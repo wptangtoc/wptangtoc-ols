@@ -1,0 +1,117 @@
+#!/bin/bash
+chmod -R +x /etc/wptt/
+chmod +x /usr/local/bin/wp
+. /etc/wptt/.wptt.conf
+
+yum install firewalld -y
+systemctl start firewalld
+systemctl enable firewalld
+firewall-cmd --zone=public --add-port=80/tcp --permanent
+firewall-cmd --zone=public --add-port=443/tcp --permanent
+firewall-cmd --zone=public --add-port=443/udp --permanent
+firewall-cmd --reload
+yum -y install policycoreutils-python
+semanage permissive -a httpd_t
+sed -i "/Port/d" /etc/ssh/sshd_config
+sed -i "/ListenAddress ::/a Port $port_ssh" /etc/ssh/sshd_config
+semanage port -a -t ssh_port_t -p tcp $port_ssh
+firewall-cmd --permanent --zone=public --add-port=$port_ssh/tcp
+firewall-cmd --reload
+systemctl reload sshd.service
+
+if [[ "$port_ols" != "" ]]; then
+firewall-cmd --zone=public --add-port=$port_ols/tcp --permanent
+firewall-cmd --reload
+fi
+sed -i "/Subsystem/d" /etc/ssh/sshd_config
+cat >> "/etc/ssh/sshd_config" <<END
+Subsystem sftp internal-sftp
+END
+echo ". /etc/wptt/wptt-status" >> /root/.bashrc
+echo ". /etc/wptt/wptt-check" >> /root/.bashrc
+echo "cd /usr/local/lsws" >> /root/.bashrc
+echo "alias 1='. /etc/wptt/wptt-menu'" >> /root/.bashrc
+echo "alias 99='. /etc/wptt/wptt-update'" >> /root/.bashrc
+
+yum groupinstall "Development Tools" -y
+yum install autoconf automake zlib-devel openssl-devel expat-devel pcre-devel libmemcached-devel cyrus-sasl* -y
+git clone https://github.com/litespeedtech/lsmcd.git
+cd lsmcd
+./fixtimestamp.sh
+./configure CFLAGS=" -O3" CXXFLAGS=" -O3"
+make
+sudo make install
+echo 'Repl.HeartBeatReq=30
+Repl.HeartBeatRetry=3000
+Repl.MaxTidPacket=2048000
+Repl.GzipStream=YES
+Repl.LbAddrs=127.0.0.1:12340
+Repl.ListenSvrAddr=127.0.0.1:12340
+REPL.DispatchAddr=127.0.0.1:5501
+RepldSockPath=/tmp/repld.usock
+CACHED.PRIADDR=127.0.0.1:11000
+
+#CACHED.ADDR=127.0.0.1:11211
+CACHED.ADDR=UDS:///tmp/lsmcd.sock
+#default is 8, it can be bigger depending on cache data amount
+Cached.Slices=8
+Cached.Slice.Priority.0=100
+Cached.Slice.Priority.1=100
+Cached.Slice.Priority.2=100
+Cached.Slice.Priority.3=100
+Cached.Slice.Priority.4=100
+Cached.Slice.Priority.5=100
+Cached.Slice.Priority.6=100
+Cached.Slice.Priority.7=100
+
+Cached.ShmDir=/dev/shm/lsmcd
+#If you change the UseSasl or DataByUser configuration options you need to remove the ShmDir folder and contents.
+#Cached.UseSasl=true
+#Cached.DataByUser=true
+#Cached.Anonymous=false
+#Cached.UserSize=1000
+#Cached.HashSize=500000
+#CACHED.MEMMAXSZ=0
+#CACHED.NOMEMFAIL=false
+
+##this is the global setting, no need to have per slice configuration. 
+User=nobody
+Group=nobody
+#depends CPU core
+CachedProcCnt=4
+CachedSockPath=/tmp/cached.usock.
+#TmpDir=/tmp/lsmcd
+LogLevel=notice
+#LogLevel=dbg_medium
+LogFile=/tmp/lsmcd.log
+' > /usr/local/lsmcd/conf/node.conf
+systemctl start lsmcd
+systemctl enable lsmcd
+chkconfig lsmcd on
+systemctl restart lsws
+
+service sshd restart
+systemctl restart mariadb.service
+/usr/local/lsws/bin/lswsctrl restart
+systemctl restart mysql.service
+systemctl restart sshd.service
+systemctl restart fail2ban.service
+systemctl restart crond.service
+echo ""
+echo "-------------------------------------------------------------------------"
+echo "              Luu lai thong tin ben duoi de truy cap ve sau              "
+echo "-------------------------------------------------------------------------"
+echo "Moi thong tin tai khoan duoc luu tru: /etc/wptt/.wptt.conf       	 "
+echo "cac thong tin tai khoan dang nhap van y het nhu cu"
+echo "-------------------------------------------------------------------------"
+echo "-------------------------------------------------------------------------"
+echo "Cong cu WPTangToc OLS phat trien boi: Gia Tuan"
+echo "Yeu Cau Ho tro: https://wptangtoc.com/lien-he/"
+echo "Tai tro phat trien: https://wptangtoc.com/donate/"
+echo "webserver se khoi dong lai."
+echo "-------------------------------------------------------------------------"
+echo "Hoan Tat cam on ban da lua chon WPTangTOC OLS"
+echo "bay gio tro dns ve ip vps moi va tan huong thanh qua" 
+cd && rm -f chuyen-vps
+sleep 3
+reboot
