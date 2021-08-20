@@ -1,0 +1,318 @@
+#!/bin/bash
+#
+#
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2021
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Quan ly Domain => chuyen huong domain                                  |"
+echo "========================================================================="
+echo ""
+echo ""
+
+. /etc/wptt/.wptt.conf
+read -p "Nhap domain ban muon chuyen huong 
+    (vidu: wptangtoc.com, giatuan.com ...) [0=Thoat]: " NAME
+
+tuandz=$(echo $NAME | grep -c ".")
+if [[ "$NAME" = "2" ]]; then
+echo "Chi ho tro domain binh thuong khong ho tro subdomain voi tinh nang chuyen huong"
+exit
+fi
+
+if [[ "$NAME" = "0" ]]; then
+  clear
+  . /etc/wptt/wptt-domain-main
+  exit
+fi
+
+read -p "Nhap domain ban muon chuyen huong toi
+    (vidu: wptangtoc.com, wptangtoc.vn ...) [0=Thoat]: " NAME2
+
+USER=${NAME//[-._]/}
+
+if [ "$NAME" = '' ]; then
+  clear
+  echo "Ban chua nhap ten mien domain."
+  sleep 3
+  . /etc/wptt/wptt-domain-main
+  exit
+fi
+
+if [ "$NAME" = "${NAME/./}" ]; then
+  clear
+  echo "Domain ten mien nhap khong dung dinh dang."
+  exit
+fi
+
+path="/etc/wptt/vhost/.$NAME.conf"
+
+tuan=$(echo "$NAME" | cut -f2 -d '.')
+tuan2=$(echo "$NAME2" | cut -f2 -d '.')
+
+if ! [[ ! -f "$path" ]]; then
+  echo 'Redirect 301 / https://'$NAME2'.'$tuan2'/
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+</IfModule>
+
+RewriteCond %{HTTP_HOST} ^'$NAME'\.'$tuan'$ [OR]
+RewriteCond %{HTTP_HOST} ^www\.'$NAME'\.'$tuan'$
+RewriteRule ^(.*)$ "https\:\/\/'$NAME2'\.'$tuan2'\/$1" [R=301,L]
+
+
+# BEGIN WordPress
+# Các nội dung nằm giữa `BEGIN WordPress` và `END WordPress` được tạo ra tự động, và chỉ nên được thay đổi thông qua các filter của WordPress. Mọi thay đổi tới thành phần này có thể sẽ bị mất và ghi đè.
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>' >/usr/local/lsws/$NAME/html/.htaccess
+
+  echo "Hoan tat chuyen huong $NAME sang $NAME2"
+  /usr/local/lsws/bin/lswsctrl restart
+  exit
+fi
+
+if [ "$USER" = '' ]; then
+  USER=${NAME//[-._]/}
+fi
+
+pathuser="/home/$USER"
+if ! [[ ! -d "$pathuser" ]]; then
+  clear
+  echo "User da ton tai tren VPS."
+  echo
+  exit
+fi
+
+if [[ "$USER" = "0" ]]; then
+  clear
+  exit
+fi
+
+. /etc/wptt/.wptt.conf
+
+work_cpucore=$(ulimit -n)
+cpucore=$(grep -c ^processor /proc/cpuinfo)
+max_client=$(expr $work_cpucore \* $cpucore \* 2)
+max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
+max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
+tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+if [[ "$rong_ram_mb" = "" ]]; then
+  rong_ram_mb="2048"
+fi
+
+echo "========================================================================="
+echo "                      wptangtoc.com xin chào $NAME                       "
+echo "========================================================================="
+echo "             them website $NAME vao OpenLiteSpeed Websever 	       "
+echo "-------------------------------------------------------------------------"
+echo ""
+echo ""
+
+sleep 1
+echo
+echo "Dang chuan bi va tien hanh them website cho $NAME vao openlitespeed..."
+sleep 2
+echo "Cam on ban da chon WPTANGTOC OLS..."
+sleep 3
+
+echo "virtualhost $NAME {
+  vhRoot                  /usr/local/lsws/$NAME/
+  configFile              /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+  allowSymbolLink         1
+  enableScript            1
+  restrained              1
+  maxKeepAliveReq         $max_client
+  setUIDMode              2
+  user                    $USER
+  group                   $USER
+}" >>/usr/local/lsws/conf/httpd_config.conf
+sed -i "/listener http/a map 		$NAME $NAME" /usr/local/lsws/conf/httpd_config.conf
+mkdir /usr/local/lsws/conf/vhosts/$NAME/
+touch /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+
+NAMEPHP=${NAME//[-._]/}
+
+echo "docRoot                   /usr/local/lsws/$NAME/html
+vhDomain                  $NAME
+enableGzip                1
+cgroups                   0
+
+
+index  {
+  useServer               0
+  indexFiles              index.html index.php
+  autoIndex               0
+}
+
+scripthandler  {
+  add                     lsapi:$NAMEPHP php
+}
+
+accessControl  {
+  allow                   *
+}
+
+lsrecaptcha  {
+  enabled                 1
+  type                    0
+}
+
+extprocessor $NAMEPHP {
+  type                    lsapi
+  address                 uds://tmp/lshttpd/$NAMEPHP.sock
+  maxConns                $max_client_php
+  env                     PHP_LSAPI_CHILDREN=$max_client_php
+  env                     LSAPI_AVOID_FORK=200M
+  initTimeout             60
+  retryTimeout            0
+  pcKeepAliveTimeout      25
+  respBuffer              0
+  autoStart               2
+  path                    /usr/local/lsws/lsphp74/bin/lsphp
+  backlog                 100
+  instances               1
+  extUser                 $USER
+  extGroup                $USER
+  runOnStartUp            2
+  priority                0
+  memSoftLimit            ${rong_ram_mb}M
+  memHardLimit            ${rong_ram_mb}M
+  procSoftLimit           $max_client
+  procHardLimit           $max_client
+}
+
+context / {
+  location                /usr/local/lsws/$NAME/html
+  allowBrowse             1
+  extraHeaders            <<<END_extraHeaders
+X-XSS-Protection 1;mode=block
+X-Frame-Options SAMEORIGIN
+Referrer-Policy strict-origin-when-cross-origin
+X-Content-Type-Options nosniff
+X-Powered-By WPTangTocOLS
+permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+  END_extraHeaders
+
+
+  rewrite  {
+
+  }
+  addDefaultCharset       off
+
+  phpIniOverride  {
+
+  }
+}
+
+rewrite  {
+  enable                  1
+  autoLoadHtaccess        1
+/usr/local/lsws/$NAME/html/.htaccess
+}
+
+vhssl  {
+  keyFile                 /etc/letsencrypt/live/$NAME/privkey.pem
+  certFile                /etc/letsencrypt/live/$NAME/cert.pem
+  certChain               0
+  CACertFile              /etc/letsencrypt/live/$NAME/chain.pem
+  sslProtocol             24
+  renegProtection         1
+  sslSessionCache         1
+  sslSessionTickets       1
+  enableSpdy              15
+  enableQuic              1
+  enableStapling          1
+  ocspRespMaxAge          86400
+  ocspResponder           http://cert.int-x3.letsencrypt.org/
+  ocspCACerts             /etc/letsencrypt/live/$NAME/chain.pem
+}
+
+module cache {
+checkPrivateCache   1
+checkPublicCache    1
+maxCacheObjSize     10000000
+maxStaleAge         200
+qsCache             1
+reqCookieCache      1
+respCookieCache     1
+ignoreReqCacheCtrl  1
+ignoreRespCacheCtrl 0
+storagePath /usr/local/lsws/$NAME/luucache
+enableCache         0
+expireInSeconds     3600
+enablePrivateCache  0
+privateExpireInSeconds 3600
+  ls_enabled              1
+}" >/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+
+php_ver_chon=${php_version_check//[-._]/}
+sed -E -i "s/lsphp[0-9]+/lsphp$php_ver_chon/g" /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+
+chown -R lsadm:nobody /usr/local/lsws/conf/vhosts/$NAME
+chmod -R 750 /usr/local/lsws/conf/vhosts/$NAME
+mkdir /usr/local/lsws/$NAME
+mkdir /usr/local/lsws/$NAME/html
+mkdir /usr/local/lsws/$NAME/luucache
+mkdir -p /usr/local/backup-website/$NAME
+chmod 755 /usr/local/lsws/$NAME
+chmod 755 /usr/local/lsws/$NAME/html
+chmod 700 /usr/local/backup-website/$NAME
+
+useradd $USER -p -m -d /home/$USER
+chown -R $USER:$USER /usr/local/lsws/$NAME/html
+echo 'Redirect 301 / https://'$NAME2'.'$tuan2'/
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+</IfModule>
+
+RewriteCond %{HTTP_HOST} ^'$NAME'\.'$tuan'$ [OR]
+RewriteCond %{HTTP_HOST} ^www\.'$NAME'\.'$tuan'$
+RewriteRule ^(.*)$ "https\:\/\/'$NAME2'\.'$tuan2'\/$1" [R=301,L]
+
+
+# BEGIN WordPress
+# Các nội dung nằm giữa `BEGIN WordPress` và `END WordPress` được tạo ra tự động, và chỉ nên được thay đổi thông qua các filter của WordPress. Mọi thay đổi tới thành phần này có thể sẽ bị mất và ghi đè.
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>' >/usr/local/lsws/$NAME/html/.htaccess
+
+/usr/local/lsws/bin/lswsctrl restart
+echo "========================================================================="
+echo "Cai dat thanh cong                         "
+echo "========================================================================="
+echo "Chuyen huong $NAME sang $NAME2 thanh cong                   "
+echo "========================================================================="
+checkdns=$(host $NAME | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+if [[ "$checkdns" = "" ]]; then
+  checkdns=$(nslookup $NAME | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+fi
+
+ip=$(curl -s myip.directadmin.com)
+if [[ "$ip" = "" ]]; then
+  ip=$(curl -s ifconfig.me)
+fi
+
+if [[ "$checkdns" != "$ip" ]]; then
+  if [[ "$checkdns" = "" ]]; then
+    echo "Ten mien $NAME chua duoc tro IP gia tri IP cua $NAME la khong co gia tri nao, ban vui long tro IP ve $ip"
+  else
+    echo "Hay tro DNS domain $NAME: $checkdns thanh $ip de tan huong thanh qua"
+  fi
+fi
