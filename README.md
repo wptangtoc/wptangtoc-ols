@@ -23,13 +23,15 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 
 <h3>Các nguồn hỗ trợ cho WPTangToc OLS</h3>
 
-OpenLiteSpeed: <a href="https://openlitespeed.org/">https://openlitespeed.org/</a>
-MariaDB: <a href="https://downloads.mariadb.org/">https://downloads.mariadb.org/</a>
-PHP: <a href="https://www.php.net/">https://www.php.net/</a>
-Rclone: <a href="https://rclone.org/">https://rclone.org/</a>
-WP-CLI: <a href="https://wp-cli.org/">https://wp-cli.org/</a>
-Fail2ban: <a href="https://www.fail2ban.org/">https://www.fail2ban.org/</a>
-ClamAV: <a href="https://www.clamav.net/">https://www.clamav.net/</a>
+<ul>
+<li>OpenLiteSpeed: <a href="https://openlitespeed.org/">https://openlitespeed.org/</a></li>
+<li>MariaDB: <a href="https://downloads.mariadb.org/">https://downloads.mariadb.org/</a></li>
+<li>PHP: <a href="https://www.php.net/">https://www.php.net/</a></li>
+<li>Rclone: <a href="https://rclone.org/">https://rclone.org/</a></li>
+<li>WP-CLI: <a href="https://wp-cli.org/">https://wp-cli.org/</a></li>
+<li>Fail2ban: <a href="https://www.fail2ban.org/">https://www.fail2ban.org/</a></li>
+<li>ClamAV: <a href="https://www.clamav.net/">https://www.clamav.net/</a></li>
+</ul>
 
 <h3>Liên hệ</h3>
 
