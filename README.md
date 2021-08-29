@@ -34,11 +34,11 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 </ul>
 
 <h3>Liên hệ</h3>
-
-Trang chủ: <a href="https://wptangtoc.com">WP Tăng Tốc</a>
-Email: <a href="mailto:giatuan@wptangtoc.com">giatuan@wptangtoc.com</a>
-Số Điện Thoại: 0866880462
-
+<ul>
+<li>Trang chủ: <a href="https://wptangtoc.com">WP Tăng Tốc</a></li>
+<li>Email: <a href="mailto:giatuan@wptangtoc.com">giatuan@wptangtoc.com</a></li>
+<li>Số Điện Thoại: 0866880462</li>
+</ul>
 <h3>Tác giả phần mềm</h3>
 
 <ul><li>Gia Tuấn</li></ul>
