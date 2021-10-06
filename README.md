@@ -31,10 +31,10 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 <li>WP-CLI: <a href="https://wp-cli.org/">https://wp-cli.org/</a></li>
 <li>Fail2ban: <a href="https://www.fail2ban.org/">https://www.fail2ban.org/</a></li>
 <li>ClamAV: <a href="https://www.clamav.net/">https://www.clamav.net/</a></li>
+<li>PhpMyAdmin: <a href="https://www.phpmyadmin.net/">https://www.phpmyadmin.net/</a></li>
 </ul>
 
-<h3>Liên hệ</h3>
-
+<h3>Liên hệ với tác giả</h3>
 <ul>
 <li>Trang chủ: <a href="https://wptangtoc.com">WP Tăng Tốc</a></li>
 <li>Email: <a href="mailto:giatuan@wptangtoc.com">giatuan@wptangtoc.com</a></li>
@@ -42,8 +42,14 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 </ul>
 
 <h3>Tác giả phần mềm</h3>
-
 <ul><li>Gia Tuấn</li></ul>
+
+<h3>Thảo luận giải đáp các thắc mắc: </h3>
+
+<ul>
+<li>Group facebook : <a href="https://www.facebook.com/groups/wptangtoc/">Cộng đồng tăng tốc WordPress 2021</a></li>
+</ul>
+
 
 <h3>License: GPLv3</h3>
 
