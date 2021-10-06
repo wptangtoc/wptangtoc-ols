@@ -42,7 +42,9 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 </ul>
 
 <h3>Tác giả phần mềm</h3>
-<ul><li>Gia Tuấn</li></ul>
+<ul>
+<li>Người phát triển dự án : <a href="https://wptangtoc.com/gia-tuan/">Gia Tuấn</a></li>
+</ul>
 
 <h3>Thảo luận giải đáp các thắc mắc: </h3>
 
