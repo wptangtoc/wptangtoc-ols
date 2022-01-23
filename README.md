@@ -53,6 +53,12 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 </ul>
 
 
+<h3>ChangeLog: </h3>
+<ul>
+<li>Nhật ký cập nhật phát triển : <a href="https://wptangtoc.com/changelog-wptangtoc-ols/">Changelog – WPTangToc OLS</a></li>
+</ul>
+
+
 <h3>License: GPLv3</h3>
 
 Đây là phần mềm miễn phí cống hiến cho cộng đồng Việt Nam; bạn có thể phân phối lại và hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU GPLv3 theo tiêu chuẩn quốc tế.
