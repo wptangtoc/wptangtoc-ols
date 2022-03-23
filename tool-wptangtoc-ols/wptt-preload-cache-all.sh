@@ -230,6 +230,8 @@ function crawl_verbose(){
     echo "Header Match: ${5}" >> ${CRAWLLOG}
     echo "----------------------------------------------------------" >> ${CRAWLLOG}   
 }
+
+#sua ham nay
 function crawlreq() {
     if [ "${DEBUGURL}" != "OFF" ] && [ "${BLACKLIST}" = 'ON' ]; then
         duplicateck ${2} ${BLACKLSPATH}
@@ -258,6 +260,99 @@ else
             protect_count 1
 fi
 }
+
+# ham mac dinh cua script
+function crawlreqmaxdinh() {
+    if [ "${DEBUGURL}" != "OFF" ] && [ "${BLACKLIST}" = 'ON' ]; then
+        duplicateck ${2} ${BLACKLSPATH}
+        if [ ${?} = 0 ]; then
+            echoY "${2} is in blacklist"
+            exit 0
+        fi
+    fi
+    echo "${2} -> " | tr -d '\n'
+    if [ ! -z "${WITH_WEBP}" ]; then
+        CURLRESULT=$(curl ${CURL_OPTS} -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
+         | sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq')
+    else
+        CURLRESULT=$(curl ${CURL_OPTS} -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
+         | sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq')
+    fi
+    excludecookie "${CURLRESULT}"
+    STATUS_CODE=$(echo "${CURLRESULT}" | grep HTTP | awk '{print $2}')
+
+    CHECKMATCH=$(echo ${STATUS_CODE} | grep -Eio "$(echo ${ERR_LIST} | tr -d "'")")
+    if [ "${CHECKMATCH}" == '' ]; then
+        CHECKMATCH=$(grep -Eio '(x-lsadc-cache: hit,litemage|x-lsadc-cache: hit|x-lsadc-cache: miss|x-qc-cache: hit|x-qc-cache: miss)'\
+        <<< ${CURLRESULT} | tr -d '\n')
+    fi
+    if [ "${CHECKMATCH}" == '' ]; then
+        CHECKMATCH=$(grep -Eio '(X-LiteSpeed-Cache: miss|X-Litespeed-Cache: hit|X-Litespeed-Cache-Control: no-cache)'\
+        <<< ${CURLRESULT} | tr -d '\n')
+    fi
+    if [ "${CHECKMATCH}" == '' ]; then
+        CHECKMATCH=$(grep -Eio '(lsc_private|HTTP/1.1 201 Created)'\
+        <<< ${CURLRESULT} | tr -d '\n')
+    fi
+    if [ ${VERBOSE} = 'ON' ]; then
+        crawl_verbose "${1}" "${2}" "${3}" "${CURLRESULT}" "${CHECKMATCH}"
+    fi
+    if [[ ${DEBUGURL} != "OFF" ]]; then
+        debugurl_display "${1}" "${2}" "${3}" "${CURLRESULT}" "${CHECKMATCH}"
+    fi
+    case ${CHECKMATCH} in
+        'CreatedSet-CookieSet-CookieSet-Cookie'|[Xx]-[Ll]ite[Ss]peed-[Cc]ache:\ miss|'X-LSADC-Cache: miss'|[Xx]-[Qq][Cc]-[Cc]ache:\ miss)
+            echoY 'Caching'
+            cachecount 'miss'
+            protect_count 0
+        ;;
+        'HTTP/1.1 201 Created')
+            if [ $(echo ${CURLRESULT} | grep -i 'Cookie' | wc -l ) != 0 ]; then
+                if [[ ${DEBUGURL} != "OFF" ]]; then
+                    echoY "Set-Cookie found"
+                fi
+                echoY 'Caching'
+                cachecount 'miss'
+            else
+                echoY 'Already cached'
+                cachecount 'hit'
+            fi
+            protect_count 0
+        ;;
+        [Xx]-[Ll]ite[Ss]peed-Cache:\ hit|'x-lsadc-cache: hit'|'x-lsadc-cache: hit,litemage'|'x-qc-cache: hit')
+            echoY 'Already cached'
+            cachecount 'hit'
+            protect_count 0
+        ;;
+        'HTTP/1.1 201 Createdlsc_private')
+            echoY 'Caching'
+            cachecount 'miss'
+            protect_count 0
+        ;;
+        '400'|'401'|'403'|'404'|'407'|'500'|'502')
+            echoY "STATUS: ${CHECKMATCH}, can not cache"
+            cachecount 'fail'
+            protect_count 1
+            if [ "${BLACKLIST}" = 'ON' ]; then
+                addtoblacklist ${2}
+            fi
+        ;;
+        [Xx]-[Ll]ite[sS]peed-Cache-Control:\ no-cache)
+            echoY 'No Cache page'
+            cachecount 'no'
+            protect_count 1
+            ### To add 'no cache' page to black list, remove following lines' comment
+            #if [ "${BLACKLIST}" = 'ON' ]; then
+            #    addtoblacklist ${2}
+            #fi
+        ;;
+        *)
+            echoY 'No Need To Cache'
+            cachecount 'no'
+        ;;
+    esac
+}
+
 
 function runLoop() {
     for URL in ${URLLIST}; do
