@@ -1,0 +1,311 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2022
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Quan ly SSL => Cai dat SSL FREE letsencrypt Cache DNS                  |"
+echo "========================================================================="
+
+. /etc/wptt/echo-color
+
+NAME=$1
+
+if [[ $NAME = "98" ]];then
+NAME=""
+fi
+
+if [[ "$NAME" = "" ]]; then
+    . /etc/wptt/tenmien
+    echo ""
+    echo ""
+    echo "Lua chon website muon cai SSL (HTTPS): "
+    echo ""
+    lua_chon_NAME
+fi
+
+path="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$path" || "$NAME" = "0" ]]; then
+    clear
+    echoDo "Domain khong ton tai tren VPS."
+    sleep 3
+    . /etc/wptt/wptt-ssl-main 1
+    exit
+fi
+
+
+
+if [[ ! -d /usr/local/lsws/$NAME/html ]]; then
+    echoDo "He thong khong xac nhan duoc thu muc ma nguon cua $NAME"
+    echoDo "Thu muc ma nguon tieu chuan cua WPTangToc OLS: /usr/local/lsws/$NAME/html khong hop le"
+    echoDo "Nguyen nhan dan den viec nay co the ban da thay doi cau truc thu muc hoac su dung unikey de them tien mien"
+    echoDo "Vui long kiem tra lai duong dan thu muc cua ban"
+    echoDo "Ho tro sua loi		: https://wptangtoc.com/lien-he/"
+    exit
+fi
+
+
+
+echo "Dang tien hanh cai SSL..."
+
+
+
+ip=$(curl -s myip.directadmin.com)
+if [[ "$ip" = "" ]]; then
+    ip=$(curl -s ifconfig.me)
+fi
+
+
+rm -f /tmp/ssl-$NAME.txt
+
+if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" ]]; then
+    echo "Ban da cai dat SSL truoc do cho $NAME roi"
+	echo "Subdomain ban muon mo rong them SSL su dung cung 1 chung chi website $NAME"
+    read -p "Ban co muon mo rong ssl khong? (y/n): " renew
+    if [[ "$renew" = "y" ]]; then
+		. /etc/wptt/ssl/wptt-mo-rong-ssl-free $NAME
+    else
+    . /etc/wptt/wptt-ssl-main 1
+        exit
+    fi
+fi
+
+if [[ -f "/etc/letsencrypt/live/$NAME-0001/cert.pem" ]]; then
+    echo "Ban da cai dat SSL cho $NAME roi"
+    read -p "Ban co muon renew lai ssl khong? (y/n): " renew
+    if [[ "$renew" = "y" ]]; then
+        echo "Tien hanh xoa SSL cu cua ban"
+        certbot revoke --cert-path /etc/letsencrypt/live/$NAME-0001/cert.pem
+        rm -rf /etc/letsencrypt/live/$NAME-0001
+    else
+    . /etc/wptt/wptt-ssl-main 1
+        exit
+    fi
+fi
+
+
+#tu dong them subdomain multisite wordpress
+if [[ -f /usr/local/lsws/$NAME/html/wp-config.php ]]; then
+check_mulsite_dang_su_dung=$(cat /usr/local/lsws/$NAME/html/wp-config.php | grep MULTISITE)
+if [[ $check_mulsite_dang_su_dung ]];then
+	sub_domain_multisite=$(wp site list --field=url --path=/usr/local/lsws/$NAME/html --allow-root 2>/dev/null | cut -f3 -d '/' | sort -u | uniq)
+	echo "$sub_domain_multisite" >> /tmp/ssl-$NAME.txt
+fi
+fi
+
+#kiem tra mo rong ssl da tro ip chua
+if [[ -f /tmp/ssl-$NAME.txt ]];then
+	multisite_check_dns_tro_ip_chua=($(cat /tmp/ssl-$NAME.txt))
+	for multisite in ${multisite_check_dns_tro_ip_chua[@]};do
+		multisite_check_dns=$(host $multisite | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+		if [[ $multisite_check_dns != $ip ]];then
+echo "domain $multisite chua tro dns ve $ip de co the cai SSL"
+sed -i "/$multisite/d" /tmp/ssl-$NAME.txt
+		fi
+	done
+fi
+
+echo "$NAME" >> /tmp/ssl-$NAME.txt
+
+checkdnscname=$(ping -c 1 www.$NAME)
+
+if [[ "$checkdnscname" ]]; then
+	echo "www.$NAME" >> /tmp/ssl-$NAME.txt
+fi
+
+echo "Dang tien hanh cai SSL cho website $NAME..."
+list_all_ssl_thong_bao=($(cat /tmp/ssl-$NAME.txt | sort -u | sed '/^$/d' | uniq))
+for domain_ssl in ${list_all_ssl_thong_bao[@]};do
+echo "Tien hanh cai dat ssl domain: $domain_ssl"
+done
+
+list_ssl_domain_all=$(cat /tmp/ssl-$NAME.txt | sort -u |uniq |sed '/^$/d' | sed 's/^/-d /g' | tr -s '\n' ' ')
+
+
+certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --expand --webroot -w /usr/local/lsws/$NAME/html/ $list_ssl_domain_all
+
+clear
+
+echo "Kiem tra chung chi SSL website $NAME..."
+echo "Vui long doi..."
+sleep 1
+/usr/local/lsws/bin/lswsctrl restart
+sleep 2
+checkssl2=$(curl -Is https://wptangtoc.com | grep -c "WPTangTocOLS")
+if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || "$checkssl2" = "0" ]]; then
+    echo "Qua trinh cai dat SSL khong thanh cong, da xay ra loi"
+    if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" ]]; then
+        echo "Chung chi ssl cua ban da duoc cai dat, kiem tra thuc te https://$NAME thi khong hoat dong"
+        . /etc/wptt/.wptt.conf
+        if [[ "$Website_chinh" != "$NAME" && ! -f "/etc/letsencrypt/live/$Website_chinh/cert.pem" && ! -d "/usr/local/lsws/$Website_chinh/ssl" ]]; then
+            echo "Website chinh $Website_chinh chua duoc cai ssl, vui long cai dat ssl cho website $Website_chinh truoc thi cac website khac moi co the su dung HTTPS"
+        fi
+    else
+    vang='\033[1;33m'
+NC='\033[0m'
+echo -e "${vang}                                              
+                   .:::....                   
+                 .--=+++=-::.                 
+                :--*%%%%%%+::.                
+               :--*%%%%%%%%*:::               
+              ---#%%%%%#%%%%*:::              
+            .--=#%%%#=--=#%%%#-::             
+           .--=%%%%%*:-:.*%%%%#-::.           
+          .--+%%%%%%*---:*%%%%%#=::.          
+         :--*%%%%%%%*--::*%%%%%%#+::.         
+        :--*%%%%%%%%*--::*%%%%%%%#+:::        
+       ---#%%%%%%%%%*--::*%%%%%%%%#*:::       
+      --=#%%%%%%%%%%*---:*%%%%%%%%%#*-::      
+    .--=%%%%%%%%%%%%#--::#%%%%%%%%%%##-::     
+   .--+%%%%%%%%%%%%%%#*+#%%%%%%%%%%%%##=::.   
+  :--+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%##=::.  
+ :--*%%%%%%%%%%%%%%%#=-:-#%%%%%%%%%%%%%##+::. 
+:--*%%%%%%%%%%%%%%%%#--::#%%%%%%%%%%%%%%##+::.
+--=%%%%%%%%%%%%%%%%%%%##%%%%%%%%%%%%%%%%###-::
+:--*%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%##+::.
+ :--=++***************++++++++++++++++++=-::. 
+   .:::::::::::::::::::....................  
+${NC}"
+        echo "Chung chi SSL cai dat khong thanh cong, ban co the xem log nguyen nhan khong cai duoc ssl tai day: cd /var/log/letsencrypt"
+    fi
+
+		if [[ -f "/etc/letsencrypt/live/$NAME-0001/cert.pem" && ! -f "/etc/letsencrypt/live/$NAME/cert.pem" ]];then
+clear
+echo "Tien hanh fix loi ssl"
+sed -i "s:/etc/letsencrypt/live/$NAME:/etc/letsencrypt/live/$NAME-0001:g" /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+echo "Chuyen doi cai ssl 2 lan lien tiep"
+echoDone "Hoan tat kich hoat lai SSL"
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+		fi
+    exit
+else
+echo '          :.::::::::::::::::::::::.:          
+         -*+======================+*=         
+         +*..================----..*+         
+        =*- #@@@@@@@##**##@@@%###* -*=        
+      :+*+.*@%%%@#--======--#@#**#+ :*+:      
+   .-++=.*@@%%%@=.**======**.=@%#*#*..=++-.   
+  .*+-.-*%%%%%@* %* +%%%%+ *% +@%%###+:.-+*.  
+  .++ -@@%%%%%@::@ +@@@@@@+ @::@%@@####- ++.  
+   =*:.%%%%%%%@:.# -#****#= #..@%%%####.:*=   
+   :*+ +@%%%%%..:..........:.:..%@####= =*:   
+    =*: %@%%@% :=***++***=*===: %%*##* :*=    
+    .+*..@@%@% :=##*=+%*+=@=-=: ##*##..++.    
+     :++ :@@%% :=++%#=+#@+@+==: *###: ++:     
+      :++..%@% :=+**=+**+=***+: *#*..++:      
+       .+*: *@:.:..............:##=:*+.       
+         =*- =@%##########%#***#-.+*=.        
+          :*+..*@@@@@@@@@@%###=..++:          
+           .=*=.:*@@%%@%%###+..=*=.           
+             .=*=.:*@@%###+:.=*=.             
+               :=*=.:=**=..=*=:               
+                 .=*+:..:+*=.                 
+                   .-++++-.                   
+                      ..                      
+'
+    echoDone "Kiem tra hoan tat: SSL duoc cai dat thanh cong"
+fi
+sleep 2
+echo "Toi uu hoa chuyen huong HTTP sang HTTPS"
+
+if [[ -f /usr/local/lsws/$NAME/html/wp-config.php ]]; then
+
+    giatuanwww=$(wp option get home --path=/usr/local/lsws/$NAME/html --allow-root | grep 'www.')
+    if [[ $giatuanwww ]]; then
+        wp option update home "https://www.$NAME" --path=/usr/local/lsws/$NAME/html --allow-root
+        wp option update siteurl "https://www.$NAME" --path=/usr/local/lsws/$NAME/html --allow-root
+    else
+        wp option update home "https://$NAME" --path=/usr/local/lsws/$NAME/html --allow-root
+        wp option update siteurl "https://$NAME" --path=/usr/local/lsws/$NAME/html --allow-root
+    fi
+
+fi
+
+path2="/usr/local/lsws/$NAME/html/.htaccess"
+
+#clear chuyen huong cu
+grepwww=$(grep -c 'RewriteCond %{HTTP_HOST} ^www' $path2)
+grepssl=$(grep -c 'RewriteCond %{HTTPS} !=on' $path2)
+
+if [[ "$grepssl" != "0" ]]; then
+    if [[ "$grepwww" = "0" ]]; then
+        sed -i '/RewriteCond %{HTTPS} !=on/,+1d' "$path2"
+    else
+        sed -i '/RewriteCond %{HTTP_HOST} ^www/,+3d' "$path2"
+    fi
+fi
+
+if [[ "$checkdns" = "$checkdnscname" ]]; then
+    sed -i '1 i RewriteCond %{HTTP_HOST} ^www.'$NAME' [NC]\
+ RewriteRule ^(.*)$ https:\/\/'$NAME'/$1 [L,R=301,NC]\
+ RewriteCond %{HTTPS} !=on\
+ RewriteRule ^(.*)$ https:\/\/%{HTTP_HOST}%{REQUEST_URI} [L,R=301,NE]' /usr/local/lsws/"$NAME"/html/.htaccess
+else
+    sed -i '1 i RewriteCond %{HTTPS} !=on\
+RewriteRule ^(.*)$ https:\/\/%{HTTP_HOST}%{REQUEST_URI} [L,R=301,NE]' /usr/local/lsws/"$NAME"/html/.htaccess
+fi
+
+if [[ $giatuanwww ]]; then
+    if [[ "$checkdns" = "$checkdnscname" ]]; then
+
+        if [[ "$grepssl" != "0" ]]; then
+            if [[ "$grepwww" = "0" ]]; then
+                sed -i '/RewriteCond %{HTTPS} !=on/,+1d' "$path2"
+            else
+                sed -i '/RewriteCond %{HTTP_HOST} ^www/,+3d' "$path2"
+            fi
+        fi
+        sed -i '1 i RewriteCond %{HTTPS} !=on [NC]\
+RewriteRule ^(.*)$ https:\/\/%{HTTP_HOST}/$1 [R=301,L]' /usr/local/lsws/"$NAME"/html/.htaccess
+    fi
+fi
+
+clear
+
+function box_out() {
+    local s=("$@") b w
+    for l in "${s[@]}"; do
+        ((w < ${#l})) && {
+            b="$l"
+            w="${#l}"
+        }
+    done
+    tput setaf 7
+    echo " -${b//?/-}-
+| ${b//?/ } |"
+    for l in "${s[@]}"; do
+        printf '| %s%*s%s |\n' "$(tput setaf 7)" "-$w" "$l" "$(tput setaf 3)"
+    done
+    echo "| ${b//?/ } |
+ -${b//?/-}-"
+    tput sgr 0
+}
+
+if [[ "$checkdns" = "$checkdnscname" ]]; then
+    chuyenhuongwww="Tu dong chuyen huong www.$NAME sang $NAME"
+fi
+
+box_out "Cai Dat SSL website $NAME thanh cong"
+box_out "" "He thong da tich hop tu dong gia han SSL" "Tu dong chuyen huong HTTP to HTTPS cho website $NAME" "$chuyenhuongwww"
+box_out "Thu muc chung chi: /etc/letsencrypt/live/$NAME"
+
+echo "========================================================================="
+echo "Cong cu phat trien boi	: Gia Tuan"
+echo "Yeu Cau Ho tro		: wptangtoc.com/lien-he"
+echo "Tai tro phat trien	: wptangtoc.com/donate"
+echo "========================================================================="
+if [[ "$renew" = "y" ]]; then
+    echo "========================================================================="
+    echo "SSL cua $NAME da duoc renew"
+    echo "========================================================================="
+fi
+
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-ssl-main 1
+fi
+
