@@ -1,6 +1,6 @@
 #!/bin/bash
 git rm --cache wptangtoc-ols.zip
-check_seria=$(cat tool-wptangtoc-ols/wptt-update2 | grep 'Seria' | cut -f2 -d ':' | cut -f1 -d '"')
+check_seria=$(cat tool-wptangtoc-ols/wptt-update2 | grep 'Seria' | cut -f2 -d ':' | cut -f1 -d '"' | head -1)
 seria=$(
       head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12
       echo ''
