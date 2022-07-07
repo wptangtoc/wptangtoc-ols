@@ -16,10 +16,9 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Phần mềm này hỗ trợ: OpenLiteSpeed + PHP (8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
 
-
 <h3>Hướng dẫn sử dụng</h3>
 
-Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">https://wptangtoc.com/wptangtoc-ols-huong-dan/</a>
+Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wptangtoc.com/wptangtoc-ols/</a>
 
 <h3>Các nguồn hỗ trợ cho WPTangToc OLS</h3>
 
@@ -32,6 +31,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 <li>Fail2ban: <a href="https://www.fail2ban.org/">https://www.fail2ban.org/</a></li>
 <li>ClamAV: <a href="https://www.clamav.net/">https://www.clamav.net/</a></li>
 <li>PhpMyAdmin: <a href="https://www.phpmyadmin.net/">https://www.phpmyadmin.net/</a></li>
+<li>tinyfilemanager: <a href="https://tinyfilemanager.github.io/">https://tinyfilemanager.github.io/</a></li>
 </ul>
 
 <h3>Liên hệ với tác giả</h3>
