@@ -285,7 +285,7 @@ EOF
         curl -X GET "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
         "${AUTH_HEADERS[@]/#/-H}" \
         -H "Content-Type: application/json" \
-        | python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
+        | python2 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
     ) 
 
     if [ -z "$ZONE_ID" ]; then
@@ -301,7 +301,7 @@ EOF
         curl -G "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" --data-urlencode "type=$TYPE" --data-urlencode "name=$NAME" --data-urlencode "content=$CONTENT" \
         "${AUTH_HEADERS[@]/#/-H}" \
         -H "Content-Type: application/json" \
-        | python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
+        | python2 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
     )
 
     if [ -z "$DNS_ID" ]; then
@@ -374,19 +374,19 @@ EOF
             "${AUTH_HEADERS[@]/#/-H}" \
             -H "Content-Type: application/json" \
             --data '{"type":"'"$TYPE"'","name":"'"$NAME"'","content":"'"$CONTENT"'","proxied":'"$PROXIED"',"ttl":'"$TTL"'}' \
-            | python3 -m json.tool --sort-keys
+            | python2 -m json.tool --sort-keys
         elif [ $TYPE == "MX" ]; then
             curl ${REQUEST[@]/#/-X} \
             "${AUTH_HEADERS[@]/#/-H}" \
             -H "Content-Type: application/json" \
             --data '{"type":"'"$TYPE"'","name":"'"$NAME"'","content":"'"$CONTENT"'","priority":'"$PRIORITY"',"ttl":'"$TTL"'}' \
-            | python3 -m json.tool --sort-keys
+            | python2 -m json.tool --sort-keys
         else
             curl ${REQUEST[@]/#/-X} \
             "${AUTH_HEADERS[@]/#/-H}" \
             -H "Content-Type: application/json" \
             --data '{"type":"'"$TYPE"'","name":"'"$NAME"'","content":"'"$CONTENT"'","ttl":'"$TTL"'}' \
-            | python3 -m json.tool --sort-keys
+            | python2 -m json.tool --sort-keys
         fi 
 
 # Delete an existing DNS record
@@ -410,7 +410,7 @@ EOF
                 curl -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_ID" \
                 "${AUTH_HEADERS[@]/#/-H}" \
                 -H "Content-Type: application/json" \
-                | python3 -m json.tool --sort-keys
+                | python2 -m json.tool --sort-keys
 
             else
                 printf "\nThe $RECORD has NOT been deleted.\n"
