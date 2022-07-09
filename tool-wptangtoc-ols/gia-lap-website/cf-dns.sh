@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 # AUTHOR: Steve Ward [steve at tech-otaku dot com]
 # URL: https://github.com/tech-otaku/cloudflare-dns.git
