@@ -14,6 +14,7 @@
 # START-UP CHECKS
 #
 
+. /etc/wptt/echo-color
 # Exit with error if Python 3 is not installed
     if [ ! $(command -v python2) ]; then 
         printf "\nERROR: * * * This script requires Python 2. * * *\n"
@@ -284,12 +285,7 @@ EOF
         | python2 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
     ) 
 
-    if [ -z "$ZONE_ID" ]; then
-        printf "\nABORTING: * * * The domain '%s' doesn't exist on Cloudflare * * *\n" "$DOMAIN"
-        exit 1
-    else
         printf ">>> %s\n" "$ZONE_ID"
-    fi
     
 # Get the DNS record's ID based on type, name and content
     printf "\nAttempting to get ID for DNS '%s' record named '%s' whose content is '%s'\n" "$TYPE" "$NAME" "$CONTENT"
