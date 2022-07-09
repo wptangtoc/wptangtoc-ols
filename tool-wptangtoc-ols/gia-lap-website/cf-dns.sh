@@ -289,7 +289,7 @@ EOF
 		echoDo "Không xác định được zone ID"
         printf "\nABORTING: * * * The domain '%s' doesn't exist on Cloudflare * * *\n" "$DOMAIN"
 		echo "Vui lòng thử lại sau"
-		. /etc/wptt/wptt-gia-lap-main 1
+		exit 1
     else
         printf ">>> %s\n" "$ZONE_ID"
     fi
