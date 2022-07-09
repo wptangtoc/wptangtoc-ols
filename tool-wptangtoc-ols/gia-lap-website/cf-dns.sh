@@ -20,15 +20,11 @@
         exit 1
     fi
 
-# Exit with error if the Cloudflare credentials file doesn't exist
-    if [ ! -f ./auth.json ]; then
-        printf "\nERROR: * * * The file containing your Cloudflare credentials '%s' doesn't exist. * * *\n" $(pwd)/auth.json
-        exit 1
-    fi
+# Exit with error if the Cloudflare credentials file doesn't exist 
 
+# Gia Tuấn xóa xác thực
 # Unset all variables
     unset ANSWER APIKEY AUTH_HEADERS AUTO CONTENT DELETE DNS_ID DOMAIN EMAIL KEY NAME OVERRIDE PRIORITY PROXIED RECORD REQUEST RESPONSE TMPFILE TOKEN TTL TYPE ZONE_ID 
-
 
 
 # # # # # # # # # # # # # # # # # # # #
