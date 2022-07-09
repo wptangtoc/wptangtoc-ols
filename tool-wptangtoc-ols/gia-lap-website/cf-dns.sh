@@ -9,11 +9,10 @@
 #   See the README for more examples
 
 # gia tuan bắt sử dụng python 2 thay vì python 3, vì centos 7 chỉ hỗ trợ python 2
-
+# sửa thêm dòng 288 để phù hợp với wptangtoc ols
 # # # # # # # # # # # # # # # # # # # #
 # START-UP CHECKS
 #
-
 . /etc/wptt/echo-color
 # Exit with error if Python 3 is not installed
     if [ ! $(command -v python2) ]; then 
@@ -285,7 +284,15 @@ EOF
         | python2 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
     ) 
 
+    if [ -z "$ZONE_ID" ]; then
+		_runloi "Cấu hình domain giả lập ${subdomain_ten_mien}.${domain_phuc_vu}"
+		echoDo "Không xác định được zone ID"
+        printf "\nABORTING: * * * The domain '%s' doesn't exist on Cloudflare * * *\n" "$DOMAIN"
+		echo "Vui lòng thử lại sau"
+		. /etc/wptt/wptt-gia-lap-main 1
+    else
         printf ">>> %s\n" "$ZONE_ID"
+    fi
     
 # Get the DNS record's ID based on type, name and content
     printf "\nAttempting to get ID for DNS '%s' record named '%s' whose content is '%s'\n" "$TYPE" "$NAME" "$CONTENT"
