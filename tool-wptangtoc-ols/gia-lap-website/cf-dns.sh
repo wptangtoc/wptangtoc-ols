@@ -8,7 +8,7 @@
 # EXAMPLE: ./cf-dns.sh -d example.com -t A -n example.com -c 203.0.113.50 -l 1 -x y
 #   See the README for more examples
 
-
+# gia tuan bắt sử dụng python 2 thay vì python 3, vì centos 7 chỉ hỗ trợ python 2
 
 # # # # # # # # # # # # # # # # # # # #
 # START-UP CHECKS
