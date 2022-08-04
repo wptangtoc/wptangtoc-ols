@@ -1,0 +1,186 @@
+#!/bin/bash
+echo "========================================================================="
+echo "|Quản lý WordPress => Reset Wordpress hoàn toàn mới                     |"
+echo "========================================================================="
+. /etc/wptt/tenmien
+echo ""
+echo ""
+echo "Lựa chọn tên website của bạn muốn reset Wordpress hoàn toàn mới:"
+echo ""
+lua_chon_NAME
+domain="$NAME"
+
+
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+    wptangtoc 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+    clear
+	echoDo "Tên miền không tồn tại trên hệ thống này"
+    sleep 3
+    wptangtoc 1
+    exit
+fi
+
+. /etc/wptt/vhost/."$NAME".conf
+. /etc/wptt/.wptt.conf
+
+. /etc/wptt/echo-color
+read -p "Xác nhận reset Wordpress cho domain $domain. (y/n): " dongy
+if [[ "$dongy" = "y" ]]; then
+_runing "Làm sạch toàn bộ dữ liệu mã nguồn của $NAME"
+  cd /usr/local/lsws/"$NAME"/html/
+  rm -rf /usr/local/lsws/"$NAME"/html/*
+_rundone "Làm sạch toàn bộ dữ liệu mã nguồn của $NAME"
+
+_runing "Download mã nguồn WordPress"
+wget -q http://wordpress.org/latest.tar.gz
+
+if [[ ! -f latest.tar.gz ]];then
+	_runloi "Download mã nguồn WordPress"
+	echoDo "Chưa thể download mã nguồn WordPress vui lòng thử lại sau"
+	check_menu_wptangtoc_active=$1
+	if [[ $check_menu_wptangtoc_active = "99" ]];then
+		wptangtoc 1
+	fi
+	return 2>/dev/null;exit
+fi
+
+ _rundone "Download mã nguồn WordPress"
+  _runing "Giải nén mã nguồn WordPress"
+  tar -zxf latest.tar.gz
+  mv wordpress/* /usr/local/lsws/"$NAME"/html && rm -rf wordpress && rm -f latest.tar.gz
+  _rundone "Giải nén mã nguồn WordPress"
+
+  if [[ "$DB_Name_web" != "" ]]; then
+ 		_runing "Làm sạch toàn bộ dữ liệu database của $NAME"
+    database1="$DB_Name_web"
+    mysql -u $database_admin_username -p"$database_admin_password" -e "DROP DATABASE $DB_Name_web"
+    mysql -u $database_admin_username -p"$database_admin_password" -e "CREATE DATABASE IF NOT EXISTS $DB_Name_web"
+ 		_rundone "Làm sạch toàn bộ dữ liệu database của $NAME"
+    read -p "Xác nhận bạn có muốn thiết lập wp-config ngay tại đây không(y/n): " dongyconfig
+
+    if [[ ! -f /usr/local/bin/wp ]]; then
+      curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+      chmod +x wp-cli.phar
+      mv wp-cli.phar /usr/local/bin/wp
+    fi
+
+    if [[ "$dongyconfig" = "y" ]]; then
+      tien_to_db=$(
+		date +%s | sha256sum | base64 | head -c 6
+		echo
+      )
+      wp core config --dbname="$DB_Name_web" --dbuser="$DB_User_web" --dbpass="$DB_Password_web" --dbhost=localhost --dbprefix="${tien_to_db}"_ --allow-root >/dev/null 2>&1 --extra-php <<PHP
+define( 'WP_DEBUG_LOG', false );
+define( 'WP_DEBUG_DISPLAY', false );
+PHP
+      read -p "1. Tên tiêu đề Website WordPress của bạn muốn: " SiteTitle
+      read -p "2. Nhập id đăng nhập WordPress: " idusername
+      read -sp "3. Nhập Password WordPress:
+Lưu ý: hãy nhập WordPress ít nhất 26 ký tự để nâng cao bảo mật (sẽ tự động ẩn trong khi gõ phím): " mypassword
+if [[ $mypassword = "" ]];then
+echo "Vui lòng nhập password - bạn chưa nhập password"
+echo "Qua trinh go password se tu dong an"
+read -sp "3. Nhập password WordPress:
+Luu y: hay nhap wordpress it nhat 26 ky tu de nang cao bao mat (se an khi go): " mypassword
+fi
+
+      echo ""
+      read -p "4. Nhập Email của website $domain
+ví dụ abc@gmail.com, giatuan@wptangtoc.com: " emailwp
+      if [ "$emailwp" = "${emailwp/@/}" ]; then
+        clear
+        echo "Email không đúng định dạng."
+        echo
+        exit
+      fi
+        if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
+            ssl_check="http://"
+		else
+			ssl_check="https://"
+        fi
+		_runing "Thiết lập WordPress"
+      wp core install --url="${ssl_check}""${domain}" --title="$SiteTitle" --admin_user="$idusername" --admin_password="$mypassword" --admin_email="$emailwp" --allow-root >/dev/null 2>&1
+    fi
+  fi
+
+  echo '
+# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+# END WordPress' >/usr/local/lsws/"$domain"/html/.htaccess
+
+    if [[ "$dongyconfig" = "y" ]]; then
+  wp language core install vi --path=/usr/local/lsws/"$NAME"/html --activate --allow-root >/dev/null 2>&1
+  wp option update timezone_string "Asia/Ho_Chi_Minh" --path=/usr/local/lsws/"$domain"/html --allow-root >/dev/null 2>&1
+  wp rewrite structure '/%postname%/' --path=/usr/local/lsws/"$NAME"/html --allow-root >/dev/null 2>&1
+  		_rundone "Thiết lập WordPress"
+	fi
+	_runing "Phần quyền website $NAME"
+  chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$domain"/html
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  	_rundone "Phần quyền website $NAME"
+  clear
+blue='\033[1;34m'
+NC='\033[0m'
+echo -e "${blue}               ...:..........:...              
+           .:..      ....      ..:.           
+        .:.   .::------------::.   .:.        
+      ::.  .:---------------------:  .::      
+    .:.  :------------------------.    .:.    
+   ::  :-------------------------        ::   
+  ::       . .--:.        . :----         ::  
+ ::        :-------:      -------:      .  :: 
+ -  -:      --------:      --------     :-  - 
+:. .--.     .--------.     .-------:    --. .:
+-  :---      :--------      --------.  .--:  -
+-  :----      --------       -------   ---:  -
+-  :----:     .------. .     .------  ----:  -
+:. .-----.     :----- .-      -----. :----. .:
+ -  :-----      ----  ---      ---: .----:  - 
+ ::  -----:     .--. ----:     .--  -----  :: 
+  ::  -----:     :- .-----.     -. :----  ::  
+   ::  :----.       -------       .---:  ::   
+    .:.  :---      --------:      --:  .:.    
+      ::.  .-:    :---------:    :.  .::      
+        .:.       -----------      .:.        
+           .:...     ....     ...:.           
+              ...:..........:...     ${NC}"
+  echo "-------------------------------------------------------------------------"
+  echo "Bạn đã cài đặt WordPress $domain thành công."
+  echo "-------------------------------------------------------------------------"
+  echo "Domain			: ${ssl_check}${domain}"
+  echo "Thu_muc_website		: /usr/local/lsws/$domain/html/"
+  echo "database_name           : $DB_Name_web"
+  echo "database_user           : $DB_User_web"
+  echo "database_password       : $DB_Password_web"
+  echo "-------------------------------------------------------------------------"
+  if [[ "$dongyconfig" = "y" ]]; then
+    echo "Thong tin wordpress cua ban $domain"
+    echo "Ten Tieu de Website wordpress		: $SiteTitle "
+    echo "Duong dan truy cap wordpress admin	: ${ssl_check}${domain}/wp-admin"
+    echo "Id dang nhap wordpress			: $idusername "
+    echo "password wordpress			: ****************** "
+    echo "Email cua ban website			: $emailwp "
+    echo "-------------------------------------------------------------------------"
+  fi
+  echo
+
+fi
+
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "99" ]];then
+wptangtoc 1
+fi
+
