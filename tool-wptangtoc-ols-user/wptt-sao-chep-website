@@ -1,0 +1,401 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2022
+. /etc/wptt/echo-color
+
+NAME=$1
+NAME2=$2
+
+if [[ $NAME = "98" ]];then
+NAME=""
+fi
+
+if [[ $NAME = '' ]];then
+. /etc/wptt/tenmien
+echo ""
+echo ""
+echo "Lựa chọn domain hoặc subdomain bạn muốn sao chép: "
+echo ""
+lua_chon_NAME
+fi
+
+
+
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+	wptangtoc 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+    clear
+	echoDo "Tên miền không tồn tại trên hệ thống này"
+    sleep 3
+	wptangtoc 1
+    exit
+fi
+
+
+if [[ $2 = '' ]];then
+read -p "Nhập domain hoac subdomain bạn muốn thêm và sao chép vào
+    (vidu: wptangtoc.com, abc.wptangtoc.com ...) [0=Thoat]: " NAME2
+fi
+
+if [ "$NAME2" = '' ]; then
+  clear
+  echo "Ban chua nhap ten mien domain."
+  exit
+fi
+
+if [[ "$NAME2" = "0" ]]; then
+  clear
+  exit
+fi
+
+if [ "$NAME2" = "${NAME2/./}" ]; then
+  clear
+  echo "Domain ten mien nhap khong dung dinh dang."
+  exit
+fi
+
+path2="/etc/wptt/vhost/.$NAME2.conf"
+if [[ -f "$path2" ]]; then
+  clear
+  echo "Domain đã tồn tại trên hệ thống."
+  echo "Muốn sử dụng tính năng này vui lòng xóa domain $NAME2 của bạn đi"
+  echo
+  exit
+fi
+
+#kiem tra phan loai bo http:// va www
+if [[ $(echo $NAME2 | grep '://') ]];then
+    NAME2=$(echo $NAME2 | cut -f3 -d '/')
+fi
+
+if [[ $(echo $NAME2 | grep 'www.') ]];then
+    NAME2=$(echo $NAME2 | sed 's/^www.//g')
+fi
+
+
+USER=${NAME2//[-._]/wp}
+
+pathuser="/home/$USER"
+if ! [[ ! -d "$pathuser" ]]; then
+  clear
+  echo "User da ton tai tren VPS."
+  echo
+  exit
+fi
+
+
+. /etc/wptt/.wptt.conf
+
+work_cpucore=$(ulimit -n)
+cpucore=$(grep -c ^processor /proc/cpuinfo)
+max_client=$(expr $work_cpucore \* $cpucore \* 2)
+max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
+max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
+tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+
+_runing "Thêm domain $NAME2 vào hệ thống"
+
+check_ky_tu=$(echo $USER | wc -c)
+if (( $check_ky_tu > 32 ));then
+	USER=$(echo $USER | cut -c 1-30)
+fi
+
+useradd $USER -p -m -d /home/$USER >/dev/null 2>&1
+if [[ ! -d /home/$USER ]];then
+	random=$(
+	date +%s | sha256sum | base64 | head -c 2
+	echo
+)
+
+USER=${NAME2//[-._]/$random}
+USER=$(echo $USER | tr '[:upper:]' '[:lower:]')
+check_ky_tu2=$(echo $USER | wc -c)
+if (( $check_ky_tu2 > 32 ));then
+	USER=$(echo $USER | cut -c 1-30)
+fi
+useradd "$USER" -p -m -d /home/"$USER" >/dev/null 2>&1
+fi
+
+
+if [[ ! -d /home/$USER ]];then
+	_runloi "Thêm domain $NAME vào hệ thống"
+	echoDo "Đã có lỗi vấn đề về hệ điều hành không thể tạo user mới"
+	wptangtoc 1
+	exit
+fi
+
+
+echo "virtualhost $NAME2 {
+  vhRoot                  /usr/local/lsws/$NAME2/
+  configFile              /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
+  allowSymbolLink         1
+  enableScript            1
+  restrained              1
+  maxKeepAliveReq         $max_client
+  setUIDMode              2
+  user                    $USER
+  group                   $USER
+}" >>/usr/local/lsws/conf/httpd_config.conf
+sed -i "/listener http/a map 		$NAME2 $NAME2" /usr/local/lsws/conf/httpd_config.conf
+mkdir /usr/local/lsws/conf/vhosts/$NAME2/
+touch /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
+NAMEPHP=${NAME2//[-._]/}
+echo "docRoot                   /usr/local/lsws/$NAME2/html
+vhDomain                  $NAME2
+enableGzip                1
+cgroups                   0
+
+
+index  {
+  useServer               0
+  indexFiles              index.html index.php
+  autoIndex               0
+}
+
+scripthandler  {
+  add                     lsapi:$NAMEPHP php
+}
+
+accessControl  {
+  allow                   *
+}
+
+lsrecaptcha  {
+  enabled                 1
+  type                    0
+}
+
+extprocessor $NAMEPHP {
+  type                    lsapi
+  address                 uds://tmp/lshttpd/$NAMEPHP.sock
+  maxConns                $max_client_php
+  env                     PHP_LSAPI_CHILDREN=$max_client_php
+  initTimeout             60
+  retryTimeout            0
+  pcKeepAliveTimeout      25
+  respBuffer              0
+  autoStart               2
+  path                    /usr/local/lsws/lsphp74/bin/lsphp
+  backlog                 100
+  instances               1
+  extUser                 $USER
+  extGroup                $USER
+  runOnStartUp            2
+  priority                0
+  memSoftLimit            ${rong_ram_mb}M
+  memHardLimit            ${rong_ram_mb}M
+  procSoftLimit           $max_client
+  procHardLimit           $max_client
+}
+
+context / {
+  location                /usr/local/lsws/$NAME2/html
+  allowBrowse             1
+  extraHeaders            <<<END_extraHeaders
+X-XSS-Protection 1;mode=block
+X-Frame-Options SAMEORIGIN
+Referrer-Policy strict-origin-when-cross-origin
+X-Content-Type-Options nosniff
+X-Powered-By WPTangTocOLS
+permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+  END_extraHeaders
+
+
+  rewrite  {
+
+  }
+  addDefaultCharset       off
+
+  phpIniOverride  {
+
+  }
+}
+
+rewrite  {
+  enable                  1
+  autoLoadHtaccess        1
+/usr/local/lsws/$NAME2/html/.htaccess
+}
+
+vhssl  {
+  keyFile                 /etc/letsencrypt/live/$NAME2/privkey.pem
+  certFile                /etc/letsencrypt/live/$NAME2/cert.pem
+  certChain               0
+  CACertFile              /etc/letsencrypt/live/$NAME2/chain.pem
+  sslProtocol             24
+  renegProtection         1
+  sslSessionCache         1
+  sslSessionTickets       1
+  enableSpdy              15
+  enableQuic              1
+  enableStapling          1
+  ocspRespMaxAge          86400
+  ocspResponder           http://cert.int-x3.letsencrypt.org/
+  ocspCACerts             /etc/letsencrypt/live/$NAME2/chain.pem
+}
+
+module cache {
+checkPrivateCache   1
+checkPublicCache    1
+maxCacheObjSize     10000000
+maxStaleAge         200
+qsCache             1
+reqCookieCache      1
+respCookieCache     1
+ignoreReqCacheCtrl  1
+ignoreRespCacheCtrl 0
+storagePath /usr/local/lsws/$NAME2/luucache
+enableCache         0
+expireInSeconds     3600
+enablePrivateCache  0
+privateExpireInSeconds 3600
+  ls_enabled              1
+}" >/usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
+
+chown -R lsadm:nobody /usr/local/lsws/conf/vhosts/"$NAME2"
+chmod -R 750 /usr/local/lsws/conf/vhosts/"$NAME2"
+
+mkdir /usr/local/lsws/"$NAME2"
+mkdir /usr/local/lsws/"$NAME2"/html
+mkdir /usr/local/lsws/"$NAME2"/luucache
+chmod 755 /usr/local/lsws/"$NAME2"/html
+chmod 755 /usr/local/lsws/"$NAME2"/
+
+chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/html
+
+touch /usr/local/lsws/"$NAME2"/html/.htaccess
+echo '# BEGIN WordPress
+# Các nội dung nằm giữa `BEGIN WordPress` và `END WordPress` được tạo ra tự động, và chỉ nên được thay đổi thông qua các filter của WordPress. Mọi thay đổi tới thành phần này có thể sẽ bị mất và ghi đè.
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+
+# END WordPress' >/usr/local/lsws/"$NAME2"/html/.htaccess
+
+_rundone "Thêm domain $NAME2 vào hệ thống"
+
+name_db=${NAME2//[-._]/}
+ramdom_db=$(date +%s | sha256sum | base64 | head -c 18 ; echo)
+database=${name_db}_${ramdom_db}_dbname
+username=${name_db}_${ramdom_db}_username
+password=$(date +%s | sha256sum | base64 | head -c 36 ; echo)
+
+
+#toi ky tu database la 64
+check_ky_tu_database_name=$(echo $database | wc -c)
+if (( $check_ky_tu_database_name > 60 ));then
+	database=$(echo $database | cut -c 1-60)
+fi
+
+#toi ky tu database la 64
+check_ky_tu_user_name=$(echo $username | wc -c)
+if (( $check_ky_tu_user_name > 60 ));then
+	username=$(echo $username | cut -c 1-60)
+fi
+_runing "Thêm database mới cho website $NAME2"
+mysql -u "$database_admin_username" -p"$database_admin_password" -e "DROP DATABASE IF EXISTS ${database}"
+mysql -u "$database_admin_username" -p"$database_admin_password" -e "CREATE DATABASE IF NOT EXISTS ${database}"
+mysql -u "$database_admin_username" -p"$database_admin_password" -e "DROP USER IF EXISTS '${username}'@'localhost'"
+mysql -u "$database_admin_username" -p"$database_admin_password" -e "CREATE USER IF NOT EXISTS '${username}'@'localhost' IDENTIFIED BY '${password}'"
+mysql -u "$database_admin_username" -p"$database_admin_password" -e "GRANT ALL PRIVILEGES ON ${database}.* TO '${username}'@'localhost' WITH GRANT OPTION"
+mysql -u "$database_admin_username" -p"$database_admin_password" -e "FLUSH PRIVILEGES"
+_rundone "Thêm database mới cho website $NAME2"
+
+php_ver_chon=${php_version_check//[-._]/}
+sed -E -i "s/lsphp[0-9]+/lsphp$php_ver_chon/g" /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
+_runing "Sao chép website $NAME sang website $NAME2"
+. /etc/wptt/vhost/."$NAME".conf
+mkdir -p "/usr/local/lsws/database"
+file_sql=${database}.sql
+duong_dan_thu_muc="/usr/local/lsws/database/$file_sql"
+mysqldump -u "$database_admin_username" -p"$database_admin_password" "$DB_Name_web" > "$duong_dan_thu_muc"
+mysql -h localhost -u "$database_admin_username" -p"$database_admin_password" "$database" < "$duong_dan_thu_muc"
+rm -f "$duong_dan_thu_muc"
+duong_dan_nguon_cu="/usr/local/lsws/$NAME/html"
+duong_dan_nguon_moi21="/usr/local/lsws/$NAME2"
+duong_dan_nguon_moi="/usr/local/lsws/$NAME2/html"
+cp -r "$duong_dan_nguon_cu" "$duong_dan_nguon_moi21"
+sed -i "/DB_HOST/s/'[^']*'/'localhost'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
+sed -i "/DB_NAME/s/'[^']*'/'$database'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
+sed -i "/DB_USER/s/'[^']*'/'$username'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
+sed -i "/DB_PASSWORD/s/'[^']*'/'$password'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
+cd /usr/local/lsws/"$NAME2"/html/
+wp search-replace "${NAME}" "${NAME2}" --path="$duong_dan_nguon_moi" --allow-root >/dev/null 2>&1
+wp cache flush --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+wp rewrite flush --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+checkplugin="/usr/local/lsws/$NAME2/html/wp-content/plugins/litespeed-cache"
+if [[ -d $checkplugin ]]; then
+  wp litespeed-purge all --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+fi
+chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/html
+
+mkdir -p /usr/local/backup-website/"$NAME2"
+mkdir -p /wptangtoc-ols
+mkdir -p /wptangtoc-ols/"$NAME2"
+mkdir -p /wptangtoc-ols/"$NAME2"/backup-website
+ln -s /usr/local/lsws/"$NAME2"/html /wptangtoc-ols/"$NAME2"
+ln -s /usr/local/backup-website/"$NAME2"/ /wptangtoc-ols/"$NAME2"/backup-website
+
+if [[ -f /usr/local/lsws/$NAME2/html/wp-content/db.php ]];then
+rm -f /usr/local/lsws/$NAME2/html/wp-content/db.php
+fi
+
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
+touch /etc/wptt/vhost/."$NAME2".conf
+echo "DB_Name_web=$database
+DB_User_web=$username
+DB_Password_web=$password
+Duong_Dan_thu_muc_web=/usr/local/lsws/$NAME2/html
+User_name_vhost=$USER" >/etc/wptt/vhost/."$NAME2".conf
+_rundone "Sao chép website $NAME sang website $NAME2"
+
+echo "==================================================================="
+echo "Hoàn tất sao chép $NAME sang $NAME2               "
+echo "==================================================================="
+echo "==================================================================="
+echo "Disk  : $(df -h | awk '$NF=="/"{printf "%d/%dGB (%s)\n", $3,$2,$5}')                        "
+echo "RAM   : $(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)\n", $3,$2,$3*100/$2 }')                         "
+echo "==================================================================="
+echo "DB_Name:  $database                                "
+echo "DB_User:  $username                                "
+echo "DB_Password:  $password				 "
+echo "duong dan thu muc website: /usr/local/lsws/$NAME2/html              "
+echo "moi thong tin tai khoan da duoc luu tru:  /etc/wptt/vhost/.$NAME2.conf    "
+echo "==================================================================="
+echo "Phần mềm phát triển bởi: Gia Tuấn"
+echo "==================================================================="
+checkdns=$(host $NAME2 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+if [[ "$checkdns" = "" ]]; then
+  checkdns=$(nslookup $NAME2 | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+fi
+
+ip=$(curl -s myip.directadmin.com)
+if [[ "$ip" = "" ]]; then
+  ip=$(curl -s ifconfig.me)
+fi
+
+if [[ "$checkdns" != "$ip" ]]; then
+  if [[ "$checkdns" = "" ]]; then
+      echo "Tên miền $NAME chưa được trỏ IP, giá trị IP của $NAME là không có giá trị nào, bạn vui lòng trỏ IP về $ip"
+  else
+      echo "Hãy trỏ DNS domain $NAME: $checkdns thành $ip để tận hưởng thành quả"
+  fi
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+wptangtoc 1
+fi
+

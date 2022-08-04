@@ -1,0 +1,194 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2022
+
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Quản lý WordPress => Bảo mật wp-admin 2 lớp                            |"
+echo "========================================================================="
+
+if [ "$(ls -A /etc/wptt/vhost)" ]; then
+    echo "========================================================================="
+    echo "Danh sách Domain đã kích hoạt bảo mật 2 lớp wp-admin:"
+    echo "========================================================================="
+    for entry in $(ls -A /etc/wptt/vhost); do
+        domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+        path="/usr/local/lsws/$domain/passwd/.mk"
+        i=1
+        if [[ -f "$path" ]]; then
+            checkauto="Đã kích hoạt"
+        else
+            checkauto="Chưa kích hoạt"
+        fi
+        echo "Website $domain $checkauto bảo mật 2 lớp wp-admin"
+    done
+    echo "========================================================================="
+    echo
+fi
+
+
+
+echo ""
+echo ""
+echo "Lựa chọn website muốn kích hoạt bảo mật 2 lớp wp-admin: "
+echo ""
+function lua_chon_NAME() {
+    NAME=""
+    if [ "$(ls -At /etc/wptt/vhost)" ]; then
+        selects=()
+        for entry in $(ls -A /etc/wptt/vhost); do
+            NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+            if [[ ! -f /usr/local/lsws/$NAME/passwd/.mk ]]; then
+                selects+=("$NAME")
+            fi
+        done
+        PS3="
+-//- Nhập lựa chọn website của bạn [0=Thoát]: "
+        select select in ${selects[@]}; do
+            NAME=$select
+            index=$REPLY
+            break
+        done
+    else
+        clear
+        echo "Không có doamin trên hệ thống của bạn."
+        exit
+    fi
+}
+
+
+lua_chon_NAME
+
+. /etc/wptt/echo-color
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+	. /etc/wptt/wptt-bao-mat-main 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+    clear
+    echoDo "Domain khong ton tai tren VPS."
+    sleep 3
+	. /etc/wptt/wptt-bao-mat-main 1
+    exit
+fi
+
+pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
+if [[ ! -f "$pathcheckwp" ]]; then
+  clear
+  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
+  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  sleep 2
+  	. /etc/wptt/wptt-bao-mat-main 1
+  exit
+fi
+
+pathcheck2="/usr/local/lsws/$NAME/passwd/.mk"
+if [[ -f "$pathcheck2" ]]; then
+  echoDo "Bạn đã kích hoạt bảo mật 2 lớp wp-admin rồi"
+  	. /etc/wptt/wptt-bao-mat-main 1
+fi
+
+echo "Xác nhận bạn có muốn tạo bảo mật 2 lớp wp-admin? "
+prompt="Nhập lựa chọn của bạn [1-2]: "
+dongy="n"
+options=("Đồng ý" "Không đồng ý")
+PS3="$prompt"
+select opt in "${options[@]}"; do
+	case "$REPLY" in
+		1)
+			dongy="y"
+			break
+			;;
+
+		2)
+			dongy="n"
+			break
+			;;
+
+		$((${#options[@]} + 1)))
+			printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+			break
+			;;
+		*)
+			printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+			break
+			;;
+	esac
+done
+
+
+if [[ "$dongy" = "y" ]]; then
+_runing "Kích hoạt bảo mật 2 lớp wp-admin cho website $NAME"
+  mkdir -p /usr/local/lsws/"$NAME"/passwd
+  Post_Install_Regenerate_Webadmin_Console_Passwd() {
+    if [[ "$Server_Edition" = "OLS" ]]; then
+      PHP_Command="admin_php"
+    else
+      PHP_Command="admin_php5"
+    fi
+
+    Webadmin_Pass=$(
+      head /dev/urandom | tr -dc A-Za-z0-9 | head -c 36
+      echo ''
+    )
+    id_ols_admin=$(
+      date +%s | sha256sum | base64 | head -c 24
+      echo
+    )
+    Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
+    echo "" >/usr/local/lsws/"$NAME"/passwd/.mk
+    echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/"$NAME"/passwd/.mk
+  }
+  Post_Install_Regenerate_Webadmin_Console_Passwd
+
+  echo 'realm '${NAME}wp' {
+
+  userDB  {
+    location              /usr/local/lsws/'$NAME'/passwd/.mk
+  }
+}
+
+context exp:wp-login.php {
+  location                $DOC_ROOT/$0
+  allowBrowse             1
+  realm                   '${NAME}wp'
+
+  accessControl  {
+    allow                 ALL
+  }
+
+  rewrite  {
+
+  }
+  addDefaultCharset	  off
+
+  phpIniOverride  {
+
+  }
+}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+
+
+  echo "id_dang_nhap_wordpress_2=$id_ols_admin
+password_dang_nhap_wordpress_2=$Webadmin_Pass" >>/etc/wptt/vhost/."$NAME".conf
+  chown nobody:nobody /usr/local/lsws/"$NAME"/passwd/.mk
+  chmod 400 /usr/local/lsws/"$NAME"/passwd/.mk
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  _rundone "Kích hoạt bảo mật 2 lớp wp-admin cho website $NAME"
+  echo "============================================================================="
+  echo "Bạn hãy lưu trữ thông tin này để lại sử dụng"
+  echo "============================================================================="
+  echo "ID đăng nhập WordPress: $id_ols_admin"
+  echo "PassWord đăng nhập WordPress: $Webadmin_Pass"
+  echo "============================================================================="
+  echo "Bạn có thể xem lại tài khoản: /etc/wptt/vhost/.$NAME.conf"
+  echo "Hoặc xem lại tài khoản trong menu WPTangToc OLS"
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-bao-mat-main 1
+fi
