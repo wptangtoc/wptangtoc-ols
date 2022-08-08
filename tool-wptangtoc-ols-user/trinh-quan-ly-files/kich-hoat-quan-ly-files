@@ -1,0 +1,231 @@
+#!/bin/bash
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Quản lý trình quản lý File (File Manager) => Kích hoạt                 |"
+echo "========================================================================="
+. /etc/wptt/echo-color
+function lua_chon_NAME() {
+	NAME=""
+	if [ "$(ls -At /etc/wptt/vhost)" ]; then
+		selects=()
+		for entry in $(ls -A /etc/wptt/vhost); do
+			NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+			if [[ ! -d /usr/local/lsws/"$NAME"/html/quan-ly-files ]]; then
+				selects+=("$NAME")
+			fi
+		done
+
+if [[ $selects = '' ]];then
+echo "Tất cả domain trên hệ thống đã được kích hoạt trình quản lý files"
+  . /etc/wptt/wptt-quan-ly-files-main 1
+fi
+
+		PS3="
+-//- Nhập lựa chọn website của bạn [0=Thoát]: "
+		select select in ${selects[@]}; do
+			NAME=$select
+			index=$REPLY
+			break
+		done
+	else
+		clear
+		echoDo "Tất cả domain trên hệ thống đều đã được kích hoạt sử dụng File Manager"
+. /etc/wptt/wptt-quan-ly-files-main 1
+		exit
+	fi
+}
+
+echo ""
+echo ""
+echo "Lựa chọn website muốn kích hoạt trình quản lý files: "
+echo ""
+lua_chon_NAME
+
+
+. /etc/wptt/echo-color
+
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+    . /etc/wptt/wptt-quan-ly-files-main 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+    clear
+	echoDo "Tên miền không tồn tại trên hệ thống này"
+    sleep 3
+    . /etc/wptt/wptt-quan-ly-files-main 1
+    exit
+fi
+
+if [[ -d /usr/local/lsws/$NAME/html/quan-ly-files ]];then
+echoDo "Bạn đã kích hoạt trình quản lý files rồi"
+. /etc/wptt/wptt-quan-ly-files-main 1
+fi
+
+_runing "Cài Đặt FileManager cho website $NAME"
+password_quan_ly_file=$(
+      head /dev/urandom | tr -dc A-Za-z0-9 | head -c 36
+      echo ''
+)
+
+
+cd /usr/local/lsws/$NAME/html
+wget -q https://wptangtoc.com/share/quan-ly-files.zip
+if [[ ! -f quan-ly-files.zip ]];then
+_runloi "Cài Đặt FileManager cho website $NAME"
+echo "Download thất bại vui lòng thử lại sau"
+. /etc/wptt/wptt-quan-ly-files-main 1
+fi
+
+unzip -oq quan-ly-files.zip
+rm -f quan-ly-files.zip
+
+
+sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
+sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
+sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
+sed -i '/password_quan_ly_file/d' /etc/wptt/vhost/.$NAME.conf
+
+user_quan_ly_file=$(
+      head /dev/urandom | tr -dc A-Za-z0-9 | head -c 24
+      echo ''
+)
+
+cd /usr/local/lsws/$NAME/html/quan-ly-files
+php ma-hoa-wptangtoc.php $user_quan_ly_file $password_quan_ly_file
+
+#chown -R nobody:nobody /usr/local/lsws/$NAME/html/quan-ly-files
+
+echo "id_quan_ly_files=$user_quan_ly_file
+password_quan_ly_file=$password_quan_ly_file" >>/etc/wptt/vhost/.$NAME.conf
+
+
+  mkdir -p /usr/local/lsws/"$NAME"/passwd
+  Post_Install_Regenerate_Webadmin_Console_Passwd() {
+    if [[ "$Server_Edition" = "OLS" ]]; then
+      PHP_Command="admin_php"
+    else
+      PHP_Command="admin_php5"
+    fi
+
+    Webadmin_Pass=$(
+      head /dev/urandom | tr -dc A-Za-z0-9 | head -c 36
+      echo ''
+    )
+    id_ols_admin=$(
+      date +%s | sha256sum | base64 | head -c 24
+      echo
+    )
+    Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
+    echo "" >/usr/local/lsws/"$NAME"/passwd/.files
+    echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/"$NAME"/passwd/.files
+  }
+  Post_Install_Regenerate_Webadmin_Console_Passwd
+
+#xóa bảo mật 2 lớp
+sed -i -e '/^realm '${NAME}files'/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+sed -i -e '/^context \/quan-ly-files\//,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+
+#add bảo mật 2 lớp
+
+echo 'realm '${NAME}files' {
+  userDB  {
+    location              /usr/local/lsws/'$NAME'/passwd/.files
+  }
+}
+context /quan-ly-files/ {
+  location                quan-ly-files/
+  allowBrowse             1
+  realm                   '${NAME}files'
+
+  accessControl  {
+    allow                 ALL
+  }
+
+  rewrite  {
+
+  }
+  addDefaultCharset	  off
+
+  phpIniOverride  {
+php_value upload_max_filesize 30G
+php_value max_file_uploads 10000
+php_value post_max_size 30G
+php_value max_execution_time 10000
+php_value max_input_time 10000
+php_admin_value open_basedir ""
+  }
+}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+
+echo "id_dang_nhap_quan_ly_file_cap_2=$id_ols_admin
+password_dang_nhap_quan_ly_file_cap_2=$Webadmin_Pass" >>/etc/wptt/vhost/.$NAME.conf
+chown nobody:nobody /usr/local/lsws/"$NAME"/passwd/.files
+chmod 400 /usr/local/lsws/"$NAME"/passwd/.files
+
+. /etc/wptt/vhost/.$NAME.conf
+
+phien_ban_php_domain_check=${phien_ban_php_domain//[-._]/}
+if [[ $phien_ban_php_domain_check = '' ]];then
+phien_ban_php_domain_check='74'
+fi
+
+check_zip_php=$(/usr/local/lsws/lsphp${phien_ban_php_domain_check}/bin/php -m | grep 'zip')
+if [[ $check_zip_php = '' ]];then
+. /etc/wptt/php/install-php-zip "$phien_ban_php_domain_check" >/dev/null 2>&1
+fi
+
+chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html/quan-ly-files
+chmod 400 /usr/local/lsws/"$NAME"/html/quan-ly-files/.password-giatuan.json
+chmod 400 /usr/local/lsws/"$NAME"/html/quan-ly-files/.user-giatuan.json
+
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
+_rundone "Cài Đặt FileManager cho website $NAME"
+echo "================================================"
+
+
+echo "========================================================================="
+echo "|Tài khoản quản lý files(File Manager) của website $NAME               |"
+echo "========================================================================="
+
+if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
+echo "========================================================================="
+echo 'Đường dẫn truy cập:' "http://$NAME/quan-ly-files"
+echo "========================================================================="
+else
+echo "========================================================================="
+echo 'Đường dẫn truy cập:' "https://$NAME/quan-ly-files"
+echo "========================================================================="
+fi
+
+printf '%36.40s:%40.40s\n' 'User tài khoản cấp 2' "$id_ols_admin"
+printf '%36.40s:%40.40s\n' 'PassWord Tài khoản cấp 2' "$Webadmin_Pass"
+printf '%37.40s:%40.40s\n' 'User tài khoản Quản lý file' "$user_quan_ly_file"
+printf '%36.40s:%40.40s\n' 'PassWord tài khoản Quản lý file' "$password_quan_ly_file"
+
+echo ""
+echo "Ghi chú: mọi tài khoản sẽ được lưu trữ lại trong WPTangToc OLS"
+echo "Bạn có thể vào menu WPTangToc OLS để xem lại tài khoản"
+echo "============================================================================="
+echo "Khuyến nghị: khi sử dụng xong FileManager thì vui lòng xóa FileManager để nâng cao bảo mật webserver"
+echo "khi nào cần thì hãy quay trở lại kích hoạt lại FileManager"
+echo "============================================================================="
+
+if [[ -d /usr/local/lsws/modsec/owasp ]]; then
+echo "Ghi chú: nếu bạn đang sử dụng tính năng bảo mật modsecurity thì khi sửa file wp-config.php thì sẽ bị lỗi 403"
+echo "Nếu bạn muốn mọi thứ hoạt động full hết hãy tắt modsecurity khi sử dụng FileManager"
+echo "Khi sử dụng xong thì có thể quay lại bật modsecurity"
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-quan-ly-files-main 1
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-quan-ly-files-main 1
+fi
+
