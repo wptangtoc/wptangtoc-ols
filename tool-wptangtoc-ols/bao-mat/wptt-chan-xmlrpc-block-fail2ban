@@ -1,0 +1,133 @@
+#!/bin/bash
+
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Bảo mật => Kích hoạt bảo mật xmlrpc WordPress                             |"
+echo "========================================================================="
+echo ""
+echo ""
+echo ""
+if [ "$(ls -A /etc/wptt/vhost)" ]; then
+    echo "========================================================================="
+    echo "Danh sách domain đã kích hoạt bảo mjâ xmlrpc WordPress:"
+    echo "========================================================================="
+    for entry in $(ls -A /etc/wptt/vhost); do
+        domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+        domain2=${domain//[-._]/wp}
+        path="/etc/fail2ban/filter.d/wordpress-dangnhap-xmlrpc-$domain2.conf"
+        i=1
+        if [[ -f "$path" ]]; then
+            checkauto="Đã kích hoạt"
+        else
+            checkauto="Chưa kích hoạt"
+        fi
+        echo "Website $domain $checkauto bảo mật xmlrpc wp-admin"
+    done
+    echo "========================================================================="
+    echo
+fi
+
+echo ""
+echo ""
+echo "Lựa chọn website kích hoạt bảo mậ xmlrpc WordPress:"
+echo ""
+function lua_chon_NAME() {
+    NAME=""
+    if [ "$(ls -At /etc/wptt/vhost)" ]; then
+        selects=()
+        for entry in $(ls -A /etc/wptt/vhost); do
+            NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+            NAME2=${NAME//[-._]/wp}
+            if [[ ! -f /etc/fail2ban/filter.d/wordpress-dangnhap-xmlrpc-$NAME2.conf ]]; then
+				if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]];then
+                selects+=("$NAME")
+				fi
+            fi
+        done
+
+if [[ $selects = '' ]];then
+echo "Tất cả website WordPress trên hệ thống đã được kích hoạt chống Brute Force hết rồi"
+. /etc/wptt/wptt-bao-mat-main 1
+fi
+
+PS3="
+-//- Nhập lựa chọn website của bạn [0=Thoát]: "
+        select select in ${selects[@]}; do
+            NAME=$select
+            index=$REPLY
+            break
+        done
+    else
+        clear
+        echo "Khong co domain tren he thong cua ban."
+        exit
+    fi
+}
+
+lua_chon_NAME
+
+
+if [[ $NAME = '' || $NAME = 0 ]];then
+. /etc/wptt/wptt-bao-mat-main 1
+fi
+
+. /etc/wptt/echo-color
+NAME2=${NAME//[-._]/wp}
+if [[ -f /etc/fail2ban/filter.d/wordpress-dangnhap-xmlrpc-$NAME2.conf ]]; then
+    echo "website $NAME đã kích hoạt chặn xmlrpc.php trước đó rồi"
+	. /etc/wptt/wptt-bao-mat-main 1
+    exit
+fi
+
+_runing "Kích hoạt bảo mật xmlrpc.php cho website $NAME"
+if [[ ! $(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf| grep 'accesslog') ]]; then
+sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+echo '
+errorlog $VH_ROOT/logs/error.log {
+  useServer               1
+  logLevel                ERROR
+  rollingSize             10M
+}
+
+accesslog $VH_ROOT/logs/access.log {
+  useServer               0
+  rollingSize             10M
+  keepDays                30
+  compressArchive         1
+}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+fi
+
+mkdir -p /usr/local/lsws/"$NAME"/logs
+chown -R nobody:nobody /usr/local/lsws/"$NAME"/logs
+chmod 700 /usr/local/lsws/"$NAME"/logs
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
+echo '[wordpress-dangnhap-xmlrpc-'$NAME2']
+enabled = true
+action = iptables-multiport[name=wordpress, port="http,https", protocol=tcp]
+port = http,https
+filter = wordpress-dangnhap-xmlrpc-'$NAME2'
+logpath = /usr/local/lsws/'$NAME'/logs/access.log
+bantime = 7200
+maxretry = 2
+findtime = 300
+' >>/etc/fail2ban/jail.local
+
+sed -i "s/banaction = iptables-multiport/banaction = firewallcmd-ipset/g" /etc/fail2ban/jail.local
+
+echo '[Definition]
+failregex = ^<HOST> .* "POST /xmlrpc.php HTTP.* 200' >>/etc/fail2ban/filter.d/wordpress-dangnhap-xmlrpc-$NAME2.conf
+fail2ban-client reload >/dev/null 2>&1
+systemctl restart fail2ban
+
+
+_rundone "Kích hoạt bảo mật xmlrpc.php cho website $NAME"
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-bao-mat-main 1
+fi
+
