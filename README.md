@@ -14,7 +14,7 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Đây là phần mềm script cài đặt thiết lập webserver và giúp bạn dễ dàng quản trị webserver, phầm mềm này mình phát triển tập trung vào mã nguồn WordPress là chủ yếu, chỉ đơn vì công việc của mình liên quan rất nhiều về WordPress và WordPress là sở trưởng của mình vì vậy mình chỉ tập trung toàn bộ nguồn lực tối ưu webserver dành cho WordPress.
 
-Phần mềm này hỗ trợ: OpenLiteSpeed + PHP (8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
+Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.7 & 10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
 
 <h3>Hướng dẫn sử dụng</h3>
 
@@ -58,6 +58,41 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Nhật ký cập nhật phát triển : <a href="https://wptangtoc.com/changelog-wptangtoc-ols/">Changelog – WPTangToc OLS</a></li>
 </ul>
 
+
+<h3>Tính năng gồm có: </h3>
+<ul>
+<li>Sao lưu và khôi phục website</li>
+<li>Sao lưu website tự động</li>
+<li>Sao lưu database</li>
+<li>Hỗ trợ Google Drive và Onedrive lưu trữ đám mây backup website</li>
+<li>Preload Cache</li>
+<li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
+<li>Hỗ trợ cài đặt SSL trả phí</li>
+<li>Có thể thêm không giới hạn website</li>
+<li>PhpSuExec mỗi một website một user, để nâng cao bảo mật và dễ dùng quản lý tài nguyên</li>
+<li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
+<li>Tối ưu wp cron</li>
+<li>Tối ưu database</li>
+<li>Hỗ trợ nhiều phiên bản PHP cùng lúc</li>
+<li>Hỗ trợ PHPMyAdmin và FileManager</li>
+<li>Hỗ trợ php ioncube</li>
+<li>Sử dụng LSPHP tùy biến hiệu suất tốt hơn PHP Thuần</li>
+<li>Hỗ trợ kích hoạt giao thức QUIC http/3 mới nhất</li>
+<li>Chống brute force WordPress</li>
+<li>Chống DDOS</li>
+<li>Hỗ trợ nhiều IP cùng lúc trên máy chủ</li>
+<li>Đăng nhập username riêng domain</li>
+<li>LockDown WordPress</li>
+<li>Quét virus</li>
+<li>Khóa IP</li>
+<li>Chuyển MYISAM sang INNODB</li>
+<li>Chống scan port</li>
+<li>Hỗ trợ tự động update WPTangToc OLS</li>
+<li>Hỗ trợ chặn quốc gia truy cập website hoặc chỉ cho quốc gia nào đó được phép truy cập thôi</li>
+<li>Cảnh báo login ssh</li>
+<li>Cảnh báo service webserver quan trọng và tự động reboot lại service đó nếu nó dừng hoạt động</li>
+<li>Vân vân và mây mây...</li>
+</ul>
 
 <h3>License: GPLv3</h3>
 
