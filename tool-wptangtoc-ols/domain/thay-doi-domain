@@ -1,0 +1,149 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2022
+. /etc/wptt/echo-color
+
+echo 'Tính năng này mới beta để test'
+exit
+NAME=$1
+if [[ $NAME = "98" ]];then
+NAME=""
+fi
+
+if [[ $NAME = '' ]];then
+. /etc/wptt/tenmien
+echo ""
+echo ""
+echo "Lựa chọn domain hoặc subdomain bạn muốn thay đổi "
+echo ""
+lua_chon_NAME
+fi
+
+
+#Biến NAME là domain cũ
+#biến NAME2 là domain mới
+
+read -p "Nhập domain hoac subdomain bạn muốn thêm và sao chép vào
+    (vidu: wptangtoc.com, abc.wptangtoc.com ...) [0=Thoat]: " NAME2
+
+NAME2=$(echo $NAME2 | tr '[:upper:]' '[:lower:]')
+
+path2="/etc/wptt/vhost/.$NAME2.conf"
+if [[ -f "$path2" ]]; then
+  clear
+  echo "Domain đã tồn tại trên hệ thống."
+  echo "Muốn sử dụng tính năng này vui lòng xóa domain $NAME2 của bạn đi"
+  echo
+  exit
+fi
+
+#kiem tra phan loai bo http:// va www
+if [[ $(echo $NAME2 | grep '://') ]];then
+    NAME2=$(echo $NAME2 | cut -f3 -d '/')
+fi
+
+if [[ $(echo $NAME2 | grep 'www.') ]];then
+    NAME2=$(echo $NAME2 | sed 's/^www.//g')
+fi
+
+mv /usr/local/lsws/conf/vhosts/"$NAME" /usr/local/lsws/conf/vhosts/"$NAME2"
+mv /usr/local/lsws/$NAME /usr/local/lsws/$NAME2
+
+vhosts=$(ls -At /usr/local/lsws/conf/vhosts/"$NAME2")
+for vhost in $vhosts[@];do
+sed -i "s/$NAME/$NAME2/g" /usr/local/lsws/conf/vhosts/"$NAME2"/$vhost
+done
+
+mv /usr/local/lsws/conf/vhosts/$NAME2/$NAME.conf /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
+mv /usr/local/lsws/conf/vhosts/$NAME2/$NAME.conf0 /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf0
+mv /usr/local/lsws/conf/vhosts/$NAME2/"$NAME.conf0,v" /usr/local/lsws/conf/vhosts/$NAME2/"$NAME2.conf0,v"
+mv /usr/local/lsws/conf/vhosts/$NAME2/$NAME.conf.bak /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf.bak
+mv /usr/local/lsws/conf/vhosts/$NAME2/$NAME.conf.txt /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf.txt
+
+if [[ -f /usr/local/lsws/$NAME2/html/robots.txt ]];then
+sed -i "s/$NAME/$NAME2/g" /usr/local/lsws/$NAME2/html/robots.txt
+fi
+
+. /etc/wptt/vhost/.$NAME/conf
+pkill -u $User_name_vhost >/dev/null 2>&1
+usermod -R wptangtoc-ols "$User_name_vhost" >/dev/null 2>&1
+userdel "$User_name_vhost" >/dev/null 2>&1
+
+if [[ -d /home/$User_name_vhost ]];then
+	rm -rf /home/$User_name_vhost
+fi
+
+USER=${NAME2//[-._]/wp}
+
+#ky tu toi da là 32 ký tự user trong linux
+check_ky_tu=$(echo $USER | wc -c)
+if (( $check_ky_tu > 32 ));then
+	USER=$(echo $USER | cut -c 1-30)
+fi
+
+# useradd $USER -p -m -d /home/$USER >/dev/null 2>&1
+useradd $USER -p -m -d /usr/local/lsws/$NAME2 >/dev/null 2>&1
+if [[ $(cat /etc/passwd | cut -f1 -d ':' | grep -w $USER) = '' ]];then
+	random=$(
+	date +%s | sha256sum | base64 | head -c 2
+	echo
+)
+
+USER=${NAME2//[-._]/$random}
+USER=$(echo $USER | tr '[:upper:]' '[:lower:]')
+
+check_ky_tu2=$(echo $USER | wc -c)
+if (( $check_ky_tu2 > 32 ));then
+	USER=$(echo $USER | cut -c 1-30)
+fi
+useradd $USER -p -m -d /usr/local/lsws/$NAME2 >/dev/null 2>&1
+# useradd "$USER" -p -m -d /home/"$USER" >/dev/null 2>&1
+fi
+
+#xac dinh user đã được tạo lập chưa
+if [[ $(cat /etc/passwd | cut -f1 -d ':' | grep -w $USER) = '' ]];then
+	_runloi "Thêm domain $NAME vào hệ thống"
+	echoDo "Đã có lỗi vấn đề về hệ điều hành không thể tạo user mới"
+	. /etc/wptt/wptt-domain-main 1
+	exit
+fi
+
+#xoa cau hinh server
+sed -i "/$NAME $NAME/d" /usr/local/lsws/conf/httpd_config.conf
+sed -i -e '/^virtualhost '$NAME'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf 
+echo "virtualhost $NAME2 {
+vhRoot                  /usr/local/lsws/$NAME2/
+configFile              /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
+allowSymbolLink         1
+enableScript            1
+restrained              1
+maxKeepAliveReq         $max_client
+setUIDMode              2
+user                    $USER
+group                   $USER
+}" >>/usr/local/lsws/conf/httpd_config.conf
+
+sed -i "/listener http/a map 		$NAME $NAME" /usr/local/lsws/conf/httpd_config.conf
+
+mv /etc/wptt/vhost/.$NAME/conf /etc/wptt/vhost/.$NAME2/conf
+
+wp search-replace "//${NAME}" "//${NAME2}" --path="/usr/local/lsws/$NAME2/html" --allow-root >/dev/null 2>&1
+
+
+. /etc/wptt/.wptt.conf
+if [[ "$NAME" = "$Website_chinh" ]]; then
+  sed -i "/keyFile/d" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a keyFile              \/etc\/letsencrypt\/live\/$NAME2\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a certFile             \/etc\/letsencrypt\/live\/$NAME2\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a CACertFile           \/etc\/letsencrypt\/live\/$NAME2\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i '/$Website_chinh/d' /etc/wptt/.wptt.conf
+  echo "Website_chinh=$NAME2" >> /etc/wptt/.wptt.conf
+fi
+
+
+echo "Hoàn tất đổi domain $NAME sang $NAME2"
+
