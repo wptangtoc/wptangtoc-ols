@@ -85,6 +85,9 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>LockDown WordPress</li>
 <li>Quét virus</li>
 <li>Khóa IP</li>
+<li>Chống ddos</li>
+<li>Sao chép website</li>
+<li>Giả lập website</li>
 <li>Chuyển MYISAM sang INNODB</li>
 <li>Chống scan port</li>
 <li>Hỗ trợ tự động update WPTangToc OLS</li>
