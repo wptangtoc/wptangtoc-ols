@@ -66,6 +66,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Sao lưu database</li>
 <li>Hỗ trợ Google Drive và Onedrive lưu trữ đám mây backup website</li>
 <li>Preload Cache</li>
+<li>Không giới hạn thêm domain</li>
 <li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
 <li>Hỗ trợ cài đặt SSL trả phí</li>
 <li>Có thể thêm không giới hạn website</li>
@@ -90,6 +91,15 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Giả lập website</li>
 <li>Chuyển MYISAM sang INNODB</li>
 <li>Chống scan port</li>
+<li>Quản lý Database</li>
+<li>Quản lý PHP</li>
+<li>Quản lý SSH</li>
+<li>Quản lý Cache</li>
+<li>Thiết lập SSL trả phí</li>
+<li>Quản lý Swap</li>
+<li>Mod Security</li>
+<li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive)</li>
+<li>Quản lý Wordpress</li>
 <li>Hỗ trợ tự động update WPTangToc OLS</li>
 <li>Hỗ trợ chặn quốc gia truy cập website hoặc chỉ cho quốc gia nào đó được phép truy cập thôi</li>
 <li>Cảnh báo login ssh</li>
