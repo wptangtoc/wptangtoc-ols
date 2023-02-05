@@ -14,7 +14,7 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Đây là phần mềm script cài đặt thiết lập webserver và giúp bạn dễ dàng quản trị webserver, phầm mềm này mình phát triển tập trung vào mã nguồn WordPress là chủ yếu, chỉ đơn vì công việc của mình liên quan rất nhiều về WordPress và WordPress là sở trưởng của mình vì vậy mình chỉ tập trung toàn bộ nguồn lực tối ưu webserver dành cho WordPress.
 
-Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.7 & 10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
+Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.2 & 8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
 
 <h3>Hướng dẫn sử dụng</h3>
 
@@ -49,7 +49,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <h3>Thảo luận giải đáp các thắc mắc: </h3>
 
 <ul>
-<li>Group facebook : <a href="https://www.facebook.com/groups/wptangtoc/">Cộng đồng tăng tốc WordPress 2022</a></li>
+<li>Group facebook : <a href="https://www.facebook.com/groups/wptangtoc/">Cộng đồng tăng tốc WordPress 2023</a></li>
 </ul>
 
 
@@ -109,7 +109,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 
 <h3>License: GPLv3</h3>
 
-Đây là phần mềm miễn phí cống hiến cho cộng đồng Việt Nam; bạn có thể phân phối lại và hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU GPLv3 theo tiêu chuẩn quốc tế.
+Đây là phần mềm miễn phí cống hiến cho cộng đồng đặc biệt dành cho cộng đồng Việt Nam; bạn có thể phân phối lại và hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU GPLv3 theo tiêu chuẩn quốc tế.
 
 Phần mềm này bạn được phép phân phối sửa đổi với hy vọng rằng nó sẽ hữu ích hơn cho cộng đồng.
 
