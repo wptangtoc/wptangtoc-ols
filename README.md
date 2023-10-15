@@ -14,7 +14,7 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Đây là phần mềm script cài đặt thiết lập webserver và giúp bạn dễ dàng quản trị webserver, phầm mềm này mình phát triển tập trung vào mã nguồn WordPress là chủ yếu, chỉ đơn vì công việc của mình liên quan rất nhiều về WordPress và WordPress là sở trưởng của mình vì vậy mình chỉ tập trung toàn bộ nguồn lực tối ưu webserver dành cho WordPress.
 
-Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.2 & 8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
+Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.2 & 8.1 & 8.0 & 7.4 & 7.3) + Mariadb (10.11 & 10.6 & 10.5 & 10.4)... có rất nhiều tính năng khác.
 
 <h3>Hướng dẫn sử dụng</h3>
 
