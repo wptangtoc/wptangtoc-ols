@@ -43,7 +43,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 
 <h3>Tác giả phần mềm</h3>
 <ul>
-<li>Người phát triển dự án : <a href="https://wptangtoc.com/gia-tuan/">Gia Tuấn</a></li>
+<li>Người phát triển dự án : <a href="https://wptangtoc.com/gia-tuan/">Gia Tuấn</a> và cộng đồng</li>
 </ul>
 
 <h3>Thảo luận giải đáp các thắc mắc: </h3>
