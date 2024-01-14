@@ -72,6 +72,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Có thể thêm không giới hạn website</li>
 <li>PhpSuExec mỗi một website một user, để nâng cao bảo mật và dễ dùng quản lý tài nguyên</li>
 <li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
+<li>Hỗ trợ object Cache (Redis & Memcached & LSMemcached)</li>
 <li>Tối ưu wp cron</li>
 <li>Tối ưu database</li>
 <li>Hỗ trợ nhiều phiên bản PHP cùng lúc</li>
