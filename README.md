@@ -79,7 +79,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Hỗ trợ PHPMyAdmin và FileManager</li>
 <li>Hỗ trợ php ioncube</li>
 <li>Sử dụng LSPHP tùy biến hiệu suất tốt hơn PHP Thuần</li>
-<li>Hỗ trợ kích hoạt giao thức QUIC http/3 mới nhất</li>
+<li>Hỗ trợ giao thức QUIC http/3</li>
 <li>Chống brute force WordPress</li>
 <li>Chống DDOS</li>
 <li>Hỗ trợ nhiều IP cùng lúc trên máy chủ</li>
