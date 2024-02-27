@@ -32,6 +32,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>ClamAV: <a href="https://www.clamav.net/">https://www.clamav.net/</a></li>
 <li>PhpMyAdmin: <a href="https://www.phpmyadmin.net/">https://www.phpmyadmin.net/</a></li>
 <li>tinyfilemanager: <a href="https://tinyfilemanager.github.io/">https://tinyfilemanager.github.io/</a></li>
+<li>8G Firewall: <a href="https://perishablepress.com/8g-firewall/">https://perishablepress.com/8g-firewall/</a></li>
 </ul>
 
 <h3>Liên hệ với tác giả</h3>
@@ -99,6 +100,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Thiết lập SSL trả phí</li>
 <li>Quản lý Swap</li>
 <li>Mod Security</li>
+<li>Tường lửa 8G</li>
 <li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive)</li>
 <li>Quản lý Wordpress</li>
 <li>Hỗ trợ tự động update WPTangToc OLS</li>
