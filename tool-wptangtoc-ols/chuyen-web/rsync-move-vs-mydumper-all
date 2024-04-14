@@ -1,0 +1,128 @@
+#!/bin/bash
+
+if [[ ! $(which mydumper) ]];then
+	if [[ $(which dnf) ]];then
+		release=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/mydumper/mydumper/releases/latest | cut -d'/' -f8)
+		yum install https://github.com/mydumper/mydumper/releases/download/${release}/mydumper-${release:1}.el8.x86_64.rpm -y
+	else
+		release=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/mydumper/mydumper/releases/latest | cut -d'/' -f8)
+		yum install https://github.com/mydumper/mydumper/releases/download/${release}/mydumper-${release:1}.el7.x86_64.rpm -y
+	fi
+fi
+
+. /etc/wptt/echo-color
+read -p "Nhập địa chỉ IP server mới: " IP
+if ! [[ $IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+echoDo "Bạn nhập không đúng định dạng IPv4"
+exit
+fi
+
+
+read -p "Nhập Port SSH Server mới: " Port
+# check điều kiện số tự nhiên port
+if [[ ! $Port =~ ^-?[0-9]+$ ]]; then
+    clear
+    echoDo "Port không đúng định dạng, vui lòng nhập port là số tự nhiên"
+    exit
+fi
+
+. /etc/wptt/.wptt.conf
+
+if [ "$(ls -A /etc/wptt/vhost)" ]; then
+	echo
+	rm -f /usr/local/lsws/$Website_chinh/html/danh-sach-website-wptangtoc-ols.txt
+	echo '--------------------------------------------------'
+	for entry in $(ls -A /etc/wptt/vhost); do
+		domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+		path="/usr/local/lsws/$domain/html"
+		i=1
+		if [[ -d "$path" ]]; then
+			_runing "Sao lưu database website $domain"
+			
+			rm -rf $path/giatuan-wptangtoc-mydumper-sql
+mkdir -p $path/giatuan-wptangtoc-mydumper-sql
+mydumper --threads $(awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo) \
+--host localhost \
+--user $(cat $path/wp-config.php | grep DB_USER | cut -d \' -f4) \
+--password $(cat $path/wp-config.php | grep DB_PASSWORD | cut -d \' -f4) \
+--database $(cat $path/wp-config.php | grep DB_NAME | cut -d \' -f4) \
+--compress \
+--rows="10000000" \
+--verbose 3 \
+--long-query-guard 999999 \
+--no-locks \
+--compress-protocol \
+--outputdir $path/giatuan-wptangtoc-mydumper-sql
+
+			check_file_error=$(ls $path/giatuan-wptangtoc-mydumper-sql | wc -l)
+			if (( $check_file_error < 10 )); then
+				_runloi "Sao lưu database website $domain"
+			else
+				_rundone "Sao lưu database website $domain"
+				echo "$domain" >> /usr/local/lsws/$Website_chinh/html/danh-sach-website-wptangtoc-ols.txt
+			fi
+		fi
+	done
+	echo '--------------------------------------------------'
+	echo
+fi
+
+if [ "$(ls -A /etc/wptt/vhost)" ]; then
+	rm -f /tmp/domain-rsync-move
+	for entry in $(ls -A /etc/wptt/vhost); do
+		domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+		path="/usr/local/lsws/$domain/html"
+		i=1
+		if [[ -d "$path" ]]; then
+			echo "/usr/local/lsws/$domain" >> /tmp/domain-rsync-move
+		fi
+	done
+fi
+
+#backup-database-subfolder
+for entry in $(ls -A /etc/wptt/vhost); do
+	NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+	rm -f /usr/local/lsws/$NAME/html/subfolder-wptt.txt
+	
+	#Kiểm tra xem có sử dụng tính năng tạo subfolder website
+	if [[ ! -d /etc/wptt/$NAME-wptt ]];then
+		continue
+	fi
+
+	domain_all=$(find /usr/local/lsws/$NAME/html -type f -name 'wp-config.php')
+	for entry in ${domain_all[@]}; do
+		path=$(echo $entry | sed 's/\/wp-config.php//g')
+		i=1
+
+	#bypass website gốc
+	thumuc=$(echo $path |cut -f7 -d '/')
+	if [[ $thumuc = '' ]];then
+		continue
+	fi
+
+	if [[ -f "$path/wp-config.php" ]]; then
+		rm -f $path/giatuan-wptangtoc.sql
+		mysqldump -u $(cat $path/wp-config.php | grep DB_USER | cut -d \' -f4) -p"$(cat $path/wp-config.php | grep DB_PASSWORD | cut -d \' -f4)" $(cat $path/wp-config.php | grep DB_NAME | cut -d \' -f4) --single-transaction --quick --lock-tables=false >$path/giatuan-wptangtoc.sql
+		echo "$thumuc" >> /usr/local/lsws/$NAME/html/subfolder-wptt.txt
+	fi
+done
+done
+
+
+
+
+list_ssl_domain_all=$(cat /tmp/domain-rsync-move | sort -u |uniq |sed '/^$/d' | sed 's/ $//g' | tr -s '\n' ' ')
+if [[ $(which rsync) = '' ]];then
+	yum install rsync -y
+fi
+
+
+#cho ip vào danh sách trắng csf khi dùng csf
+check_csf=$(which csf)
+if [[ $check_csf ]];then
+	csf -a $IP >/dev/null 2>&1
+fi
+
+echo "Lệnh: rsync -avzh -e 'ssh -p $Port -o StrictHostKeyChecking=no' $list_ssl_domain_all root@$IP:/usr/local/lsws"
+rsync -avzh -e "ssh -p $Port -o StrictHostKeyChecking=no" $list_ssl_domain_all root@$IP:/usr/local/lsws
+echo "sang bên server mới hãy gõ lệnh: curl -sO https://wptangtoc.com/share/wptt-rsync-mydumper-move && bash wptt-rsync-mydumper-move"
