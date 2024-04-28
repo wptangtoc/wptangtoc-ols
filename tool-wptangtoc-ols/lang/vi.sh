@@ -105,3 +105,40 @@ sao_luu_toan_bo_database="Sao lưu toàn bộ database"
 bat_tat_tu_dong_auto_restart_mariadb="Bật/tắt tự động auto restart mariadb"
 cai_lai_mariadb="Cài lại MariaDB"
 
+#backup restore menu main
+sao_luu_website="Sao lưu website"
+khoi_phuc_website="Khôi phục website"
+tu_dong_sao_luu_website="Tự động sao lưu website"
+tat_tu_dong_sao_luu_website="Tắt tự động sao lưu website"
+xoa_file_backup="Xoá file Backup"
+thiet_lap_backup_google_drive_rclone="Thiết lập backup Google Drive Rclone"
+download_tai_file_backup_tu_dam_may="Download tải File backup từ lưu trữ đám mây"
+huy_dang_ky_google_drive_hoac_onedrive="Hủy đăng ký Google Drive hoặc Microsoft OneDrive"
+sao_luu_tat_ca_website="Sao lưu tất cả website"
+sao_luu_tat_ca_website_uploads_len_dam_may="Sao lưu tất cả website và uploads luôn lên lưu trữ đám mây"
+tu_dong_xoa_file_backup_het_han="Thiết lập tự động xóa File Backup hết hạn"
+huy_tu_dong_xoa_file_backup_het_han="Huỷ thiết lập tự động xóa File Backup hết hạn"
+thiet_lap_tu_dong_xoa_file_backup_het_han_tren_dam_may="Thiết lập tự động xóa file backup hết hạn trên lưu trữ đám mây"
+huy_thiet_lap_tu_dong_xoa_file_backup_het_han_tren_dam_may="Huỷ thiết lập tự động xóa file backup hết hạn trên lưu trữ đám mây"
+xoa_file_backup_tren_luu_tru_dam_may="Xóa file Backup trên lưu trữ đám mây"
+tu_dong_sao_luu_database="Tự động sao lưu database"
+tat_tu_dong_sao_luu_database="Tắt tự động sao lưu database"
+thiet_lap_backup_microsoft_onedrive="Thiết lập backup Microsoft OneDrive"
+
+
+#quản lý database menu main
+reboot_khoi_dong_lai_service_application="Reboot khởi động lại Service Application"
+start_bat_service_application="Start bật Service Application"
+stop_bat_service_application="Stop tắt Service Application"
+status_top_bat_service_application="Status kiểm tra Service Application"
+thiet_lap_canh_bao_service_ngung_hoat_dong="Thiết lập cảnh báo service ngừng hoạt động"
+
+#quản lý khoá và mở khoá ip
+khoa_ip="Khoá ip"
+mo_khoa_ip="Mở khoá ip"
+danh_sach_ip_da_bi_khoa="Danh sách IP đã bị khóa"
+
+#quản lý ssh/sftp menu main
+thay_doi_password_ssh="Thay đổi password"
+thay_doi_port_ssh="Thay đổi port SSH/SFTP"
+thiet_lap_canh_bao_login_ssh_qua_telegram="Thiết lập cảnh báo login SSH qua telegram"
