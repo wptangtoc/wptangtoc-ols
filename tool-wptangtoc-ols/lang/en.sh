@@ -143,3 +143,13 @@ thay_doi_password_ssh="Change password"
 thay_doi_port_ssh="Change port SSH/SFTP"
 thiet_lap_canh_bao_login_ssh_qua_telegram="Set up SSH login alerts via telegram"
 
+#update menu main
+cap_nhat_toan_bo_webserver="Update & Upgrade All server"
+cap_nhat="Update"
+cai_lai="Reinstall"
+kich_hoat_tu_dong_update_wptangtoc_ols="Enable automatic updates of WPTangToc OLS"
+tat_kich_hoat_tu_dong_update_wptangtoc_ols="Disnable automatic updates of WPTangToc OLS"
+kiem_tra_phien_ban_cac_service="Check service versions"
+chuyen_nhanh_wptangtoc_ols_chinh_thuc="install branch wptangtoc ols version official"
+chuyen_nhanh_wptangtoc_ols_beta="install branch wptangtoc ols version beta"
+
