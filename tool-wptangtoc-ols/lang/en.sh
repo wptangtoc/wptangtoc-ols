@@ -153,3 +153,9 @@ kiem_tra_phien_ban_cac_service="Check service versions"
 chuyen_nhanh_wptangtoc_ols_chinh_thuc="install branch wptangtoc ols version official"
 chuyen_nhanh_wptangtoc_ols_beta="install branch wptangtoc ols version beta"
 
+#WebGuiAdmin menu main
+kich_hoat="Kích hoạt"
+huy_kich_hoat="Huỷ kích hoạt"
+doi_port_webguiadmin="Đổi cổng port"
+thay_doi_id_va_password="Thay đổi ID va Password"
+xem_lai_thong_tin_tai_khoan_webguiadmin="Xem lại thông tin tài khoản"
