@@ -142,3 +142,14 @@ danh_sach_ip_da_bi_khoa="Danh sách IP đã bị khóa"
 thay_doi_password_ssh="Thay đổi password"
 thay_doi_port_ssh="Thay đổi port SSH/SFTP"
 thiet_lap_canh_bao_login_ssh_qua_telegram="Thiết lập cảnh báo login SSH qua telegram"
+
+#update menu main
+cap_nhat_toan_bo_webserver="Cập nhật toàn bộ webserver"
+cap_nhat="Cập nhật"
+cai_lai="Cài lại"
+kich_hoat_tu_dong_update_wptangtoc_ols="Kích hoạt tự động cập nhật WPTangToc OLS"
+tat_kich_hoat_tu_dong_update_wptangtoc_ols="Tắt kích hoạt tự động cập nhật WPTangToc OLS"
+kiem_tra_phien_ban_cac_service="Kiểm tra phiên bản các service"
+chuyen_nhanh_wptangtoc_ols_chinh_thuc="cài đặt chuyển nhánh wptangtoc version chính thức"
+chuyen_nhanh_wptangtoc_ols_beta="cài đặt chuyển nhánh wptangtoc version beta"
+
