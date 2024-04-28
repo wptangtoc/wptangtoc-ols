@@ -159,3 +159,8 @@ huy_kich_hoat_webguiadmin="Disnable"
 doi_port_webguiadmin="Change the port"
 thay_doi_id_va_password="Change ID vs Password"
 xem_lai_thong_tin_tai_khoan_webguiadmin="Review account information"
+
+#cau hinh webserver main menu
+chinh_sua="Edit"
+thay_doi_cong_cu_cau_hinh="Change tool Edit"
+
