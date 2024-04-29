@@ -84,6 +84,8 @@ them="add"
 vao_he_thong="Into the system"
 cai_dat_thanh_cong="Installed successfully"
 thanh_cong="success"
+duong_dan_thu_muc="directory path"
+moi_thong_tin_tai_khoan_da_duoc_luu_tru="account information is stored"
 
 
 #quản lý ssl menu main
