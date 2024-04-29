@@ -92,8 +92,10 @@ khong_dong_y="Không đồng ý"
 xac_nhan="Xác nhận"
 khong_co_domain_nao_ton_tai_tren_he_thong="Không có domain nào tồn tại trên hệ thống của bạn"
 may_chu="Máy chủ"
-tren_he_thong="On System"
-
+tren_he_thong="trên hệ thống"
+ngung_hoat_dong="ngừng hoạt động"
+dang_duoc_tat="đang được tắt"
+he_thong="hệ thống"
 
 
 #quản lý ssl menu main
