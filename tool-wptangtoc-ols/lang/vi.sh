@@ -262,4 +262,18 @@ chuyen_tat_ca_website_wptangtoc_ve_wptangtoc_ols="Chuyển tất cả website WP
 chuyen_tat_ca_website_wptangtoc_ols_ve_wptangtoc_bang_rsync="Chuyển tất cả website WPTangToc OLS về WPTangToc OLS Bằng Rsync"
 chuyen_1_website_wptangtoc_ols_ve_wptangtoc_ols_bang_rsync="Chuyển 1 website WPTangToc OLS về WPTangToc OLS Bằng Rsync"
 
-#quản lý file manager menu main
+#quản lý tài nguyên menu main
+kiem_tra="Kiểm tra"
+toc_do="tốc độ"
+o_cung="ổ cứng"
+cong_nghe_ao_hoa="công nghệ ảo hóa VPS"
+xem="Xem"
+
+#giả lập website main menu
+gia_lap_website_tu_website_nao_do_trong_he_thong="Giả lập từ một website nào đó trong hệ thống này"
+gia_lap_website_moi_trang="Giả lập từ WordPress mới trắng"
+chuyen_web_site_gia_lap_ve_website_chinh="Chuyển website giả lập vào website chính"
+
+#thay đổi ngôn ngữ menu main
+tieng_viet="Tiếng Việt"
+tieng_anh="Tiếng Anh"
