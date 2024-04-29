@@ -97,6 +97,8 @@ tren_he_thong="On System"
 ngung_hoat_dong="downtimes"
 dang_duoc_tat="is being turned off"
 he_thong="system"
+hoan_tat="completed"
+thu_muc="directory path"
 
 
 
