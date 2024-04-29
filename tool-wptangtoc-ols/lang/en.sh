@@ -31,7 +31,7 @@ quan_ly_tai_nguyen="resources server"
 gia_lap_website="Staging website"
 tai_tro_du_an="Donate"
 nhom_facebook_thao_luan="Discuss Group"
-quan_ly_ngon_ngu="Change language (Chuyển đổi ngôn ngữ)"
+quan_ly_ngon_ngu="Change language (ngôn ngữ)"
 wptangtoc_ols_menu_chinh="WPTangToc OLS MENU main"
 tinh_trang_may_chu="Status server"
 may_chu_dang_gap_van_de="The server is having problems and needs to be fixed"
@@ -93,6 +93,7 @@ khong_dong_y="Do not agree"
 xac_nhan="Confirm"
 khong_co_domain_nao_ton_tai_tren_he_thong="No domains exist on your system"
 may_chu="Server"
+tren_he_thong="On System"
 
 
 
