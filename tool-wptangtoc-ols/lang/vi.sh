@@ -252,4 +252,14 @@ thay_doi="Thay đổi"
 #quản lý swap
 them="thêm"
 xoa="Xoá"
+dung_luong_swap_hien_tai="Dung lượng swap hiện tại"
+dung_luong_swap_dang_dung="Dung lượng swap đang dùng"
+dung_luong_swap_con_thua="Dung lượng swap đang còn thừa"
 
+#quản lý chuyển website
+chuyen_website_ben_ngoai_ve_wptangtoc="Chuyển website bên ngoài về WPTangToc OLS"
+chuyen_tat_ca_website_wptangtoc_ve_wptangtoc_ols="Chuyển tất cả website WPTangToc ols về WPTangToc ols"
+chuyen_tat_ca_website_wptangtoc_ols_ve_wptangtoc_bang_rsync="Chuyển tất cả website WPTangToc OLS về WPTangToc OLS Bằng Rsync"
+chuyen_1_website_wptangtoc_ols_ve_wptangtoc_ols_bang_rsync="Chuyển 1 website WPTangToc OLS về WPTangToc OLS Bằng Rsync"
+
+#quản lý file manager menu main
