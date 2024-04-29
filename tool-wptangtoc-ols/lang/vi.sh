@@ -217,3 +217,12 @@ tat_kich_hoat_lscache="Tắt kích hoạt LScache"
 xoa_opcache="Xóa OPCache"
 bat_tat_memcached="Bât/Tắt memcached"
 bat_tat_opcache_php="Bật/tắt OPCache PHP"
+
+#quan ly disk o cung menu main
+dung_luong_o_cung_hien_tai="Dung lượng ổ cứng hiện tại"
+kiem_tra_dung_luong_website="Kiểm tra dung lượng website"
+kiem_tra_file_lon_nhat="Kiểm tra dung lượng file lớn nhất"
+kiem_tra_dung_luong_file_lon_nhat_cua_domain="Kiểm tra dung lượng file lớn nhất của domain"
+kiem_tra_dung_luong_thu_muc_lon_nhat="Kiểm tra dung lượng thư mục lớn nhất"
+kiem_tra_dung_luong_thu_muc_lon_nhat_cua_domain="Kiểm tra dung lượng thư mục lớn nhất của domain"
+
