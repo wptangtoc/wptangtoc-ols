@@ -94,9 +94,9 @@ xac_nhan="Confirm"
 khong_co_domain_nao_ton_tai_tren_he_thong="No domains exist on your system"
 may_chu="Server"
 tren_he_thong="On System"
-ngung_hoat_dong="ngừng hoạt động"
-dang_duoc_tat="đang được tắt"
-he_thong="hệ thống"
+ngung_hoat_dong="downtimes"
+dang_duoc_tat="is being turned off"
+he_thong="system"
 
 
 
