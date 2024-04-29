@@ -249,4 +249,11 @@ tim_kiem="search"
 xem_thong_tin_tai_khoan_bao_mat="View secure account information"
 thay_doi="Change"
 
+#quản lý swap
+them="Add"
+xoa="Delete"
+dung_luong_swap_hien_tai="Dung lượng swap hiện tại"
+dung_luong_swap_dang_dung="Dung lượng swap đang dùng"
+dung_luong_swap_con_thua="Dung lượng swap đang còn thừa"
+
 
