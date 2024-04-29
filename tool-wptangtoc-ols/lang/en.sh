@@ -31,7 +31,7 @@ quan_ly_tai_nguyen="resources server"
 gia_lap_website="Staging website"
 tai_tro_du_an="Donate"
 nhom_facebook_thao_luan="Discuss Group"
-quan_ly_ngon_ngu="Change language"
+quan_ly_ngon_ngu="Change language (Chuyển đổi ngôn ngữ)"
 wptangtoc_ols_menu_chinh="WPTangToc OLS MENU main"
 tinh_trang_may_chu="Status server"
 may_chu_dang_gap_van_de="The server is having problems and needs to be fixed"
@@ -72,7 +72,7 @@ thay_doi_username="Change username"
 bat_tat_dang_nhap_username_rieng_domain="On/Off login username domain"
 khoi_tao_subfolder_website="Initialization subfolder website"
 
-#wordpress main ben trong
+#domain main ben trong
 vi_du="example"
 nhap="Type"
 hoac="or"
@@ -86,6 +86,14 @@ cai_dat_thanh_cong="Installed successfully"
 thanh_cong="success"
 duong_dan_thu_muc="directory path"
 moi_thong_tin_tai_khoan_da_duoc_luu_tru="account information is stored"
+lua_chon_website_ban_muon="Type in your website choice"
+ten_mien_nay_khong_ton_tai_tren_he_thong="The domain name does not exist on this system"
+dong_y="Agree"
+khong_dong_y="Do not agree"
+xac_nhan="Confirm"
+khong_co_domain_nao_ton_tai_tren_he_thong="No domains exist on your system"
+may_chu="Server"
+
 
 
 #quản lý ssl menu main
