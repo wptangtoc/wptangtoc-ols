@@ -248,3 +248,8 @@ tim_kiem="tìm kiếm"
 #quản lý PhpMyAdmin menu main
 xem_thong_tin_tai_khoan_bao_mat="Xem thông tin tài khoản bảo mật"
 thay_doi="Thay đổi"
+
+#quản lý swap
+them="thêm"
+xoa="Xoá"
+
