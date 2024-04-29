@@ -204,3 +204,17 @@ kiem_tra_dung_luong_ma_nguon="Check website source code capacity"
 xoa_ma_nguon_website="Delete website source code"
 xem_tong_quan_ma_nguon="See source code overview"
 
+#quan_ly_cache
+xoa_cache_website_wordpress="Clear Cache website WordPress"
+xoa_all_cache_wordpress="Clear ALL Cache WordPress"
+xoa_cache_redis="Clear Cache Redis"
+kich_hoat_lscache="Kích hoạt LScache"
+kich_hoat_object_cache_lsmemcached="Enable object cache lsmemcached"
+huy_kich_hoat_object_cache_lsmemcached="Disnable object cache lsmemcached"
+bat_tat_object_cache_redis="Enable/Disnable Redis Object Cache"
+kiem_tra_lscache="Check LScache"
+tat_kich_hoat_lscache="Disnable LScache"
+xoa_opcache="Clear OPCache"
+bat_tat_memcached="Enable/Disnable memcached"
+bat_tat_opcache_php="Enable/Disnable OPCache PHP"
+
