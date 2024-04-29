@@ -163,4 +163,19 @@ xem_lai_thong_tin_tai_khoan_webguiadmin="Review account information"
 #cau hinh webserver main menu
 chinh_sua="Edit"
 thay_doi_cong_cu_cau_hinh="Change tool Edit"
+ghi_chu_muc_nay_chi_danh_cho_nguoi_nang_cao="Note: This category is advanced for professional users"
+hay_het_suc_can_than_trong_qua_trinh_chinh_sua="Be very careful while editing the configuration"
+
+#cau hinh php menu main
+cau_hinh_uploads_max_php="Setting uploads max php.ini"
+khoi_phuc_uploads_max_php="Restore uploads max php.ini"
+cau_hinh_php_ini="Setting PHP.ini"
+thay_doi_version_phien_ban_php_domain="Change the domain PHP version"
+thay_doi_version_phien_ban_php_webserver="Change the version of PHP All webserver version"
+kiem_tra_phien_ban_php="Check PHP version"
+cai_them_php_extension="Install PHP extension"
+xoa_php_extension="Delete PHP extension"
+cai_dat_zip_php_extension="Install ZIP PHP extension"
+cau_hinh_max_excution_time="Setting max execution time"
+cau_hinh_memory_litmit="Setting memory_limit"
 

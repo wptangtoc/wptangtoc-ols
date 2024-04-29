@@ -163,3 +163,18 @@ xem_lai_thong_tin_tai_khoan_webguiadmin="Xem lại thông tin tài khoản"
 #cau hinh webserver main menu
 chinh_sua="Cấu hình"
 thay_doi_cong_cu_cau_hinh="Thay đổi công cụ cấu hình"
+ghi_chu_muc_nay_chi_danh_cho_nguoi_nang_cao="Ghi chú : Danh mục này là nâng cao dành cho người dùng chuyên nghiệp"
+hay_het_suc_can_than_trong_qua_trinh_chinh_sua="Hãy hết sức cẩn thận trong quá trình chỉnh sửa cấu hình"
+
+#cau hinh php menu main
+cau_hinh_uploads_max_php="Cấu hình uploads max php.ini"
+khoi_phuc_uploads_max_php="Khôi phục uploads max php.ini"
+cau_hinh_php_ini="Cấu hình PHP.ini"
+thay_doi_version_phien_ban_php_domain="Thay đổi version phiên bản PHP của domain"
+thay_doi_version_phien_ban_php_webserver="Thay đổi version phiên bản PHP All webserver"
+kiem_tra_phien_ban_php="Kiểm tra phiên bản PHP"
+cai_them_php_extension="Cài thêm PHP extension"
+xoa_php_extension="Xóa PHP extension"
+cai_dat_zip_php_extension="Cài đặt ZIP PHP extension"
+cau_hinh_max_excution_time="Cấu hình max execution time"
+cau_hinh_memory_litmit="Cấu hình memory_limit"
