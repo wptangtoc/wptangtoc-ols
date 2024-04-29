@@ -83,6 +83,8 @@ ten_mien_da_ton_tai_he_thong_nay="Tên miền đã tồn tại trên hệ thốn
 them="thêm"
 vao_he_thong="vào hệ thống"
 cai_dat_thanh_cong="Cài đặt thành công"
+duong_dan_thu_muc="đường dẫn thư mục"
+moi_thong_tin_tai_khoan_da_duoc_luu_tru="Mọi thông tin tài khoản được lưu trữ"
 
 
 #quản lý ssl menu main
