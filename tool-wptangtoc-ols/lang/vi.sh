@@ -72,6 +72,19 @@ thay_doi_username="Thay đổi username"
 bat_tat_dang_nhap_username_rieng_domain="Bật/Tắt đăng nhập username riêng domain"
 khoi_tao_subfolder_website="Khởi tạo subfolder website"
 
+#wordpress main ben trong
+vi_du="ví dụ"
+nhap="Nhập"
+hoac="or"
+ban_muon_them="bạn muốn thêm"
+ban_chua_nhap_ten_domain="Bạn chưa nhập tên domain"
+domain_nhap_khong_dung_dinh_dang="Domain tên miền nhập không đúng định dạng"
+ten_mien_da_ton_tai_he_thong_nay="Tên miền đã tồn tại trên hệ thống này"
+them="thêm"
+vao_he_thong="vào hệ thống"
+cai_dat_thanh_cong="Cài đặt thành công"
+
+
 #quản lý ssl menu main
 cai_dat_ssl_letencrypt="Cài đặt SSL FREE Let’s Encrypt"
 mo_rong_ssl_letencrypt="Mở rộng chứng chỉ SSL FREE Let’s Encrypt"
