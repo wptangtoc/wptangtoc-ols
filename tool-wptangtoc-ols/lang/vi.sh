@@ -96,6 +96,7 @@ tren_he_thong="trên hệ thống"
 ngung_hoat_dong="ngừng hoạt động"
 dang_duoc_tat="đang được tắt"
 he_thong="hệ thống"
+hoan_tat="hoàn tất"
 
 
 #quản lý ssl menu main
