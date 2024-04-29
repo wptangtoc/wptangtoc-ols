@@ -278,3 +278,24 @@ chuyen_web_site_gia_lap_ve_website_chinh="Transfer the emulator website to the m
 tieng_viet="Vietnamese"
 tieng_anh="English"
 
+#quản lý wordpress menu main
+tai="Download"
+chinh_sua_code_truc_tiep_wp_admin_wordpress="DISALLOW_FILE_MODS WordPress"
+truy_van_va_thay_the="Search and Replace"
+che_do_bao_tri="maintenance-mode"
+toi_uu="optimize"
+hinh_anh="image"
+tang_gioi_han_ram="Increase ram limit"
+tien_to="prefix"
+reset_lai_ve_wordpress_moi_hoan_toan="Reset to a completely new WordPress"
+tai_tao_lai="Regenerate"
+kham_suc_khoe="Site Health"
+binh_luan="comment"
+nhap_du_lieu="Import data"
+
+
+
+
+
+
+
