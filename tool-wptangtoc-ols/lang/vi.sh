@@ -275,5 +275,21 @@ gia_lap_website_moi_trang="Giả lập từ WordPress mới trắng"
 chuyen_web_site_gia_lap_ve_website_chinh="Chuyển website giả lập vào website chính"
 
 #thay đổi ngôn ngữ menu main
-tieng_viet="Tiếng Việt"
-tieng_anh="Tiếng Anh"
+tieng_viet="Vietnamese"
+tieng_anh="English"
+
+#quản lý wordpress menu main
+tai="Tải"
+chinh_sua_code_truc_tiep_wp_admin_wordpress="chỉnh sửa code trực tiếp trên wp-admin WordPress"
+truy_van_va_thay_the="Truy vấn và thay thế"
+che_do_bao_tri="chế độ bảo trì"
+toi_uu="Tối ưu"
+hinh_anh="hình ảnh"
+tang_gioi_han_ram="Tăng giới hạn ram"
+tien_to="tiền tố"
+reset_lai_ve_wordpress_moi_hoan_toan="Reset lại về WordPress mới hoàn toàn"
+tai_tao_lai="Tái tạo lại"
+kham_suc_khoe="Khám sức khỏe"
+binh_luan="bình luận"
+nhap_du_lieu="Nhập dữ liệu"
+
