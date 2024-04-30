@@ -87,6 +87,9 @@ thanh_cong="success"
 duong_dan_thu_muc="directory path"
 moi_thong_tin_tai_khoan_da_duoc_luu_tru="account information is stored"
 lua_chon_website_ban_muon="Type in your website choice"
+nhap_lua_chon_website_cua_ban="Type in your website choice"
+toan_bo="all"
+
 ten_mien_nay_khong_ton_tai_tren_he_thong="The domain name does not exist on this system"
 dong_y="Agree"
 khong_dong_y="Do not agree"
@@ -105,7 +108,15 @@ da_duoc_chuyen_huong_truoc_do_roi="has been redirected before"
 neu_ban_muon_thay_doi_chuyen_huong_hay_thiet_lap_lai="If you want to change the redirect to another domain, delete the redirect and return to setup"
 chuyen_huong_sang="redirect to"
 user_da_ton_tai_tren_he_thong_nay="User đã tồn tại trên hệ thống này"
-ban_muon="bạn muốn"
+ban_muon="you want"
+ten_mien="domain"
+chua_duoc_tro_ip="IP has not been assigned yet"
+ban_vui_long_tro_ip_ve="Please point to the IP"
+cua="of"
+ban_nhap_sai_he_thong_se_chon_khong_dong_y="Bạn nhập sai hệ thống sẽ chọn là không đồng ý"
+da_xoa_website_thanh_cong="Website deleted successfully"
+
+
 
 
 
@@ -119,6 +130,13 @@ thiet_lap_ssl_tra_phi="Set up a paid SSL certificate"
 xoa_chung_chi_ssl_tra_phi="Remove commercial paid SSL certificates"
 kiem_tra_chung_chi_ssl_dang_su_dung="Check the SSL certificate in use"
 renew_thiet_lap_chuyen_huong_http_sang_https="Renew resets the HTTP to HTTPS redirect"
+
+#ssl ben trong
+chung_chi="certificate"
+khong_thanh_cong="không thành công"
+cai="install"
+
+
 
 #quản lý database menu main
 them_database="Add database"
