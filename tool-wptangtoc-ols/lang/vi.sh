@@ -41,6 +41,8 @@ phien_ban="phiên bản"
 phat_trien_boi_gia_tuan="Phát triển bởi: Gia Tuấn"
 nhap_lua_chon_cua_ban="Nhập lựa chọn của bạn"
 exit_thoat="Thoát"
+he_thong_xac_nhan_ban_khong_su_ma_nguon="Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress"
+tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="Tính năng này chỉ dành cho mã nguồn WordPress"
 
 #wptt status
 wptangtoc_ols_dang_kiem_tra_he_thong="WPTangToc OLS đang kiểm tra tình trạng hệ thống của bạn"
@@ -358,3 +360,4 @@ ten_tieu_de_website_wordpress_cua_ban="Tên tiêu đề Website WordPress"
 id_dang_nhap_wp="ID đăng nhập WordPress"
 dieu_nay_se_xoa_toan_bo_wordpress_hien_tai_hoan_toan="Điều này sẽ xóa toàn bộ mã nguồn Wordpress hiện tại để cài mới trắng hoàn toàn"
 lam_sach_toan_bo_du_lieu_ma_nguon_cua="Làm sạch toàn bộ dữ liệu mã nguồn của"
+
