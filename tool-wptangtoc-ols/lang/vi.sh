@@ -43,6 +43,8 @@ nhap_lua_chon_cua_ban="Nhập lựa chọn của bạn"
 exit_thoat="Thoát"
 he_thong_xac_nhan_ban_khong_su_ma_nguon="Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress"
 tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="Tính năng này chỉ dành cho mã nguồn WordPress"
+don_dep="Xoá"
+
 
 #wptt status
 wptangtoc_ols_dang_kiem_tra_he_thong="WPTangToc OLS đang kiểm tra tình trạng hệ thống của bạn"
@@ -98,6 +100,7 @@ khong_co_domain_nao_ton_tai_tren_he_thong="Không có domain nào tồn tại tr
 may_chu="Máy chủ"
 ngung_hoat_dong="ngừng hoạt động"
 dang_duoc_tat="đang được tắt"
+dang_duoc_bat="đang được bật"
 he_thong="hệ thống"
 hoan_tat="hoàn tất"
 thu_muc="thư mục"
@@ -185,6 +188,8 @@ thiet_lap_canh_bao_service_ngung_hoat_dong="Thiết lập cảnh báo service ng
 khoa_ip="Khoá ip"
 mo_khoa_ip="Mở khoá ip"
 danh_sach_ip_da_bi_khoa="Danh sách IP đã bị khóa"
+ip_ban_muon_khoa="IP bạn muốn khóa"
+ban_nhap_khong_dung_dinh_dang_ipv4="Bạn nhập không đúng định dạng IPv4"
 
 #quản lý ssh/sftp menu main
 thay_doi_password_ssh="Thay đổi password"
