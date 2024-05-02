@@ -302,6 +302,7 @@ tat_kich_hoat_lscache="Disnable LScache"
 xoa_opcache="Clear OPCache"
 bat_tat_memcached="Enable/Disnable memcached"
 bat_tat_opcache_php="Enable/Disnable OPCache PHP"
+ban_chua_kich_hoat="Bạn chưa kích hoạt"
 don_dep="clear"
 
 #quan ly disk o cung menu main
