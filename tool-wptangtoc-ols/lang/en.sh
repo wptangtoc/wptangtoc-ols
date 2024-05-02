@@ -224,6 +224,11 @@ cam_on_ban_da_lua_chon="Thank you for choosing"
 dang_tien_hanh_cap_nhat_vui_long_doi="Update in progress. Please wait"
 cap_nhat_thanh_cong="Update successful"
 ban_co_muon_reboot_lai_may_chu_khong="Do you want to reboot the entire server"
+thong_bao="Notification"
+ban_dang_su_dung="You're using"
+da_co_ban="There is an"
+
+
 
 
 #WebGuiAdmin menu main
