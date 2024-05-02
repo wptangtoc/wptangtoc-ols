@@ -189,6 +189,7 @@ khoa_ip="Khoá ip"
 mo_khoa_ip="Mở khoá ip"
 danh_sach_ip_da_bi_khoa="Danh sách IP đã bị khóa"
 ip_ban_muon_khoa="IP bạn muốn khóa"
+ip_ban_muon_mo_khoa="IP bạn muốn mở khóa"
 ban_nhap_khong_dung_dinh_dang_ipv4="Bạn nhập không đúng định dạng IPv4"
 
 #quản lý ssh/sftp menu main
@@ -205,6 +206,14 @@ tat_kich_hoat_tu_dong_update_wptangtoc_ols="Tắt kích hoạt tự động cậ
 kiem_tra_phien_ban_cac_service="Kiểm tra phiên bản các service"
 chuyen_nhanh_wptangtoc_ols_chinh_thuc="cài đặt chuyển nhánh wptangtoc version chính thức"
 chuyen_nhanh_wptangtoc_ols_beta="cài đặt chuyển nhánh wptangtoc version beta"
+hien_tai_cua_ban_la="hiện tại của bạn là"
+da_xay_ra_loi_vui_long_thu_lai_sau="Đã có lỗi xảy ra, vui lòng thử lại sau"
+ban_dang_su_dung_phien_ban_moi_nhat="Bạn đang sử dụng phiên bản mới nhất"
+cam_on_ban_da_lua_chon="Cảm ơn bạn đã lựa chọn"
+dang_tien_hanh_cap_nhat_vui_long_doi="Đang tiến hành cập nhật. Vui lòng đợi"
+cap_nhat_thanh_cong="cập nhật thành công"
+ban_co_muon_reboot_lai_may_chu_khong="Bạn có muốn khởi động lại máy chủ không"
+
 
 #WebGuiAdmin menu main
 kich_hoat_webguiadmin="Kích hoạt"

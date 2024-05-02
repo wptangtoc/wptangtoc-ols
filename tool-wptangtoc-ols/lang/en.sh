@@ -33,7 +33,7 @@ tai_tro_du_an="Donate"
 nhom_facebook_thao_luan="Discuss Group"
 quan_ly_ngon_ngu="Change language (ngôn ngữ)"
 wptangtoc_ols_menu_chinh="WPTangToc OLS MENU main"
-tinh_trang_may_chu="Status server"
+tinh_trang_may_chu="Status server	"
 may_chu_dang_gap_van_de="The server is having problems and needs to be fixed"
 hoat_dong_tot="good"
 dang_gap_su_co="is having trouble"
@@ -51,7 +51,7 @@ wptangtoc_ols_dang_kiem_tra_he_thong="WPTangToc OLS checking your system status"
 chao_mung_ban_den_voi_wptangtoc_ols="Welcome to WPTangToc OLS"
 san_sang_phuc_vu="ready to serve"
 tang_toc_wordpress="Speed UP WordPress"
-nha_tai_tro_chinh="Major donors"
+nha_tai_tro_chinh="Major donors	"
 phat_trien_boi="developed by"
 nhap_lenh_phim_1_de_vao_menu_quan_tri="Enter key command 1 to enter the admin menu"
 yeu_cau_ho_tro="Contact"
@@ -198,6 +198,7 @@ khoa_ip="Ban ip"
 mo_khoa_ip="Unban ip"
 danh_sach_ip_da_bi_khoa="List of blocked IPs"
 ip_ban_muon_khoa="IP you want to block"
+ip_ban_muon_mo_khoa="IP you want to unlock"
 ban_nhap_khong_dung_dinh_dang_ipv4="You entered the IPv4 format incorrectly"
 
 
@@ -216,6 +217,17 @@ tat_kich_hoat_tu_dong_update_wptangtoc_ols="Disnable automatic updates of WPTang
 kiem_tra_phien_ban_cac_service="Check service versions"
 chuyen_nhanh_wptangtoc_ols_chinh_thuc="install branch wptangtoc ols version official"
 chuyen_nhanh_wptangtoc_ols_beta="install branch wptangtoc ols version beta"
+hien_tai_cua_ban_la="Your current is"
+da_xay_ra_loi_vui_long_thu_lai_sau="An error occurred, please try again later"
+ban_dang_su_dung_phien_ban_moi_nhat="You are using the latest version"
+cam_on_ban_da_lua_chon="Thank you for choosing"
+dang_tien_hanh_cap_nhat_vui_long_doi="Update in progress. Please wait"
+cap_nhat_thanh_cong="Update successful"
+ban_co_muon_reboot_lai_may_chu_khong="Do you want to reboot the entire server"
+
+
+
+
 
 #WebGuiAdmin menu main
 kich_hoat_webguiadmin="Enable"
