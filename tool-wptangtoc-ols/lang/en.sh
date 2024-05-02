@@ -403,5 +403,10 @@ giup_wptangtoc_ols_luon_luon_su_dung_mien_phi_tai_tro_cho_du_an="Help WPTangToc 
 minh_gia_tuan_rat_biet_on="Gia Tuan is very grateful for your contribution to support our mission"
 trong_viec_xay_dung_mot_phan_mem_quan_tri="in building a free webserver setup and administration software with the best performance"
 thong_tin_tai_khoan_ngan_hang="Bank account information in Vietnam"
+noi_chia_se_trao_doi_thao_luan_cac_van_de_lien_quan="A place to share and discuss related issues"
+
+#echo color
+dang_tien_hanh="In process"
+dang_xay_ra_su_co="Something went wrong"
 
 
