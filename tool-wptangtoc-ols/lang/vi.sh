@@ -383,3 +383,11 @@ id_dang_nhap_wp="ID đăng nhập WordPress"
 dieu_nay_se_xoa_toan_bo_wordpress_hien_tai_hoan_toan="Điều này sẽ xóa toàn bộ mã nguồn Wordpress hiện tại để cài mới trắng hoàn toàn"
 lam_sach_toan_bo_du_lieu_ma_nguon_cua="Làm sạch toàn bộ dữ liệu mã nguồn của"
 
+#donate menu main
+thay_mat_cong_dong_cam_on="Thay mặt cộng đồng sử dụng phần mềm wptangtoc ols biết ơn các nhà tài trợ dưới đây"
+giup_wptangtoc_ols_luon_luon_su_dung_mien_phi_tai_tro_cho_du_an="Giúp WPTangToc OLS luôn luôn được sử dụng miễn phí bằng cách tài trợ cho dự án"
+minh_gia_tuan_rat_biet_on="Mình Gia Tuấn rất biết ơn sự đóng góp của bạn nhằm hỗ trợ sứ mệnh của chúng mình"
+trong_viec_xay_dung_mot_phan_mem_quan_tri="trong việc xây dựng một phần mềm thiết lập và quản trị webserver miễn phí mà hiệu suất tốt nhất"
+thong_tin_tai_khoan_ngan_hang="Thông tin tài khoản ngân hàng"
+
+
