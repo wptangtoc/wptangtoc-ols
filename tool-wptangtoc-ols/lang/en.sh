@@ -397,3 +397,11 @@ id_dang_nhap_wp="ID login WordPress"
 dieu_nay_se_xoa_toan_bo_wordpress_hien_tai_hoan_toan="This will delete all current Wordpress source code for a completely clean install"
 lam_sach_toan_bo_du_lieu_ma_nguon_cua="Clean all source code data"
 
+#donate menu main
+thay_mat_cong_dong_cam_on="the community using wptangtoc ols known software thanks to the sponsors below"
+giup_wptangtoc_ols_luon_luon_su_dung_mien_phi_tai_tro_cho_du_an="Help WPTangToc OLS stay free to use by sponsoring the project"
+minh_gia_tuan_rat_biet_on="Gia Tuan is very grateful for your contribution to support our mission"
+trong_viec_xay_dung_mot_phan_mem_quan_tri="in building a free webserver setup and administration software with the best performance"
+thong_tin_tai_khoan_ngan_hang="Bank account information in Vietnam"
+
+
