@@ -263,6 +263,8 @@ xoa_php_extension="Delete PHP extension"
 cai_dat_zip_php_extension="Install ZIP PHP extension"
 cau_hinh_max_excution_time="Setting max execution time"
 cau_hinh_memory_litmit="Setting memory_limit"
+ban_co_the="you can"
+
 
 #quan ly logs menu main
 xem_error_log_server="View error log server"
