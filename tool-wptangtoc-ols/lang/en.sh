@@ -227,6 +227,17 @@ ban_co_muon_reboot_lai_may_chu_khong="Do you want to reboot the entire server"
 thong_bao="Notification"
 ban_dang_su_dung="You're using"
 da_co_ban="There is an"
+tu_dong="automatic"
+ban_da_kich_hoat="You are activated"
+truoc_do_roi="before that"
+chu_nhat="Sunday"
+thu_hai="Monday"
+thu_ba="Tuesday"
+thu_tu="Wednesday"
+thu_nam="Thursday"
+thu_sau="Friday"
+thu_bay="Saturday"
+hang_ngay="daily"
 
 
 
@@ -264,6 +275,15 @@ cai_dat_zip_php_extension="Install ZIP PHP extension"
 cau_hinh_max_excution_time="Setting max execution time"
 cau_hinh_memory_litmit="Setting memory_limit"
 ban_co_the="you can"
+so_dung_luong="capacity number"
+luu_y="note"
+so_nguyen_duong="integer"
+gia_tri="value"
+khong_xac_dinh_duoc="cannot be determined"
+
+
+
+
 
 
 #quan ly logs menu main
