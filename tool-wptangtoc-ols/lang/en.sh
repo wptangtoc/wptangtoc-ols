@@ -188,6 +188,7 @@ xoa_file_backup_tren_luu_tru_dam_may="Delete Backup files on cloud storage"
 tu_dong_sao_luu_database="Enable automatic database backup"
 tat_tu_dong_sao_luu_database="Disnable automatic database backup"
 thiet_lap_backup_microsoft_onedrive="Set up Microsoft OneDrive backup"
+sao_luu_ma_nguon="backup source code"
 
 
 #quản lý database menu main
@@ -211,6 +212,10 @@ ban_nhap_khong_dung_dinh_dang_ipv4="You entered the IPv4 format incorrectly"
 thay_doi_password_ssh="Change password"
 thay_doi_port_ssh="Change port SSH/SFTP"
 thiet_lap_canh_bao_login_ssh_qua_telegram="Set up SSH login alerts via telegram"
+nhap_nhap_lua_chon_user_ban_muon="Type the user you want to change the password"
+khong_dung_dinh_dang="Malformed"
+
+
 
 #update menu main
 cap_nhat_toan_bo_webserver="Update & Upgrade All server"
@@ -331,6 +336,10 @@ bat_tat_opcache_php="Enable/Disnable OPCache PHP"
 ban_chua_kich_hoat="Bạn chưa kích hoạt"
 don_dep="clear"
 
+#cache menu ben trong
+chi_nen_su_dung_object_cache_toi_thieu_2gb_ram="You should only use object cache when there is at least 2GB of RAM, your system is currently not capable of meeting this need."
+
+
 #quan ly disk o cung menu main
 dung_luong_o_cung_hien_tai="Current hard drive capacity"
 kiem_tra_dung_luong_website="Check website capacity"
@@ -415,7 +424,7 @@ giai_nen="Decompression"
 ten_tieu_de_website_wordpress_cua_ban_muon="Title name of your WordPress Website you want"
 nhap_id_dang_nhap_wordpress="Type the WordPress login id"
 nhap_password_wordpress="Type Password WordPress"
-luu_y_nhap_wordpress_it_nhat_12_ky_tu="Note: please enter WordPress with at least 12 characters for enhanced security (will automatically hide while typing)"
+luu_y_nhap_wordpress_it_nhat_12_ky_tu="Note: please enter with at least 12 characters for enhanced security (will automatically hide while typing)"
 lam_sach_toan_bo_du_lieu_database="Clean all of your database website"
 ban_co_muon="do you want"
 ngay_tai_day_khong="right here?"
