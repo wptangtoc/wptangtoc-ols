@@ -156,6 +156,9 @@ remote_database="Remote Database"
 sao_luu_toan_bo_database="Sao lưu toàn bộ database"
 bat_tat_tu_dong_auto_restart_mariadb="Bật/tắt tự động auto restart mariadb"
 cai_lai_mariadb="Cài lại MariaDB"
+tai_khoan="Tài khoản"
+dang_nhap="đăng nhập"
+truy_cap="truy cập"
 
 #backup restore menu main
 sao_luu_website="Sao lưu website"
@@ -337,6 +340,8 @@ tim_kiem="tìm kiếm"
 #quản lý PhpMyAdmin menu main
 xem_thong_tin_tai_khoan_bao_mat="Xem thông tin tài khoản bảo mật"
 thay_doi="Thay đổi"
+ban_hay_luu_tru_thong_tin_de_su_dung="Bạn hãy lưu trữ các thông tin này để sử dụng"
+
 
 #quản lý swap
 them="thêm"

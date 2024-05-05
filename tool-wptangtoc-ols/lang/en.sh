@@ -164,6 +164,10 @@ remote_database="Remote Database"
 sao_luu_toan_bo_database="Backup All database"
 bat_tat_tu_dong_auto_restart_mariadb="Turn on/off auto restart mariadb"
 cai_lai_mariadb="Reinstall MariaDB"
+tai_khoan="Account"
+dang_nhap="log in"
+truy_cap="access"
+
 
 #backup restore menu main
 sao_luu_website="Backup website"
@@ -357,6 +361,7 @@ tim_kiem="search"
 #quản lý PhpMyAdmin menu main
 xem_thong_tin_tai_khoan_bao_mat="View secure account information"
 thay_doi="Change"
+ban_hay_luu_tru_thong_tin_de_su_dung="Please store this information for future use"
 
 #quản lý swap
 them="Add"
