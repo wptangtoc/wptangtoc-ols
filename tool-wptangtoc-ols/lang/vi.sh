@@ -179,7 +179,7 @@ xoa_file_backup_tren_luu_tru_dam_may="Xóa file Backup trên lưu trữ đám m�
 tu_dong_sao_luu_database="Tự động sao lưu database"
 tat_tu_dong_sao_luu_database="Tắt tự động sao lưu database"
 thiet_lap_backup_microsoft_onedrive="Thiết lập backup Microsoft OneDrive"
-
+sao_luu_ma_nguon="sao lưu mã nguồn"
 
 #quản lý database menu main
 reboot_khoi_dong_lai_service_application="Reboot khởi động lại Service Application"
@@ -200,6 +200,8 @@ ban_nhap_khong_dung_dinh_dang_ipv4="Bạn nhập không đúng định dạng IP
 thay_doi_password_ssh="Thay đổi password"
 thay_doi_port_ssh="Thay đổi port SSH/SFTP"
 thiet_lap_canh_bao_login_ssh_qua_telegram="Thiết lập cảnh báo login SSH qua telegram"
+nhap_nhap_lua_chon_user_ban_muon="Nhập lựa chọn user bạn muốn thay đổi Password"
+khong_dung_dinh_dang="Không đúng định dạng"
 
 #update menu main
 cap_nhat_toan_bo_webserver="Cập nhật toàn bộ webserver"
@@ -310,6 +312,9 @@ bat_tat_memcached="Bât/Tắt memcached"
 bat_tat_opcache_php="Bật/tắt OPCache PHP"
 ban_chua_kich_hoat="Bạn chưa kích hoạt"
 
+#cache menu ben trong
+chi_nen_su_dung_object_cache_toi_thieu_2gb_ram="Chỉ nên sử dụng object cache khi tối thiểu 2GB Ram, hiện tại hệ thống của bạn không đủ khả năng đáp ứng nhu cầu này"
+
 #quan ly disk o cung menu main
 dung_luong_o_cung_hien_tai="Dung lượng ổ cứng hiện tại"
 kiem_tra_dung_luong_website="Kiểm tra dung lượng website"
@@ -395,7 +400,7 @@ giai_nen="Giải nén"
 ten_tieu_de_website_wordpress_cua_ban_muon="Tên tiêu đề Website WordPress của bạn muốn"
 nhap_id_dang_nhap_wordpress="Nhập id đăng nhập WordPress"
 nhap_password_wordpress="Nhập Password WordPress"
-luu_y_nhap_wordpress_it_nhat_12_ky_tu="Lưu ý: hãy nhập WordPress ít nhất 12 ký tự để nâng cao bảo mật (sẽ tự động ẩn trong khi gõ phím)"
+luu_y_nhap_wordpress_it_nhat_12_ky_tu="Lưu ý: hãy nhập ít nhất 12 ký tự để nâng cao bảo mật (sẽ tự động ẩn trong khi gõ phím)"
 lam_sach_toan_bo_du_lieu_database="Làm sạch toàn bộ dữ liệu database của"
 ban_co_muon="bạn có muốn"
 ngay_tai_day_khong="ngay tại đây không"
