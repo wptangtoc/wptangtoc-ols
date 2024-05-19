@@ -1,6 +1,7 @@
 #!/bin/bash
 
 #wptangtoc main
+quan_ly_="Quản lý"
 quan_ly_wordpress="Quản lý WordPress"
 quan_ly_domain="Quản lý Domain"
 quan_ly_ssl="Quản lý SSL"
@@ -180,6 +181,9 @@ tu_dong_sao_luu_database="Tự động sao lưu database"
 tat_tu_dong_sao_luu_database="Tắt tự động sao lưu database"
 thiet_lap_backup_microsoft_onedrive="Thiết lập backup Microsoft OneDrive"
 sao_luu_ma_nguon="sao lưu mã nguồn"
+
+#backup restore ben trong
+khong_co_file_backup_nao_ton_tai="Không có file backup nào tồn tại"
 
 #quản lý database menu main
 reboot_khoi_dong_lai_service_application="Reboot khởi động lại Service Application"
@@ -423,4 +427,5 @@ thong_tin_tai_khoan_ngan_hang="Thông tin tài khoản ngân hàng"
 dang_tien_hanh="Đang tiến hành"
 dang_xay_ra_su_co="Đang gặp sự cố"
 
-
+#service menu ben trong
+tinh_trang_hoat_dong_cac_service_hien_tai="Tình trạng hoạt động các service hiện tại"
