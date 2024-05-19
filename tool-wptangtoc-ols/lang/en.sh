@@ -1,6 +1,7 @@
 #!/bin/bash
 
 #wptangtoc main
+quan_ly_="Manager"
 quan_ly_wordpress="WordPress Manager"
 quan_ly_domain="Domain Manager"
 quan_ly_ssl="SSL Manager"
@@ -190,6 +191,8 @@ tat_tu_dong_sao_luu_database="Disnable automatic database backup"
 thiet_lap_backup_microsoft_onedrive="Set up Microsoft OneDrive backup"
 sao_luu_ma_nguon="backup source code"
 
+#backup restore ben trong
+khong_co_file_backup_nao_ton_tai="No backup files exist"
 
 #quản lý database menu main
 reboot_khoi_dong_lai_service_application="Reboot Service Application"
@@ -446,4 +449,6 @@ noi_chia_se_trao_doi_thao_luan_cac_van_de_lien_quan="A place to share and discus
 dang_tien_hanh="In process"
 dang_xay_ra_su_co="Something went wrong"
 
+#service menu ben trong
+tinh_trang_hoat_dong_cac_service_hien_tai="Current operating status of services"
 
