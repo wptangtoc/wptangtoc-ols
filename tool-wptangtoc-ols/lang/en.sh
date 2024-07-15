@@ -286,12 +286,16 @@ xoa_php_extension="Delete PHP extension"
 cai_dat_zip_php_extension="Install ZIP PHP extension"
 cau_hinh_max_excution_time="Setting max execution time"
 cau_hinh_memory_litmit="Setting memory_limit"
+cau_hinh_max_input_time_php="Setting max_input_time"
+
 ban_co_the="you can"
 so_dung_luong="capacity number"
 luu_y="note"
 so_nguyen_duong="integer"
 gia_tri="value"
 khong_xac_dinh_duoc="cannot be determined"
+nhap_sai_truong_du_lieu_so_tu_nhien="If you enter the wrong data field, please enter a natural number"
+
 
 
 
