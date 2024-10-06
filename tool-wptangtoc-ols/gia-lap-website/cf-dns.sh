@@ -15,7 +15,7 @@
 #
 . /etc/wptt/echo-color
 # Exit with error if Python 3 is not installed
-    if [ ! $(command -v python2) ]; then 
+    if [ ! $(command -v python3) ]; then 
         printf "\nERROR: * * * This script requires Python 2. * * *\n"
         exit 1
     fi
@@ -31,9 +31,9 @@
 # CONSTANTS
 #
 
-EMAIL=$(cat ./auth.json | python2 -c "import sys, json; print(json.load(sys.stdin)['cloudflare']['email'])")
-KEY=$(cat ./auth.json | python2 -c "import sys, json; print(json.load(sys.stdin)['cloudflare']['key'])")
-TOKEN=$(cat ./auth.json | python2 -c "import sys, json; print(json.load(sys.stdin)['cloudflare']['token'])")
+EMAIL=$(cat ./auth.json | python3 -c "import sys, json; print(json.load(sys.stdin)['cloudflare']['email'])")
+KEY=$(cat ./auth.json | python3 -c "import sys, json; print(json.load(sys.stdin)['cloudflare']['key'])")
+TOKEN=$(cat ./auth.json | python3 -c "import sys, json; print(json.load(sys.stdin)['cloudflare']['token'])")
 
 
 
@@ -281,7 +281,7 @@ EOF
         curl -X GET "https://api.cloudflare.com/client/v4/zones?name=$DOMAIN" \
         "${AUTH_HEADERS[@]/#/-H}" \
         -H "Content-Type: application/json" \
-        | python2 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
+        | python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
     ) 
 
     if [ -z "$ZONE_ID" ]; then
@@ -300,7 +300,7 @@ EOF
         curl -G "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records" --data-urlencode "type=$TYPE" --data-urlencode "name=$NAME" --data-urlencode "content=$CONTENT" \
         "${AUTH_HEADERS[@]/#/-H}" \
         -H "Content-Type: application/json" \
-        | python2 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
+        | python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')"
     )
 
     if [ -z "$DNS_ID" ]; then
@@ -373,19 +373,19 @@ EOF
             "${AUTH_HEADERS[@]/#/-H}" \
             -H "Content-Type: application/json" \
             --data '{"type":"'"$TYPE"'","name":"'"$NAME"'","content":"'"$CONTENT"'","proxied":'"$PROXIED"',"ttl":'"$TTL"'}' \
-            | python2 -m json.tool --sort-keys
+            | python3 -m json.tool --sort-keys
         elif [ $TYPE == "MX" ]; then
             curl ${REQUEST[@]/#/-X} \
             "${AUTH_HEADERS[@]/#/-H}" \
             -H "Content-Type: application/json" \
             --data '{"type":"'"$TYPE"'","name":"'"$NAME"'","content":"'"$CONTENT"'","priority":'"$PRIORITY"',"ttl":'"$TTL"'}' \
-            | python2 -m json.tool --sort-keys
+            | python3 -m json.tool --sort-keys
         else
             curl ${REQUEST[@]/#/-X} \
             "${AUTH_HEADERS[@]/#/-H}" \
             -H "Content-Type: application/json" \
             --data '{"type":"'"$TYPE"'","name":"'"$NAME"'","content":"'"$CONTENT"'","ttl":'"$TTL"'}' \
-            | python2 -m json.tool --sort-keys
+            | python3 -m json.tool --sort-keys
         fi 
 
 # Delete an existing DNS record
@@ -409,7 +409,7 @@ EOF
                 curl -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$DNS_ID" \
                 "${AUTH_HEADERS[@]/#/-H}" \
                 -H "Content-Type: application/json" \
-                | python2 -m json.tool --sort-keys
+                | python3 -m json.tool --sort-keys
 
             else
                 printf "\nThe $RECORD has NOT been deleted.\n"
