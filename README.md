@@ -69,7 +69,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Preload Cache</li>
 <li>Không giới hạn thêm domain</li>
 <li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
-<li>Hỗ trợ cài đặt SSL trả phí</li>
+<li>Hỗ trợ cài đặt SSL trả phí (Sectigo, Geotrust,...)</li>
 <li>Có thể thêm không giới hạn website</li>
 <li>PhpSuExec mỗi một website một user, để nâng cao bảo mật và dễ dùng quản lý tài nguyên</li>
 <li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
@@ -77,7 +77,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Tối ưu wp cron</li>
 <li>Tối ưu database</li>
 <li>Hỗ trợ nhiều phiên bản PHP cùng lúc</li>
-<li>Hỗ trợ PHPMyAdmin và FileManager</li>
+<li>Hỗ trợ PHPMyAdmin và FileManager (Trực tiếp trên web)</li>
 <li>Hỗ trợ php ioncube</li>
 <li>Sử dụng LSPHP tùy biến hiệu suất tốt hơn PHP Thuần</li>
 <li>Hỗ trợ giao thức QUIC http/3</li>
@@ -100,7 +100,8 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Thiết lập SSL trả phí</li>
 <li>Quản lý Swap</li>
 <li>Mod Security</li>
-<li>Tường lửa 8G</li>
+<li>Tường lửa 8g</li>
+<li>Tường lửa firewalld (Tường lửa CSF tuỳ chọn)</li>
 <li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive)</li>
 <li>Quản lý Wordpress</li>
 <li>Hỗ trợ tự động update WPTangToc OLS</li>
