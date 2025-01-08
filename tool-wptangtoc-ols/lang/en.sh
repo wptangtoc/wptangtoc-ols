@@ -277,6 +277,7 @@ luu_lai="save"
 #cau hinh php menu main
 cau_hinh_uploads_max_php="Setting uploads max php.ini"
 khoi_phuc_uploads_max_php="Restore uploads max php.ini"
+khoi_phuc_php_cau_hinh="Restore default php.ini settings"
 cau_hinh_php_ini="Setting PHP.ini"
 thay_doi_version_phien_ban_php_domain="Change the domain PHP version"
 thay_doi_version_phien_ban_php_webserver="Change the version of PHP All webserver version"
