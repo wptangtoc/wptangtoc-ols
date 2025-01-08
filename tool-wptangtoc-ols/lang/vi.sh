@@ -260,6 +260,7 @@ luu_lai="lưu lại"
 #cau hinh php menu main
 cau_hinh_uploads_max_php="Cấu hình uploads max php.ini"
 khoi_phuc_uploads_max_php="Khôi phục uploads max php.ini"
+khoi_phuc_php_cau_hinh="Khôi phục reset mặc định php.ini"
 cau_hinh_php_ini="Cấu hình PHP.ini"
 thay_doi_version_phien_ban_php_domain="Thay đổi version phiên bản PHP của domain"
 thay_doi_version_phien_ban_php_webserver="Thay đổi version phiên bản PHP All webserver"
