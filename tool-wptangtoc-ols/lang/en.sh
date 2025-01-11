@@ -208,6 +208,7 @@ danh_sach_ip_da_bi_khoa="List of blocked IPs"
 ip_ban_muon_khoa="IP you want to block"
 ip_ban_muon_mo_khoa="IP you want to unlock"
 ban_nhap_khong_dung_dinh_dang_ipv4="You entered the IPv4 format incorrectly"
+ban_nhap_khong_dung_dinh_dang_ipv6="You entered the IPv6 format incorrectly"
 
 
 
