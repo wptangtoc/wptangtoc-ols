@@ -1,0 +1,267 @@
+#!/bin/bash
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Quản lý Database => Thay đổi nhánh phiên bản MariaDB                   |"
+echo "========================================================================="
+echo ""
+echo ""
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+
+echo "Bạn hãy lựa chọn phiên bản Maria Database muốn sử dụng: "
+while IFS= read -r line; do selects+=("$line"); done <<<"$rest_api_mariadb_verison"
+	PS3="
+-//- Nhập vào lựa chọn của bạn [1-$(echo $rest_api_mariadb_verison |wc -w)]: "
+	select select in "${selects[@]}"; do
+		mariadb_version=$select
+		break
+	done
+
+rest_api_mariadb_verison=$(curl -s "https://downloads.mariadb.org/rest-api/mariadb" | \
+tr "}" "\n" | \
+grep '"release_support_type": "Long Term Support"' | \
+while read -r line; do
+  echo "$line" | sed -E 's/.*"release_name": "([^"]+)".*/\1/'
+done)
+
+
+phien_ban_hien_tai=$(mysqld --version | grep mysqld | cut -f4 -d " " | grep '^1' |cut -f1-2 -d '.' | cut -f1 -d '-')
+
+if [[ $mariadb_version = $phien_ban_hien_tai ]];then
+echo "Bạn đang sử dụng phiên bản $phien_ban_hien_tai rồi"
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+	. /etc/wptt/wptt-db-main 1
+fi
+exit
+fi
+
+
+function backup_database_wptt(){
+NAME=$1
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+. /etc/wptt/echo-color
+. /etc/wptt/vhost/."$NAME".conf
+
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+	. /etc/wptt/wptt-db-main 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+	clear
+	echoDo "$ten_mien_nay_khong_ton_tai_tren_he_thong"
+	sleep 3
+	. /etc/wptt/wptt-db-main 1
+	exit
+fi
+
+mkdir -p /usr/local/backup-website/move-db-version
+mkdir -p "/usr/local/backup-website/move-db-version/$NAME"
+
+_runing "$sao_luu_database website $NAME"
+
+#sao luư database bản .sql bình thường
+if [[ $sql_gz = '' ]];then
+	mariadb-dump -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" >/usr/local/backup-website/move-db-version/$NAME/$NAME.sql
+fi
+
+# sao lưu database định dạng gzip có nén được config
+if [[ $sql_gz ]];then
+	mariadb-dump -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" | gzip >/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz
+fi
+
+
+if [[ ! -f /usr/local/backup-website/$NAME/$NAME.sql && ! -f /usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz ]];then
+	_runloi "$sao_luu_database website $NAME"
+fi
+
+if [[ $sql_gz = '' ]];then
+	check_file_error=$(du -c /usr/local/backup-website/move-db-version/$NAME/$NAME.sql | awk '{print $1}' | sed '1d')
+	if (( $check_file_error < 10 ));then
+		_runloi "$sao_luu_database website $NAME"
+		rm -f /usr/local/backup-website/$NAME/$NAME.sql
+		return 2>/dev/null ; exit
+	fi
+fi
+
+
+if [[ $sql_gz ]];then
+	check_file_error=$(du -c /usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz | awk '{print $1}' | sed '1d')
+	if (( $check_file_error < 10 ));then
+		_runloi "$sao_luu_database website $NAME"
+		rm -f /usr/local/backup-website/$NAME/$NAME.sql.gz
+		return 2>/dev/null ; exit
+	fi
+fi
+
+_rundone "$sao_luu_database website $NAME"
+
+echo "========================================================================="
+}
+
+if [ "$(ls -A /etc/wptt/vhost)" ]; then
+echo "Sao lưu toàn bộ database trên hệ thống"
+echo ""
+echo ""
+for entry in $(ls -A /etc/wptt/vhost); do
+domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+path="/usr/local/lsws/$domain/html"
+i=1
+
+if [[ -d "$path" ]]; then
+	_runing "Sao lưu database website $domain"
+timedate=$(date +%Hgio\_%d\_%m\_%Y)
+	backup_database_wptt $domain >/dev/null 2>&1
+
+	if [[ $sql_gz = '' ]];then
+	if [[ ! -f /usr/local/backup-website/move-db-version/$domain/$domain.sql ]];then
+	_runloi "Sao lưu database website $domain"
+	continue
+	fi
+
+	check_file_error=$(du -c /usr/local/backup-website/move-db-version/$domain/$domain.sql | awk '{print $1}' | sed '1d')
+	if [[ $check_file_error = '' ]];then
+	check_file_error=1
+	fi
+
+	if (( $check_file_error < 10 ));then
+	_runloi "Sao lưu database website $domain"
+	rm -f /usr/local/backup-website/move-db-version/$domain/$domain.sql
+	continue
+	fi
+	fi
+
+	if [[ $sql_gz ]];then
+	if [[ ! -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz ]];then
+	_runloi "Sao lưu database website $domain"
+	continue
+	fi
+
+	check_file_error=$(du -c /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz | awk '{print $1}' | sed '1d')
+
+	if [[ $check_file_error = '' ]];then
+	check_file_error=1
+	fi
+
+	if (( $check_file_error < 10 ));then
+	_runloi "Sao lưu database website $domain"
+	rm -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz
+	continue
+	fi
+	fi
+
+	_rundone "Sao lưu database website $domain"
+	fi
+	done
+fi
+
+
+systemctl stop mariadb
+rm -rf /var/lib/mysql
+yum remove mariadb-server -y
+yum remove mariadb-client -y
+
+
+#thiết lập repo mariadb
+OUTPUT=$(cat /etc/*release)
+if  echo $OUTPUT | grep -q "AlmaLinux 8\|Rocky Linux 8" ; then
+echo '[mariadb]
+name = MariaDB
+baseurl = http://yum.mariadb.org/'$mariadb_version'/rhel8-amd64
+gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck=1
+module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
+
+#repo mariadb cpu arm
+if [[ $(uname -m | grep 'arm') ]];then
+echo '[mariadb]
+name = MariaDB
+baseurl = http://yum.mariadb.org/'$mariadb_version'/rhel8-aarch64
+gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck=1
+module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
+fi
+
+elif echo $OUTPUT | grep -q "AlmaLinux 9\|Rocky Linux 9" ; then
+echo '[mariadb]
+name = MariaDB
+baseurl = http://yum.mariadb.org/'$mariadb_version'/rhel9-amd64
+gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck=1
+module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
+
+#repo mariadb cpu arm
+if [[ $(uname -m | grep 'arm') ]];then
+echo '[mariadb]
+name = MariaDB
+baseurl = http://yum.mariadb.org/'$mariadb_version'/rhel9-aarch64
+gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck=1
+module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
+fi
+
+elif echo $OUTPUT | grep -q "Ubuntu 22.04\|Ubuntu 24.04" ; then
+UBUNTU_CODENAME_VERSION=$(cat /etc/os-release | grep UBUNTU_CODENAME | cut -f2 -d=)
+apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
+add-apt-repository 'deb [arch=amd64,arm64,ppc64el] http://sfo1.mirrors.digitalocean.com/mariadb/repo/'$mariadb_version'/ubuntu '$UBUNTU_CODENAME_VERSION' main' -y
+else
+	echo "Hiện tại WPTangToc OLS không hỗ trợ với hệ điều hành $(hostnamectl | grep System | cut -f2 -d':'|sed 's/^ //g') của bạn"
+	echo "Muốn sử dụng WPTangToc OLS vui lòng sử dụng hệ điều hành (Almalinux 8|AlmaLinux 9| Rocky linux 8| Rocky Linux 9| Ubuntu 22.04 LTS | Ubuntu 24.04 LTS)"
+	exit
+fi
+
+yum install mariadb-server mariadb-client -y
+
+
+
+. /etc/wptt/.wptt.conf
+mariadb <<EOF
+use mysql;
+FLUSH PRIVILEGES;
+CREATE USER 'wordpressadmin'@'localhost' IDENTIFIED BY '$database_admin_password';
+GRANT ALL PRIVILEGES ON *.* TO 'wordpressadmin'@'localhost' WITH GRANT OPTION;
+DROP USER 'root'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+
+
+for entry in $(ls -A /etc/wptt/vhost); do
+domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+path="/usr/local/lsws/$domain/html"
+i=1
+
+_runing "Thêm database website $domain"
+mariadb -u $database_admin_username -p"$database_admin_password" -e "DROP DATABASE IF EXISTS ${DB_Name_web}"
+mariadb -u $database_admin_username -p"$database_admin_password" -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web}"
+mariadb -u $database_admin_username -p"$database_admin_password" -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'"
+mariadb -u $database_admin_username -p"$database_admin_password" -e "CREATE USER IF NOT EXISTS '${DB_User_web}'@'localhost' IDENTIFIED BY '${DB_Password_web}'"
+mariadb -u $database_admin_username -p"$database_admin_password" -e "GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost' WITH GRANT OPTION"
+mariadb -u $database_admin_username -p"$database_admin_password" -e "FLUSH PRIVILEGES"
+_rundone "Thêm database website $domain"
+
+_runing "Khôi phục database website $domain"
+mariadb -u $database_admin_username -p"$database_admin_password" ${DB_Name_web} < /usr/local/backup-website/move-db-version/$domain/$domain.sql
+_rundone "Khôi phục database website $domain"
+done
+
+rm -rf /usr/local/backup-website/move-db-version
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-db-main 1
+fi
+
