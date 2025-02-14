@@ -54,6 +54,10 @@ if [[ $port_mariadb_remote ]];then
 sed -i "/chain input /a\ \ tcp dport $port_mariadb_remote accept #port remote mariadb" $path_nftables_config
 fi
 
+sed -i "s/^action = .*/action = nftables-allports/" /etc/fail2ban/jail.local
+sed -i "s/^banaction = .*/action = nftables-allports/" /etc/fail2ban/jail.local
+sed -i "s/^banaction_allports = .*/action = nftables-allports/" /etc/fail2ban/jail.local
+systemctl restart fail2ban
 echo "hoàn tất cài nftables"
 
 #file config /etc/sysconfig/nftables.conf

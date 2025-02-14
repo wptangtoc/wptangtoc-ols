@@ -46,9 +46,10 @@ fi
 chmod +x /usr/local/lsws/$NAME/bao-mat/anti.py
 
 sed -i '/log_file_path =/d' /usr/local/lsws/$NAME/bao-mat/anti.py
-sed -i "/parser = Parser()/a\ \ \ \ log_file_path = \"/usr/local/lsws/$NAME/access.log\"" /usr/local/lsws/$NAME/bao-mat/anti.py
+sed -i "/__main__/a\ \ \ \ log_file_path = \"/usr/local/lsws/$NAME/access.log\"" /usr/local/lsws/$NAME/bao-mat/anti.py
 
 cat <(crontab -l) | sed "/bao-mat/d" | crontab -
+cat <(crontab -l) | sed "/access.log/d" | crontab -
 cat <(crontab -l) <(echo "* * * * * python3 /usr/local/lsws/$NAME/bao-mat/anti.py") | crontab -
 cat <(crontab -l) <(echo "*/1 * * * * echo '' > /usr/local/lsws/$NAME/logs/access.log") | crontab -
 
@@ -83,7 +84,7 @@ systemctl restart nftables
 
 path_webgui="/usr/local/lsws/conf/disablewebconsole"
 if [[ ! -f $path_webgui ]]; then
-port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | cut -f2 -d":")
+port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | grep -o '[0-9]\+$')
 sed -i "/chain input /a\ \ tcp dport $port_webgui_openlitespeed accept #port webguiadmin" $path_nftables_config
 systemctl restart nftables
 fi
