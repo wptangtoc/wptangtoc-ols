@@ -49,6 +49,12 @@ fi
 
 rm -f $path_nftables_config
 
+
+sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/'  /etc/fail2ban/jail.local
+sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/'  /etc/fail2ban/jail.local
+sed -i "s/^banaction_allports = .*/banaction_allports = firewallcmd-allports/" /etc/fail2ban/jail.local
+systemctl restart fail2ban
+
 firewall-cmd --reload
 echo "Hoàn tất remove nftables và bật lại firewalld"
 
