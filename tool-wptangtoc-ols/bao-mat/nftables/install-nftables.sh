@@ -41,6 +41,19 @@ systemctl restart nftables
 fi
 
 
+
+#remote mariadb port
+if $(cat /etc/*release | grep -q "Ubuntu") ; then
+	duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+else
+	duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+fi
+
+port_mariadb_remote=$(cat $duong_dan_cau_hinh_mariadb | grep 'port='| grep -o '[0-9]\+$')
+if [[ $port_mariadb_remote ]];then
+sed -i "/chain input /a\ \ tcp dport $port_mariadb_remote accept #port remote mariadb" $path_nftables_config
+fi
+
 echo "hoàn tất cài nftables"
 
 #file config /etc/sysconfig/nftables.conf
