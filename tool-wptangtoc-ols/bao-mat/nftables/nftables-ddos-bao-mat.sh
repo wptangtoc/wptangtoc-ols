@@ -1,5 +1,11 @@
 #!/bin/bash
 
+nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ "$nftables_service" != "active" ]]; then
+echo "nftables chưa được cài đặt vui lòng cài đặt nftables"
+exit
+fi
+
 . /etc/wptt/tenmien
 echo ""
 echo ""
@@ -47,13 +53,24 @@ cat <(crontab -l) <(echo "* * * * * python3 /usr/local/lsws/$NAME/bao-mat/anti.p
 cat <(crontab -l) <(echo "*/1 * * * * echo '' > /usr/local/lsws/$NAME/logs/access.log") | crontab -
 
 
+	if $(cat /etc/*release | grep -q "Ubuntu") ; then
+		path_nftables_config="/etc/nftables.conf"
+	else
+		path_nftables_config="/etc/sysconfig/nftables.conf"
+	fi
+
 #file config /etc/sysconfig/nftables.conf
 
 
 if [[ $(cat /etc/sysconfig/nftables.conf | grep 'ipvietnam') = '' ]];then
-cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc/sysconfig
-chmod 600 /etc/sysconfig/nftables.conf
 
+	if $(cat /etc/*release | grep -q "ubuntu") ; then
+		cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc
+	else
+		cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc/sysconfig
+	fi
+
+	chmod 600 $path_nftables_config
 
 #mở port ssh
 port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$')
@@ -65,10 +82,20 @@ port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$')
 if [[ $port_checkssh = '' ]];then
 port_checkssh=22
 fi
-sed -i "/chain input /a\ \ tcp dport $port_checkssh accept" /etc/sysconfig/nftables.conf
+sed -i "/chain input /a\ \ tcp dport $port_checkssh accept #port ssh" $path_nftables_config
 systemctl restart nftables
 
+path_webgui="/usr/local/lsws/conf/disablewebconsole"
+if [[ -f $path_webgui ]]; then
+port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | cut -f2 -d":")
+sed -i "/chain input /a\ \ tcp dport $port_webgui_openlitespeed accept #port webguiadmin" $path_nftables_config
+systemctl restart nftables
 fi
+
+
+fi
+
+
 
 google=$(curl -s  https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d'|  sed 's/"//g' | sed 's/ /\n/g'| sed '/^$/d')
 google=$(echo $google | sed 's/ /, /g')
