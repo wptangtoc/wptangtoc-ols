@@ -11,4 +11,5 @@ exit
 fi
 
 nft add element ip blackblock blackaction "{$ip}"
+nft list ruleset > /etc/sysconfig/nftables.conf
 
