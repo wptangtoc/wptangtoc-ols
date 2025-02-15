@@ -53,6 +53,11 @@ cat <(crontab -l) | sed "/truncate/d" | crontab -
 
 
 cat <(crontab -l) <(echo "* * * * * /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
+cat <(crontab -l) <(echo "* * * * * sleep 10; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
+cat <(crontab -l) <(echo "* * * * * sleep 20; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
+cat <(crontab -l) <(echo "* * * * * sleep 30; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
+cat <(crontab -l) <(echo "* * * * * sleep 40; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
+cat <(crontab -l) <(echo "* * * * * sleep 50; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/$NAME/logs/access.log") | crontab -
 
 
