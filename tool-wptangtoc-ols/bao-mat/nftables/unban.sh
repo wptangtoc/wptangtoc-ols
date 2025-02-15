@@ -11,5 +11,12 @@ exit
 fi
 
 nft delete element blackblock blackaction "{$ip}"
-nft list ruleset > /etc/sysconfig/nftables.conf
+
+if $(cat /etc/*release | grep -q "Ubuntu") ; then
+	path_nftables_config="/etc/nftables.conf"
+else
+	path_nftables_config="/etc/sysconfig/nftables.conf"
+fi
+
+nft list ruleset > $path_nftables_config
 
