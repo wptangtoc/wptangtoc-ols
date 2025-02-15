@@ -28,7 +28,7 @@ port_checkssh=22
 fi
 sed -i "/chain input /a\ \ tcp dport $port_checkssh accept #port ssh" $path_nftables_config
 
-chmod 600 /etc/sysconfig/nftables.conf
+chmod 600 $path_nftables_config
 systemctl restart nftables
 
 

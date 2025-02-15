@@ -38,7 +38,7 @@ def ip_to_cidr_range(ip_address):  # Renamed function
 
 def block_ip_address(ip_address):  # Renamed function
     try:
-        subprocess.run(f"nft add element ip blackblock blackaction {{ {ip_address} timeout 8h }} >/dev/null", shell=True, check=True)
+        subprocess.run(f"/usr/sbin/nft add element ip blackblock blackaction {{ {ip_address} timeout 8h }} >/dev/null", shell=True, check=True)
         return True
     except subprocess.CalledProcessError as block_error:
         print(f"Error blocking IP {ip_address}: {block_error}")
