@@ -114,7 +114,12 @@ bing_ip=$(echo $bing_ip | sed 's/ /, /g')
 bing_ip=$(echo $bing_ip | sed 's/^/{ /g' | sed 's/$/ }/g')
 nft add element inet filter BINGv4 $bing_ip
 
+#chặn tấn công SYN food
+#nft add rule inet filter input tcp flags syn limit rate 100/second burst 200 packets accept
+
 nft list ruleset > /etc/sysconfig/nftables.conf
+
+
 
 systemctl restart nftables
 
