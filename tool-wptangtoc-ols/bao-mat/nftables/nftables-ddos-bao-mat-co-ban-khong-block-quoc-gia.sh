@@ -73,9 +73,9 @@ cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/logs/error.l
 if [[ $(cat $path_nftables_config | grep 'ipvietnam') = '' ]];then
 
 	if $(cat /etc/*release | grep -q "ubuntu") ; then
-		cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc
+		cp -f /etc/wptt/bao-mat/nftables/nftables-khong-block-quoc-gia.conf $path_nftables_config
 	else
-		cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc/sysconfig
+		cp -f /etc/wptt/bao-mat/nftables/nftables-khong-block-quoc-gia.conf $path_nftables_config
 	fi
 
 	chmod 600 $path_nftables_config
@@ -101,23 +101,6 @@ fi
 
 
 
-google=$(curl -s  https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d'|  sed 's/"//g' | sed 's/ /\n/g'| sed '/^$/d')
-google=$(echo $google | sed 's/ /, /g')
-google=$(echo $google | sed 's/^/{ /g' | sed 's/$/ }/g')
-
-nft add element inet filter GGv4 $google
-
-ip_elements_bing=$(nft list set inet filter BINGv4 | awk '/{ /,/}/' | cut -d '=' -f 2)
-nft delete element inet filter BINGv4 ${ip_elements_bing}
-bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d'|  sed 's/"//g'|sed 's/ /\n/g' | sed 's/^/\n/g'|sed '/^$/d')
-bing_ip=$(echo $bing_ip | sed 's/ /, /g')
-bing_ip=$(echo $bing_ip | sed 's/^/{ /g' | sed 's/$/ }/g')
-nft add element inet filter BINGv4 $bing_ip
-
-#chặn tấn công SYN food
-#nft add rule inet filter input tcp flags syn limit rate 100/second burst 200 packets accept
-
-
 
 nft list ruleset > /etc/sysconfig/nftables.conf
 
@@ -125,7 +108,6 @@ ip=$(curl -s myip.directadmin.com)
 if [[ "$ip" = "" ]]; then
 	ip=$(curl -s ifconfig.me)
 fi
-. /etc/wptt/bao-mat/nftables/bypass-ip.sh $ip
 
 . /etc/wptt/logs/error-chuyen-warn-log-server
 
