@@ -75,6 +75,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
 <li>Hỗ trợ object Cache (Redis & Memcached & LSMemcached)</li>
 <li>Tối ưu wp cron</li>
+<li>Hỗ trợ IPv4 và IPv6</li>
 <li>Tối ưu database</li>
 <li>Hỗ trợ nhiều phiên bản PHP cùng lúc</li>
 <li>Hỗ trợ PHPMyAdmin và FileManager (Trực tiếp trên web)</li>
