@@ -458,7 +458,7 @@ function storexml() {
     validmap
     if [ $(echo ${1} | grep '\.xml$'|wc -l) != 0 ]; then
 		#thêm sed 's/<loc>/\n<loc>/g' để tương thích với wp sitemap vì wp sitemap nó nén, nên phải giải mã kiểu này mới tương thích
-        XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed 's/<loc>/\n<loc>/g'| sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/')
+        XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed 's/<loc>/\n<loc>/g'| sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/'| sed '/ xmlns=/d')
         XML_NUM=$(echo ${XML_URL} | grep '\.xml' | wc -l)
         if [ ${XML_NUM} -gt 0 ]; then
             for URL in $XML_URL; do
@@ -504,11 +504,11 @@ function main(){
             if [ "${CRAWLQS}" = 'ON' ]; then
                 URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
-                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d')
+                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             else
                 URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'| \
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' | \
-                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d')
+                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             fi
             URLCOUNT=$(echo "${URLLIST}" | grep -c '[^[:space:]]')
             maincrawl
