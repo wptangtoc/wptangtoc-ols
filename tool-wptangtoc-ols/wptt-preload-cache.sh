@@ -1,6 +1,6 @@
 #Author          :LiteSpeedtech & Gia Tuấn
-#date            :20230814
-#version         :1.9.3
+#date            :20250313
+#version         :2.0.0
 #Require         :Prepare site map XML
 #                 Allow LSCache crawler
 #=======================================================
@@ -423,7 +423,8 @@ function debugurl() {
 function storexml() {
     validmap
     if [ $(echo ${1} | grep '\.xml$'|wc -l) != 0 ]; then
-        XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/')
+		#thêm sed 's/<loc>/\n<loc>/g' để tương thích với wp sitemap vì wp sitemap nó nén, nên phải giải mã kiểu này mới tương thích
+        XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed 's/<loc>/\n<loc>/g'| sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/')
         XML_NUM=$(echo ${XML_URL} | grep '\.xml' | wc -l)
         if [ ${XML_NUM} -gt 0 ]; then
             for URL in $XML_URL; do
@@ -467,12 +468,13 @@ function main(){
     else
         for XMLURL in "${XML_LIST[@]}"; do
             echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
+				#thêm sed 's/<loc>/\n<loc>/g' để tương thích với wp sitemap vì wp sitemap nó nén, nên phải giải mã kiểu này mới tương thích
             if [ "${CRAWLQS}" = 'ON' ]; then
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | \
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | sed 's/<loc>/\n<loc>/g'| \
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
                     grep -iPo '^((?!png|jpg|webp).)*$' | sort -u)
             else
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | \
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' | \
                     grep -iPo '^((?!png|jpg|webp).)*$' | sort -u)
             fi
