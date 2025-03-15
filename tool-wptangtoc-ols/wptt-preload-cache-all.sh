@@ -256,10 +256,10 @@ function crawlreq() {
 	domain_host=$(echo ${2}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
     if [ ! -z "${WITH_WEBP}" ]; then
 
-        CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
+        CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
          | sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq' | tr '\n' ' ')
     else     
-        CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
+        CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
          | sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac |  sed '/Server: /Iq'|tr '\n' ' ')
     fi     
     excludecookie "${CURLRESULT}"
@@ -394,7 +394,7 @@ function validmap(){
 	CURL_CMD="curl -IkL -w httpcode=%{http_code}"
 	CURL_MAX_CONNECTION_TIMEOUT="-m 100"
 	CURL_RETURN_CODE=0
-	CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache check" 2> /dev/null) || CURL_RETURN_CODE=$?
+	CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80"  -A "WPTangToc OLS preload cache check" 2> /dev/null) || CURL_RETURN_CODE=$?
 
 	if [ ${CURL_RETURN_CODE} -ne 0 ]; then
 . /etc/wptt/.wptt.conf
@@ -534,11 +534,11 @@ function main(){
             echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
 			domain_host=$(echo ${XMLURL}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
             if [ "${CRAWLQS}" = 'ON' ]; then
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
                     grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             else
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'| \
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'| \
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' | \
                     grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             fi
