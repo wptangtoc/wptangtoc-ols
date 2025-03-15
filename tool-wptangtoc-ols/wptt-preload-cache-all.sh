@@ -390,14 +390,13 @@ function runLoop() {
 }
 
 function validmap(){
-	domain_host=$(echo ${1}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
+	domain_host=$(echo ${SITEMAP}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
+	CURL_CMD="curl -IkL -w httpcode=%{http_code}"
+	CURL_MAX_CONNECTION_TIMEOUT="-m 100"
+	CURL_RETURN_CODE=0
+	CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache check" 2> /dev/null) || CURL_RETURN_CODE=$?
 
-    CURL_CMD="curl -IkL -w httpcode=%{http_code}"
-    CURL_MAX_CONNECTION_TIMEOUT="-m 100"
-    CURL_RETURN_CODE=0
-    CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" 2> /dev/null) || CURL_RETURN_CODE=$?
-
-    if [ ${CURL_RETURN_CODE} -ne 0 ]; then
+	if [ ${CURL_RETURN_CODE} -ne 0 ]; then
 . /etc/wptt/.wptt.conf
 if [[ $ngon_ngu = '' ]];then
 	ngon_ngu='vi'
@@ -410,11 +409,11 @@ echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       
 echo "========================================================================="
 		wptangtoc 1
 
-        exit 1
+		exit 1
 
-    else
-        HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP'| tail -1 | awk '{print $2}')
-        if [ "${HTTPCODE}" != '200' ]; then
+	else
+		HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP'| tail -1 | awk '{print $2}')
+		if [ "${HTTPCODE}" != '200' ]; then
 
 
 . /etc/wptt/.wptt.conf
@@ -431,9 +430,9 @@ echo "========================================================================="
 			exit 1
 
 
-        fi
-        echoG "Kết với sitemap thành công \n"
-    fi
+		fi
+		echoG "Kết với sitemap thành công \n"
+	fi
 }
 
 function checkcrawler() {
