@@ -1,6 +1,6 @@
 #Author          :LiteSpeedtech & Gia Tuấn
-#date            :20250313
-#version         :2.0.0
+#date            :20250315
+#version         :2.0.1
 #Require         :Prepare site map XML
 #                 Allow LSCache crawler
 #=======================================================
@@ -531,12 +531,13 @@ function main(){
     else
         for XMLURL in "${XML_LIST[@]}"; do
             echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
+			domain_host=$(echo ${XMLURL}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
             if [ "${CRAWLQS}" = 'ON' ]; then
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
                     grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             else
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'| \
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'| \
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' | \
                     grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             fi
