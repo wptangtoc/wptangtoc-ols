@@ -254,9 +254,9 @@ function crawlreq() {
 	domain_host=$(echo ${2}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
 	if [ ! -z "${WITH_WEBP}" ]; then
 		CURLRESULT=$(curl ${CURL_OPTS} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
-			| sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq' | tr '\n' ' ')
+		| sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq' | tr '\n' ' ')
 	else     
-			CURLRESULT=$(curl ${CURL_OPTS} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
+		CURLRESULT=$(curl ${CURL_OPTS} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
 					| sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac |  sed '/Server: /Iq'|tr '\n' ' ')
 	fi     
 
