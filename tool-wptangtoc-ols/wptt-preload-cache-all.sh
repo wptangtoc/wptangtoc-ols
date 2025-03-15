@@ -253,7 +253,7 @@ function crawlreq() {
         fi    
     fi
     echo "${2} -> " | tr -d '\n'
-	domain_host=$(echo ${2}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
+	domain_host=$(echo ${2}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
     if [ ! -z "${WITH_WEBP}" ]; then
 
         CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
@@ -390,7 +390,7 @@ function runLoop() {
 }
 
 function validmap(){
-	domain_host=$(echo ${SITEMAP}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
+	domain_host=$(echo ${SITEMAP}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
 	CURL_CMD="curl -IkL -w httpcode=%{http_code}"
 	CURL_MAX_CONNECTION_TIMEOUT="-m 100"
 	CURL_RETURN_CODE=0
@@ -532,7 +532,7 @@ function main(){
     else
         for XMLURL in "${XML_LIST[@]}"; do
             echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
-			domain_host=$(echo ${XMLURL}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
+			domain_host=$(echo ${XMLURL}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
             if [ "${CRAWLQS}" = 'ON' ]; then
                 URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}:80:127.0.0.1" --connect-to "${domain_host}:443:127.0.0.1" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
