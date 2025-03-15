@@ -363,13 +363,38 @@ function validmap(){
     CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} 2> /dev/null) || CURL_RETURN_CODE=$?
     if [ ${CURL_RETURN_CODE} -ne 0 ]; then
         echoR "Kết nối không thành công với code mã trả về - ${CURL_RETURN_CODE}, exit"
+
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echoR "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
+echo "========================================================================="
+echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
+echo "========================================================================="
+		wptangtoc 1
+
         exit 1
     else
         HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP'| tail -1 | awk '{print $2}')
-        if [ "${HTTPCODE}" != '200' ]; then
-            echoR "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
-            exit 1
-        fi
+		if [ "${HTTPCODE}" != '200' ]; then
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echoR "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
+echo "========================================================================="
+echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
+echo "========================================================================="
+			wptangtoc 1
+			exit 1
+		fi
         echoG "Kết với sitemap thành công \n"
     fi
 }
