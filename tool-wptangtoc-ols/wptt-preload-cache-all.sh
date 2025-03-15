@@ -395,12 +395,12 @@ function validmap(){
     CURL_RETURN_CODE=0
     CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} 2> /dev/null) || CURL_RETURN_CODE=$?
     if [ ${CURL_RETURN_CODE} -ne 0 ]; then
-        echoR "Curl connection failed with return code - ${CURL_RETURN_CODE}, exit"
+        echoR "Kết nối không thành công với code mã trả về - ${CURL_RETURN_CODE}, exit"
         exit 1
     else
         HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP'| tail -1 | awk '{print $2}')
         if [ "${HTTPCODE}" != '200' ]; then
-            echoR "Curl operation/command failed due to server return code - ${HTTPCODE}, exit"
+            echoR "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
             exit 1
         fi
         echoG "Kết với sitemap thành công \n"
