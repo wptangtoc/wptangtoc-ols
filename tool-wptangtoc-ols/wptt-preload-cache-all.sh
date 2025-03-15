@@ -390,18 +390,19 @@ function runLoop() {
 }
 
 function validmap(){
-    CURL_CMD="curl -IkL -w httpcode=%{http_code}"
+	domain_host=$(echo ${SITEMAP}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
+    CURL_CMD="curl -IkL -w httpcode=%{http_code} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1""
     CURL_MAX_CONNECTION_TIMEOUT="-m 100"
     CURL_RETURN_CODE=0
     CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} 2> /dev/null) || CURL_RETURN_CODE=$?
     if [ ${CURL_RETURN_CODE} -ne 0 ]; then
-		. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf
 if [[ $ngon_ngu = '' ]];then
 	ngon_ngu='vi'
 fi
 . /etc/wptt/lang/$ngon_ngu.sh
 
-echoR "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
+echo "Kết nối không thành công với không có code mã nào được trả về - ${CURL_RETURN_CODE}, exit"
 echo "========================================================================="
 echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
 echo "========================================================================="
@@ -420,7 +421,7 @@ if [[ $ngon_ngu = '' ]];then
 fi
 . /etc/wptt/lang/$ngon_ngu.sh
 
-echoR "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
+echo "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
 echo "========================================================================="
 echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
 echo "========================================================================="
