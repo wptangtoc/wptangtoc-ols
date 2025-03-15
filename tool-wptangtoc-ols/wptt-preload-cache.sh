@@ -358,8 +358,7 @@ function runLoop() {
 
 #kiểm tra sitemap có hoạt động không
 function validmap(){
-	domain_host=$(echo ${SITEMAP}| sed 's/https\?:\/\///g'| cut -f1 -d '/')
-    CURL_CMD="curl -IkL -w httpcode=%{http_code} --resolve "${domain_host}:80:127.0.0.1" --resolve "${domain_host}:443:127.0.0.1""
+    CURL_CMD="curl -IkL -w httpcode=%{http_code}"
     CURL_MAX_CONNECTION_TIMEOUT="-m 100"
     CURL_RETURN_CODE=0
     CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} 2> /dev/null) || CURL_RETURN_CODE=$?
