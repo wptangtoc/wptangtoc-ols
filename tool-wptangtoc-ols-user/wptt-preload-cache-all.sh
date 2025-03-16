@@ -1,6 +1,6 @@
 #Author          :LiteSpeedtech & Gia Tuấn
-#date            :20230814
-#version         :1.9.3
+#date            :20250315
+#version         :2.0.1
 #Require         :Prepare site map XML
 #                 Allow LSCache crawler
 #=======================================================
@@ -15,7 +15,7 @@ CUSTUM_COOKIE=''
 WITH_WEBP=''
 XML_LIST=()
 CURL_OPTS=''
-PROTECTOR='ON'
+PROTECTOR='OFF'
 ESCAPE='OFF'
 VERBOSE='OFF'
 DEBUGURL='OFF'
@@ -253,11 +253,13 @@ function crawlreq() {
         fi    
     fi
     echo "${2} -> " | tr -d '\n'
+	domain_host=$(echo ${2}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
     if [ ! -z "${WITH_WEBP}" ]; then
-        CURLRESULT=$(curl ${CURL_OPTS} -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
+
+        CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} \
          | sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq' | tr '\n' ' ')
     else     
-        CURLRESULT=$(curl ${CURL_OPTS} -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
+        CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} \
          | sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac |  sed '/Server: /Iq'|tr '\n' ' ')
     fi     
     excludecookie "${CURLRESULT}"
@@ -388,21 +390,49 @@ function runLoop() {
 }
 
 function validmap(){
-    CURL_CMD="curl -IkL -w httpcode=%{http_code}"
-    CURL_MAX_CONNECTION_TIMEOUT="-m 100"
-    CURL_RETURN_CODE=0
-    CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} 2> /dev/null) || CURL_RETURN_CODE=$?
-    if [ ${CURL_RETURN_CODE} -ne 0 ]; then
-        echoR "Curl connection failed with return code - ${CURL_RETURN_CODE}, exit"
-        exit 1
-    else
-        HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP'| tail -1 | awk '{print $2}')
-        if [ "${HTTPCODE}" != '200' ]; then
-            echoR "Curl operation/command failed due to server return code - ${HTTPCODE}, exit"
-            exit 1
-        fi
-        echoG "Kết với sitemap thành công \n"
-    fi
+	domain_host=$(echo ${SITEMAP}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
+	CURL_CMD="curl -IkL -w httpcode=%{http_code}"
+	CURL_MAX_CONNECTION_TIMEOUT="-m 100"
+	CURL_RETURN_CODE=0
+	CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80"  -A "WPTangToc OLS preload cache check" 2> /dev/null) || CURL_RETURN_CODE=$?
+
+	if [ ${CURL_RETURN_CODE} -ne 0 ]; then
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echo "Kết nối không thành công với không có code mã nào được trả về - ${CURL_RETURN_CODE}, exit"
+echo "========================================================================="
+echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
+echo "========================================================================="
+		wptangtoc 1
+
+		exit 1
+
+	else
+		HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP'| tail -1 | awk '{print $2}')
+		if [ "${HTTPCODE}" != '200' ]; then
+
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echo "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
+echo "========================================================================="
+echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
+echo "========================================================================="
+			wptangtoc 1
+			exit 1
+
+
+		fi
+		echoG "Kết với sitemap thành công \n"
+	fi
 }
 
 function checkcrawler() {
@@ -455,9 +485,11 @@ function debugurl() {
 }
 
 function storexml() {
-    validmap
+#bình luận validmap không cần phải check điêu kiện vì preload-cache2 đã check điều kiện rooiff
+    # validmap
     if [ $(echo ${1} | grep '\.xml$'|wc -l) != 0 ]; then
-        XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/')
+		#thêm sed 's/<loc>/\n<loc>/g' để tương thích với wp sitemap vì wp sitemap nó nén, nên phải giải mã kiểu này mới tương thích
+        XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed 's/<loc>/\n<loc>/g'| sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/'| sed '/ xmlns=/d')
         XML_NUM=$(echo ${XML_URL} | grep '\.xml' | wc -l)
         if [ ${XML_NUM} -gt 0 ]; then
             for URL in $XML_URL; do
@@ -500,14 +532,15 @@ function main(){
     else
         for XMLURL in "${XML_LIST[@]}"; do
             echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
+			domain_host=$(echo ${XMLURL}| sed 's/https\?:\/\///g'| cut -f1 -d '/'| sed 's/^www.//g')
             if [ "${CRAWLQS}" = 'ON' ]; then
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | \
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
-                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u)
+                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             else
-                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | \
+                URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g'| grep '<loc>' |  sed 's/<loc>/\n<loc>/g'| \
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' | \
-                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u)
+                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u| sed '/ xmlns=/d'| sed '/><url>/d')
             fi
             URLCOUNT=$(echo "${URLLIST}" | grep -c '[^[:space:]]')
             maincrawl
@@ -582,4 +615,8 @@ while [ ! -z "${1}" ]; do
     shift
 done
 main
+
+
+
+
 
