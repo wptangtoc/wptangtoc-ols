@@ -23,11 +23,7 @@ def kiem_tra_ping(host, so_goi_tin, thoi_gian_cho):
     isp = xac_dinh_isp(host)
 
     try:
-        # Xây dựng lệnh ping dựa trên hệ điều hành
-        if platform.system().lower() == "windows":
-            lenh = ["ping", "-n", str(so_goi_tin), "-w", str(int(thoi_gian_cho * 1000)), host]
-        else:  # Linux/macOS
-            lenh = ["ping", "-c", str(so_goi_tin), "-W", str(thoi_gian_cho), host]
+        lenh = ["ping", "-c", str(so_goi_tin), "-W", str(thoi_gian_cho), host]
 
 
         ket_qua = subprocess.run(lenh, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
