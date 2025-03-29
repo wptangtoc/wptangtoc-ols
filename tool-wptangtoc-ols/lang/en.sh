@@ -42,6 +42,7 @@ phien_ban="version"
 phat_trien_boi_gia_tuan="Developed by: Gia Tuan"
 nhap_lua_chon_cua_ban="Type in your choice"
 exit_thoat="exit"
+chon_nhanh="Quick select"
 he_thong_xac_nhan_ban_khong_su_ma_nguon="The system confirms that you are not using the WordPress source code"
 tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="This feature is only available for WordPress source code"
 
