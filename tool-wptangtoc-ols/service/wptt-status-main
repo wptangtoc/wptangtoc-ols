@@ -1,120 +1,158 @@
 #!/bin/bash
-# @author: Gia Tuấn
-# @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
-# @since: 2024
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]];then
-	ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
 
-if [[ $1 = "" ]];then
-	. /etc/wptt/wptt-header-menu
-	header_menu
-	echo "+-----------------------------------------------------------------------+"
-	echo "|$tinh_trang_hoat_dong_cac_service_hien_tai                              |"
-	echo "+-----------------------------------------------------------------------+"
-	echo "|LiteSpeed     : $(systemctl status lshttpd.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                  |"
-	echo "|MariaDB       : $(systemctl status mariadb.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	if [[ -f /etc/sysconfig/memcached ]];then
-		echo "|Memcached   : $(systemctl status memcached.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	fi
-	if [[ -d /usr/local/lsmcd ]];then
-		echo "|LSMemcached   : $(systemctl status lsmcd.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	fi
-	if [[ -f /etc/redis.conf ]];then
-		echo "|Redis 		: $(systemctl status redis.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	fi
-	echo "|SSH           : $(systemctl status sshd.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	echo "|Crond         : $(systemctl status crond.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	echo "|Fail2Ban      : $(systemctl status fail2ban.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)                                                 |"
-	echo "+-----------------------------------------------------------------------+"
-else
-	. /etc/wptt/echo-color
-	echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
-fi
-
-
-options=(
-    "Status-LiteSpeed-Webserver"                                                           #1
-    "Status-Maria-Database"                                                                #2
-    "Status-Fai2ban"                                                                       #3
-    "Status-ALL-service"                                                                   #4
-)
-
-if [[ -d /usr/local/lsmcd ]];then
-options+=("Status-LSMemcached")
-fi
-
-if [[ -f /etc/redis.conf ]];then
-options+=("Status-Redis")
-fi
-
-if [[ -f /etc/sysconfig/memcached ]];then
-options+=("Status-Memcached")
-fi
-
-
-# for service in ${options[@]};do
-# echo $service
-# done
-
-function lua_chon_NAME() {
-	NAME=""
-	a=0
-	selects=()
-		for entry in ${options[@]}; do
-			selects+=("$entry")
-			a=$((a+1));
-		done
-		PS3="
-$nhap_lua_chon_cua_ban (1-${a}) [0=$exit_thoat]: "
-		select select in ${selects[@]}; do
-			service=$select
-			index=$REPLY
-			break
-		done
+# Function to get service status using systemctl is-active
+# Returns "active", "inactive", "activating", "failed", etc., or "not-found"
+get_status() {
+  local service_name="$1"
+  # Check if the service unit exists first
+  # Use systemctl cat to check existence, quieter than list-unit-files | grep
+  if ! systemctl cat "${service_name}.service" &> /dev/null; then
+    echo "not-found"
+    return
+  fi
+  # Get the active state
+  systemctl is-active "$service_name.service" 2>/dev/null || echo "inactive" # Return inactive if is-active fails
 }
 
-echo ""
-echo ""
-echo "$quan_ly_ Start service:"
-echo ""
-lua_chon_NAME
 
+# --- Helper function to clean status string ---
+clean_status() {
+  echo "$1" | tr -d '\r' | xargs
+}
 
-if [[ $service = 'Status-LiteSpeed-Webserver' ]];then
-. /etc/wptt/service/status-app/wptt-status-litespeed 98
+# Print header
+printf "+-----------------------------------------------------------------------+\n"
+printf "| Tình trạng hoạt động của các service hiện tại                         |\n" # Adjusted spacing slightly
+printf "+-----------------------------------------------------------------------+\n"
+
+# --- Check and print status for each service ---
+
+# LiteSpeed
+if systemctl cat lshttpd.service &> /dev/null; then
+  status_raw=$(get_status "lshttpd")
+  status=$(clean_status "$status_raw")
+  printf "| %-12s : %-54s |\n" "LiteSpeed" "$status"
 fi
 
-if [[ $service = 'Status-Maria-Database' ]];then
-. /etc/wptt/service/status-app/wptt-status-mariadb 98
+# MariaDB / MySQL
+db_service=""
+if systemctl cat mariadb.service &> /dev/null; then
+  db_service="mariadb"
+elif systemctl cat mysql.service &> /dev/null; then
+  db_service="mysql"
+elif systemctl cat mysqld.service &> /dev/null; then
+  db_service="mysqld"
 fi
 
-if [[ $service = 'Status-Fai2ban' ]];then
-. /etc/wptt/service/status-app/wptt-status-fail2ban 98
+if [[ -n "$db_service" ]]; then
+  status_raw=$(get_status "$db_service")
+  status=$(clean_status "$status_raw")
+  display_name="MariaDB/MySQL"
+  if [[ "$db_service" == "mariadb" ]]; then
+      display_name="MariaDB"
+  elif [[ "$db_service" == "mysql" || "$db_service" == "mysqld" ]]; then
+      display_name="MySQL"
+  fi
+  printf "| %-12s : %-54s |\n" "$display_name" "$status"
 fi
 
-if [[ $service = 'Status-ALL-service' ]];then
-. /etc/wptt/service/status-app/wptt-status-app 98
+# LSMemcached (Using directory check first, then service check)
+if [[ -d /usr/local/lsmcd ]]; then
+  if systemctl cat lsmcd.service &> /dev/null; then
+    status_raw=$(get_status "lsmcd")
+    status=$(clean_status "$status_raw")
+    printf "| %-12s : %-54s |\n" "LSMemcached" "$status"
+  fi
 fi
 
-if [[ $service = 'Status-LSMemcached' ]];then
-. /etc/wptt/service/status-app/wptt-status-lsmemcached 98
+# Memcached (Standard)
+if systemctl cat memcached.service &> /dev/null; then
+  status_raw=$(get_status "memcached")
+  status=$(clean_status "$status_raw")
+  printf "| %-12s : %-54s |\n" "Memcached" "$status"
 fi
 
-if [[ $service = 'Status-Redis' ]];then
-. /etc/wptt/service/status-app/wptt-status-redis 98
+# Redis (Using config file check OR service check)
+redis_service=""
+# Check service first
+if systemctl cat redis.service &> /dev/null; then
+    redis_service="redis"
+elif systemctl cat redis-server.service &> /dev/null; then
+    redis_service="redis-server"
+# Fallback to config file check if service not found by common names
+elif [[ -z "$redis_service" && ( -f /etc/redis.conf || -f /etc/redis/redis.conf ) ]]; then
+    # Attempt to get status even if unit name isn't standard, assuming 'redis' if config exists
+    # This might fail if the service name is very unusual
+     if systemctl cat redis.service &> /dev/null; then
+         redis_service="redis"
+     fi
 fi
 
-if [[ $service = 'Status-Memcached' ]];then
-. /etc/wptt/service/status-app/wptt-status-memcached 98
+if [[ -n "$redis_service" ]]; then
+    status_raw=$(get_status "$redis_service")
+    status=$(clean_status "$status_raw")
+    printf "| %-12s : %-54s |\n" "Redis" "$status"
 fi
 
-if [[ $service = '' || $service = '0' || $service = * ]];then
-. /etc/wptt/wptt-service-main 1
+
+# SSH
+ssh_service=""
+if systemctl cat sshd.service &> /dev/null; then
+    ssh_service="sshd"
+elif systemctl cat ssh.service &> /dev/null; then
+    ssh_service="ssh"
+fi
+
+if [[ -n "$ssh_service" ]]; then
+    status_raw=$(get_status "$ssh_service")
+    status=$(clean_status "$status_raw")
+    printf "| %-12s : %-54s |\n" "SSH" "$status"
+fi
+
+# Crond
+cron_service=""
+if systemctl cat crond.service &> /dev/null; then
+  cron_service="crond"
+elif systemctl cat cron.service &> /dev/null; then
+  cron_service="cron"
+fi
+
+if [[ -n "$cron_service" ]]; then
+  status_raw=$(get_status "$cron_service")
+  status=$(clean_status "$status_raw")
+  printf "| %-12s : %-54s |\n" "Crond" "$status"
+fi
+
+# Fail2Ban
+if systemctl cat fail2ban.service &> /dev/null; then
+  status_raw=$(get_status "fail2ban")
+  status=$(clean_status "$status_raw")
+  printf "| %-12s : %-54s |\n" "Fail2Ban" "$status"
+fi
+
+# nftables (Currently commented out in your version, kept it that way)
+# if systemctl cat nftables.service &> /dev/null; then
+#   status_raw=$(get_status "nftables")
+#   status=$(clean_status "$status_raw")
+#   printf "| %-12s : %-54s |\n" "nftables" "$status"
+# fi
+
+# firewalld
+if systemctl cat firewalld.service &> /dev/null; then
+  status_raw=$(get_status "firewalld")
+  status=$(clean_status "$status_raw")
+  printf "| %-12s : %-54s |\n" "FirewallD" "$status"
 fi
 
 
+# Print footer
+printf "+-----------------------------------------------------------------------+\n"
 
+# Execute the external script (as in your provided code)
+if [[ -f /etc/wptt/wptt-service-main ]]; then
+  . /etc/wptt/wptt-service-main 1
+else
+  printf "| WPTT script not found: /etc/wptt/wptt-service-main                   |\n"
+  printf "+-----------------------------------------------------------------------+\n"
+
+fi
