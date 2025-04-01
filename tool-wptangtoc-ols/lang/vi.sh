@@ -438,3 +438,6 @@ dang_xay_ra_su_co="Đang gặp sự cố"
 tinh_trang_hoat_dong_cac_service_hien_tai="Tình trạng hoạt động các service hiện tại"
 
 add_ons="add ons"
+
+#csf
+quan_ly_csf="Quản lý CSF"
