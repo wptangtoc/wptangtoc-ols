@@ -2,410 +2,203 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2024
-# @modified: 2025-03-30 - Removed server reboot, changed restart to start
+# @since: 2025-04-01 # Lưu ý: Ngày này trong tương lai so với thời điểm hiện tại
 
-# --- Khởi tạo và tải cấu hình ---
-# Tải cấu hình chính
-if [[ -f "/etc/wptt/.wptt.conf" ]]; then
-    . "/etc/wptt/.wptt.conf"
-else
-    # Gán ngôn ngữ mặc định nếu không có file config
-    ngon_ngu='vi'
-    echo "Cảnh báo: Không tìm thấy tệp cấu hình /etc/wptt/.wptt.conf. Sử dụng ngôn ngữ mặc định 'vi'."
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
 fi
+. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/echo-color
 
-# Xác định và tải file ngôn ngữ
-if [[ -z "$ngon_ngu" ]]; then # Kiểm tra chuỗi rỗng an toàn hơn
-    ngon_ngu='vi'
-fi
-lang_file="/etc/wptt/lang/${ngon_ngu}.sh"
-if [[ -f "$lang_file" ]]; then
-    . "$lang_file"
-else
-    echo "Cảnh báo: Không tìm thấy tệp ngôn ngữ '$lang_file'. Sử dụng tiếng Việt mặc định."
-    # Cố gắng tải tiếng Việt nếu có
-    if [[ -f "/etc/wptt/lang/vi.sh" ]]; then
-        . "/etc/wptt/lang/vi.sh"
+echo ""
+echo ""
+echo "$start_bat_service_application"
+echo ""
+# --- Mảng Tùy chọn (options) ---
+# Đã cập nhật với các dịch vụ mới và tùy chọn "All" cho hành động KHỞI ĐỘNG
+options=(
+    "${start_mariadb:-Khởi động MariaDB}"                      # Index 0
+    "${start_lsws:-Khởi động LiteSpeed}"                       # Index 1
+    "${start_nftables:-Khởi động Nftables}"                    # Index 2
+    "${start_csf:-Khởi động CSF Firewall}"                     # Index 3
+    "${start_firewalld:-Khởi động Firewalld}"                  # Index 4
+    "${start_sshd:-Khởi động SSHd}"                            # Index 5
+    "${start_fail2ban:-Khởi động Fail2ban}"                    # Index 6
+    "${start_memcached:-Khởi động Memcached}"                  # Index 7
+    "${start_lsmcd:-Khởi động LSMCD (LS Memcached)}"           # Index 8
+    "${start_redis:-Khởi động Redis}"                          # Index 9
+    "${start_all_services:-Khởi động TẤT CẢ Dịch vụ}"         # Index 10
+)
+
+# --- Hàm Helper: Chứa logic kiểm tra và KHỞI ĐỘNG thực tế ---
+_start_service() {
+    local service_name="$1"
+    local display_name="$2"
+    local check_command="$3"
+    local is_csf=${4:-false}
+
+    local not_found=false
+    if [[ "$is_csf" = true ]]; then
+        # Kiểm tra CSF tồn tại
+        if ! command -v csf &> /dev/null; then not_found=true; fi
+    elif [[ -n "$check_command" ]]; then
+        # Kiểm tra lệnh liên quan tồn tại
+         if ! command -v "$check_command" &> /dev/null; then not_found=true; fi
+    # Kiểm tra unit systemd tồn tại
+    elif ! systemctl list-unit-files --full --all | grep -Fq "$service_name"; then
+        # Nếu không tìm thấy unit file, có thể dịch vụ chưa được cài hoặc tên sai
+        not_found=true
+    fi
+
+    if $not_found; then
+        # Không in lỗi nếu không tìm thấy, chỉ return 1 để logic "All" bỏ qua
+        # printf "$dich_vu_khong_tim_thay" "$display_name" >&2
+        return 1 # Chỉ trả về mã lỗi nếu không tìm thấy
+    fi
+
+    # Chỉ in thông báo và thực hiện nếu dịch vụ được tìm thấy
+    printf "$dang_khoi_dong" "$display_name"
+    local success=false
+    _runing "Khởi động $service_name"
+    if [[ "$is_csf" = true ]]; then
+        # Sử dụng 'csf -e' để kích hoạt CSF và LFD (nếu chưa chạy)
+        if csf -e &> /dev/null; then success=true; fi # Ẩn output của csf -e
     else
-        echo "Lỗi: Không tìm thấy cả tệp ngôn ngữ mặc định /etc/wptt/lang/vi.sh"
+        # Sử dụng 'systemctl start' để khởi động dịch vụ
+        if systemctl start "$service_name"; then success=true; fi
     fi
-fi
 
-# --- Gán giá trị mặc định cho các biến (quan trọng nếu file lang thiếu) ---
-# **Đã đổi tên và nội dung biến**
-quan_ly_start_service=${quan_ly_start_service:-"Quản lý Khởi động Service"} # Đổi tên biến và văn bản
-khoi_dong_litespeed_webserver=${khoi_dong_litespeed_webserver:-"Khởi động LiteSpeed-Webserver"} # Đổi văn bản
-khoi_dong_maria_database=${khoi_dong_maria_database:-"Khởi động Maria-Database"} # Đổi văn bản
-khoi_dong_fail2ban=${khoi_dong_fail2ban:-"Khởi động Fail2ban"} # Đổi văn bản
-khoi_dong_all_service=${khoi_dong_all_service:-"Khởi động ALL-service"} # Đổi văn bản
-# khoi_dong_lai_may_chu đã bị xóa
-khoi_dong_lsmemcached=${khoi_dong_lsmemcached:-"Khởi động LSMemcached"} # Đổi văn bản
-khoi_dong_redis=${khoi_dong_redis:-"Khởi động Redis"} # Đổi văn bản
-khoi_dong_memcached=${khoi_dong_memcached:-"Khởi động Memcached"} # Đổi văn bản
-khoi_dong_csf=${khoi_dong_csf:-"Khởi động CSF"} # Đổi văn bản
-khoi_dong_nftables=${khoi_dong_nftables:-"Khởi động Nftables"} # Đổi văn bản
-khoi_dong_firewalld=${khoi_dong_firewalld:-"Khởi động Firewalld"} # Đổi văn bản
-
-tinh_trang_hoat_dong_cac_service_hien_tai=${tinh_trang_hoat_dong_cac_service_hien_tai:-"Tình trạng hoạt động các service hiện tại"}
-nhap_lua_chon_cua_ban=${nhap_lua_chon_cua_ban:-"Nhập lựa chọn của bạn"}
-chon_nhanh=${chon_nhanh:-"Chọn nhanh"}
-exit_thoat=${exit_thoat:-"Thoát"}
-lua_chon_khong_hop_le=${lua_chon_khong_hop_le:-"Lựa chọn không hợp lệ"}
-vui_long_chon_lai=${vui_long_chon_lai:-"Vui lòng chọn lại"}
-#-----------------------------------------------------
-
-# Hàm get_status đơn giản hóa việc lấy trạng thái
-get_status() {
-    local service_name=$1
-    # Kiểm tra systemctl tồn tại
-    if ! command -v systemctl &>/dev/null; then
-        echo "no-systemctl"
-        return
+    if $success; then
+        _rundone "Khởi động $service_name"
+        #printf "$khoi_dong_thanh_cong" "$display_name"
+    else
+        _runloi "Khởi động $service_name"
+        #printf "$khoi_dong_that_bai" "$display_name" >&2
     fi
-    # Lấy trạng thái
-    systemctl status "${service_name}.service" 2>/dev/null | grep 'Active:' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs || echo "not-found"
+    echo ""
+    [[ "$success" = true ]]
 }
 
-# --- Hiển thị header và trạng thái (nếu không có tham số) ---
-if [[ $1 = "" ]];then
-    if [[ -x "/etc/wptt/wptt-header-menu" ]]; then
-        . /etc/wptt/wptt-header-menu
-        header_menu
-    else
-        echo "Lỗi: Không tìm thấy /etc/wptt/wptt-header-menu"
+# --- Hàm THỰC HIỆN hành động dựa trên index ---
+# Đã cập nhật với các dịch vụ mới và tùy chọn "All" cho hành động KHỞI ĐỘNG
+_perform_action() {
+    local index=$1
+    local ret_code=0
+    case $index in
+        0) _start_service "mariadb.service" "${start_mariadb:-MariaDB}" "mysql" ;;
+        1) _start_service "lsws.service" "${start_lsws:-LiteSpeed}" "/usr/local/lsws/bin/lswsctrl" ;;
+        2) _start_service "nftables.service" "${start_nftables:-Nftables}" "nft" ;;
+        3) _start_service "csf.service" "${start_csf:-CSF Firewall}" "csf" true ;;
+        4) _start_service "firewalld.service" "${start_firewalld:-Firewalld}" "firewall-cmd" ;;
+        5) _start_service "sshd.service" "${start_sshd:-SSHd}" "sshd" ;; # Không cần xác nhận khi start
+        6) _start_service "fail2ban.service" "${start_fail2ban:-Fail2ban}" "fail2ban-client" ;;
+        7) _start_service "memcached.service" "${start_memcached:-Memcached}" "memcached" ;;
+        8) _start_service "lsmcd.service" "${start_lsmcd:-LSMCD}" "lsmcd" ;;
+        9) _start_service "redis-server.service" "${start_redis:-Redis}" "redis-server" ;; # Kiểm tra tên service nếu cần
+        10) # Khởi động TẤT CẢ
+            printf "$dang_khoi_dong_tat_ca"
+            echoDo "--------------------------------------------------" # Thêm phân cách
+            # Gọi lại hàm _start_service cho từng dịch vụ
+            # Hàm _start_service đã có kiểm tra cài đặt bên trong
+            _start_service "mariadb.service" "${start_mariadb:-MariaDB}" "mysql"
+            _start_service "lsws.service" "${start_lsws:-LiteSpeed}" "/usr/local/lsws/bin/lswsctrl"
+            _start_service "nftables.service" "${start_nftables:-Nftables}" "nft"
+            _start_service "csf.service" "${start_csf:-CSF Firewall}" "csf" true
+            _start_service "firewalld.service" "${start_firewalld:-Firewalld}" "firewall-cmd"
+            _start_service "sshd.service" "${start_sshd:-SSHd}" "sshd" # Khởi động cả SSH
+            _start_service "fail2ban.service" "${start_fail2ban:-Fail2ban}" "fail2ban-client"
+            _start_service "memcached.service" "${start_memcached:-Memcached}" "memcached"
+            _start_service "lsmcd.service" "${start_lsmcd:-LSMCD}" "lsmcd"
+            _start_service "redis-server.service" "${start_redis:-Redis}" "redis-server"
+            echoDo "--------------------------------------------------" # Thêm phân cách
+            printf "$hoan_tat_khoi_dong_tat_ca"
+            ret_code=0 # Giả định thành công vì lỗi từng dịch vụ đã được báo cáo
+            ;;
+        *)
+            printf "${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: Index '%s'.\n" "$index" >&2
+            ret_code=1
+            ;;
+    esac
+    # Trả về mã lỗi cuối cùng (quan trọng cho trường hợp không phải "All")
+    if [[ "$index" -ne 10 ]]; then
+         _start_service_ret=$?
+         # Chỉ cập nhật ret_code nếu _start_service thất bại (trả về khác 0)
+         [[ $_start_service_ret -ne 0 ]] && ret_code=$_start_service_ret
     fi
-    # In bảng trạng thái với định dạng cố định chiều rộng
-    echo "+-----------------------------------------------------------------------+"
-    # Sử dụng printf để căn chỉnh và đảm bảo độ dài, cắt bớt nếu quá dài
-    printf "| %-69s |\n" "$tinh_trang_hoat_dong_cac_service_hien_tai"
-    echo "+-----------------------------------------------------------------------+"
-    printf "| %-13s : %-50.50s |\n" "LiteSpeed" "$(get_status lshttpd)" # Giữ lshttpd như gốc để hiển thị
-    printf "| %-13s : %-50.50s |\n" "MariaDB" "$(get_status mariadb)"
-    if [[ -f /etc/sysconfig/memcached ]];then
-        printf "| %-13s : %-50.50s |\n" "Memcached" "$(get_status memcached)"
-    fi
-    if [[ -d /usr/local/lsmcd ]];then
-        printf "| %-13s : %-50.50s |\n" "LSMemcached" "$(get_status lsmcd)"
-    fi
-    if [[ -f /etc/redis.conf ]];then
-        printf "| %-13s : %-50.50s |\n" "Redis" "$(get_status redis)"
-    fi
-    printf "| %-13s : %-50.50s |\n" "SSH" "$(get_status sshd)"
-    printf "| %-13s : %-50.50s |\n" "Crond" "$(get_status crond)"
-    printf "| %-13s : %-50.50s |\n" "Fail2Ban" "$(get_status fail2ban)"
-    if command -v csf &> /dev/null; then
-        printf "| %-13s : %-50.50s |\n" "CSF (LFD)" "$(get_status lfd)"
-    fi
-    if systemctl list-units --full -all | grep -q 'firewalld.service'; then
-        printf "| %-13s : %-50.50s |\n" "Firewalld" "$(get_status firewalld)"
-    fi
-    if systemctl list-units --full -all | grep -q 'nftables.service'; then
-        printf "| %-13s : %-50.50s |\n" "Nftables" "$(get_status nftables)"
-    fi
-    echo "+-----------------------------------------------------------------------+"
 
-else
-    # Tải echo-color nếu có tham số
-    if [[ -x "/etc/wptt/echo-color" ]]; then
-        . /etc/wptt/echo-color
-        echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
-    else
-        echo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" # Dự phòng
-    fi
-fi
+    return $ret_code
+}
 
-# --- Định nghĩa Hàm Hành Động và Menu Động ---
-
-# Hàm thực thi hành động dựa trên index (cho menu Start Service)
-# Hàm này ánh xạ index dựa trên thứ tự TỐI ĐA các tùy chọn có thể có.
-# **Đã cập nhật index và hành động**
+# --- Hàm run_action (QUAN TRỌNG cho bộ phân tích của WPTangToc) ---
+# Đã cập nhật đường dẫn script thành wptt-start-main
 run_action() {
     local index=$1
-    local service_name=""
-    local action_desc="" # Mô tả hành động
+    # Đường dẫn tới script này (hoặc script thực thi hành động khởi động)
+    local script_path="/etc/wptt/service/wptt-start-main" # Đã cập nhật
+    local script_args="$index"                            # Tham số là index tương ứng
 
-    # Ánh xạ index dựa trên thứ tự tối đa CÓ THỂ có
-    # Thứ tự: lsws, mariadb, fail2ban, ALL, lsmcd, redis, memcached, csf, nftables, firewalld
-    # **Index đã được điều chỉnh sau khi xóa Reboot Server (index 4 cũ)**
+    # Cấu trúc case này là BẮT BUỘC cho bộ phân tích của wptangtoc
+    # Cập nhật script_path trong tất cả các case
     case $index in
-        0) service_name="lshttpd"; action_desc="${khoi_dong_litespeed_webserver}" ;; # Hoặc lshttpd
-        1) service_name="mariadb"; action_desc="${khoi_dong_maria_database}" ;;
-        2) service_name="fail2ban"; action_desc="${khoi_dong_fail2ban}" ;;
-        3) action_desc="${khoi_dong_all_service}" ;; # Xử lý đặc biệt
-        # Index 4 (Reboot Server) đã bị xóa
-        4) service_name="lsmcd"; action_desc="${khoi_dong_lsmemcached}" ;;        # Index mới là 4
-        5) service_name="redis"; action_desc="${khoi_dong_redis}" ;;            # Index mới là 5
-        6) service_name="memcached"; action_desc="${khoi_dong_memcached}" ;;      # Index mới là 6
-        7) action_desc="${khoi_dong_csf}" ;;                                     # Index mới là 7, Xử lý đặc biệt
-        8) service_name="nftables"; action_desc="${khoi_dong_nftables}" ;;       # Index mới là 8
-        9) service_name="firewalld"; action_desc="${khoi_dong_firewalld}" ;;     # Index mới là 9
-        *) echo "${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: Index $index."; return 1 ;;
+        0) script_path="/etc/wptt/service/wptt-start-main"; script_args="0" ;;
+        1) script_path="/etc/wptt/service/wptt-start-main"; script_args="1" ;;
+        2) script_path="/etc/wptt/service/wptt-start-main"; script_args="2" ;;
+        3) script_path="/etc/wptt/service/wptt-start-main"; script_args="3" ;;
+        4) script_path="/etc/wptt/service/wptt-start-main"; script_args="4" ;;
+        5) script_path="/etc/wptt/service/wptt-start-main"; script_args="5" ;;
+        6) script_path="/etc/wptt/service/wptt-start-main"; script_args="6" ;;
+        7) script_path="/etc/wptt/service/wptt-start-main"; script_args="7" ;;
+        8) script_path="/etc/wptt/service/wptt-start-main"; script_args="8" ;;
+        9) script_path="/etc/wptt/service/wptt-start-main"; script_args="9" ;;
+        10) script_path="/etc/wptt/service/wptt-start-main"; script_args="10" ;;
+        *)
+            script_path="/bin/false"
+            script_args=""
+            echo "${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: Index $index." >&2
+            # return 1 # Không cần thiết
+            ;;
     esac
 
-    # Sử dụng action_desc đã lấy từ case hoặc biến ngôn ngữ
-    echo "Đang thực hiện: ${action_desc}..."
-    echo "-------------------------------------------------------------------------"
-
-    # --- Thực thi hành động (Sử dụng systemctl start) ---
-    if [[ $index -eq 3 ]]; then # Start ALL
-        echo "Khởi động LiteSpeed..."
-        systemctl start lshttpd.service # Hoặc lshttpd
-        echo "Khởi động MariaDB..."
-        systemctl start mariadb.service
-        echo "Khởi động Fail2Ban..."
-        systemctl start fail2ban.service
-
-        # Khởi động các dịch vụ tùy chọn (phi firewall) nếu chúng tồn tại
-        if systemctl list-units --full -all | grep -q 'lsmcd.service'; then
-            echo "Khởi động LSMemcached..."
-            systemctl start lsmcd.service
-        fi
-        if systemctl list-units --full -all | grep -q 'redis.service'; then
-            echo "Khởi động Redis..."
-            systemctl start redis.service
-        fi
-        if systemctl list-units --full -all | grep -q 'memcached.service'; then
-            echo "Khởi động Memcached..."
-            systemctl start memcached.service
-        fi
-
-        # Khởi động dịch vụ Firewall đang hoạt động (ưu tiên CSF > firewalld > nftables)
-        # **Sử dụng lệnh start cho CSF**
-        if command -v csf &> /dev/null && ! systemctl is-active lfd.service &>/dev/null; then
-            echo "Khởi động CSF & LFD (nếu chưa chạy)..."
-            csf -s &> /dev/null # Lệnh start CSF rules
-            systemctl start lfd.service
-        elif command -v csf &> /dev/null; then
-             echo "CSF & LFD dường như đang chạy, để khởi động lại, dùng tùy chọn riêng."
-        fi
-
-        if systemctl is-active firewalld.service &>/dev/null; then
-            echo "Firewalld dường như đang chạy, để khởi động lại, dùng tùy chọn riêng."
-        elif systemctl list-units --full -all | grep -q 'firewalld.service'; then
-            echo "Khởi động Firewalld..."
-            systemctl start firewalld.service
-        fi
-
-        if systemctl is-active nftables.service &>/dev/null; then
-             echo "Nftables dường như đang chạy, để khởi động lại, dùng tùy chọn riêng."
-        elif systemctl list-units --full -all | grep -q 'nftables.service'; then
-            echo "Khởi động Nftables..."
-            systemctl start nftables.service
-        fi
-
-        echo "Hoàn thành khởi động các dịch vụ."
-
-    # elif [[ $index -eq 4 ]]; then # Reboot Server - ĐÃ BỊ XÓA
-
-    elif [[ $index -eq 7 ]]; then # Start CSF (Index mới là 7)
-        # **Sử dụng lệnh start cho CSF**
-        if command -v csf &> /dev/null; then
-            echo "Khởi động CSF & LFD..."
-            csf -s &> /dev/null # Start firewall rules
-            systemctl start lfd.service # Start Login Failure Daemon
-            echo "Hoàn thành khởi động CSF."
-            sleep 1
-            local lfd_status=$(systemctl is-active lfd.service 2>/dev/null)
-            echo "Trạng thái LFD hiện tại: ${lfd_status:-Không xác định}"
-        else
-            echo "Lỗi: CSF dường như chưa được cài đặt."
-        fi
-
-    elif [[ -n "$service_name" ]]; then # Start dịch vụ cụ thể
-        # **Sử dụng systemctl start**
-        if systemctl list-units --full -all | grep -q "${service_name}.service"; then
-            systemctl start "${service_name}.service"
-            echo "Hoàn thành khởi động ${action_desc}."
-            sleep 1
-            local current_status=$(systemctl is-active "${service_name}.service" 2>/dev/null)
-            echo "Trạng thái ${action_desc} hiện tại: ${current_status:-Không xác định}"
-        else
-             echo "Dịch vụ ${service_name} không tìm thấy." # Thông báo rõ hơn
-        fi
-    else
-        echo "Lỗi logic: Không xác định được hành động cụ thể cho index $index."
-        return 1
-    fi
-
-    echo "-------------------------------------------------------------------------"
-    # read -rp "Nhấn Enter để quay lại menu..."
+    # Gọi hàm thực hiện hành động thực tế (đã đổi thành START)
+    _perform_action "$index"
+    return $? # Trả về mã lỗi từ _perform_action
 }
 
-
-# **Đã cập nhật tiêu đề menu**
-echo "${quan_ly_start_service:-Quản lý Khởi động Service}:"
-# Mảng options cơ bản (sử dụng biến ngôn ngữ với fallback)
-# **Đã cập nhật văn bản và loại bỏ tùy chọn Reboot Server**
-options=(
-    "${khoi_dong_litespeed_webserver:-Khởi động LiteSpeed-Webserver}" # Index 0
-    "${khoi_dong_maria_database:-Khởi động Maria-Database}"          # Index 1
-    "${khoi_dong_fail2ban:-Khởi động Fail2ban}"                      # Index 2
-    "${khoi_dong_all_service:-Khởi động ALL-service}"                # Index 3
-    # "${khoi_dong_lai_may_chu:-Khởi động lại máy chủ}"             # Index 4 cũ - ĐÃ BỊ XÓA
-)
-# Index tiềm năng tiếp theo: 4=lsmcd, 5=redis, 6=memcached, 7=csf, 8=nftables, 9=firewalld
-
-# Thêm các tùy chọn động dựa trên sự tồn tại của dịch vụ
-# **Đã cập nhật văn bản**
-# Kiểm tra cẩn thận hơn sự tồn tại của dịch vụ trong systemd
-if [[ -d /usr/local/lsmcd ]] && systemctl list-units --full -all | grep -q 'lsmcd.service'; then
-    options+=("${khoi_dong_lsmemcached:-Khởi động LSMemcached}") # Index 4 tiềm năng
-fi
-if [[ -f /etc/redis.conf ]] && systemctl list-units --full -all | grep -q 'redis.service'; then
-    options+=("${khoi_dong_redis:-Khởi động Redis}") # Index 5 tiềm năng
-fi
-if [[ -f /etc/sysconfig/memcached ]] && systemctl list-units --full -all | grep -q 'memcached.service'; then
-    options+=("${khoi_dong_memcached:-Khởi động Memcached}") # Index 6 tiềm năng
-fi
-if command -v csf &> /dev/null; then
-    options+=("${khoi_dong_csf:-Khởi động CSF}") # Index 7 tiềm năng
-fi
-if systemctl list-units --full -all | grep -q 'nftables.service'; then
-     options+=("${khoi_dong_nftables:-Khởi động Nftables}") # Index 8 tiềm năng
-fi
-if systemctl list-units --full -all | grep -q 'firewalld.service'; then
-     options+=("${khoi_dong_firewalld:-Khởi động Firewalld}") # Index 9 tiềm năng
+# --- Xử lý gọi trực tiếp hoặc callback từ WPTT ---
+if [[ $1 = '98' ]]; then
+    # Xử lý callback đặc biệt nếu có
+    [[ -f /etc/wptt/wptt-callback-menu-chon ]] && . /etc/wptt/wptt-callback-menu-chon
+    # Thêm logic xử lý callback nếu cần
 fi
 
-
-# --- Vòng lặp Menu Tương tác ---
-fzf_installed=false
-if command -v fzf &>/dev/null; then
-    fzf_installed=true
+# --- Logic Thực thi Chính ---
+# Kiểm tra xem tham số đầu tiên có phải là số (chỉ số hành động) không
+if [[ -n "$1" && "$1" =~ ^[0-9]+$ && "$1" != '98' ]]; then # Loại trừ mã callback '98'
+    _perform_action "$1"
+    exit $? # Thoát với mã trạng thái từ _perform_action
 fi
 
-# Đặt PS3 dựa trên việc fzf có được cài đặt hay không
-# Lưu ý: ${#options[@]} sẽ phản ánh số lượng tùy chọn thực tế được hiển thị
-if $fzf_installed; then
-    PS3="
-$(tput setab 0)${nhap_lua_chon_cua_ban} (1-${#options[@]}) [00=${chon_nhanh}] [0=${exit_thoat}]:$(tput sgr0) "
-else
-    PS3="
-$(tput setab 0)${nhap_lua_chon_cua_ban} (1-${#options[@]}) [0=${exit_thoat}]:$(tput sgr0) "
+# --- Chạy Độc Lập (hiển thị menu - nếu không có tham số hoặc là callback) ---
+# Chỉ hiển thị header nếu chạy độc lập (không có tham số)
+if [[ -z "$1" ]]; then
+    # Hiển thị header chung của WPTangToc nếu có
+    [[ -f /etc/wptt/wptt-header-menu ]] && . /etc/wptt/wptt-header-menu && header_menu
+# Nếu có tham số nhưng không phải là số chỉ mục hợp lệ (ví dụ: gọi từ menu chính khác)
+# thì không cần hiển thị lại header, chỉ cần in phân cách nếu cần
+elif [[ "$1" != '98' ]]; then # Không in phân cách cho callback '98'
+     echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
 fi
 
-echo ""
-echo ""
-# Sử dụng biến ngôn ngữ cho tiêu đề menu
-echo ""
+# Hiển thị tiêu đề chính của menu này (chỉ khi không thoát sớm do thực thi trực tiếp)
+if [[ ! ( -n "$1" && "$1" =~ ^[0-9]+$ && "$1" != '98' ) ]]; then
+    echo ""
+    echo "${khoi_dong_dich_vu:-Khởi động Dịch vụ Hệ thống}:" # Cập nhật tiêu đề chính
+    echo ""
+    # Phần hiển thị các tùy chọn trong mảng $options và đọc lựa chọn
+    # của người dùng có lẽ được xử lý bởi một script khác trong WPTangToc
+    # gọi lại script này với chỉ số được chọn làm tham số $1.
+fi
 
-# Sử dụng select để hiển thị menu động
-select opt in "${options[@]}"; do
-    case $REPLY in
-        0) # Thoát/Quay lại menu chính
-            echo "Đang quay lại menu quản lý service..."
-            # Giả sử wptt-service-main vẫn là script quản lý chính
-            if [[ -f /etc/wptt/wptt-service-main ]]; then
-                 . /etc/wptt/wptt-service-main 1
-            else
-                 echo "Lỗi: Không tìm thấy /etc/wptt/wptt-service-main"
-            fi
-            break # Thoát khỏi vòng lặp select của menu con này
-            ;;
 
-        00) # Gọi FZF (chỉ khi đã cài đặt)
-            if $fzf_installed; then
-                fzf_height=$(( ${#options[@]} + 4 ))
-                [[ $fzf_height -gt 15 ]] && fzf_height=15 # Giới hạn chiều cao
-                fzf_prompt="${nhap_lua_chon_cua_ban} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
-
-                # Hiển thị các tùy chọn thực tế trong FZF
-                selected_opt=$(printf '%s\n' "${options[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border --cycle --reverse)
-                fzf_exit_status=$?
-                selected_opt=$(echo "$selected_opt" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-
-                if [[ $fzf_exit_status -eq 0 ]] && [[ -n "$selected_opt" ]]; then
-                    selected_index=-1
-                    # Tìm index dựa trên TEXT của tùy chọn đã chọn trong mảng options HIỆN TẠI
-                    for i in "${!options[@]}"; do
-                        # So sánh chính xác, bỏ khoảng trắng cuối dòng
-                        if [[ "$(echo -n "${options[$i]}" | sed 's/[[:space:]]*$//')" == "$(echo -n "$selected_opt" | sed 's/[[:space:]]*$//')" ]]; then
-                            selected_index=$i
-                            break
-                        fi
-                    done
-
-                    if [[ $selected_index -ne -1 ]]; then
-                        # echo "Đã chọn (FZF): ${options[$selected_index]}"
-                        # Xác định index "cố định" tương ứng với lựa chọn động
-                        # **Logic ánh xạ đã được cập nhật để phản ánh index mới và văn bản mới**
-                        fixed_index=-1
-                        option_text_selected="${options[$selected_index]}"
-                        # Sử dụng văn bản mới "Khởi động" hoặc tên dịch vụ để khớp
-                        if [[ "$option_text_selected" == *LiteSpeed* ]]; then fixed_index=0
-                        elif [[ "$option_text_selected" == *Maria* ]]; then fixed_index=1
-                        elif [[ "$option_text_selected" == *Fail2ban* ]]; then fixed_index=2
-                        elif [[ "$option_text_selected" == *ALL-service* ]]; then fixed_index=3
-                        # elif [[ "$option_text_selected" == *máy*chủ* ]]; then fixed_index=4 # Đã xóa
-                        elif [[ "$option_text_selected" == *LSMemcached* ]]; then fixed_index=4 # Index mới
-                        elif [[ "$option_text_selected" == *Redis* ]]; then fixed_index=5       # Index mới
-                        elif [[ "$option_text_selected" == *Memcached* && "$option_text_selected" != *LSMemcached* ]]; then fixed_index=6 # Index mới, tránh trùng LSMemcached
-                        elif [[ "$option_text_selected" == *CSF* ]]; then fixed_index=7         # Index mới
-                        elif [[ "$option_text_selected" == *Nftables* ]]; then fixed_index=8     # Index mới
-                        elif [[ "$option_text_selected" == *Firewalld* ]]; then fixed_index=9    # Index mới
-                        fi
-
-                        if [[ $fixed_index -ne -1 ]]; then
-                            run_action "$fixed_index" # Gọi run_action với index cố định
-                        else
-                            echo "Lỗi: Không thể ánh xạ lựa chọn động '$option_text_selected' sang index cố định."
-                        fi
-                    else
-                        echo "Lỗi: Không thể khớp lựa chọn FZF '$selected_opt' với danh sách."
-                    fi
-                else
-                     # User pressed ESC or selection was empty
-                     echo "${vui_long_chon_lai}"
-                fi
-            else
-                 echo "${lua_chon_khong_hop_le}: '00'. FZF chưa được cài đặt."
-            fi
-            REPLY="" # Xóa REPLY để không bị xử lý ở vòng lặp sau
-            # Hiển thị lại prompt PS3
-            echo "$PS3"
-            continue # Bỏ qua phần còn lại của vòng lặp và hiển thị lại menu
-            ;;
-
-        *) # Xử lý nhập số hoặc nhập không hợp lệ
-            # Kiểm tra số nhập vào với số lượng tùy chọn THỰC TẾ được hiển thị
-            if [[ "$REPLY" =~ ^[1-9][0-9]*$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#options[@]} ]; then
-                # Lấy index 0-based từ số người dùng nhập (1-based)
-                action_index_dynamic=$((REPLY - 1))
-                # echo "Đã chọn (Số): ${options[$action_index_dynamic]}"
-
-                # Tương tự FZF, cần ánh xạ index động sang index cố định
-                # **Logic ánh xạ đã được cập nhật**
-                fixed_index=-1
-                option_text_selected="${options[$action_index_dynamic]}"
-                 if [[ "$option_text_selected" == *LiteSpeed* ]]; then fixed_index=0
-                 elif [[ "$option_text_selected" == *Maria* ]]; then fixed_index=1
-                 elif [[ "$option_text_selected" == *Fail2ban* ]]; then fixed_index=2
-                 elif [[ "$option_text_selected" == *ALL-service* ]]; then fixed_index=3
-                 # elif [[ "$option_text_selected" == *máy*chủ* ]]; then fixed_index=4 # Đã xóa
-                 elif [[ "$option_text_selected" == *LSMemcached* ]]; then fixed_index=4 # Index mới
-                 elif [[ "$option_text_selected" == *Redis* ]]; then fixed_index=5       # Index mới
-                 elif [[ "$option_text_selected" == *Memcached* && "$option_text_selected" != *LSMemcached* ]]; then fixed_index=6 # Index mới
-                 elif [[ "$option_text_selected" == *CSF* ]]; then fixed_index=7         # Index mới
-                 elif [[ "$option_text_selected" == *Nftables* ]]; then fixed_index=8     # Index mới
-                 elif [[ "$option_text_selected" == *Firewalld* ]]; then fixed_index=9    # Index mới
-                 fi
-
-                 if [[ $fixed_index -ne -1 ]]; then
-                     run_action "$fixed_index" # Gọi run_action với index cố định
-                 else
-                     echo "Lỗi: Không thể ánh xạ lựa chọn động '$option_text_selected' sang index cố định."
-                 fi
-            else
-                echo "${lua_chon_khong_hop_le}: '$REPLY'. ${vui_long_chon_lai}"
-            fi
-            REPLY="" # Xóa REPLY
-            # Hiển thị lại prompt PS3
-            echo "$PS3"
-            continue # Bỏ qua phần còn lại của vòng lặp và hiển thị lại menu
-            ;;
-    esac
-    # Chỉ break nếu người dùng chọn 0 (Thoát)
-done
-
-# Script kết thúc sau khi break khỏi vòng lặp
+# Mã thoát mặc định nếu không có hành động nào được thực thi trực tiếp
