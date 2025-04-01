@@ -463,3 +463,6 @@ tinh_trang_hoat_dong_cac_service_hien_tai="Current operating status of services"
 
 add_ons="add ons"
 
+#csf
+quan_ly_csf="CSF management"
+
