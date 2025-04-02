@@ -104,7 +104,7 @@ fi
 
 nft list ruleset > /etc/sysconfig/nftables.conf
 
-ip=$(curl -s myip.directadmin.com)
+ip=$(curl -s icanhazip.com)
 if [[ "$ip" = "" ]]; then
 	ip=$(curl -s ifconfig.me)
 fi
