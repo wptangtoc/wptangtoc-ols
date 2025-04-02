@@ -106,7 +106,7 @@ nft list ruleset > /etc/sysconfig/nftables.conf
 
 ip=$(curl -s icanhazip.com)
 if [[ "$ip" = "" ]]; then
-	ip=$(curl -s ifconfig.me)
+	ip=$(curl -s checkip.amazonaws.com)
 fi
 
 . /etc/wptt/logs/error-chuyen-warn-log-server
