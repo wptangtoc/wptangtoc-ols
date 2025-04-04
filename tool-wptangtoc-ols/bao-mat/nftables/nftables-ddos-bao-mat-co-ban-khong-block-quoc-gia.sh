@@ -102,7 +102,7 @@ fi
 
 nft list ruleset > /etc/sysconfig/nftables.conf
 
-ip=$(curl -s icanhazip.com)
+ip=$(curl -s ipv4.icanhazip.com)
 if [[ "$ip" = "" ]]; then
 	ip=$(curl -s checkip.amazonaws.com)
 fi
