@@ -81,10 +81,8 @@ if [[ $(cat $path_nftables_config | grep 'ipvietnam') = '' ]];then
 	chmod 600 $path_nftables_config
 
 #mở port ssh
-port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$')
-if [[ $port_checkssh = '' ]];then
-port_checkssh=22
-fi
+port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$'|| echo 22)
+
 
 sed -i "/chain input /a\ \ tcp dport $port_checkssh accept #port ssh" $path_nftables_config
 systemctl restart nftables
