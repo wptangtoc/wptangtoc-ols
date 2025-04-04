@@ -2,9 +2,46 @@
 Sứ mệnh của chúng tôi trong việc xây dựng một phần mềm thiết lập và quản trị webserver miễn phí mà hiệu suất tốt nhất.
 
 <h2>Hướng dẫn cài đặt</h2>
-Yêu cầu hệ điều hành (AlmaLinux 8 && 9 | Rocky linux 8 && 9| Ubuntu 22.04 && 24.04) để có thể sử dụng được phần mềm, bạn paste đoạn mã này vào terminal của bạn rồi phần mềm sẽ tự động thiết lập.
+Yêu cầu hệ điều hành WPTangToc OLS hỗ trợ những hệ điều hành sau đây:
+<ul>
+<li>
+AlmaLinux 8
+</li>
+<li>
+AlmaLinux 9
+</li>
+Rocky linux 8
+<li>
+Rocky linux 9
+</li>
+<li>
+Red Hat Enterprise Linux 8
+</li>
+<li>
+Red Hat Enterprise Linux 9
+</li>
 
+<li>
+Oracle Linux Server 8
+</li>
+
+<li>
+Oracle Linux Server 9
+</li>
+
+<li>
+Ubuntu 24.04
+</li>
+<li>
+Ubuntu 24.04
+</li>
+
+</ul>
 Hệ điều hành mà mình yêu thích nhất là AlmaLinux 8:
+
+
+Bạn paste đoạn mã này vào terminal của bạn rồi phần mềm sẽ tự động thiết lập.
+
 
 <pre>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</pre>
 
