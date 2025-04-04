@@ -10,13 +10,18 @@ AlmaLinux 8
 <li>
 AlmaLinux 9
 </li>
+
+<li>
 Rocky linux 8
+</li>
 <li>
 Rocky linux 9
 </li>
+
 <li>
 Red Hat Enterprise Linux 8
 </li>
+
 <li>
 Red Hat Enterprise Linux 9
 </li>
