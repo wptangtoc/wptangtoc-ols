@@ -121,7 +121,7 @@ nft add element inet filter BINGv4 $bing_ip
 
 nft list ruleset > /etc/sysconfig/nftables.conf
 
-ip=$(curl -sf --connect-timeout 5 --max-time 10 https://icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
+ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
 . /etc/wptt/bao-mat/nftables/bypass-ip.sh $ip
 
 . /etc/wptt/logs/error-chuyen-warn-log-server
