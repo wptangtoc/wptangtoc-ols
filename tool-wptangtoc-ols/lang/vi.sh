@@ -442,3 +442,6 @@ add_ons="add ons"
 
 #csf
 quan_ly_csf="Quản lý CSF"
+
+#quản lý băng thông
+quan_ly_bang_thong="Quản lý băng thông"
