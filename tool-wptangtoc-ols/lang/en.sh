@@ -467,3 +467,6 @@ add_ons="add ons"
 #csf
 quan_ly_csf="CSF management"
 
+
+#quản lý băng thông
+quan_ly_bang_thong="Bandwidth management"
