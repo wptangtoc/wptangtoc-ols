@@ -102,10 +102,7 @@ fi
 
 nft list ruleset > /etc/sysconfig/nftables.conf
 
-ip=$(curl -s ipv4.icanhazip.com)
-if [[ "$ip" = "" ]]; then
-	ip=$(curl -s checkip.amazonaws.com)
-fi
+ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com |grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com| grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
 . /etc/wptt/logs/error-chuyen-warn-log-server
 
