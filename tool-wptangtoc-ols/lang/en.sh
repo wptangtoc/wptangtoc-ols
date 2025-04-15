@@ -292,7 +292,7 @@ cai_dat_zip_php_extension="Install ZIP PHP extension"
 cau_hinh_max_excution_time="Setting max execution time"
 cau_hinh_memory_litmit="Setting memory_limit"
 cau_hinh_max_input_time_php="Setting max_input_time"
-
+cau_hinh_max_input_vars_php="Setting max_input_vars"
 ban_co_the="you can"
 so_dung_luong="capacity number"
 luu_y="note"
