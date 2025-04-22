@@ -46,6 +46,7 @@ chon_nhanh="Chọn nhanh"
 he_thong_xac_nhan_ban_khong_su_ma_nguon="Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress"
 tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="Tính năng này chỉ dành cho mã nguồn WordPress"
 don_dep="Xoá"
+quan_ly_cap_nhat_wordpress="Quản lý cập nhật WordPress"
 
 
 #wptt status
