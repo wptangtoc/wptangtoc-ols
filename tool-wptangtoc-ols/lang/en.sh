@@ -45,6 +45,7 @@ exit_thoat="exit"
 chon_nhanh="Quick select"
 he_thong_xac_nhan_ban_khong_su_ma_nguon="The system confirms that you are not using the WordPress source code"
 tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="This feature is only available for WordPress source code"
+quan_ly_cap_nhat_wordpress="Manage WordPress Updates"
 
 
 
