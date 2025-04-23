@@ -1,0 +1,136 @@
+#!/bin/bash
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|$quan_ly_cap_nhat_wordpress => Downguprade Plugins                |"
+echo "========================================================================="
+. /etc/wptt/echo-color
+NAME=$1
+if [[ $NAME = "98" ]];then
+NAME=""
+fi
+
+if [[ $NAME = "" ]];then
+. /etc/wptt/tenmien-only-website-by-wordpress
+echo ""
+echo ""
+echo "$lua_chon_website_ban_muon hạ cấp Plugins WordPress: "
+echo ""
+lua_chon_NAME
+fi
+
+
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+    . /etc/wptt/wptt-wordpress-main 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+    clear
+	echoDo "Tên miền không tồn tại trên hệ thống này"
+    sleep 3
+    . /etc/wptt/wptt-wordpress-main 1
+    exit
+fi
+
+pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
+if [[ ! -f "$pathcheckwp" ]]; then
+  clear
+  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
+  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  sleep 3
+  . /etc/wptt/wptt-wordpress-main 1
+  exit
+fi
+
+# read -p "plugin muốn hạ cấp" plugin_downupgrade
+
+# curl -s https://api.wordpress.org/plugins/info/1.0/${plugin_downupgrade}
+unset plugin_all line selects
+plugin_all=$(wp plugin list --allow-root --field=name --path=/usr/local/lsws/$NAME/html 2>/dev/null)
+echo "Bạn hãy lựa chọn plugin website $NAME bạn muốn hạ cấp: "
+while IFS= read -r line; do selects+=("$line"); done <<<"$plugin_all"
+	PS3="
+-//- Nhập vào lựa chọn của bạn [1-$(echo $plugin_all |wc -w)] [0=Thoát]: "
+	select select in "${selects[@]}"; do
+		plugin_downupgrade=$select
+		break
+	done
+
+
+if [[ $plugin_downupgrade = '0' || $plugin_downupgrade = '' ]]; then
+	. /etc/wptt/wordpress/wptt-update-wordpress-main 1
+fi
+
+
+unset plugin_version_phien_ban phien_ban_core_download line selects
+path="/usr/local/lsws/$NAME/html"
+phien_ban_core_download=$(curl -s https://api.wordpress.org/plugins/info/1.0/${plugin_downupgrade} | \
+tr "}" "\n" | \
+grep -oP 's:\d+:"\K[^"]+(?=";s:\d+:)' |\
+grep "$plugin_downupgrade" |\
+sed -n 's#^.*/'$plugin_downupgrade'\.\([0-9.]\+\)\.zip$#\1#p'|\
+sort -ru |\
+while read -r line; do
+  echo "$line"
+done)
+
+if [[ -z $phien_ban_core_download ]];then
+	echo "$phien_ban của plugin $plugin_downupgrade không thể kiểm tra phiên bản được"
+	echo "Có thể vì lý do bản quyền trả phí $plugin_downupgrade"
+. /etc/wptt/wordpress/wptt-update-wordpress-main 1
+fi
+
+clear
+echo "Bạn hãy lựa chọn phiên bản plugin $plugin_downupgrade bạn muốn muốn sử dụng: "
+while IFS= read -r line; do selects+=("$line"); done <<<"$phien_ban_core_download"
+	PS3="
+-//- Nhập vào lựa chọn của bạn [1-$(echo $phien_ban_core_download |wc -w)] [0=Thoát]: "
+	select select in "${selects[@]}"; do
+		plugin_version_phien_ban=$select
+		break
+	done
+
+	
+if [[ $plugin_version_phien_ban = '0' || $plugin_version_phien_ban = '' ]]; then
+. /etc/wptt/wordpress/wptt-update-wordpress-main 1
+fi
+
+
+. /etc/wptt/vhost/.$NAME.conf
+if [[ $lock_down ]];then
+. /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME off
+fi
+
+path="/usr/local/lsws/$NAME/html"
+_runing "hạ cấp plugin $plugin_downupgrade website $NAME $phien_ban $plugin_version_phien_ban"
+. /etc/wptt/php/wptt-php-service-cli-theo-domain $NAME 
+wp plugin install $plugin_downupgrade --version=${plugin_version_phien_ban} --force --allow-root --path="$path" >/dev/null 2>&1
+_rundone "hạ cấp plugin $plugin_downupgrade website $NAME $phien_ban $plugin_version_phien_ban"
+
+_runing "$phan_quyen website $NAME"
+chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html/wp-content/plugins
+if [[ $lock_down ]];then
+	find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type f -print0 |xargs -0 chmod 404
+	find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type d -print0 |xargs -0 chmod 515
+	find /usr/local/lsws/"$NAME"/html/wp-content/uploads -type d -print0 |xargs -0 chmod 755
+	. /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME on
+else
+	find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type f -print0 |xargs -0 chmod 644
+	find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type d -print0 |xargs -0 chmod 755
+fi
+_rundone "$phan_quyen website $NAME"
+
+echo "hạ cấp plugin $plugin_downupgrade website $NAME $phien_ban $plugin_version_phien_ban website $NAME : $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wordpress/wptt-update-wordpress-main 1
+fi
+
