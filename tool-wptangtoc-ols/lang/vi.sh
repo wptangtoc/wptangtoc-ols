@@ -392,7 +392,7 @@ tieng_anh="English"
 
 #quản lý wordpress menu main
 tai="Tải"
-chinh_sua_code_truc_tiep_wp_admin_wordpress="chỉnh sửa code trực tiếp trên wp-admin WordPress"
+chinh_sua_code_truc_tiep_wp_admin_wordpress="chỉnh sửa code trong dashboard"
 truy_van_va_thay_the="Truy vấn và thay thế"
 che_do_bao_tri="chế độ bảo trì"
 toi_uu="Tối ưu"
