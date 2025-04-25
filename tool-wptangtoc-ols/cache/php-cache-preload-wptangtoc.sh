@@ -20,7 +20,7 @@ fi
 if [[ -f /usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadAllPHP.php ]];then
 	. /etc/wptt/vhost/.$NAME.conf
 	if [[ $phien_ban_php_domain = '' ]];then
-		phien_ban_php_domain=$(php -v |grep cli | cut -c 4-7| sed 's/ //g')
+		phien_ban_php_domain=$(php -v | grep cli |grep -oP 'PHP \K[0-9]+\.[0-9]+')
 	fi
 	phien_ban_php_domain=${phien_ban_php_domain//[-._]/}
 /usr/local/lsws/lsphp${phien_ban_php_domain}/bin/php /usr/local/bin/wp eval 'WPTangToc\PreloadAllPHP::preload_cache();' --allow-root --path=/usr/local/lsws/$NAME/html >/dev/null 2>&1
