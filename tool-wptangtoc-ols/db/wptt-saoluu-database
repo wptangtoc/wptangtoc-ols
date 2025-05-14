@@ -45,31 +45,163 @@ fi
 
 
 if [[ $NAME = 'Tất cả website' ]];then
+	if [[ -z $3 ]];then #doi số 3 không có giá trị auto mới hỏi
+	unset ggdriver ggdriver2 checkdathietlap
+		checkdathietlap=$(grep -rnw '/root/.config/rclone/rclone.conf' -e "wptangtoc" >>/dev/null 2>&1 && echo 1)
+		if [[ $checkdathietlap ]]; then
+			if [[ $(cat ~/.config/rclone/rclone.conf | grep 'onedrive') ]];then
+				echo "$ban_co_muon file backup uploads OneDrive?"
+				drive_name="OneDrive"
+			else
+				echo "$ban_co_muon file backup uploads Google Drive?"
+				drive_name="Google Drive"
+			fi
+
+			prompt="$nhap_lua_chon_cua_ban [1-2]: "
+			ggdriver="n"
+			options=("$dong_y" "$khong_dong_y")
+			PS3="$prompt"
+			select opt in "${options[@]}"; do
+				case "$REPLY" in
+					1)
+						ggdriver="1998"
+						break
+						;;
+
+					2)
+						ggdriver="n"
+						break
+						;;
+
+					$((${#options[@]} + 1)))
+						printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+						break
+						;;
+					*)
+						printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+						break
+						;;
+				esac
+			done
+			if [[ "$ggdriver" = "1998" ]]; then
+				kiem_tra_xem_cloud_drive_co_hoat_dong_khong=$(rclone about wptangtoc: 2>/dev/null | grep 'Free:')
+				if [[ $kiem_tra_xem_cloud_drive_co_hoat_dong_khong ]];then
+					echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây $drive_name không?"
+					prompt="$nhap_lua_chon_cua_ban [1-2]: "
+					ggdriver2="12345"
+					options=("$dong_y" "$khong_dong_y")
+					PS3="$prompt"
+					select opt in "${options[@]}"; do
+						case "$REPLY" in
+							1)
+								ggdriver2="1998"
+								break
+								;;
+
+							2)
+								ggdriver2="12345"
+								break
+								;;
+
+							$((${#options[@]} + 1)))
+								printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+								break
+								;;
+							*)
+								printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+								break
+								;;
+						esac
+					done
+				fi
+			fi
+		fi
+	fi
+
+
+	START_TIMESTAMP_FILE=$(mktemp) #khởi tạo file temp để xác định bắt đầu thực thi all
+
+	if [[ $ggdriver = '1998' ]];then
+		dung_luong_drive_truoc_khi_sao_luu=$(rclone size wptangtoc: 2>/dev/null| grep 'size' | cut -f2 -d ':' | cut -f1 -d '('| head -1)
+	fi
+
+	before_optimize_full_all=$(du -hs /usr/local/backup-website)
 	if [ "$(ls -A /etc/wptt/vhost)" ]; then
+		echo $sao_luu_toan_bo_database
 		for entry in $(ls -A /etc/wptt/vhost); do
 			domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
 			path_html="/usr/local/lsws/$domain/html"
 			i=1
 			if [[ -d "$path_html" ]]; then
 				_runing "$sao_luu_database website $domain"
-				. /etc/wptt/db/wptt-saoluu-database $domain
+				. /etc/wptt/db/wptt-saoluu-database $domain $ggdriver $ggdriver2
 				_rundone "$sao_luu_database website $domain"
 			fi
 		done
 	fi
 
+
 	check_menu_wptangtoc_active=$1
-	if [[ $check_menu_wptangtoc_active = "98" ]];then
-		. /etc/wptt/wptt-db-main 1
+	if [[ $check_menu_wptangtoc_active = "98" || $check_menu_wptangtoc_active = "97" ]];then
+		END_TIMESTAMP_FILE=$(mktemp) #kết thúc file temp để xác định những website nào đã được thực thi backup thành công
+		clear
+		echo "==================================================================="
+		echo "Hoàn tất backup $sao_luu_tat_ca_website"
+		echo "==================================================================="
+		for entry in $(ls -A /etc/wptt/vhost); do
+			domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+			path="/usr/local/lsws/$domain/html"
+			i=1
+
+			if [[ -d "$path" ]]; then
+				if [[ $ggdriver2 != '1998' ]];then #xac nhan da xoa tai local thì không phải check điều kiện file đã được khhởi tạo chưa
+					if [[ $(find "/usr/local/backup-website/$domain" -type f -newer "$START_TIMESTAMP_FILE" ! -newer "$END_TIMESTAMP_FILE" -ls) ]];then
+						echo "Hoàn tất backup website: $domain"
+					fi
+				else
+					echo "Hoàn tất backup website: $domain"
+				fi
+			fi
+		done
+		if [[ $ggdriver2 != '1998' ]];then #xac nhan da xoa tai local thì không phải check điều kiện file đã được khhởi tạo chưa
+			echo "==================================================================="
+			echo "Dung lượng thư mục trước khi sao lưu	: $before_optimize_full_all"
+			echo "Dung lượng thư mục sau khi sao lưu	: $(du -hs /usr/local/backup-website)"
+			echo "==================================================================="
+		fi
+
+		if [[ $ggdriver = '1998' ]];then #xac nhan có uploads drive
+		echo "Dung lượng $drive_name của bạn trước khi sao lưu: $dung_luong_drive_truoc_khi_sao_luu"
+		echo "Dung lượng $drive_name của bạn sau khi sao lưu: $(rclone size wptangtoc: 2>/dev/null| grep 'size' | cut -f2 -d ':' | cut -f1 -d '('| head -1)"
+		fi
+
+		rm "$END_TIMESTAMP_FILE"
+		check_menu_wptangtoc_active=$1
+		if [[ $check_menu_wptangtoc_active = "98" ]];then
+			. /etc/wptt/wptt-db-main 1
+		fi
+
+		check_menu_wptangtoc_active=$1
+		if [[ $check_menu_wptangtoc_active = "97" ]];then
+			. /etc/wptt/wptt-backup-restore-main 1
+		fi
 	fi
-	exit
+	rm -f "$START_TIMESTAMP_FILE"
 fi
+
 
 
 . /etc/wptt/vhost/."$NAME".conf
 
 if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-	. /etc/wptt/wptt-db-main 1
+	check_menu_wptangtoc_active=$1
+	if [[ $check_menu_wptangtoc_active = "98" ]];then
+		. /etc/wptt/wptt-db-main 1
+	fi
+	check_menu_wptangtoc_active=$1
+	if [[ $check_menu_wptangtoc_active = "97" ]];then
+		. /etc/wptt/wptt-backup-restore-main 1
+	fi
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
