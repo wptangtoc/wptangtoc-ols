@@ -1,0 +1,285 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+
+if [[ $(which fzf 2>/dev/null) = '' ]];then
+echo "Vui lòng cài fzf thì mới sử dụng được tính năng này"
+exit;
+fi
+
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8
+
+# --- Basic Setup ---
+# shellcheck disable=SC1091
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color || { echo "Lỗi: Không tìm thấy /etc/wptt/echo-color"; exit 1; }
+# shellcheck disable=SC1091
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf || { echo "Lỗi: Không tìm thấy /etc/wptt/.wptt.conf"; exit 1; }
+
+if [[ -z "$ngon_ngu" ]]; then
+    ngon_ngu='vi'
+    echo "Thông báo: Biến ngôn ngữ không được đặt, sử dụng mặc định 'vi'."
+fi
+
+lang_file="/etc/wptt/lang/$ngon_ngu.sh"
+if [[ -f "$lang_file" ]]; then
+    # shellcheck disable=SC1090
+    . "$lang_file"
+    echo "Đã tải tệp ngôn ngữ: $lang_file"
+else
+    _runloi "Lỗi: Không tìm thấy tệp ngôn ngữ '$lang_file'. Một số văn bản có thể không hiển thị đúng!"
+    if [[ -f "/etc/wptt/lang/vi.sh" ]]; then
+        echo "Thông báo: Đang tải tệp ngôn ngữ mặc định vi.sh"
+        # shellcheck disable=SC1090
+         . "/etc/wptt/lang/vi.sh"
+    else
+        _runloi "Lỗi: Không tìm thấy cả tệp ngôn ngữ mặc định vi.sh!"
+    fi
+fi
+
+# --- Define Main Menu Definition File (Still needed for sorting priority) ---
+main_definition_file="/usr/bin/wptangtoc" # <--- **ĐẢM BẢO ĐÚNG ĐƯỜNG DẪN**
+main_def_realpath=""
+if [[ ! -f "$main_definition_file" ]]; then
+    _runloi "Cảnh báo: Không tìm thấy tệp định nghĩa menu chính '$main_definition_file'. Sắp xếp ưu tiên sẽ bị bỏ qua."
+    main_definition_file=""
+else
+    main_def_realpath=$(realpath "$main_definition_file" 2>/dev/null)
+    if [[ -z "$main_def_realpath" ]]; then
+         _runloi "Lỗi: Không thể lấy đường dẫn tuyệt đối cho '$main_definition_file'."
+         main_definition_file=""
+    fi
+fi
+
+# --- Pre-extract Main Menu Order (For sorting - Logic unchanged) ---
+declare -a main_menu_order
+if [[ -n "$main_definition_file" ]]; then
+    echo "Đang đọc thứ tự ưu tiên từ: $main_definition_file"
+    main_options_raw=$(sed -n '/^[[:space:]]*options=(/,/^[[:space:]]*)/{ /^[[:space:]]*options=(/d; /^[[:space:]]*)/d; p; }' "$main_definition_file")
+    main_options_clean=$(echo "$main_options_raw" | sed 's/^[[:space:]]*//; s/[[:space:]]*#.*$//' | grep -v '^[[:space:]]*$')
+    declare -a temp_main_options_vars
+    readarray -t temp_main_options_vars <<< "$main_options_clean"
+    for var_name in "${temp_main_options_vars[@]}"; do
+        eval_var_name=$(echo "$var_name" | sed 's/^"\(.*\)"$/\1/')
+        display_name=$(eval echo "\"$eval_var_name\"" 2>/dev/null)
+        if [[ -n "$display_name" ]]; then main_menu_order+=("$display_name"); else echo "    -> Cảnh báo (Ưu tiên): Lỗi lấy giá trị biến '$eval_var_name'."; fi
+    done
+     echo "    -> Đã xác định ${#main_menu_order[@]} mục ưu tiên."
+fi
+# --- End Pre-extraction ---
+
+# --- Server Status Check & Banner (Unchanged) ---
+clear
+# --- Data Aggregation ---
+echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+echo "Đang tổng hợp các tính năng từ các tệp menu..."
+echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+echo ""
+
+declare -A feature_scripts
+declare -A feature_args
+declare -A feature_sort_keys
+
+all_files_to_process=()
+shopt -s nullglob
+for f in $(find /etc/wptt -type f -name '*-main'); do [[ -f "$f" ]] && all_files_to_process+=("$f"); done
+shopt -u nullglob
+if [[ -n "$main_definition_file" && -f "$main_definition_file" ]]; then
+    is_already_listed=false
+    for existing_file in "${all_files_to_process[@]}"; do if [[ "$(realpath "$existing_file" 2>/dev/null)" == "$main_def_realpath" ]]; then is_already_listed=true; break; fi; done
+    if ! $is_already_listed; then echo "WPTangToc OLS menu chính:"; all_files_to_process+=("$main_definition_file"); fi
+fi
+if [[ ${#all_files_to_process[@]} -eq 0 ]]; then _runloi "Lỗi: Không tìm thấy tệp menu nào."; return; fi
+
+# Loop through all files
+for filepath in "${all_files_to_process[@]}"; do
+    if [[ ! -r "$filepath" ]]; then echo "Cảnh báo: Bỏ qua '$filepath' vì không đọc được."; continue; fi
+    file=$(basename "$filepath")
+    #echo "Đang xử lý tệp: $filepath"
+    current_filepath_realpath=$(realpath "$filepath" 2>/dev/null)
+
+    # --- Extract Category Title (Logic unchanged) ---
+    category_title=""
+    title_var_name=""
+    potential_title_line=$(awk 2>/dev/null '/^[[:space:]]*echo[[:space:]]+\"\$[a-zA-Z_][a-zA-Z0-9_]*.*\"/ { last_echo_line = $0 } /^[[:space:]]*options=\(/ { if (last_echo_line) { print last_echo_line }; exit }' "$filepath")
+    if [[ -n "$potential_title_line" ]]; then
+        if [[ "$potential_title_line" =~ echo[[:space:]]+\"\$([a-zA-Z_][a-zA-Z0-9_]*) ]]; then title_var_name="${BASH_REMATCH[1]}"; if declare -p "$title_var_name" &>/dev/null; then category_title="${!title_var_name}"; category_title="${category_title%:}" ; category_title=$(echo "$category_title" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'); else echo "    -> Cảnh báo: Biến '\$$title_var_name' không định nghĩa."; title_var_name=""; fi; else echo "    -> Cảnh báo: Không trích xuất được tên biến từ '$potential_title_line'."; fi
+    fi
+    if [[ -z "$category_title" ]]; then echo "    -> Thông báo: Không tìm thấy 'echo \"\$biến...\"'. Dùng tên tệp làm fallback."; category_base=${file%-main}; category_base=$(echo "$category_base" | sed -e 's/^wptt-//' -e 's/^wptangtoc-//'); category_title_tmp="$(tr '[:lower:]' '[:upper:]' <<< "${category_base:0:1}")${category_base:1}"; category_title=$(echo "$category_title_tmp" | sed 's/-/ /g'); fi
+    echo "    -> quét danh mục: '$category_title'"
+    # --- End Category Title Extraction ---
+
+    # --- Extract Options and Actions ---
+    option_vars_raw=$(sed -n '/^[[:space:]]*options=(/,/^[[:space:]]*)/{ /^[[:space:]]*options=(/d; /^[[:space:]]*)/d; p; }' "$filepath")
+    option_vars_clean=$(echo "$option_vars_raw" | sed 's/^[[:space:]]*//; s/[[:space:]]*#.*$//' | grep -v '^[[:space:]]*$')
+    readarray -t options_array <<< "$option_vars_clean"
+    if [[ ${#options_array[@]} -eq 0 ]]; then echo "    -> Cảnh báo: Không tìm thấy 'options' trong $file."; continue; fi
+
+    run_action_cases=$(sed -n '/^[[:space:]]*run_action()[[:space:]]*{/,/^[[:space:]]*}/ { /case \$index in\|case \$((\$index + 1)) in/,/esac/p; }' "$filepath" | sed '/case \$index in/d; /case \$((\$index + 1)) in/d; /esac/d')
+    if [[ -z "$run_action_cases" ]]; then echo "    -> Cảnh báo: Không tìm thấy 'case ... esac' trong run_action của $file."; continue; fi
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" =~ ^[[:space:]]*([0-9]+)\) ]]; then
+            case_label_index=${BASH_REMATCH[1]} # Số N từ dòng N)
+
+            # --- TÍNH INDEX CHO MẢNG options= (LOGIC V6.2 - THỐNG NHẤT KHÔNG TRỪ 1) ---
+            # Áp dụng: Label N -> Index N cho TẤT CẢ các file theo yêu cầu.
+            # **CẢNH BÁO:** Chỉ đúng nếu TẤT CẢ file dùng 'case $index' (label 0-based).
+            current_options_index=$((case_label_index))
+            # echo "    -> Mapping: Label $case_label_index -> Index $current_options_index" # Debug nếu cần
+            # --- KẾT THÚC TÍNH INDEX ---
+
+            script_path=$(echo "$line" | grep -o 'script_path="[^"]*"' | sed 's/script_path="\([^"]*\)"/\1/')
+            script_args=$(echo "$line" | grep -o 'script_args="[^"]*"' | sed 's/script_args="\([^"]*\)"/\1/')
+            [[ -z "$script_args" ]] && script_args="98"
+
+            if [[ $current_options_index -ge 0 && $current_options_index -lt ${#options_array[@]} ]]; then
+                display_var_name="${options_array[$current_options_index]}"
+                display_name_value=""
+                if [[ -n "$display_var_name" ]]; then
+                    eval_var_name=$(echo "$display_var_name" | sed 's/^"\(.*\)"$/\1/')
+                    display_name_value=$(eval echo "\"$eval_var_name\"" 2>/dev/null)
+                    if [[ $? -ne 0 || -z "$display_name_value" ]]; then echo "    -> Cảnh báo: Lỗi lấy giá trị biến '$eval_var_name'"; display_name_value="Lỗi_Tên_Biến ($eval_var_name)"; fi
+                else display_name_value="Lỗi_Biến_Rỗng (Index: $current_options_index)"; fi
+
+                if [[ "$display_name_value" != Lỗi_Tên_Biến* && "$display_name_value" != Lỗi_Biến_Rỗng* && -n "$script_path" ]]; then
+                    feature_key="$category_title > $display_name_value"
+
+                    # --- Gán Khóa Sắp xếp (Logic unchanged) ---
+                    current_sort_key="99"
+                    if [[ ${#main_menu_order[@]} -gt 0 ]]; then
+                        for i in "${!main_menu_order[@]}"; do if [[ "$display_name_value" == "${main_menu_order[$i]}" ]]; then current_sort_key=$(printf "%02d" "$i"); break; fi; done
+                    fi
+                    # --- Kết thúc Gán Khóa Sắp xếp ---
+
+                    if [[ -v feature_scripts["$feature_key"] ]]; then
+                        echo -n '' # Tính năng đã tồn tại, có thể ghi đè hoặc bỏ qua. Hiện tại là bỏ qua.
+                    else
+                        feature_scripts["$feature_key"]="$script_path"; feature_args["$feature_key"]="$script_args"; feature_sort_keys["$feature_key"]="$current_sort_key";
+                    fi
+                else echo "    -> Cảnh báo: Bỏ qua index $current_options_index do thiếu tên/script path."; fi
+            else echo "    -> Cảnh báo: Index $current_options_index (từ case $case_label_index) ngoài giới hạn options trong $file."; fi
+        fi
+    done <<< "$run_action_cases"
+
+done # Kết thúc vòng lặp xử lý file
+
+echo ""
+echo "Tổng hợp hoàn tất. Tìm thấy ${#feature_scripts[@]} tính năng."
+echo ""
+
+# --- FZF Selection (Modified for cat/bat preview) ---
+if [[ ${#feature_scripts[@]} -eq 0 ]]; then _runloi "Lỗi: Không có tính năng nào. Thoát."; exit 1; fi
+
+# Sử dụng file tạm để lưu trữ dữ liệu đầu vào cho fzf, giúp xử lý các ký tự đặc biệt tốt hơn.
+fzf_input_tempfile=$(mktemp)
+# Đảm bảo file tạm được xóa khi script kết thúc hoặc bị ngắt
+trap 'rm -f "$fzf_input_tempfile"' EXIT
+
+# Chuẩn bị dữ liệu cho fzf: mỗi dòng là "sort_key\tfeature_key\tscript_path"
+for key in "${!feature_scripts[@]}"; do
+    sort_val=${feature_sort_keys["$key"]:-99}
+    script_path_val=${feature_scripts["$key"]}
+    # Đảm bảo script_path_val không rỗng để cut -f3 hoạt động đáng tin cậy ngay cả khi file không tồn tại
+    # hoặc để hàm previewer có thể xử lý trường hợp này.
+    [[ -z "$script_path_val" ]] && script_path_val="NO_SCRIPT_PATH_DEFINED_FOR_PREVIEW"
+    printf "%s\t%s\t%s\n" "$sort_val" "$key" "$script_path_val" >> "$fzf_input_tempfile"
+done
+
+# Hàm trợ giúp cho việc xem trước nội dung file trong fzf
+wptt_fzf_previewer() {
+    local full_line="$1" # fzf truyền toàn bộ dòng hiện tại (candidate line) vào lệnh preview với {}
+    # Dòng đầy đủ có định dạng: "sort_key\tfeature_key\tscript_path"
+    # Chúng ta cần trường thứ 3, là script_path
+    # Sử dụng awk để trích xuất trường một cách an toàn, phòng trường hợp feature_key chứa tab (dù ít khả năng)
+    local script_to_preview
+    script_to_preview=$(echo "$full_line" | awk -F'\t' '{print $3}')
+
+    if [[ "$script_to_preview" == "NO_SCRIPT_PATH_DEFINED_FOR_PREVIEW" || -z "$script_to_preview" ]]; then
+        echo "Thông báo: Không có đường dẫn script được định nghĩa cho mục này để xem trước."
+    elif [[ -f "$script_to_preview" && -r "$script_to_preview" ]]; then
+        # Sử dụng 'bat' để hiển thị có màu nếu có, nếu không thì dùng 'cat'
+         awk '
+  # Khi gặp dòng định nghĩa hàm huong_dan, đặt cờ "active" và bỏ qua dòng này (không in)
+  /^[[:space:]]*(function[[:space:]]+)?huong_dan[[:space:]]*\(\)[[:space:]]*\{/ {
+    active=1
+    next
+  }
+
+  # Khi gặp dòng chỉ có dấu "}" (và có thể có khoảng trắng phía trước) và cờ "active" đang được đặt,
+  # hủy cờ "active" và bỏ qua dòng này (không in)
+  active && /^[[:space:]]*\}/ {
+    active=0
+    next
+  }
+
+  # Nếu cờ "active" đang được đặt, in dòng hiện tại (đây là nội dung bên trong hàm)
+  active {
+    print
+  }
+'  "$script_to_preview"
+    else
+        echo "Cảnh báo xem trước: Không thể đọc file hoặc file không tồn tại:"
+        echo "$script_to_preview"
+    fi
+}
+export -f wptt_fzf_previewer # Export hàm để fzf (chạy trong subshell) có thể gọi
+
+# Sắp xếp dữ liệu theo trường đầu tiên (sort_key) và đưa vào fzf
+# fzf sẽ trả về toàn bộ dòng đã chọn: "sort_key\tfeature_key\tscript_path"
+selected_line_from_fzf=$(sort -t$'\t' -k1,1 "$fzf_input_tempfile" | \
+    fzf --prompt="Tìm kiếm hướng dẫn WPTangToc OLS > " \
+        --height='~60%' \
+        --border=rounded \
+        --color=border:red \
+        --layout=reverse \
+        --header="Tìm thấy ${#feature_scripts[@]} tính năng Mũi tên di chuyển, ESC hủy, Gõ để lọc, Enter chọn." \
+        --with-nth=2 \
+        --delimiter='\t' \
+        --preview='wptt_fzf_previewer {}' \
+        --preview-window=up:20:wrap)
+
+# Sau khi fzf chạy, selected_line_from_fzf sẽ chứa toàn bộ dòng được chọn
+# (ví dụ: "01\tCategory > Feature\t/path/to/script.sh") hoặc rỗng nếu nhấn ESC.
+selected_feature=""
+if [[ -n "$selected_line_from_fzf" ]]; then
+    # Trích xuất feature_key (trường thứ 2) từ dòng đã chọn
+    selected_feature=$(echo "$selected_line_from_fzf" | awk -F'\t' '{print $2}')
+fi
+# File tạm "$fzf_input_tempfile" sẽ được xóa bởi lệnh trap
+
+# --- Action Execution (Logic unchanged) ---
+if [[ -n "$selected_feature" ]]; then
+    script_to_run="${feature_scripts["$selected_feature"]}"; script_arguments="${feature_args["$selected_feature"]}"; [[ -z "$script_arguments" ]] && script_arguments="98"
+    echo ""; echoXanhlacay "Bạn đã chọn:"; echo "$selected_feature"; echo "";
+    if [[ -x "$script_to_run" ]]; then
+		 awk '
+  # Khi gặp dòng định nghĩa hàm huong_dan, đặt cờ "active" và bỏ qua dòng này (không in)
+  /^[[:space:]]*(function[[:space:]]+)?huong_dan[[:space:]]*\(\)[[:space:]]*\{/ {
+    active=1
+    next
+  }
+
+  # Khi gặp dòng chỉ có dấu "}" (và có thể có khoảng trắng phía trước) và cờ "active" đang được đặt,
+  # hủy cờ "active" và bỏ qua dòng này (không in)
+  active && /^[[:space:]]*\}/ {
+    active=0
+    next
+  }
+
+  # Nếu cờ "active" đang được đặt, in dòng hiện tại (đây là nội dung bên trong hàm)
+  active {
+    print
+  }
+'  "$script_to_run"
+echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+	else _runloi "Lỗi: Không thể thực thi script '$script_to_run'."
+return; # Sử dụng return thay vì exit nếu script này được source
+        fi
+else
+    # --- Exit Logic (Logic unchanged) ---
+    echoVang "Không chọn gì. Đang thoát...";
+fi;
