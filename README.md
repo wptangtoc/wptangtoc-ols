@@ -152,7 +152,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Cảnh báo login ssh thông báo qua Telegram</li>
 <li>Theo dõi lưu lượng mạng,cpu,ram...</li>
 <li>Cảnh báo service webserver quan trọng và tự động reboot lại service đó nếu nó dừng hoạt động</li>
-<li>Vân vân và mây mây... đầy đủ các tính dành cho anh em system admin cơ bản đến chuyên nghiệp</li>
+<li>Vân vân và mây mây... đầy đủ các tính năng cho anh em system admin cơ bản đến chuyên nghiệp</li>
 </ul>
 
 <h3>Hỗ trợ WPTangToc OLS</h3>
