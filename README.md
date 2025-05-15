@@ -109,19 +109,19 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Sao lưu và khôi phục website</li>
 <li>Sao lưu website tự động</li>
 <li>Sao lưu database</li>
-<li>Hỗ trợ Google Drive và Onedrive lưu trữ đám mây backup website</li>
+<li>Hỗ trợ Google Drive và Onedrive, Telegram lưu trữ đám mây backup website</li>
 <li>Preload Cache</li>
-<li>Không giới hạn thêm domain</li>
+<li>Thêm Không giới hạn domain & subdomain</li>
 <li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
 <li>Hỗ trợ cài đặt SSL trả phí (Sectigo, Geotrust,...)</li>
-<li>Có thể thêm không giới hạn website</li>
-<li>PhpSuExec mỗi một website một user, để nâng cao bảo mật và dễ dùng quản lý tài nguyên</li>
+<li>PhpSuExec mỗi một website một username, để nâng cao bảo mật tránh bị một website bị hack lây sang website khác</li>
 <li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
-<li>Hỗ trợ object Cache (Redis & Memcached & LSMemcached)</li>
+<li>Hỗ trợ object Cache (Redis & Memcached)</li>
+<li>Hỗ trợ OPcache (LSOpcache)</li>
 <li>Tối ưu wp cron</li>
 <li>Hỗ trợ IPv4 và IPv6</li>
 <li>Tối ưu database</li>
-<li>Hỗ trợ nhiều phiên bản PHP cùng lúc</li>
+<li>Hỗ trợ nhiều phiên bản PHP cùng lúc, các website có thể sử dụng các phiên bản PHP khác nhau tuỳ theo nhu cầu</li>
 <li>Hỗ trợ PHPMyAdmin và FileManager (Trực tiếp trên web)</li>
 <li>Hỗ trợ php ioncube</li>
 <li>Sử dụng LSPHP tùy biến hiệu suất tốt hơn PHP Thuần</li>
@@ -129,31 +129,30 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Chống brute force WordPress</li>
 <li>Chống DDOS cơ bản</li>
 <li>Hỗ trợ nhiều IP cùng lúc trên 1 máy chủ</li>
-<li>Đăng nhập username riêng domain</li>
+<li>Đăng nhập username riêng domain (Khởi tạo tài khoản username riêng để login riêng website đó)</li>
 <li>LockDown WordPress</li>
 <li>Quét virus</li>
 <li>Khóa IP</li>
-<li>Chống ddos</li>
-<li>Sao chép website</li>
+<li>Sao chép nhân bản website</li>
 <li>Giả lập website</li>
-<li>Chuyển MYISAM sang INNODB</li>
+<li>Chuyển đổi công nghệ lưu trữ (INNODB, MYISAM, Aria)</li>
 <li>Chống scan port</li>
 <li>Quản lý Database</li>
 <li>Quản lý PHP</li>
 <li>Quản lý SSH</li>
 <li>Quản lý Cache</li>
-<li>Thiết lập SSL trả phí</li>
 <li>Quản lý Swap</li>
 <li>Mod Security</li>
-<li>Tường lửa 8g</li>
-<li>Tường lửa firewalld (Tường lửa CSF tuỳ chọn)</li>
-<li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive)</li>
+<li>Tường lửa 8G for WordPress</li>
+<li>Tường lửa firewalld (Tường lửa CSF, NFtables tuỳ chọn)</li>
+<li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive, Telegram)</li>
 <li>Quản lý Wordpress</li>
-<li>Hỗ trợ tự động update WPTangToc OLS</li>
+<li>Hỗ trợ update WPTangToc OLS, WordPress, máy chủ...</li>
 <li>Hỗ trợ chặn quốc gia truy cập website hoặc chỉ cho quốc gia nào đó được phép truy cập thôi</li>
-<li>Cảnh báo login ssh</li>
+<li>Cảnh báo login ssh thông báo qua Telegram</li>
+<li>Theo dõi lưu lượng mạng,cpu,ram...</li>
 <li>Cảnh báo service webserver quan trọng và tự động reboot lại service đó nếu nó dừng hoạt động</li>
-<li>Vân vân và mây mây...</li>
+<li>Vân vân và mây mây... đầy đủ các tính dành cho anh em system admin cơ bản đến chuyên nghiệp</li>
 </ul>
 
 <h3>Hỗ trợ WPTangToc OLS</h3>
