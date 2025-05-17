@@ -26,6 +26,6 @@ if [[ -f /usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadAl
 /usr/local/lsws/lsphp${phien_ban_php_domain}/bin/php /usr/local/bin/wp eval 'WPTangToc\PreloadAllPHP::preload_cache();' --allow-root --path=/usr/local/lsws/$NAME/html >/dev/null 2>&1
 chown "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/$NAME/html/wp-content/preload-wptangtoc-url.txt
 random=$(shuf -i 0-9 -n 10 -r | tr -d '\n')
-curl -s https://$NAME/?wptangtoc_cache=${random}
+curl -s https://$NAME/?wptangtoc_cache=${random} -A "WPTangToc OLS preload cache"
 echo "Triển khai Preload Cache PHP"
 fi
