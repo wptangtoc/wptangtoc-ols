@@ -200,44 +200,69 @@ for key in "${!feature_scripts[@]}"; do
     printf "%s\t%s\t%s\n" "$sort_val" "$key" "$script_path_val" >> "$fzf_input_tempfile"
 done
 
-# Hàm trợ giúp cho việc xem trước nội dung file trong fzf
 wptt_fzf_previewer() {
     local full_line="$1" # fzf truyền toàn bộ dòng hiện tại (candidate line) vào lệnh preview với {}
     # Dòng đầy đủ có định dạng: "sort_key\tfeature_key\tscript_path"
-    # Chúng ta cần trường thứ 3, là script_path
-    # Sử dụng awk để trích xuất trường một cách an toàn, phòng trường hợp feature_key chứa tab (dù ít khả năng)
     local script_to_preview
     script_to_preview=$(echo "$full_line" | awk -F'\t' '{print $3}')
 
     if [[ "$script_to_preview" == "NO_SCRIPT_PATH_DEFINED_FOR_PREVIEW" || -z "$script_to_preview" ]]; then
         echo "Thông báo: Không có đường dẫn script được định nghĩa cho mục này để xem trước."
-    elif [[ -f "$script_to_preview" && -r "$script_to_preview" ]]; then
-        # Sử dụng 'bat' để hiển thị có màu nếu có, nếu không thì dùng 'cat'
-         awk '
-  # Khi gặp dòng định nghĩa hàm huong_dan, đặt cờ "active" và bỏ qua dòng này (không in)
-  /^[[:space:]]*(function[[:space:]]+)?huong_dan[[:space:]]*\(\)[[:space:]]*\{/ {
-    active=1
-    next
-  }
-
-  # Khi gặp dòng chỉ có dấu "}" (và có thể có khoảng trắng phía trước) và cờ "active" đang được đặt,
-  # hủy cờ "active" và bỏ qua dòng này (không in)
-  active && /^[[:space:]]*\}/ {
-    active=0
-    next
-  }
-
-  # Nếu cờ "active" đang được đặt, in dòng hiện tại (đây là nội dung bên trong hàm)
-  active {
-    print
-  }
-'  "$script_to_preview"
-    else
-        echo "Cảnh báo xem trước: Không thể đọc file hoặc file không tồn tại:"
-        echo "$script_to_preview"
+        return
     fi
+
+    if [[ ! -f "$script_to_preview" || ! -r "$script_to_preview" ]]; then
+        echo "Cảnh báo xem trước: Không thể đọc file '$script_to_preview' hoặc file không tồn tại."
+        return
+    fi
+
+    local extracted_content
+    # Trích xuất nội dung hàm huong_dan bằng awk
+    extracted_content=$(awk '
+        /^[[:space:]]*(function[[:space:]]+)?huong_dan[[:space:]]*\(\)[[:space:]]*\{/ {
+            active=1
+            next
+        }
+        active && /^[[:space:]]*\}/ {
+            active=0
+            next
+        }
+        active {
+            print
+        }
+    ' "$script_to_preview")
+
+    if [[ -z "$extracted_content" ]]; then
+        echo "Thông báo: Không tìm thấy nội dung 'huong_dan' trong script '$script_to_preview'."
+        return
+    fi
+
+    local preview_width=${FZF_PREVIEW_COLUMNS:-80} # Lấy chiều rộng từ fzf, mặc định 80
+    
+    # --- ĐIỀU CHỈNH THỬ NGHIỆM ---
+    # Hãy thử các giá trị khác nhau cho 'adjustment' để tìm chiều rộng tối ưu.
+    # Mục tiêu là tìm giá trị 'adjustment' LỚN NHẤT có thể mà dòng dài nhất
+    # không bị fzf tự động ngắt ký tự ở cuối.
+    # Dựa trên hình ảnh trước đó của bạn (FZF_COLS=72), giá trị 'adjustment' khoảng 15 có vẻ gần đúng.
+    # Hãy tinh chỉnh từ đó.
+    local adjustment=15  # <<< THAY ĐỔI GIÁ TRỊ NÀY (ví dụ: 14, 15, 16, 17, ...)
+    local effective_width=$((preview_width + adjustment))
+    # --- KẾT THÚC ĐIỀU CHỈNH THỬ NGHIỆM ---
+
+    # Dòng debug này sẽ hiển thị ở đầu nội dung xem trước
+    #local debug_line="[DEBUG: FZF_COLS=${preview_width}, ADJ=${adjustment}, EFF_WIDTH=${effective_width}]"
+
+    local wrapped_content
+    # Sử dụng 'fmt' để word wrap với chiều rộng đã điều chỉnh
+    # Tùy chọn -s đảm bảo chỉ ngắt dòng tại khoảng trắng.
+    wrapped_content=$(echo "$extracted_content" | fmt -s -w "$effective_width")
+
+    # Kết hợp dòng debug và nội dung đã wrap
+    local final_output="${debug_line}\n${wrapped_content}"
+
+    echo -e "$final_output"
 }
-export -f wptt_fzf_previewer # Export hàm để fzf (chạy trong subshell) có thể gọi
+export -f wptt_fzf_previewer
 
 # Sắp xếp dữ liệu theo trường đầu tiên (sort_key) và đưa vào fzf
 # fzf sẽ trả về toàn bộ dòng đã chọn: "sort_key\tfeature_key\tscript_path"
