@@ -327,6 +327,7 @@ huy_kich_hoat_ghi_logs_database="Off take note ghi logs database"
 xem_logs_database="View log database"
 xem_log_database_truy_van_cham="View log database have query"
 xem_kiem_tra_toc_do_su_ly_php_he_thong="See system PHP processing speed test"
+xem_log_access_thoi_gian_thuc="View real-time access logs domain"
 
 #quan_ly_ma_nguon
 truy_cap_nhanh_vao_ma_nguon_website="Quick access to website source code"

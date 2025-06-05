@@ -304,6 +304,8 @@ huy_kich_hoat_ghi_logs_database="Hủy kích hoạt ghi logs database"
 xem_logs_database="Xem log database"
 xem_log_database_truy_van_cham="Xem log database truy vấn chậm"
 xem_kiem_tra_toc_do_su_ly_php_he_thong="Xem kiểm tra tốc độ sử lý PHP hệ thống"
+xem_log_access_thoi_gian_thuc="Xem access log domain thời gian thực"
+
 
 #quan_ly_ma_nguon
 truy_cap_nhanh_vao_ma_nguon_website="Truy cập nhanh vào mã nguồn website"
