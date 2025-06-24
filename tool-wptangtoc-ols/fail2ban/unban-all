@@ -1,13 +1,81 @@
 #!/bin/bash
 
-for JAIL in $(fail2ban-client status | grep 'Jail list:' | awk 'BEGIN {FS="\t"} {print $2}' | sed 's/, / /g')
-do
-  for IP in $(fail2ban-client status ${JAIL} | grep 'Banned IP list:' | awk 'BEGIN {FS="\t"} {print $2}' | sed 's/ /\n/g')
-  do
-    fail2ban-client set ${JAIL} unbanip ${IP}
+function huong_dan() {
+  mở khoá unban all ip
+}
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]]; then
+  ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|$quan_ly_ip => $khoa_ip tất cả                                  |"
+echo "========================================================================="
+echo ""
+echo ""
+
+. /etc/wptt/echo-color
+_runing "Mở khóa toàn bộ địa chỉ IP đã chặn"
+fail2ban_service=$(systemctl status fail2ban.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ "$fail2ban_service" = "active" ]]; then
+  fail2ban-client reload
+  for JAIL in $(fail2ban-client status | grep 'Jail list:' | awk 'BEGIN {FS="\t"} {print $2}' | sed 's/, / /g'); do
+    for IP in $(fail2ban-client status ${JAIL} | grep 'Banned IP list:' | awk 'BEGIN {FS="\t"} {print $2}' | sed 's/ /\n/g'); do
+      fail2ban-client set ${JAIL} unbanip ${IP}
+    done
   done
-done
+fi
 
-unset JAIL IP
+sed -i -e '/^accessControl/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+if [[ $(cat /usr/local/lsws/conf/httpd_config.conf | grep 'useIpInProxyHeader') = '' ]]; then #tuong thich cloudflare cdn
+  echo '
+accessControl  {
+  allow                   ALL
+}
+' >>/usr/local/lsws/conf/httpd_config.conf
 
-exit 0
+else
+  echo '
+accessControl  {
+  allow                   ALL, 103.21.244.0/22T, 103.22.200.0/22T, 103.31.4.0/22T, 104.16.0.0/13T, 104.24.0.0/14T, 108.162.192.0/18T, 131.0.72.0/22T, 141.101.64.0/18T, 162.158.0.0/15T, 172.64.0.0/13T, 173.245.48.0/20T, 188.114.96.0/20T, 190.93.240.0/20T, 197.234.240.0/22T, 198.41.128.0/17T
+}
+' >>/usr/local/lsws/conf/httpd_config.conf
+
+fi
+
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
+#mở khoá nftables
+nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ "$nftables_service" = "active" ]]; then
+  systemctl restart nftables
+fi
+
+if [[ -f /etc/csf/csf.conf ]]; then #unban all csf
+  csf -tf
+  csf -df
+fi
+
+if [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then #unban firewalld
+  RICH_RULES=$(firewall-cmd --permanent --list-rich-rules)
+  # Kiểm tra xem có quy tắc nào để xóa không
+  if [ "$RICH_RULES" ]; then
+    # Vòng lặp để xóa từng quy tắc một
+    while IFS= read -r rule; do
+      firewall-cmd --permanent --remove-rich-rule="$rule" >/dev/null 2>&1
+    done <<<"$RICH_RULES"
+    firewall-cmd --reload >/dev/null 2>&1
+  fi
+fi
+_rundone "Mở khóa toàn bộ địa chỉ IP đã chặn"
+
+unset JAIL IP checkip RICH_RULES
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  . /etc/wptt/wptt-khoa-ip-main 1
+fi
