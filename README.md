@@ -42,7 +42,6 @@ Ubuntu 24.04
 </li>
 
 </ul>
-<li>Hỗ trợ CPU x86_64 và arm</li>
 Hệ điều hành mà mình yêu thích nhất là AlmaLinux 8:
 
 
@@ -61,43 +60,44 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.4 & 8.3 & 8.2 & 8.1 & 8.0 & 7.4 & 7.3 & 7.2 & 7.1) + MariaDB (11.8 & 11.4 & 10.11 & 10.6)... có rất nhiều tính năng khác.
 
-<h2>Hướng dẫn cài đặt</h2>
-Yêu cầu phần cứng: Ram tối thiểu 512MB, CPU tối thiểu 1 vcore
+<h2>Cấu hình tối thiểu</h2>
+Yêu cầu phần cứng: Ram > 512MB, CPU tối thiểu 1 vcore
+<h2>Cấu hình khuyến nghị</h2>
+Yêu cầu phần cứng: Ram > 2GB , CPU tối thiểu 1 vcore
 
-Kiến trúc CPU hệ điều hành được hỗ trợ:
+Kiến trúc CPU được hỗ trợ theo hệ điều hành sau:
 <ul>
 <li>
-AlmaLinux 8 (CPU x86_64)
+AlmaLinux 8 (hỗ trợ CPU x86_64)
 </li>
 
 <li>
-Rocky linux 8 (CPU x86_64)
+Rocky linux 8 (hỗ trợ CPU x86_64)
 </li>
 
 <li>
-Red Hat Enterprise Linux 8 (CPU x86_64)
+Red Hat Enterprise Linux 8 (hỗ trợ CPU x86_64)
 </li>
 
 <li>
-Oracle Linux Server 8
+Oracle Linux Server 8 (hỗ trợ CPU x86_64)
 </li>
 
 <li>
-AlmaLinux 9 (x86_64 hoặc arm)
+AlmaLinux 9 (Hỗ trợ x86_64 hoặc arm)
 </li>
 
 <li>
-Rocky linux 9 (x86_64 hoặc arm)
+Rocky linux 9 (Hỗ trợ x86_64 hoặc arm)
+</li>
+
+<li>
+Red Hat Enterprise Linux 9 (Hỗ trợ x86_64 hoặc arm)
 </li>
 
 
 <li>
-Red Hat Enterprise Linux 9 (x86_64 hoặc arm)
-</li>
-
-
-<li>
-Oracle Linux Server 9 (x86_64 hoặc arm)
+Oracle Linux Server 9 (Hỗ trợ x86_64 hoặc arm)
 </li>
 
 <li>
