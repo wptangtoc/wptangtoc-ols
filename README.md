@@ -61,6 +61,55 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.4 & 8.3 & 8.2 & 8.1 & 8.0 & 7.4 & 7.3 & 7.2 & 7.1) + MariaDB (11.8 & 11.4 & 10.11 & 10.6)... có rất nhiều tính năng khác.
 
+<h2>Hướng dẫn cài đặt</h2>
+Yêu cầu phần cứng: Ram tối thiểu 512MB, CPU tối thiểu 1 vcore
+
+Kiến trúc CPU hệ điều hành được hỗ trợ:
+<ul>
+<li>
+AlmaLinux 8 (CPU x86_64)
+</li>
+
+<li>
+Rocky linux 8 (CPU x86_64)
+</li>
+
+<li>
+Red Hat Enterprise Linux 8 (CPU x86_64)
+</li>
+
+<li>
+Oracle Linux Server 8
+</li>
+
+<li>
+AlmaLinux 9 (x86_64 hoặc arm)
+</li>
+
+<li>
+Rocky linux 9 (x86_64 hoặc arm)
+</li>
+
+
+<li>
+Red Hat Enterprise Linux 9 (x86_64 hoặc arm)
+</li>
+
+
+<li>
+Oracle Linux Server 9 (x86_64 hoặc arm)
+</li>
+
+<li>
+Ubuntu 22.04 (x86_64 hoặc arm)
+</li>
+<li>
+Ubuntu 24.04 (x86_64 hoặc arm)
+</li>
+
+</ul>
+
+
 <h3>Hướng dẫn sử dụng</h3>
 
 Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wptangtoc.com/wptangtoc-ols/</a>
