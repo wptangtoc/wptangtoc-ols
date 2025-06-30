@@ -95,16 +95,15 @@ Rocky linux 9 (Hỗ trợ x86_64 hoặc arm)
 Red Hat Enterprise Linux 9 (Hỗ trợ x86_64 hoặc arm)
 </li>
 
-
 <li>
 Oracle Linux Server 9 (Hỗ trợ x86_64 hoặc arm)
 </li>
 
 <li>
-Ubuntu 22.04 (x86_64 hoặc arm)
+Ubuntu 22.04 (Hỗ trợ x86_64 hoặc arm)
 </li>
 <li>
-Ubuntu 24.04 (x86_64 hoặc arm)
+Ubuntu 24.04 (Hỗ trợ x86_64 hoặc arm)
 </li>
 
 </ul>
