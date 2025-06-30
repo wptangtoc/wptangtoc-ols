@@ -1,0 +1,184 @@
+#!/bin/bash
+
+function huong_dan() {
+MySQL CLI [còn gọi là MySQL Monitor] là một công cụ giao diện dòng lệnh cho phép bạn tương tác trực tiếp với máy chủ MySQL. Bạn có thể thực hiện mọi tác vụ từ tạo cơ sở dữ liệu, quản lý bảng, đến truy vấn dữ liệu phức tạp.
+}
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]]; then
+  ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+  echo ""
+  echo ""
+  echo "$nhap_lua_chon_website_cua_ban thực thi mysql cli: "
+  echo ""
+  function lua_chon_NAME() {
+  unset NAME
+  if [ "$(ls -At /etc/wptt/vhost)" ]; then
+    selects=()
+    for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
+      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+      if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+        selects+=("$NAME")
+      fi
+    done
+
+    selects+=("root")
+
+    if command -v fzf &>/dev/null; then
+      PS3="
+$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [00=$chon_nhanh] [0=$exit_thoat]:$(tput sgr0) "
+    else
+      PS3="
+$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) "
+    fi
+
+    #phải thêm  "" bên trong ${selects[@]} để phân biệt nút cách để tránh phân biệt mảng array
+    select select in "${selects[@]}"; do
+      NAME=$select
+      index=$REPLY
+      break
+    done
+  else
+    clear
+    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
+    exit
+  fi
+
+  if [[ -z $NAME ]]; then                             #tính năng nhập input thẳng domain
+    REPLY=$(echo $REPLY | tr '[:upper:]' '[:lower:]') #chuyển viết hoa thành viết thường, tránh người dùng gõ viết hoa sẽ tự động sử lý vấn đề đó
+    if [[ $(ls -A /etc/wptt/vhost | sed 's/^.//' | sed 's/.conf//' | grep "$REPLY") ]]; then
+      if [ "$REPLY" != "${REPLY/./}" ] && [ "$REPLY" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+        if [[ -f /etc/wptt/vhost/.$REPLY.conf ]]; then              #kiểm tra điều kiện xác thực domain này đã đúng đã thêm trước đó chưa lần 2 tuyệt đối
+          NAME=$REPLY
+        fi
+      fi
+    fi
+  fi
+
+  if [[ $REPLY == "00" ]] && command -v fzf &>/dev/null; then
+    local selected_name
+    # Mảng để lưu trữ các tên miền hợp lệ
+    local options=()
+    local vhost_dir="/etc/wptt/vhost"
+
+    # Kiểm tra xem thư mục tồn tại và có phải là thư mục không
+    if [[ ! -d "$vhost_dir" ]]; then
+      clear
+      echo "Lỗi: Thư mục '$vhost_dir' không tồn tại."
+      return 1 # Trả về mã lỗi
+    fi
+
+    # Sử dụng find để lấy danh sách file .conf một cách an toàn hơn ls
+    # và đọc từng dòng bằng while read
+    mapfile -t options < <(
+      # Tìm tất cả các file (-type f) trong thư mục vhost_dir (không vào sâu hơn -maxdepth 1)
+      # có tên kết thúc bằng .conf.
+      # -print0 dùng ký tự NULL để phân tách các đường dẫn, an toàn hơn với các tên file đặc biệt.
+      find "$vhost_dir" -maxdepth 1 -type f -name '*.conf' -print0 |
+
+        # Đọc từng đường dẫn được phân tách bằng NULL vào biến entry_path.
+        while IFS= read -r -d '' entry_path; do
+          # Lấy tên file từ đường dẫn đầy đủ (sử dụng parameter expansion, nhanh hơn `basename`).
+          local entry
+          entry=${entry_path##*/}
+
+          # Xử lý tên file bằng Shell Parameter Expansion để tăng hiệu suất:
+          # 1. Bỏ đuôi .conf
+          local name
+          name=${entry%.conf}
+          # 2. Bỏ ký tự đầu tiên
+          name=${name#?}
+
+          # Kiểm tra xem tên có chứa dấu chấm không (để lọc domain).
+          if [[ "$name" == *.* ]] && [ "$name" != '.' ]; then
+            # In tên hợp lệ ra standard output
+            echo "$name"
+          fi
+        done |
+
+        # Sắp xếp danh sách domain từ output của vòng lặp while.
+        # -u: Lọc các dòng trùng lặp (unique).
+        # -V: Sắp xếp theo kiểu "version number", giúp sắp xếp tự nhiên (ví dụ: site2.com đứng trước site10.com).
+        sort -uV
+    )
+
+    # Kiểm tra xem có tìm thấy tên miền hợp lệ nào không
+    if [ ${#options[@]} -eq 0 ]; then
+      clear
+      # Kiểm tra xem thư mục có trống không hay chỉ không có file .conf hợp lệ
+      if [ -z "$(find "$vhost_dir" -maxdepth 1 -type f -name '*.conf')" ]; then
+        echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
+      else
+        echo "$khong_tim_thay_domain_hop_le"
+      fi
+      return 1 # Trả về mã lỗi
+    fi
+
+    # Sử dụng printf để đưa danh sách vào fzf một cách an toàn (mỗi tên miền một dòng)
+    # fzf sẽ hiển thị danh sách và cho phép người dùng lọc/chọn
+    # --prompt đặt thông điệp hiển thị phía trước ô nhập liệu của fzf
+    # Kết quả (dòng được chọn) sẽ được gán vào biến selected_name
+    selected_name=$(printf "%s\n" "${options[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> $nhap_lua_chon_website_cua_ban [0=$exit_thoat]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    # Kiểm tra xem người dùng có hủy chọn không (ví dụ: nhấn Ctrl+C hoặc Esc)
+    # fzf sẽ trả về chuỗi rỗng và mã thoát khác 0 (thường là 130 cho Ctrl+C)
+    local exit_status=$?
+    if [ $exit_status -ne 0 ] || [ -z "$selected_name" ]; then
+      echo "$da_huy_chon"
+      NAME=""  # Đặt lại biến NAME nếu cần
+      return 1 # Trả về mã lỗi
+    fi
+
+    # Gán tên miền đã chọn vào biến NAME (có thể là biến toàn cục nếu cần)
+    NAME="$selected_name"
+    # echo "Đã chọn: $NAME" # Có thể bỏ dòng này nếu không cần thông báo
+    return 0 # Trả về mã thành công
+  fi
+
+}
+
+lua_chon_NAME
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+  . /etc/wptt/wptt-wordpress-main 1
+fi
+echo "========================================================================="
+echo 'Đây là một tính năng khá nâng cao '
+echo 'Sau đây những hướng dẫn cơ bản: '
+echo 'SHOW DATABASES; - Liệt kê tất cả các cơ sở dữ liệu.
+USE [tên_db]; - Chọn một cơ sở dữ liệu để bắt đầu làm việc.
+CREATE DATABASE [tên_db]; - Tạo một cơ sở dữ liệu mới.
+DROP DATABASE [tên_db]; - Xóa vĩnh viễn một cơ sở dữ liệu. (Cẩn thận!)
+SHOW TABLES; - Liệt kê tất cả các bảng trong cơ sở dữ liệu hiện tại.
+CREATE TABLE [tên_bảng] (...); - Tạo một bảng mới.
+ALTER TABLE [tên_bảng] ...; - Sửa đổi cấu trúc của bảng (thêm/xóa/sửa cột).
+DROP TABLE [tên_bảng]; - Xóa vĩnh viễn một bảng. (Cẩn thận!)
+INSERT INTO [tên_bảng] (cột1, cột2) VALUES (giá_trị1, giá_trị2); - Chèn một hàng dữ liệu mới vào bảng.
+SELECT * FROM [tên_bảng]; - Lấy tất cả dữ liệu từ một bảng.
+SELECT cột1, cột2 FROM [tên_bảng]; - Lấy dữ liệu từ các cột được chỉ định.
+SELECT * FROM [tên_bảng] WHERE [điều_kiện]; - Lấy dữ liệu được lọc theo một điều kiện.
+UPDATE [tên_bảng] SET cột1 = giá_trị_mới WHERE [điều_kiện]; - Cập nhật dữ liệu trong bảng. (Luôn dùng WHERE!)
+DELETE FROM [tên_bảng] WHERE [điều_kiện]; - Xóa dữ liệu khỏi bảng. (Luôn dùng WHERE!)
+SHOW PROCESSLIST; - Xem tiến tình database đang thực thi tại thời điểm hiện tại
+exit; - Để thoát Mysql CLI
+'
+echo "========================================================================="
+if [[ $NAME = 'root' ]];then
+mariadb -u "$database_admin_username" -p"$database_admin_password"
+else
+unset DB_Password_web DB_User_web
+. /etc/wptt/vhost/.$NAME.conf
+if [[ $DB_User_web && $DB_Password_web ]];then
+mariadb -u "$DB_User_web" -p"$DB_Password_web"
+fi
+fi
+
+echo "========================================================================="
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  . /etc/wptt/wptt-db-main 1
+fi
+
