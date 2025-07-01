@@ -84,26 +84,26 @@ Oracle Linux Server 8 (hỗ trợ CPU x86_64)
 </li>
 
 <li>
-AlmaLinux 9 (Hỗ trợ x86_64 hoặc arm)
+AlmaLinux 9 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
-Rocky linux 9 (Hỗ trợ x86_64 hoặc arm)
+Rocky linux 9 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
-Red Hat Enterprise Linux 9 (Hỗ trợ x86_64 hoặc arm)
+Red Hat Enterprise Linux 9 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
-Oracle Linux Server 9 (Hỗ trợ x86_64 hoặc arm)
+Oracle Linux Server 9 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
-Ubuntu 22.04 (Hỗ trợ x86_64 hoặc arm)
+Ubuntu 22.04 (Hỗ trợ x86_64 & arm)
 </li>
 <li>
-Ubuntu 24.04 (Hỗ trợ x86_64 hoặc arm)
+Ubuntu 24.04 (Hỗ trợ x86_64 & arm)
 </li>
 
 </ul>
