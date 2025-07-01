@@ -65,7 +65,7 @@ Yêu cầu phần cứng: Ram > 512MB, CPU tối thiểu 1 vcore
 <h2>Cấu hình khuyến nghị</h2>
 Yêu cầu phần cứng: Ram > 2GB , CPU tối thiểu 1 vcore
 
-Kiến trúc CPU được hỗ trợ theo hệ điều hành sau:
+<h3>Kiến trúc CPU được hỗ trợ theo hệ điều hành sau:</h3>
 <ul>
 <li>
 AlmaLinux 8 (hỗ trợ CPU x86_64)
