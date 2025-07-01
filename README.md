@@ -61,9 +61,9 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.4 & 8.3 & 8.2 & 8.1 & 8.0 & 7.4 & 7.3 & 7.2 & 7.1) + MariaDB (11.8 & 11.4 & 10.11 & 10.6)... có rất nhiều tính năng khác.
 
 <h2>Cấu hình tối thiểu</h2>
-Yêu cầu phần cứng: Ram > 512MB, CPU tối thiểu 1 vcore
+Yêu cầu phần cứng: Ram > 512MB, CPU tối thiểu 1 vcore, Disk > 5GB
 <h2>Cấu hình khuyến nghị</h2>
-Yêu cầu phần cứng: Ram > 2GB , CPU tối thiểu 1 vcore
+Yêu cầu phần cứng: Ram > 2GB , CPU tối thiểu 1 vcore, Disk > 20GB
 
 <h3>Kiến trúc CPU được hỗ trợ theo hệ điều hành sau:</h3>
 <ul>
