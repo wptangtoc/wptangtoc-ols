@@ -23,8 +23,8 @@ if [[ -f /usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadAl
     phien_ban_php_domain=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
   fi
 
-  if [[ $(echo $phien_ban_php_domain | grep 'lsphp') ]]; then #tương thích ngươcj với thời xưa đặt phiên bản php là lsphp
-    phien_ban_php_domain=$(echo $phien_ban_php_domain | sed 's/lsphp//g')
+  if [[ $(echo $phien_ban_php_domain | grep '^lsphp') ]]; then #tương thích ngươcj với thời xưa đặt phiên bản php là lsphp
+    phien_ban_php_domain=$(echo $phien_ban_php_domain | sed 's/^lsphp//g')
   fi
 
   phien_ban_php_domain=${phien_ban_php_domain//[-._]/}
