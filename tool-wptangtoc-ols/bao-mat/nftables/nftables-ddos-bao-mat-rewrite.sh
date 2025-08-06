@@ -42,6 +42,9 @@ else
   systemctl restart cron
 fi
 
+google=$(curl -s https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed '/^$/d')
+bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed 's/^/\n/g' | sed '/^$/d')
+
 chmod +x /usr/local/lsws/$NAME/bao-mat/anti.py
 
 # sed -i '/log_file_path =/d' /usr/local/lsws/$NAME/bao-mat/anti.py
@@ -94,18 +97,24 @@ if [[ $(cat $path_nftables_config | grep 'ipvietnam') = '' ]]; then
 
 fi
 
-google=$(curl -s https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed '/^$/d')
-google=$(echo $google | sed 's/ /, /g')
-google=$(echo $google | sed 's/^/{ /g' | sed 's/$/ }/g')
+if [[ $(echo $google | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)') ]]; then #loc nếu không call được thì thôi
+  google=$(echo $google | sed 's/ /, /g')
+  google=$(echo $google | sed 's/^/{ /g' | sed 's/$/ }/g')
+  nft add element inet filter GGv4 $google
+else
+  echo "không gọi được ip của google, ngừng tiến trình"
+  exit
+fi
 
-nft add element inet filter GGv4 $google
-
-ip_elements_bing=$(nft list set inet filter BINGv4 | awk '/{ /,/}/' | cut -d '=' -f 2)
-nft delete element inet filter BINGv4 ${ip_elements_bing}
-bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed 's/^/\n/g' | sed '/^$/d')
-bing_ip=$(echo $bing_ip | sed 's/ /, /g')
-bing_ip=$(echo $bing_ip | sed 's/^/{ /g' | sed 's/$/ }/g')
-nft add element inet filter BINGv4 $bing_ip
+if [[ $(echo $bing_ip | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)') ]]; then #loc nếu không call được thì thôi
+  ip_elements_bing=$(nft list set inet filter BINGv4 | awk '/{ /,/}/' | cut -d '=' -f 2)
+  nft delete element inet filter BINGv4 ${ip_elements_bing}
+  bing_ip=$(echo $bing_ip | sed 's/ /, /g')
+  bing_ip=$(echo $bing_ip | sed 's/^/{ /g' | sed 's/$/ }/g')
+  nft add element inet filter BINGv4 $bing_ip
+else
+  echo "không gọi được ip của bing"
+fi
 
 #chặn tấn công SYN food
 #nft add rule inet filter input tcp flags syn limit rate 100/second burst 200 packets accept
