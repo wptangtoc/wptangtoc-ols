@@ -113,24 +113,66 @@ if [[ ! -f $duong_dan_config_redis ]]; then
   else
     yum install redis -y --disablerepo="mariadb" >/dev/null 2>&1
     lsphp=($(ls /usr/local/lsws | grep 'lsphp' | sed 's/^lsphp//g'))
+    php_eol_list_check=$(curl -s https://wptangtoc.com/share/php-suport-OEL.txt)
+    (/etc/wptt/php/kho-luu-tru-litespeed) #subshell tránh đè biến
+
     for phpredis in ${lsphp[@]}; do
-      yum install lsphp${phpredis}-pecl-redis -y --nogpgcheck --disablerepo="mariadb" >/dev/null 2>&1
-      if [[ $phpredis = '74' && $(cat /etc/*release | grep 'el8') && $(uname -m | grep 'x86_64') ]]; then # tương thích ngược với php7.4
-        dnf install https://rpms.litespeedtech.com/centos/8/x86_64/RPMS/lsphp74-pecl-igbinary-3.0.1-1.el8.7.4.x86_64.rpm -y >/dev/null 2>&1
-        dnf install https://rpms.litespeedtech.com/centos/8/x86_64/RPMS/lsphp74-pecl-redis-5.3.7-1.el8.7.4.x86_64.rpm -y >/dev/null 2>&1
-      fi
+      if [[ $(echo $php_eol_list_check | grep "lsphp${phpredis}") ]]; then #điều kiện PHP đang được hỗ trợ
+        yum install lsphp${phpredis}-pecl-redis -y --nogpgcheck --disablerepo="mariadb" >/dev/null 2>&1
+      else
+        url_repo_litespeed=$(
+          cat /tmp/php_extension_call_eol | grep lsphp${phpredis} | grep -oP 'href="\K[^"]+' | grep -v 'debuginfo\|-devel\|-debugsource' | awk '
+BEGIN { FS = "/" }
+{
+    filename = $NF
+    split(filename, parts, "-")
 
-      if [[ $phpredis = '74' && $(cat /etc/*release | grep 'el9') && $(uname -m | grep 'x86_64') ]]; then # tương thích ngược với php7.4
-        dnf install https://rpms.litespeedtech.com/centos/9/update/x86_64/RPMS/lsphp74-pecl-igbinary-3.2.12-4.el9.7.4.x86_64.rpm -y >/dev/null 2>&1
-        dnf install https://rpms.litespeedtech.com/centos/9/update/x86_64/RPMS/lsphp74-pecl-redis-5.3.7-4.el9.7.4.x86_64.rpm -y >/dev/null 2>&1
-      fi
+    pkg_name = ""
+    version = ""
 
-      if [[ $phpredis = '74' && $(cat /etc/*release | grep 'el9') && $(uname -m | grep 'aarch64') ]]; then # tương thích ngược với php7.4 cùng cpu arm
-        dnf install https://rpms.litespeedtech.com/centos/9/aarch64/RPMS/lsphp74-pecl-igbinary-3.2.14-1.el9.7.4.aarch64.rpm -y >/dev/null 2>&1
-        dnf install https://rpms.litespeedtech.com/centos/9/aarch64/RPMS/lsphp74-pecl-redis-5.3.7-1.el9.7.4.aarch64.rpm -y >/dev/null 2>&1
-      fi
+    if (parts[2] == "pecl") {
+        # TRƯỜNG HỢP 1: Gói PECL (ví dụ: lsphp74-pecl-redis-...)
+        pkg_name = parts[1] "-" parts[2] "-" parts[3]
+        version = parts[4]
+    } else if (parts[2] ~ /^[0-9]+\.[0-9]+/) {
+        # TRƯỜNG HỢP 2 (MỚI): Gói lsphp gốc (ví dụ: lsphp74-7.4.28-...)
+        pkg_name = parts[1]
+        version = parts[2]
+    } else {
+        # TRƯỜNG HỢP 3: Gói extension thông thường (ví dụ: lsphp74-pgsql-...)
+        pkg_name = parts[1] "-" parts[2]
+        version = parts[3]
+    }
 
+    # Logic so sánh phiên bản và lưu trữ vẫn như cũ
+    if (version > versions[pkg_name]) {
+        versions[pkg_name] = version
+        latest_lines[pkg_name] = $0
+    }
+}
+END {
+    PROCINFO["sorted_in"] = "@ind_str_asc"
+    for (pkg in latest_lines) {
+        print latest_lines[pkg]
+    }
+}'
+        )
+        extensions_redis=(pecl-igbinary
+          pecl-redis)
+        for extension in ${extensions_redis[@]}; do
+          if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpredis}-${extension}-") ]]; then #kiểm tra extension đó có tồn tại không
+            dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpredis}-${extension}-") -y
+            if [[ -z $(rpm -aq | grep "lsphp${phpredis}-${extension}-") ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
+              sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+              echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+              dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpredis}-${extension}-") -y
+              su_dung_repo_du_phong=1
+            fi
+          fi
+        done
+      fi
     done
+    rm -f /tmp/php_extension_call_eol
   fi
 
   _rundone "$cai redis"

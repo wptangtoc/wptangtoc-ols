@@ -163,7 +163,7 @@ fi
 #chuyen doi vi du lsphp74 thì thành giá trị: 7.4
 
 #https://make.wordpress.org/hosting/handbook/server-environment/
-extensions=(common gd imagick process mbstring mysqlnd xml opcache mcrypt pdo imap bcmath intl zip mysql json curl pecl-igbinary igbinary)
+extensions=(common gd imagick process mbstring pdo mysqlnd xml opcache mcrypt imap bcmath intl zip mysql json curl pecl-igbinary igbinary)
 
 php_eol_list_check=$(curl -s https://wptangtoc.com/share/php-suport-OEL.txt)
 
@@ -212,14 +212,27 @@ END {
     }
 }'
   )
+
   for extension in ${extensions[@]}; do
     if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") ]]; then #kiểm tra extension đó có tồn tại không
-      dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y 2>/dev/null
+      dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y
+      if [[ -z $(rpm -aq | grep "lsphp${php_ver_chon}-${extension}-") ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
+        sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+        echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+        dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y
+        su_dung_repo_du_phong=1
+      fi
     fi
   done
 
   url_php_eol_install=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep -P 'lsphp'${php_ver_chon}'-\K[0-9]+\.[0-9]+' | tail -n1) #lấy php main
-  dnf install http://rpms.litespeedtech.com${url_php_eol_install} -y 2>/dev/null
+  dnf install http://rpms.litespeedtech.com${url_php_eol_install} -y
+  if [[ -z $(rpm -aq | grep -P 'lsphp'${php_ver_chon}'-\K[0-9]+\.[0-9]+') ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
+    sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+    echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+    su_dung_repo_du_phong=1
+    dnf install http://rpms.litespeedtech.com${url_php_eol_install} -y
+  fi
   rm -f /tmp/php_extension_call_eol
 fi
 
@@ -240,19 +253,55 @@ if [[ $(which dnf) = '' ]]; then
 fi
 
 #redis rehat
-if [[ -f /etc/redis.conf ]]; then
-  yum install lsphp${php_ver_chon}-pecl-redis -y
+redis_check=$(systemctl status redis.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ $redis_check = 'active' ]]; then
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    yum install lsphp${php_ver_chon}-redis -y
+  else
+    if [[ $(echo $php_eol_list_check | grep "lsphp${php_ver_chon}") ]]; then #điều kiện PHP đang được hỗ trợ
+      yum install lsphp${php_ver_chon}-pecl-redis -y
+    else
+      extensions_redis=(pecl-igbinary
+        pecl-redis)
+      for extension in ${extensions_redis[@]}; do
+        if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") ]]; then #kiểm tra extension đó có tồn tại không
+          dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y
+          if [[ -z $(rpm -aq | grep "lsphp${php_ver_chon}-${extension}-") ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
+            sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+            echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+            dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y
+            su_dung_repo_du_phong=1
+          fi
+        fi
+      done
+
+    fi
+  fi
 fi
 
-#redis rehat
-if [[ -f /etc/redis/redis.conf ]]; then
-  yum install lsphp${php_ver_chon}-redis -y
-fi
-
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  yum install lsphp${php_ver_chon}-memcached -y
-else
-  yum install lsphp${php_ver_chon}-pecl-memcached -y --nogpgcheck --disablerepo="mariadb"
+memcache_check=$(systemctl status memcached.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ $memcache_check = 'active' ]]; then
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    yum install lsphp${php_ver_chon}-memcached -y
+  else
+    if [[ $(echo $php_eol_list_check | grep "lsphp${php_ver_chon}") ]]; then #điều kiện PHP đang được hỗ trợ
+      yum install lsphp${php_ver_chon}-pecl-memcached -y --nogpgcheck --disablerepo="mariadb"
+    else
+      extensions_memcached=(pecl-igbinary
+        pecl-memcached)
+      for extension in ${extensions_memcached[@]}; do
+        if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") ]]; then #kiểm tra extension đó có tồn tại không
+          dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y
+          if [[ -z $(rpm -aq | grep "lsphp${php_ver_chon}-${extension}-") ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
+            sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+            echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+            dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y
+            su_dung_repo_du_phong=1
+          fi
+        fi
+      done
+    fi
+  fi
 fi
 
 phien_ban_php_co_cham=$(echo $php_ver_chon | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
