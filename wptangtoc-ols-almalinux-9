@@ -841,7 +841,9 @@ echo '                         -#-
 '
 
 #openlitespeed yêu cầu phải có lsphp74 cấu hình khuyến nghị mới cho install
-extension_php74=(
+#dnf deplist openlitespeed gói phụ thuộc bắt buộc
+goi_ls_php_bat_buoc=$(dnf deplist openlitespeed | grep -oP 'lsphp\K[0-9]+' | tail -n1) #như 74
+extension_php_bat_buoc=(
   common
   gd
   xml
@@ -851,23 +853,67 @@ extension_php74=(
   mysqlnd
   mbstring
   imap
-  json
   zip
 )
 
-for extension_php_in in ${extension_php74[@]}; do
-  if [[ $(uname -m | grep 'aarch64') ]]; then #arm
-    dnf install https://rpms.litespeedtech.com/centos/9/aarch64/RPMS/lsphp74-${extension_php_in}-7.4.33-1.el9.aarch64.rpm -y
-  else
-    dnf install https://rpms.litespeedtech.com/centos/9/update/x86_64/RPMS/lsphp74-${extension_php_in}-7.4.33-2.el9.x86_64.rpm -y
+if [[ $(uname -m | grep 'aarch64') ]]; then #arm
+  curl -skfL http://rpms.litespeedtech.com/centos/9/aarch64/RPMS >/tmp/php_extension_call_eol
+else
+  curl -skfL http://rpms.litespeedtech.com/centos/9/update/x86_64/RPMS >/tmp/php_extension_call_eol
+fi
+
+url_repo_litespeed=$(
+  cat /tmp/php_extension_call_eol | grep lsphp${goi_ls_php_bat_buoc} | grep -oP 'href="\K[^"]+' | grep -v 'debuginfo\|-devel\|-debugsource' | awk '
+BEGIN { FS = "/" }
+{
+    filename = $NF
+    split(filename, parts, "-")
+
+    pkg_name = ""
+    version = ""
+
+    if (parts[2] == "pecl") {
+        # TRƯỜNG HỢP 1: Gói PECL (ví dụ: lsphp74-pecl-redis-...)
+        pkg_name = parts[1] "-" parts[2] "-" parts[3]
+        version = parts[4]
+    } else if (parts[2] ~ /^[0-9]+\.[0-9]+/) {
+        # TRƯỜNG HỢP 2 (MỚI): Gói lsphp gốc (ví dụ: lsphp74-7.4.28-...)
+        pkg_name = parts[1]
+        version = parts[2]
+    } else {
+        # TRƯỜNG HỢP 3: Gói extension thông thường (ví dụ: lsphp74-pgsql-...)
+        pkg_name = parts[1] "-" parts[2]
+        version = parts[3]
+    }
+
+    # Logic so sánh phiên bản và lưu trữ vẫn như cũ
+    if (version > versions[pkg_name]) {
+        versions[pkg_name] = version
+        latest_lines[pkg_name] = $0
+    }
+}
+END {
+    PROCINFO["sorted_in"] = "@ind_str_asc"
+    for (pkg in latest_lines) {
+        print latest_lines[pkg]
+    }
+}'
+)
+
+# for extension in ${extensions[@]}; do
+#   if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension}-") ]]; then #kiểm tra extension đó có tồn tại không
+#     dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-") -y 2>/dev/null
+#   fi
+# done
+
+for extension_php_in in ${extension_php_bat_buoc[@]}; do
+  if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") ]]; then #kiểm tra extension đó có tồn tại không
+    dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") -y 2>/dev/null
   fi
 done
-
-if [[ $(uname -m | grep 'aarch64') ]]; then #arm
-  dnf install https://rpms.litespeedtech.com/centos/9/aarch64/RPMS/lsphp74-7.4.33-1.el9.aarch64.rpm -y
-else
-  dnf install https://rpms.litespeedtech.com/centos/9/update/x86_64/RPMS/lsphp74-7.4.33-2.el9.x86_64.rpm -y
-fi
+url_php_eol_install=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep -P 'lsphp'${goi_ls_php_bat_buoc}'-\K[0-9]+\.[0-9]+' | tail -n1) #lấy php main
+dnf install http://rpms.litespeedtech.com${url_php_eol_install} -y 2>/dev/null
+rm -f /tmp/php_extension_call_eol
 
 dnf install openlitespeed -y --nogpgcheck
 
