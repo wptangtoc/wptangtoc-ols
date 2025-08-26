@@ -48,7 +48,6 @@ tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="Tính năng này chỉ dành cho 
 don_dep="Xoá"
 quan_ly_cap_nhat_wordpress="Quản lý cập nhật WordPress"
 
-
 #wptt status
 wptangtoc_ols_dang_kiem_tra_he_thong="WPTangToc OLS đang kiểm tra tình trạng hệ thống của bạn"
 chao_mung_ban_den_voi_wptangtoc_ols='Chào mừng bạn đến với WPTangToc OLS'
@@ -262,7 +261,6 @@ xong="xong"
 de="để"
 luu_lai="lưu lại"
 
-
 #cau hinh php menu main
 cau_hinh_uploads_max_php="Cấu hình uploads max php.ini"
 khoi_phuc_uploads_max_php="Khôi phục uploads max php.ini"
@@ -306,7 +304,6 @@ xem_log_database_truy_van_cham="Xem log database truy vấn chậm"
 xem_kiem_tra_toc_do_su_ly_php_he_thong="Xem kiểm tra tốc độ sử lý PHP hệ thống"
 xem_log_access_thoi_gian_thuc="Xem access log domain thời gian thực"
 
-
 #quan_ly_ma_nguon
 truy_cap_nhanh_vao_ma_nguon_website="Truy cập nhanh vào mã nguồn website"
 kiem_tra_dung_luong_ma_nguon="Kiểm tra dung lượng mã nguồn website"
@@ -318,8 +315,6 @@ xoa_cache_website_wordpress="Xóa Cache website WordPress"
 xoa_all_cache_wordpress="Xóa ALL Cache WordPress"
 xoa_cache_redis="Xóa Cache Redis"
 kich_hoat_lscache="Kích hoạt LScache"
-kich_hoat_object_cache_lsmemcached="Kích hoạt object cache lsmemcached"
-huy_kich_hoat_object_cache_lsmemcached="Huỷ Kích hoạt object cache lsmemcached"
 bat_tat_object_cache_redis="Bật/tắt Redis Object Cache"
 kiem_tra_lscache="Kiểm tra LScache"
 tat_kich_hoat_lscache="Tắt kích hoạt LScache"
@@ -362,7 +357,6 @@ tim_kiem="tìm kiếm"
 xem_thong_tin_tai_khoan_bao_mat="Xem thông tin tài khoản bảo mật"
 thay_doi="Thay đổi"
 ban_hay_luu_tru_thong_tin_de_su_dung="Bạn hãy lưu trữ các thông tin này để sử dụng"
-
 
 #quản lý swap
 them="thêm"
