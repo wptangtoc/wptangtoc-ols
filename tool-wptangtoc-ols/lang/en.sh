@@ -47,8 +47,6 @@ he_thong_xac_nhan_ban_khong_su_ma_nguon="The system confirms that you are not us
 tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress="This feature is only available for WordPress source code"
 quan_ly_cap_nhat_wordpress="Manage WordPress Updates"
 
-
-
 #wptt status
 wptangtoc_ols_dang_kiem_tra_he_thong="WPTangToc OLS checking your system status"
 chao_mung_ban_den_voi_wptangtoc_ols="Welcome to WPTangToc OLS"
@@ -125,10 +123,6 @@ cua="of"
 ban_nhap_sai_he_thong_se_chon_khong_dong_y="Bạn nhập sai hệ thống sẽ chọn là không đồng ý"
 da_xoa_website_thanh_cong="Website deleted successfully"
 
-
-
-
-
 #quản lý ssl menu main
 cai_dat_ssl_letencrypt="Install Free certificate SSL Let's Encrypt"
 mo_rong_ssl_letencrypt="Expand certificate SSL FREE Let’s Encrypt"
@@ -144,8 +138,6 @@ renew_thiet_lap_chuyen_huong_http_sang_https="Renew resets the HTTP to HTTPS red
 chung_chi="certificate"
 khong_thanh_cong="không thành công"
 cai="install"
-
-
 
 #quản lý database menu main
 them_database="Add database"
@@ -173,7 +165,6 @@ thay_phien_ban_mariadb="Change MariaDB version branch"
 tai_khoan="Account"
 dang_nhap="log in"
 truy_cap="access"
-
 
 #backup restore menu main
 sao_luu_website="Backup website"
@@ -215,16 +206,12 @@ ip_ban_muon_mo_khoa="IP you want to unlock"
 ban_nhap_khong_dung_dinh_dang_ipv4="You entered the IPv4 format incorrectly"
 ban_nhap_khong_dung_dinh_dang_ipv6="You entered the IPv6 format incorrectly"
 
-
-
 #quản lý ssh/sftp menu main
 thay_doi_password_ssh="Change password"
 thay_doi_port_ssh="Change port SSH/SFTP"
 thiet_lap_canh_bao_login_ssh_qua_telegram="Set up SSH login alerts via telegram"
 nhap_nhap_lua_chon_user_ban_muon="Type the user you want to change the password"
 khong_dung_dinh_dang="Malformed"
-
-
 
 #update menu main
 cap_nhat_toan_bo_webserver="Update & Upgrade All server"
@@ -257,9 +244,6 @@ thu_sau="Friday"
 thu_bay="Saturday"
 hang_ngay="daily"
 
-
-
-
 #WebGuiAdmin menu main
 kich_hoat_webguiadmin="Enable"
 huy_kich_hoat_webguiadmin="Disnable"
@@ -277,8 +261,6 @@ de_cap_nhat_gia_tri="to update the value"
 xong="done"
 de="to"
 luu_lai="save"
-
-
 
 #cau hinh php menu main
 cau_hinh_uploads_max_php="Setting uploads max php.ini"
@@ -302,12 +284,6 @@ so_nguyen_duong="integer"
 gia_tri="value"
 khong_xac_dinh_duoc="cannot be determined"
 nhap_sai_truong_du_lieu_so_tu_nhien="If you enter the wrong data field, please enter a natural number"
-
-
-
-
-
-
 
 #quan ly logs menu main
 xem_error_log_server="View error log server"
@@ -340,8 +316,6 @@ xoa_cache_website_wordpress="Clear Cache website WordPress"
 xoa_all_cache_wordpress="Clear ALL Cache WordPress"
 xoa_cache_redis="Clear Cache Redis"
 kich_hoat_lscache="Enable LScache"
-kich_hoat_object_cache_lsmemcached="Enable object cache lsmemcached"
-huy_kich_hoat_object_cache_lsmemcached="Disnable object cache lsmemcached"
 bat_tat_object_cache_redis="Enable/Disnable Redis Object Cache"
 kiem_tra_lscache="Check LScache"
 tat_kich_hoat_lscache="Disnable LScache"
@@ -353,7 +327,6 @@ don_dep="clear"
 
 #cache menu ben trong
 chi_nen_su_dung_object_cache_toi_thieu_2gb_ram="You should only use object cache when there is at least 2GB of RAM, your system is currently not capable of meeting this need."
-
 
 #quan ly disk o cung menu main
 dung_luong_o_cung_hien_tai="Current hard drive capacity"
@@ -469,7 +442,6 @@ add_ons="add ons"
 
 #csf
 quan_ly_csf="CSF management"
-
 
 #quản lý băng thông
 quan_ly_bang_thong="Bandwidth management"
