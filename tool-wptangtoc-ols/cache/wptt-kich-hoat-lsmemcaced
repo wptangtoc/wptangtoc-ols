@@ -1,0 +1,129 @@
+#!/bin/bash
+echo "========================================================================="
+echo "|Quản lý Cache => Kích hoạt LSmemcached	                             |"
+echo "========================================================================="
+
+tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+if [[ "$rong_ram_mb" = "" ]]; then
+  rong_ram_mb="2048"
+fi
+if (( $rong_ram_mb  < 1024 ));then
+echo "Chỉ nên sử dụng object cache khi tối thiểu 2GB Ram, hiện tại hệ thống của bạn không đủ khả năng đáp ứng nhu cầu này"
+	. /etc/wptt/wptt-cache-main 1
+fi
+
+if [[ -d /usr/local/lsmcd ]];then
+echo "Bạn đã cài đặt lsmemcached trước đó rồi"
+. /etc/wptt/wptt-cache-main 1
+exit
+fi
+
+
+echo "Tien hanh kich hoat lsmemcached"
+cd
+. /etc/wptt/.wptt.conf
+lsphp=($(ls /usr/local/lsws | grep 'lsphp' | sed 's/^lsphp//g'))
+for phpmemcached in ${lsphp[@]};do
+yum install lsphp${phpmemcached}-pecl-memcached -y
+done
+
+yum groupinstall "Development Tools" -y
+yum install autoconf automake zlib-devel openssl-devel expat-devel pcre-devel libmemcached-devel cyrus-sasl* -y
+dnf --enablerepo=powertools install libmemcached-devel -y
+
+git clone https://github.com/litespeedtech/lsmcd.git
+cd lsmcd
+./fixtimestamp.sh
+./configure CFLAGS=" -O3" CXXFLAGS=" -O3"
+make
+sudo make install
+echo 'Repl.HeartBeatReq=30
+Repl.HeartBeatRetry=3000
+Repl.MaxTidPacket=2048000
+Repl.GzipStream=YES
+Repl.LbAddrs=127.0.0.1:12340
+Repl.ListenSvrAddr=127.0.0.1:12340
+REPL.DispatchAddr=127.0.0.1:5501
+RepldSockPath=/tmp/repld.usock
+CACHED.PRIADDR=127.0.0.1:11000
+
+#CACHED.ADDR=127.0.0.1:11211
+CACHED.ADDR=UDS:///tmp/lsmcd.sock
+#default is 8, it can be bigger depending on cache data amount
+Cached.Slices=8
+Cached.Slice.Priority.0=100
+Cached.Slice.Priority.1=100
+Cached.Slice.Priority.2=100
+Cached.Slice.Priority.3=100
+Cached.Slice.Priority.4=100
+Cached.Slice.Priority.5=100
+Cached.Slice.Priority.6=100
+Cached.Slice.Priority.7=100
+
+Cached.ShmDir=/dev/shm/lsmcd
+#If you change the UseSasl or DataByUser configuration options you need to remove the ShmDir folder and contents.
+#Cached.UseSasl=true
+#Cached.DataByUser=true
+#Cached.Anonymous=false
+#Cached.UserSize=1000
+#Cached.HashSize=500000
+#CACHED.MEMMAXSZ=0
+#CACHED.NOMEMFAIL=false
+
+##this is the global setting, no need to have per slice configuration. 
+User=nobody
+Group=nobody
+#depends CPU core
+CachedProcCnt=4
+CachedSockPath=/tmp/cached.usock.
+#TmpDir=/tmp/lsmcd
+LogLevel=notice
+#LogLevel=dbg_medium
+LogFile=/tmp/lsmcd.log
+' >/usr/local/lsmcd/conf/node.conf
+echo '                               .:---::::::::::
+                          .:-=+++++++=::::::::
+                       .-++++++++++++*+=::::::
+                    .-+++++++****++++++*+=::::
+                  .=++++++#%@@@@@@%*+++++*+=::
+                .=++++++*@@@%%%%%@@@%*+++++*+.
+               -+++++++*@@%########@@%++++++= 
+         .:::-+++++++++#@@#########%@@*+++++. 
+      ::---:-++++++++++*@@%########@@@+++++:  
+    :-----:-*+++++++++++#@@@%###%%@@@*++++-   
+  .------:-++++++++++++++*#@@@@@@@%#+++++-    
+ .----::::+++++++++*++++++++******++++++:     
+.-:.     -++++++*++=--++++++++++++++++-       
+.      :=****+*+=--:=+++++++++++++++=.        
+     :*##%%%%%+-::-+*+++++++++++++=.          
+    =##%%%%%#=::=++*+++++++++*++-.            
+   :##%%%%%*--+*%%*+++++***++=-:              
+   *#####%#+*#%%%%#*++++==--::-.              
+   :=##%%%%%%%%%%##=:..-::----:               
+    *#%%####%%%##*:   :------.                
+   -###*+*####*=:    .-----:                  
+    ..   :-::.      .---:.                    
+                   .::.                       
+'
+echo "Hoan tat cai dat object cache LSmemcached"
+
+cpucore=$(grep -c ^processor /proc/cpuinfo)
+
+sed -i "/CachedProcCnt=/c \CachedProcCnt = $cpucore" /usr/local/lsmcd/conf/node.conf
+
+systemctl start lsmcd
+systemctl enable lsmcd
+/usr/local/lsmcd/bin/lsmcdctrl start
+systemctl restart lsws
+
+echo "Đại chỉunix stocket: /tmp/lsmcd.sock"
+if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]];then
+echo "Bạn có thể sử dụng plugin LiteSpeed Cache để kích hoạt lsmemcaced cho WordPress"
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]];then
+. /etc/wptt/wptt-cache-main 1
+fi
+
