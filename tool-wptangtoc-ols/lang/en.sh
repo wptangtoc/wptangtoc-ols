@@ -445,3 +445,6 @@ quan_ly_csf="CSF management"
 
 #quản lý băng thông
 quan_ly_bang_thong="Bandwidth management"
+
+kich_hoat_object_cache_lsmemcached="Enable object cache lsmemcached"
+huy_kich_hoat_object_cache_lsmemcached="Disnable object cache lsmemcached"
