@@ -36,12 +36,6 @@ systemctl mask fail2ban
 mkdir -p /usr/local/lsws/$NAME/bao-mat
 cp -f /etc/wptt/bao-mat/nftables/anti2.py /usr/local/lsws/$NAME/bao-mat/anti.py
 
-if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
-  systemctl restart crond
-else
-  systemctl restart cron
-fi
-
 google=$(curl -s https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed '/^$/d')
 bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed 's/^/\n/g' | sed '/^$/d')
 
@@ -127,5 +121,10 @@ ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || cu
 . /etc/wptt/logs/error-chuyen-warn-log-server
 
 systemctl restart nftables
+if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
+  systemctl restart crond
+else
+  systemctl restart cron
+fi
 
 echo "hoàn tất thiết lập nftables chống ddos"
