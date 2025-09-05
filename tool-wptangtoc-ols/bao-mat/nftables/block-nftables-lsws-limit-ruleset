@@ -1,11 +1,94 @@
 #!/bin/bash
+
+nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ "$nftables_service" != "active" ]]; then
+  echo "nftables chưa được cài đặt vui lòng cài đặt nftables"
+  exit
+fi
+
+# ip_hien_tai_bi_lsws_block=$(cat /tmp/lshttpd/.rtreport* | grep 'BLOCKED_IP:' | tr ',' '\n' | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'| sort -u)
+# for ip in ${ip_hien_tai_bi_lsws_block[@]};do
+# /usr/sbin/nft add element ip blackblock blackaction "{$ip timeout 16h}" >/dev/null
+# done
+
+. /etc/wptt/tenmien
+echo ""
+echo ""
+echo "Lựa chọn triển khai ddos nftables layer7 limit lsws:"
+echo ""
+lua_chon_NAME
+. /etc/wptt/echo-color
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+  . /etc/wptt/wptt-wordpress-main 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+  clear
+  echoDo "Tên miền không tồn tại trên hệ thống này"
+  sleep 3
+  . /etc/wptt/wptt-wordpress-main 1
+  exit
+fi
+
+if [[ -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service ]]; then
+  echo "Đã kích hoạt rồi"
+  exit
+fi
+
+if [[ $(nft list ruleset | grep 'blackaction') = '' ]]; then
+  echo "nftables chưa được thiết lập triển khai chống ddos"
+  exit
+fi
+
+dnf install golang -y
+
+if [[ ! -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service ]]; then
+  mkdir -p /usr/local/lsws/$NAME/bao-mat
+  cp -f /etc/wptt/bao-mat/nftables/block-nftables-lsws-limit-ruleset.go /usr/local/lsws/$NAME/bao-mat/block-nftables-lsws-limit-ruleset.go
+  cd /usr/local/lsws/$NAME/bao-mat && go mod init lsws-watcher
+  go get github.com/fsnotify/fsnotify
+  go build -ldflags="-s -w" main.go
+
+  chmod +x /usr/local/lsws/$NAME/bao-mat/block-nftables-lsws-limit-ruleset.go
+  cd /usr/local/lsws/$NAME/bao-mat && go build block-nftables-lsws-limit-ruleset.go && chmod +x block-nftables-lsws-limit-ruleset
+  rm -f /usr/local/bin/block-nftables-lsws-limit-ruleset
+  mv /usr/local/lsws/$NAME/bao-mat/block-nftables-lsws-limit-ruleset /usr/local/bin/
+  # rm -rf /usr/local/lsws/$NAME/bao-mat
+  echo '
+[Unit]
+Description=Go Lang Log Blocker for Litespeed webserver
+Documentation=https://your-doc-link.com
+After=network.target nftables.service
+
+[Service]
+ExecStart=/usr/local/bin/block-nftables-lsws-limit-ruleset
+
+Restart=always
+
+User=root
+Group=root
+
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+' >/etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service
+  setenforce 0
+  sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
+  systemctl daemon-reload
+  systemctl start layer7-lsws-litmit-ddos-blocker-nftables
+  systemctl enable layer7-lsws-litmit-ddos-blocker-nftables
+fi
+
+echo "hoàn tất thiết lập nftables layer7-lsws-litmit-ddos-blocker-nftables"
+
 #chuyển ip block từ layer7 lsws sang layer 3,4 nftables để cải thiện hiệu suất, giảm tải máy chủ
-ip_hien_tai_bi_lsws_block=$(cat /tmp/lshttpd/.rtreport* | grep 'BLOCKED_IP:' | tr ',' '\n' | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'| sort -u)
-for ip in ${ip_hien_tai_bi_lsws_block[@]};do
-/usr/sbin/nft add element ip blackblock blackaction "{$ip timeout 16h}" >/dev/null
-done
+# ip_hien_tai_bi_lsws_block=$(cat /tmp/lshttpd/.rtreport* | grep 'BLOCKED_IP:' | tr ',' '\n' | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' | sort -u)
+# for ip in ${ip_hien_tai_bi_lsws_block[@]}; do
+#   /usr/sbin/nft add element ip blackblock blackaction "{$ip timeout 16h}" >/dev/null
+# done
 
 #cat <(crontab -l) | sed "/block-nftables-lsws-limit-ruleset/d" | crontab -
 #cat <(crontab -l) <(echo "*/5 * * * * /bin/bash /etc/wptt/bao-mat/nftables/block-nftables-lsws-limit-ruleset >/dev/null 2>&1") | crontab -
 #systemctl restart crond
-
