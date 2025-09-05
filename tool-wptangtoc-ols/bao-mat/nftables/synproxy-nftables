@@ -1,0 +1,29 @@
+#!/bin/bash
+
+nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ "$nftables_service" != "active" ]]; then
+  echo "nftables chưa được cài đặt vui lòng cài đặt nftables"
+  exit
+fi
+
+#find /lib/modules/$(uname -r) -type f -name "*SYNPROXY*" check kiểm tra có SYNPROXY trong kernel không
+if [[ $(cat /etc/sysconfig/nftables.conf | grep 'synproxy_filter') = '' ]]; then
+  echo 'ipt_SYNPROXY' >>/etc/modules-load.d/synproxy.conf
+  sudo modprobe ipt_SYNPROXY
+  # modinfo ipt_SYNPROXY
+  echo "table netdev synproxy_filter {
+    chain ingress {
+        # Sử dụng hook 'ingress' trong table 'netdev'
+        type filter hook ingress device \"eth0\" priority -8;
+
+        # Chỉ xử lý các gói tin TCP
+        ether type != ip return
+        ip protocol != tcp return
+
+        # Đánh dấu các gói tin TCP SYN đến port 80/443 để không bị conntrack theo dõi
+        tcp dport { 80, 443 } tcp flags syn notrack
+    }
+}" >>/etc/sysconfig/nftables.conf
+  sed -i 's/ct state established,related accept/ct state established,related,untracked accept/g' /etc/sysconfig/nftables.conf
+  systemctl restart nftables
+fi
