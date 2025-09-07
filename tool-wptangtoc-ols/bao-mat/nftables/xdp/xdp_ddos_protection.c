@@ -7,7 +7,7 @@
 
 #define THRESHOLD 50 // Ngưỡng đã được nâng lên
 #define TIME_WINDOW_NS 1000000000ULL
-#define BAN_DURATION_NS (15 * 60 * 1000000000ULL)
+#define BAN_DURATION_NS (30 * 60 * 1000000000ULL)
 
 struct rate_limit_entry {
     __u64 last_update;
