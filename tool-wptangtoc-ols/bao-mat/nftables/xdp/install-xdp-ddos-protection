@@ -1,24 +1,141 @@
 #!/bin/bash
 
-# Cài đặt bộ công cụ phát triển, Clang, LLVM, và các thư viện cần thiết
 check_xdp_action=$(ip a | grep 'xdp')
 if [[ $check_xdp_action ]]; then
   echo "đã kích hoạt"
   exit
 fi
+
+. /etc/wptt/tenmien
+echo ""
+echo ""
+echo "Lựa chọn triển khai ddos xdp block log:"
+echo ""
+lua_chon_NAME
+. /etc/wptt/echo-color
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+  . /etc/wptt/wptt-wordpress-main 1
+fi
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$pathcheck" ]]; then
+  clear
+  echoDo "Tên miền không tồn tại trên hệ thống này"
+  sleep 3
+  . /etc/wptt/wptt-wordpress-main 1
+  exit
+fi
+
+dnf install golang -y
+
 sudo dnf groupinstall -y "Development Tools"
 sudo dnf config-manager --set-enabled powertools
 sudo dnf install -y clang llvm kernel-devel-$(uname -r) iproute bpftool elfutils-libelf-devel
 
 sudo dnf install libbpf-devel -y
 
+if [[ -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
+  rm -f /etc/systemd/system/ddos-blocker-nftables.service
+fi
+
+if [[ ! -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
+  mkdir -p /usr/local/lsws/$NAME/bao-mat
+  cp -f /etc/wptt/bao-mat/nftables/xdp/xdp-anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
+  ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+
+  sed -i "/whitelistIPs =/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
+  chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
+  cd /usr/local/lsws/$NAME/bao-mat
+  go mod init lsws-watcher
+  go get github.com/cilium/ebpf
+  go build anti.go && chmod +x anti
+  rm -f /usr/local/bin/anti
+  mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
+  # rm -rf /usr/local/lsws/$NAME/bao-mat
+  echo '
+[Unit]
+Description=Go Lang Log Blocker for Litespeed
+Documentation=https://your-doc-link.com
+After=network.target nftables.service
+
+[Service]
+ExecStart=/usr/local/bin/anti
+
+Restart=always
+
+User=root
+Group=root
+
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+' >/etc/systemd/system/ddos-blocker-nftables.service
+  setenforce 0
+  sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
+  systemctl daemon-reload
+  systemctl start ddos-blocker-nftables
+  systemctl enable ddos-blocker-nftables
+fi
+
+#install xdp
 cd /etc/wptt/bao-mat/nftables/xdp
 rm -f xdp_ddos_protection.o
+
+# # Đường dẫn cần kiểm tra và mount
+# BPF_FS_PATH="/sys/fs/bpf"
+
+# # Kiểm tra xem BPF filesystem đã được mount hay chưa
+# # grep -q sẽ không in ra output, chỉ trả về mã thoát (exit code)
+# if ! mount | grep -q "${BPF_FS_PATH}"; then
+#   # Nếu chưa được mount (lệnh grep thất bại)
+#   echo "[!] BPF filesystem chưa được mount. Đang tiến hành mount..."
+#   # Thực hiện mount
+#   sudo mount -t bpf bpf "${BPF_FS_PATH}"
+#   if [ $? -eq 0 ]; then
+#     echo "[+] Đã mount thành công BPF filesystem tại ${BPF_FS_PATH}"
+#   else
+#     echo "[!] Lỗi: Không thể mount BPF filesystem. Vui lòng kiểm tra lại."
+#     exit 1
+#   fi
+# else
+#   # Nếu đã được mount rồi
+#   echo "[*] BPF filesystem đã được mount sẵn. Bỏ qua."
+# fi
+
+# ...
+# Đặt các lệnh bpftool và các lệnh khác của bạn ở đây
+# ...
+
 clang -O2 -g -target bpf -c xdp_ddos_protection.c -o xdp_ddos_protection.o
-ip link set dev eth0 xdp obj xdp_ddos_protection.o sec xdp
-check=$(ip link show eth0 | grep 'xdp')
-if [[ $check ]]; then
-  echo "Hoàn tất"
-else
-  echo "không thành công"
-fi
+
+# Bước 2: Dọn dẹp môi trường cũ một cách triệt để
+sudo bpftool net detach xdp dev eth0 || true
+sudo rm -f /sys/fs/bpf/xdp_ddos_protection_prog
+sudo rm -f /sys/fs/bpf/log_blacklist
+
+# Bước 3: Chỉ TẢI chương trình và các map của nó vào kernel
+# Ở bước này, map chưa được pin.
+sudo bpftool prog load xdp_ddos_protection.o /sys/fs/bpf/xdp_ddos_protection_prog
+
+# Bước 4: Tìm ID của map và PIN nó ra file
+# Đây là bước quan trọng để script Go có thể thấy map.
+MAP_ID=$(sudo bpftool map list | grep log_blacklist | awk '{print $1}' | sed 's/://')
+sudo bpftool map pin id $MAP_ID /sys/fs/bpf/log_blacklist
+sudo bpftool net attach xdp pinned /sys/fs/bpf/xdp_ddos_protection_prog dev eth0
+
+sudo bpftool net list dev eth0
+
+#bypass danh sách trắng
+/etc/wptt/bao-mat/nftables/xdp/bypass-ip.sh $ip
+
+echo "Hoàn tất xdp"
+
+# Sẽ báo lỗi nếu không có gì đang chạy, điều này là bình thường.
+# ip link set dev eth0 xdp obj xdp_ddos_protection.o sec xdp
+# check=$(ip link show eth0 | grep 'xdp')
+# if [[ $check ]]; then
+#   echo "Hoàn tất"
+# else
+#   echo "không thành công"
+# fi
