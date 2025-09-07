@@ -5,7 +5,7 @@
 #include <linux/tcp.h>
 #include <bpf/bpf_helpers.h>
 
-#define THRESHOLD 50 // Ngưỡng đã được nâng lên
+#define THRESHOLD 100 // Ngưỡng đã được nâng lên
 #define TIME_WINDOW_NS 1000000000ULL
 #define BAN_DURATION_NS (30 * 60 * 1000000000ULL)
 
