@@ -69,7 +69,15 @@ int ddos_and_log_protection(struct xdp_md *ctx) {
         return XDP_PASS;
     }
     
-    // BƯỚC 2: Kiểm tra các gói tin đã thuộc về một kết nối TCP đã thiết lập
+    // BƯỚC 2: Kiểm tra danh sách đen từ LOG
+    __u64 current_time = bpf_ktime_get_ns();
+    __u64 *log_ban_ts = bpf_map_lookup_elem(&log_blacklist, &src_ip);
+    if (log_ban_ts) {
+        if (current_time < *log_ban_ts) return XDP_DROP;
+        else bpf_map_delete_elem(&log_blacklist, &src_ip);
+    }
+
+    // BƯỚC 3: Kiểm tra các gói tin đã thuộc về một kết nối TCP đã thiết lập
     // Logic này tương tự với "ct state established" của nftables
     if (iph->protocol == IPPROTO_TCP) {
         tcph = (void *)iph + iph->ihl * 4;
@@ -82,13 +90,6 @@ int ddos_and_log_protection(struct xdp_md *ctx) {
         }
     }
 
-    // BƯỚC 3: Kiểm tra danh sách đen từ LOG
-    __u64 current_time = bpf_ktime_get_ns();
-    __u64 *log_ban_ts = bpf_map_lookup_elem(&log_blacklist, &src_ip);
-    if (log_ban_ts) {
-        if (current_time < *log_ban_ts) return XDP_DROP;
-        else bpf_map_delete_elem(&log_blacklist, &src_ip);
-    }
 
     // BƯỚC 4: Kiểm tra danh sách đen do RATE-LIMIT
     __u64 *rate_ban_ts = bpf_map_lookup_elem(&rl_blacklist, &src_ip);
