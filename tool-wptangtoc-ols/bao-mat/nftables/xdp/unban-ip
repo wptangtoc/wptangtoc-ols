@@ -1,0 +1,54 @@
+#!/bin/bash
+
+# Kịch bản để gỡ chặn một địa chỉ IP cụ thể khỏi tất cả các blacklist của XDP
+
+set -e
+
+# --- CẤU HÌNH ---
+# Danh sách các map blacklist cần kiểm tra và xóa IP
+MAPS_TO_CLEAR=("log_blacklist" "rl_blacklist")
+
+# --- LOGIC CHÍNH ---
+
+# 1. Kiểm tra xem người dùng có cung cấp IP không
+if [ -z "$1" ]; then
+    echo "Lỗi: Vui lòng cung cấp địa chỉ IP cần gỡ chặn."
+    echo "Ví dụ sử dụng: sudo $0 1.2.3.4"
+    exit 1
+fi
+
+IP_TO_UNBAN=$1
+IP_FOUND=0
+
+echo "--- Bat dau qua trinh go chan cho IP: $IP_TO_UNBAN ---"
+
+# 2. Chuyển đổi IP sang dạng 4 byte hexa
+HEX_KEY=$(echo "$IP_TO_UNBAN" | awk -F. '{ printf "0x%x 0x%x 0x%x 0x%x\n", $1, $2, $3, $4 }')
+
+# 3. Lặp qua từng map để tìm và xóa
+for map_name in "${MAPS_TO_CLEAR[@]}"; do
+    echo "Dang kiem tra map: $map_name..."
+
+    MAP_ID=$(sudo bpftool map list | grep "$map_name" | awk '{print $1}' | sed 's/://' || true)
+
+    if [ -n "$MAP_ID" ]; then
+        # Lệnh `bpftool map lookup` sẽ báo lỗi nếu không tìm thấy key, chúng ta bỏ qua lỗi đó
+        if sudo bpftool map lookup id "$MAP_ID" key $HEX_KEY &>/dev/null; then
+            echo "  -> Tim thay IP trong '$map_name'. Dang xoa..."
+            sudo bpftool map delete id "$MAP_ID" key $HEX_KEY
+            echo "  -> Da xoa thanh cong."
+            IP_FOUND=1
+        else
+            echo "  -> Khong tim thay IP trong map nay."
+        fi
+    else
+        echo "  -> Khong tim thay map '$map_name'. Bo qua."
+    fi
+done
+
+echo "--------------------------------------------------"
+if [ "$IP_FOUND" -eq 1 ]; then
+    echo "✅ Hoan tat! Da go chan cho IP $IP_TO_UNBAN."
+else
+    echo "Thong bao: Khong tim thay IP $IP_TO_UNBAN trong bat ky danh sach den nao."
+fi
