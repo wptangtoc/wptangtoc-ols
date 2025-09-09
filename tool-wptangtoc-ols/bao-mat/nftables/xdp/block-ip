@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# Kịch bản để chặn thủ công một địa chỉ IP bằng XDP (Phiên bản cuối cùng)
+
+set -e
+
+# --- CẤU HÌNH ---
+MAP_NAME="log_blacklist"
+BAN_DURATION="30 days"
+
+# --- LOGIC CHÍNH ---
+
+if [ -z "$1" ]; then
+    echo "Lỗi: Vui lòng cung cấp địa chỉ IP cần chặn."
+    echo "Ví dụ sử dụng: sudo $0 1.2.3.4"
+    exit 1
+fi
+
+IP_TO_BLOCK=$1
+BAN_TIMESTAMP=$(sudo date -d "+${BAN_DURATION}" +%s%N)
+
+MAP_ID=$(sudo bpftool map list | grep "$MAP_NAME" | awk '{print $1}' | sed 's/://' || true)
+if [ -z "$MAP_ID" ]; then
+    echo "Lỗi: Không tìm thấy map '$MAP_NAME'."
+    exit 1
+fi
+
+HEX_KEY=$(echo "$IP_TO_BLOCK" | awk -F. '{ printf "0x%x 0x%x 0x%x 0x%x\n", $1, $2, $3, $4 }')
+
+# === PHẦN SỬA LỖI CUỐI CÙNG ===
+# Chuyển đổi timestamp sang 8 byte hexa, little-endian
+HEX_VALUE=""
+# Lấy timestamp dưới dạng số hexa 16 ký tự
+HEX_TIMESTAMP=$(printf '%016x' "$BAN_TIMESTAMP")
+# Đảo ngược từng cặp 2 ký tự (từng byte) để tạo chuỗi Little Endian
+for (( i=14; i>=0; i-=2 )); do
+    HEX_VALUE+="0x${HEX_TIMESTAMP:$i:2} "
+done
+
+echo "Đang chặn IP: $IP_TO_BLOCK (Hex Key: $HEX_KEY)"
+echo "Thời gian chặn: $BAN_DURATION (Hex Value: $HEX_VALUE)"
+
+# Thêm IP vào BPF map
+sudo bpftool map update id "$MAP_ID" key $HEX_KEY value $HEX_VALUE
+
+echo "✅ Đã thêm thành công IP $IP_TO_BLOCK vào danh sách đen."
