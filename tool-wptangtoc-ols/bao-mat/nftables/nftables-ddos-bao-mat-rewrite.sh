@@ -35,19 +35,20 @@ systemctl mask fail2ban
 google=$(curl -s https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed '/^$/d')
 bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed 's/^/\n/g' | sed '/^$/d')
 
-if [[ ! -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
-  mkdir -p /usr/local/lsws/$NAME/bao-mat
-  cp -f /etc/wptt/bao-mat/nftables/anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
+if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
+  if [[ ! -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
+    mkdir -p /usr/local/lsws/$NAME/bao-mat
+    cp -f /etc/wptt/bao-mat/nftables/anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
 
-  ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+    ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
-  sed -i "/var whitelistIPs/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
-  chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
-  cd /usr/local/lsws/$NAME/bao-mat && go build anti.go && chmod +x anti
-  rm -f /usr/local/bin/anti
-  mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
-  # rm -rf /usr/local/lsws/$NAME/bao-mat
-  echo '
+    sed -i "/var whitelistIPs/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
+    chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
+    cd /usr/local/lsws/$NAME/bao-mat && go build anti.go && chmod +x anti
+    rm -f /usr/local/bin/anti
+    mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
+    # rm -rf /usr/local/lsws/$NAME/bao-mat
+    echo '
 [Unit]
 Description=Go Lang Log Blocker for Litespeed
 Documentation=https://your-doc-link.com # (Tùy chọn)
@@ -66,26 +67,14 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 ' >/etc/systemd/system/ddos-blocker-nftables.service
-  setenforce 0
-  sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
-  systemctl daemon-reload
-  systemctl start ddos-blocker-nftables
-  systemctl enable ddos-blocker-nftables
+    setenforce 0
+    sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
+    systemctl daemon-reload
+    systemctl start ddos-blocker-nftables
+    systemctl enable ddos-blocker-nftables
+  fi
 fi
-
-# chmod +x /usr/local/lsws/$NAME/bao-mat/anti.py
-
-# sed -i '/log_file_path =/d' /usr/local/lsws/$NAME/bao-mat/anti.py
-# sed -i "/__main__/a\ \ \ \ log_file_path = \"/usr/local/lsws/$NAME/logs/access.log\"" /usr/local/lsws/$NAME/bao-mat/anti.py
-
-# cat <(crontab -l) | sed "/bao-mat/d" | crontab -
 cat <(crontab -l) | sed "/truncate/d" | crontab -
-# cat <(crontab -l) <(echo "* * * * * /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
-# cat <(crontab -l) <(echo "* * * * * sleep 10; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
-# cat <(crontab -l) <(echo "* * * * * sleep 20; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
-# cat <(crontab -l) <(echo "* * * * * sleep 30; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
-# cat <(crontab -l) <(echo "* * * * * sleep 40; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
-# cat <(crontab -l) <(echo "* * * * * sleep 50; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/logs/error.log") | crontab -
 
 if $(cat /etc/*release | grep -q "Ubuntu"); then

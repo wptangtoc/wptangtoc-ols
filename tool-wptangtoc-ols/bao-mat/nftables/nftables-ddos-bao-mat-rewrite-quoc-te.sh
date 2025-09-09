@@ -34,19 +34,20 @@ systemctl stop fail2ban
 systemctl disable fail2ban
 systemctl mask fail2ban
 
-if [[ ! -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
-  mkdir -p /usr/local/lsws/$NAME/bao-mat
-  cp -f /etc/wptt/bao-mat/nftables/anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
+if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
+  if [[ ! -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
+    mkdir -p /usr/local/lsws/$NAME/bao-mat
+    cp -f /etc/wptt/bao-mat/nftables/anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
 
-  ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+    ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
-  sed -i "/var whitelistIPs/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
-  chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
-  cd /usr/local/lsws/$NAME/bao-mat && go build anti.go && chmod +x anti
-  rm -f /usr/local/bin/anti
-  mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
-  # rm -rf /usr/local/lsws/$NAME/bao-mat
-  echo '
+    sed -i "/var whitelistIPs/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
+    chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
+    cd /usr/local/lsws/$NAME/bao-mat && go build anti.go && chmod +x anti
+    rm -f /usr/local/bin/anti
+    mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
+    # rm -rf /usr/local/lsws/$NAME/bao-mat
+    echo '
 [Unit]
 Description=Go Lang Log Blocker for Litespeed
 Documentation=https://your-doc-link.com
@@ -65,13 +66,13 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 ' >/etc/systemd/system/ddos-blocker-nftables.service
-  setenforce 0
-  sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
-  systemctl daemon-reload
-  systemctl start ddos-blocker-nftables
-  systemctl enable ddos-blocker-nftables
+    setenforce 0
+    sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
+    systemctl daemon-reload
+    systemctl start ddos-blocker-nftables
+    systemctl enable ddos-blocker-nftables
+  fi
 fi
-
 # sed -i '/log_file_path =/d' /usr/local/lsws/$NAME/bao-mat/anti.py
 # sed -i "/__main__/a\ \ \ \ log_file_path = \"/usr/local/lsws/$NAME/logs/access.log\"" /usr/local/lsws/$NAME/bao-mat/anti.py
 
