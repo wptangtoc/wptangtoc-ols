@@ -106,11 +106,8 @@ WantedBy=multi-user.target
   systemctl enable ddos-blocker-xdp
 fi
 
-#install xdp
-
-cd /etc/wptt/bao-mat/nftables/xdp
 rm -f xdp_ddos_protection.o
-
+cd /etc/wptt/bao-mat/nftables/xdp
 # # Đường dẫn cần kiểm tra và mount
 # BPF_FS_PATH="/sys/fs/bpf"
 
@@ -157,12 +154,91 @@ sudo bpftool net attach xdp pinned /sys/fs/bpf/xdp_ddos_protection_prog dev eth0
 sudo bpftool net list dev eth0
 
 #bypass danh sách trắng
+ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 /etc/wptt/bao-mat/nftables/xdp/bypass-ip.sh $ip
 /etc/wptt/bao-mat/nftables/xdp/bypass-ip.sh '103.106.105.75'
 
 . /etc/wptt/logs/error-chuyen-warn-log-server
 
+systemctl restart ddos-blocker-xdp
+
 #upgrade kernel phải từ 5x mới chạy được xdp
+#install xdp
+dnf install golang -y
+
+cd /etc/wptt/bao-mat/nftables/xdp
+go mod init map-xdp
+go get github.com/cilium/ebpf
+go build cleanup_maps.go
+chmod +x cleanup_maps
+mkdir -p /etc/xdp-protection
+mv cleanup_maps /etc/xdp-protection
+cat <(crontab -l) | sed "/cleanup_maps/d" | crontab -
+# cat <(crontab -l) <(echo '*/5 * * * * /root/cleanup_maps >/dev/null 2>&1') | crontab -
+cat <(crontab -l) <(echo '*/5 * * * * /etc/xdp-protection/cleanup_maps > /var/log/bpf_cleanup.log 2>&1') | crontab -
+
+if $(cat /etc/*release | grep -q "Ubuntu"); then
+  systemctl restart cron
+else
+  systemctl restart crond
+fi
+
+MAP_NAMES_TO_PIN=("log_blacklist" "rl_blacklist")
+# --- Hàm xử lý chính ---
+# Hàm này nhận tên map, tìm ID của nó và ghim nếu cần.
+pin_map_if_needed() {
+  local map_name=$1
+  local pin_path="/sys/fs/bpf/${map_name}"
+
+  echo "--- Đang xử lý map: ${map_name} ---"
+
+  # 1. Kiểm tra xem map đã được ghim hay chưa
+  if [ -f "${pin_path}" ]; then
+    echo "✅ Map '${map_name}' đã được ghim tại ${pin_path}. Bỏ qua."
+    return 0
+  fi
+
+  echo "ℹ️ Map '${map_name}' chưa được ghim. Đang tìm ID..."
+
+  # 2. Tìm ID của map từ bpftool
+  # Lệnh `bpftool map show` sẽ liệt kê tất cả map.
+  # `grep "name ${map_name}"` sẽ lọc ra dòng chứa map của chúng ta.
+  # `awk -F: '{print $1}'` sẽ lấy phần đầu tiên trước dấu hai chấm (:), chính là ID.
+  map_id=$(bpftool map show | grep "name ${map_name}" | awk -F: '{print $1}')
+
+  # 3. Kiểm tra xem có tìm thấy ID không
+  if [ -z "${map_id}" ]; then
+    echo "❌ Lỗi: Không tìm thấy map nào có tên '${map_name}' đang chạy. Hãy chắc chắn chương trình XDP đã được nạp."
+    return 1
+  fi
+
+  echo "👍 Đã tìm thấy ID của map '${map_name}': ${map_id}"
+
+  # 4. Thực hiện ghim map
+  echo "📌 Đang thực hiện ghim map..."
+  bpftool map pin id "${map_id}" "${pin_path}"
+
+  # Kiểm tra lại lần nữa để chắc chắn thành công
+  if [ $? -eq 0 ]; then
+    echo "✅ Ghim thành công map '${map_name}' vào ${pin_path}."
+  else
+    echo "❌ Lỗi: Không thể ghim map '${map_name}'. Vui lòng kiểm tra lại."
+    return 1
+  fi
+}
+
+# --- Điểm bắt đầu của script ---
+# Kiểm tra quyền root
+if [ "$EUID" -ne 0 ]; then
+  echo "Lỗi: Vui lòng chạy script này với quyền root (sudo)."
+  exit 1
+fi
+
+# Vòng lặp qua danh sách các map cần ghim
+for map_name in "${MAP_NAMES_TO_PIN[@]}"; do
+  pin_map_if_needed "${map_name}"
+  echo # In một dòng trống để dễ đọc
+done
 
 echo "Hoàn tất install xdp"
 # if [[ $upgrade_kernel_linux_wptt ]]; then
