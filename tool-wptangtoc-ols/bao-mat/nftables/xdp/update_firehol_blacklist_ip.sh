@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#cat <(crontab -l) <(echo "10 0,6,12,18 * * * /etc/wptt/bao-mat/nftables/xdp/update_firehol_blacklist_ip.sh") | crontab -
+#cat <(crontab -l) <(echo "10 0,6,12,18 * * * /bin/bash /etc/wptt/bao-mat/nftables/xdp/update_firehol_blacklist_ip.sh >/dev/null 2>&1") | crontab -
 #systemctl restart crond
 #đoạn để 6 tiếng nó tự động update firehol list
 
