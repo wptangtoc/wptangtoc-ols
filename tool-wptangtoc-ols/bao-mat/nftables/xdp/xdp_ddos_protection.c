@@ -16,9 +16,9 @@ struct rate_limit_entry {
 
 // Khai báo các map (không thay đổi)
 struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 256);   __type(key, __u32); __type(value, __u8);  } whitelist_map SEC(".maps");
-struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 65535); __type(key, __u32); __type(value, __u64); } log_blacklist SEC(".maps");
-struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 125535); __type(key, __u32); __type(value, struct rate_limit_entry); } rl_counters SEC(".maps");
-struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 65535); __type(key, __u32); __type(value, __u64); } rl_blacklist SEC(".maps");
+struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 131072); __type(key, __u32); __type(value, __u64); } log_blacklist SEC(".maps");
+struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 262144); __type(key, __u32); __type(value, struct rate_limit_entry); } rl_counters SEC(".maps");
+struct { __uint(type, BPF_MAP_TYPE_HASH); __uint(max_entries, 131072); __type(key, __u32); __type(value, __u64); } rl_blacklist SEC(".maps");
 
 
 SEC("xdp")
