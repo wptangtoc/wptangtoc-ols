@@ -45,7 +45,7 @@ if [[ ! -f "$pathcheck" ]]; then
   exit
 fi
 
-dnf install golang jq -y
+dnf install jq -y
 sudo dnf groupinstall -y "Development Tools"
 sudo dnf config-manager --set-enabled powertools
 sudo dnf install -y clang llvm iproute bpftool elfutils-libelf-devel
@@ -62,33 +62,39 @@ fi
 
 if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
   mkdir -p /usr/local/lsws/$NAME/bao-mat
-  cp -f /etc/wptt/bao-mat/nftables/xdp/xdp-anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
-  ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-
-  sed -i "/whitelistIPs =/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
-  chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
+  cp -f /etc/wptt/bao-mat/nftables/xdp/log-xdp-anti.c /usr/local/lsws/$NAME/bao-mat/anti.c
   cd /usr/local/lsws/$NAME/bao-mat
-  go mod init lsws-watcher
-  go get github.com/cilium/ebpf
-  go build anti.go && chmod +x anti
+  rm -f anti
+  gcc -o anti anti.c -lbpf
+  # ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+
+  # sed -i "/whitelistIPs =/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
+  # chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
+  # cd /usr/local/lsws/$NAME/bao-mat
+  # go mod init lsws-watcher
+  # go get github.com/cilium/ebpf
+  # go build anti.go && chmod +x anti
   rm -f /usr/local/bin/anti
   mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
+  chmod +x /usr/local/bin/anti
   # rm -rf /usr/local/lsws/$NAME/bao-mat
+  echo '#!/bin/bash
+
+LOG_FILE="/usr/local/lsws/logs/error.log"
+BLOCKER_APP="/usr/local/bin/anti"
+
+# Chạy lệnh tail -F và pipe output vào chương trình blocker
+tail -F -n 0 "$LOG_FILE" | "$BLOCKER_APP"' >/usr/local/bin/start_blocker.sh
+  chmod +x /usr/local/bin/start_blocker.sh
   echo '
 [Unit]
-Description=Go Lang Log Blocker for Litespeed
-Documentation=https://your-doc-link.com
-After=network.target nftables.service
+Description=XDP Log Blocker Service
+After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/anti
-
-Restart=always
-
-User=root
-Group=root
-
-RestartSec=5s
+Type=simple
+ExecStart=/usr/local/bin/start_blocker.sh
+Restart=on-failure
 
 [Install]
 WantedBy=multi-user.target
@@ -153,6 +159,8 @@ sudo bpftool net list dev eth0
 #bypass danh sách trắng
 /etc/wptt/bao-mat/nftables/xdp/bypass-ip.sh $ip
 /etc/wptt/bao-mat/nftables/xdp/bypass-ip.sh '103.106.105.75'
+
+. /etc/wptt/logs/error-chuyen-warn-log-server
 
 #upgrade kernel phải từ 5x mới chạy được xdp
 
