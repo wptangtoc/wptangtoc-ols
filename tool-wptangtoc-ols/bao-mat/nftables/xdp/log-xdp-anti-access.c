@@ -11,10 +11,10 @@
 // --- CẤU HÌNH ---
 const char *map_pin_path = "/sys/fs/bpf/log_blacklist";
 const unsigned long long ban_duration_ns = 4ULL * 3600ULL * 1000000000ULL;
-const int rate_limit_threshold = 3;
+const int rate_limit_threshold = 5;
 const int rate_limit_window_sec = 1;
 
-#define HASH_TABLE_SIZE 65536
+#define HASH_TABLE_SIZE 655360
 struct ip_tracker {
     unsigned int ip;
     unsigned int count;
@@ -23,7 +23,8 @@ struct ip_tracker {
 };
 static struct ip_tracker *ip_rate_table[HASH_TABLE_SIZE];
 
-// --- CÁC HÀM TIỆN ÍCH (không đổi) ---
+// --- CÁC HÀM TIỆN ÍCH ---
+
 unsigned long long get_monotonic_time_ns() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -37,16 +38,43 @@ void block_ip(int map_fd, unsigned int ip_key_bswapped, const char* ip_str) {
     }
 }
 
+// --- HÀM is_static_file ĐÃ ĐƯỢC CẢI TIẾN ---
 int is_static_file(const char *path) {
-    const char *dot = strrchr(path, '.');
-    if (!dot) return 0;
-    const char *static_exts[] = { ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".mp4", ".webm", ".txt", NULL };
-    for (int i = 0; static_exts[i] != NULL; i++) {
-        if (strcasecmp(dot, static_exts[i]) == 0) return 1;
+    char clean_path[2048];
+    const char *query_start = strchr(path, '?');
+
+    // Nếu có query string, chỉ sao chép phần đường dẫn trước dấu '?'
+    if (query_start) {
+        size_t path_len = query_start - path;
+        if (path_len >= sizeof(clean_path)) {
+            path_len = sizeof(clean_path) - 1;
+        }
+        strncpy(clean_path, path, path_len);
+        clean_path[path_len] = '\0';
+    } else {
+        // Nếu không có, sao chép toàn bộ đường dẫn
+        strncpy(clean_path, path, sizeof(clean_path) - 1);
+        clean_path[sizeof(clean_path) - 1] = '\0';
     }
-    return 0;
+
+    const char *dot = strrchr(clean_path, '.');
+    if (!dot) {
+        return 0; // Không có phần mở rộng, coi là động
+    }
+    
+    const char *static_exts[] = {
+        ".css", ".js", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico", 
+        ".woff", ".woff2", ".ttf", ".eot", ".otf", ".mp4", ".webm", ".txt", NULL
+    };
+    for (int i = 0; static_exts[i] != NULL; i++) {
+        if (strcasecmp(dot, static_exts[i]) == 0) {
+            return 1; // Là file tĩnh
+        }
+    }
+    return 0; // Là file động
 }
 
+// --- process_line và các hàm khác không thay đổi ---
 void process_line(int map_fd, regex_t *regex, const char *line) {
     regmatch_t pmatch[3];
     if (regexec(regex, line, 3, pmatch, 0) != 0) return;
@@ -102,8 +130,6 @@ int main(void) {
         return 1;
     }
     
-    // --- THAY ĐỔI DUY NHẤT VÀ QUAN TRỌNG NHẤT LÀ Ở ĐÂY ---
-    // Regex được cập nhật để khớp với định dạng log mới có ["vhost"] ở đầu
     const char *regex_pattern = "^\\[\"[^\"]+\"\\] ([0-9.]+) \\S+ \\S+ \\[[^]]+\\] \"[A-Z]+ (\\S+)[^\"]*\"";
     if (regcomp(&regex, regex_pattern, REG_EXTENDED | REG_ICASE) != 0) {
         fprintf(stderr, "Lỗi: Không thể biên dịch regex: %s\n", strerror(errno));
