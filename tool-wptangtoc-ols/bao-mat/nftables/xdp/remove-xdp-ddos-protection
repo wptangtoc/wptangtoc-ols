@@ -75,8 +75,51 @@ if systemctl is-active --quiet ddos-blocker-xdp-access.service; then
   rm -f $SERVICE_FILE
 fi
 
+if systemctl is-active --quiet load-xdp.service; then
+  SERVICE_FILE="/etc/systemd/system/load-xdp.service"
+  systemctl stop load-xdp
+  systemctl disable load-xdp
+  rm -f $SERVICE_FILE
+fi
+
 echo "--------------------------------------------------"
 echo "✅ Da go bo thanh cong!"
 echo "Kiem tra lai trang thai:"
+
+# Các biến này phải khớp với service 'load-xdp.service' của bạn
+IFACE="eth0" # <--- Tên card mạng của bạn
+PIN_PATH="/sys/fs/bpf/xdp_ddos_prog"
+
+echo "--- Bắt đầu quá trình dọn dẹp XDP ---"
+
+# Bước 1: Gỡ chương trình XDP ra khỏi card mạng
+echo "-> Đang gỡ chương trình XDP khỏi card mạng '${IFACE}'..."
+# Kiểm tra xem có chương trình nào đang được gắn không trước khi gỡ
+if ip link show dev "$IFACE" | grep -q "xdp"; then
+  sudo /usr/sbin/bpftool net detach xdp dev "$IFACE"
+  echo "   ✅ Đã gỡ thành công."
+else
+  echo "   ℹ️ Không có chương trình XDP nào đang được gắn trên '${IFACE}'. Bỏ qua."
+fi
+
+# Bước 2: Xóa file ghim (pinned file) của chương trình
+# Việc này sẽ giải phóng tham chiếu cuối cùng đến chương trình và các map của nó
+echo "-> Đang xóa file ghim tại '${PIN_PATH}'..."
+if [ -f "$PIN_PATH" ]; then
+  sudo rm -f "$PIN_PATH"
+  echo "   ✅ Đã xóa thành công file ghim."
+else
+  echo "   ℹ️ Không tìm thấy file ghim. Bỏ qua."
+fi
+
+# Bước 3: Kiểm tra lại kết quả
+echo "-> Đang kiểm tra lại..."
+if sudo bpftool map list | grep -q "."; then
+  echo "⚠️ Cảnh báo: Vẫn còn BPF map tồn tại. Vui lòng kiểm tra thủ công."
+  sudo bpftool map list
+else
+  echo "✅ Xác nhận: Tất cả các BPF map đã được dọn dẹp."
+fi
+
 bpftool net list dev "${IFACE}"
 ls -l /sys/fs/bpf/
