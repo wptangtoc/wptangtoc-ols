@@ -56,6 +56,11 @@ dnf install kernel-devel-$(uname -r) -y #nếu có lt thì thôi chạy cho có
 
 sudo dnf install libbpf-devel -y
 
+if [[ $(bpftool map list) ]]; then
+  echo "Hãy reboot rồi cài lại"
+  exit
+fi
+
 if [[ -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then #xoá mode nftables tránh xdp xung đột
   systemctl stop ddos-blocker-nftables
   systemctl disable ddos-blocker-nftables
@@ -80,13 +85,28 @@ if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
   mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
   chmod +x /usr/local/bin/anti
   # rm -rf /usr/local/lsws/$NAME/bao-mat
-  echo '#!/bin/bash
+  echo "#!/bin/bash
 
-LOG_FILE="/usr/local/lsws/logs/error.log"
-BLOCKER_APP="/usr/local/bin/anti"
+if [[ \$(bpftool map list) = '' ]]; then
+  sudo bpftool net detach xdp dev eth0 || true
+  sudo rm -f /sys/fs/bpf/xdp_ddos_protection_prog
+  sudo rm -f /sys/fs/bpf/log_blacklist
+
+  # Bước 3: Chỉ TẢI chương trình và các map của nó vào kernel
+  # Ở bước này, map chưa được pin.
+  sudo bpftool prog load /etc/wptt/bao-mat/nftables/xdp/xdp_ddos_protection.o /sys/fs/bpf/xdp_ddos_protection_prog
+
+  # Bước 4: Tìm ID của map và PIN nó ra file
+  MAP_ID=\$(sudo bpftool map list | grep log_blacklist | awk '{print \$1}' | sed 's/://')
+  sudo bpftool map pin id \$MAP_ID /sys/fs/bpf/log_blacklist
+  sudo bpftool net attach xdp pinned /sys/fs/bpf/xdp_ddos_protection_prog dev eth0
+fi
+
+LOG_FILE='/usr/local/lsws/logs/error.log'
+BLOCKER_APP='/usr/local/bin/anti'
 
 # Chạy lệnh tail -F và pipe output vào chương trình blocker
-tail -F -n 0 "$LOG_FILE" | "$BLOCKER_APP"' >/usr/local/bin/start_blocker.sh
+tail -F -n 0 \"\$LOG_FILE\" | \"\$BLOCKER_APP\"" >/usr/local/bin/start_blocker.sh
   chmod +x /usr/local/bin/start_blocker.sh
   echo '
 [Unit]
@@ -241,38 +261,6 @@ for map_name in "${MAP_NAMES_TO_PIN[@]}"; do
   pin_map_if_needed "${map_name}"
   echo # In một dòng trống để dễ đọc
 done
-
-echo '[Unit]
-Description=Load XDP DDoS Protection Program at Boot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-
-ExecStartPre=/bin/mkdir -p /sys/fs/bpf
-ExecStartPre=/bin/mount -t bpf bpf /sys/fs/bpf
-
-# Lệnh 1: Nạp chương trình. Vẫn giữ nguyên.
-ExecStart=/usr/sbin/bpftool prog load /etc/wptt/bao-mat/nftables/xdp/xdp_ddos_protection.o /sys/fs/bpf/xdp_ddos_prog
-
-# Lệnh 2 (Mới): Luôn gỡ chương trình cũ trước. "|| true" để lệnh không báo lỗi nếu không có gì để gỡ.
-ExecStart=/usr/sbin/bpftool net detach xdp dev eth0 || true
-
-# Lệnh 3 (Cũ): Gắn chương trình mới.
-ExecStart=/usr/sbin/bpftool net attach xdp pinned /sys/fs/bpf/xdp_ddos_prog dev eth0
-
-# Dấu "-" ở đầu sẽ báo cho systemd bỏ qua lỗi nếu lệnh này thất bại (ví dụ khi XDP đã bị gỡ).
-ExecStop=-/usr/sbin/bpftool net detach xdp dev eth0
-
-[Install]
-WantedBy=multi-user.target
-' >/etc/systemd/system/load-xdp.service
-systemctl daemon-reload
-sudo systemctl enable load-xdp.service
-# Bạn có thể chạy thử ngay lập tức mà không cần reboot
-sudo systemctl start load-xdp.service
 
 echo "Hoàn tất install xdp"
 # if [[ $upgrade_kernel_linux_wptt ]]; then
