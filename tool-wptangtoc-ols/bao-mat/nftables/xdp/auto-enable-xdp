@@ -1,0 +1,145 @@
+#!/bin/bash
+
+# Script để tự động quản lý việc bật/tắt toàn bộ hệ thống XDP
+# bằng cách điều khiển các service systemd theo mức sử dụng CPU của máy chủ.
+
+set -e
+
+if [[ $(which mpstat) = '' ]];then
+dnf install sysstat bc -y
+fi
+
+# --- CẤU HÌNH ---
+# Tên các service cần quản lý.
+LOADER_SERVICE="ddos-blocker-xdp.service"
+
+
+# File để lưu trạng thái và mốc thời gian khi XDP được bật
+STATE_FILE="/var/run/xdp_manager.state"
+MINIMUM_ON_TIME=43200
+
+# --- NGƯỠNG TẢI ---
+# Ngưỡng bật XDP: Mức sử dụng CPU vượt quá 80%
+OVERLOAD_THRESHOLD_PERCENT=80
+
+# --- CÁC HÀM TIỆN ÍCH ---
+
+# Hàm ghi log với timestamp
+log() {
+    # Thêm timestamp vào mỗi dòng log để dễ theo dõi
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
+# Hàm kiểm tra service XDP có đang chạy không (chỉ cần kiểm tra service loader)
+is_protection_active() {
+    systemctl is-active --quiet "$LOADER_SERVICE"
+}
+
+# Hàm bật toàn bộ hệ thống XDP
+enable_protection() {
+    if is_protection_active; then
+        return 0 # Nếu đã bật, không làm gì cả
+    fi
+
+    log "Tải cao! Đang BẬT toàn bộ hệ thống XDP..."
+    # Khởi động và kích hoạt cả hai service để chúng tự chạy sau khi reboot
+    systemctl start "$LOADER_SERVICE"
+
+    systemctl enable "$LOADER_SERVICE"
+
+
+cat <(crontab -l) | sed "/cleanup_maps/d" | crontab -
+# cat <(crontab -l) <(echo '*/5 * * * * /root/cleanup_maps >/dev/null 2>&1') | crontab -
+cat <(crontab -l) <(echo '*/5 * * * * /etc/xdp-protection/cleanup_maps > /var/log/bpf_cleanup.log 2>&1') | crontab -
+
+if $(cat /etc/*release | grep -q "Ubuntu"); then
+  systemctl restart cron
+else
+  systemctl restart crond
+fi
+
+
+    if is_protection_active; then
+        log "✅ Hệ thống XDP đã được bật thành công."
+        # Ghi lại mốc thời gian khi hệ thống được bật
+        date +%s > "$STATE_FILE"
+    else
+        log "❌ LỖI: Không thể bật service ${LOADER_SERVICE}."
+    fi
+}
+
+# Hàm tắt toàn bộ hệ thống XDP
+disable_protection() {
+    if ! is_protection_active; then
+        return 0 # Nếu đã tắt, không làm gì cả
+    fi
+    
+    log "Tải đã trở lại bình thường. Đang TẮT toàn bộ hệ thống XDP..."
+    # Dừng và vô hiệu hóa cả hai service để chúng không tự chạy sau khi reboot
+
+    systemctl stop "$LOADER_SERVICE"
+
+    systemctl disable "$LOADER_SERVICE"
+    # Xóa file trạng thái
+    rm -f "$STATE_FILE"
+    log "✅ Hệ thống XDP đã được tắt thành công."
+    
+    cat <(crontab -l) | sed "/cleanup_maps/d" | crontab -
+
+
+if $(cat /etc/*release | grep -q "Ubuntu"); then
+  systemctl restart cron
+else
+  systemctl restart crond
+fi
+
+    /sbin/reboot
+}
+
+# --- LOGIC CHÍNH ---
+
+# Kiểm tra các công cụ cần thiết
+if ! command -v bc &> /dev/null; then
+    log "Lỗi: Lệnh 'bc' không được tìm thấy. Vui lòng cài đặt (sudo dnf install bc)."
+    exit 1
+fi
+if ! command -v mpstat &> /dev/null; then
+    log "Lỗi: Lệnh 'mpstat' không được tìm thấy. Vui lòng cài đặt gói 'sysstat' (sudo dnf install sysstat)."
+    exit 1
+fi
+
+# --- Tính toán mức sử dụng CPU (Phương pháp đáng tin cậy) ---
+# Dùng mpstat để lấy phần trăm CPU rảnh rỗi (%idle)
+IDLE_PERCENT=$(mpstat 1 1 | awk '/Average:/ {print $NF}')
+# Phần trăm sử dụng = 100 - phần trăm rảnh rỗi
+CPU_USAGE=$(echo "100 - $IDLE_PERCENT" | bc)
+
+log "Kiểm tra tải hệ thống: Mức sử dụng CPU=${CPU_USAGE}%, Ngưỡng=${OVERLOAD_THRESHOLD_PERCENT}%"
+
+# --- RA QUYẾT ĐỊNH ---
+if (( $(echo "$CPU_USAGE > $OVERLOAD_THRESHOLD_PERCENT" | bc -l) )); then
+    # Nếu tải cao, luôn bật hệ thống bảo vệ
+    enable_protection
+else
+    # Nếu tải bình thường, chỉ tắt khi đã bật và đã qua thời gian chờ
+    if is_protection_active; then
+        if [ ! -f "$STATE_FILE" ]; then
+            # Nếu file trạng thái không tồn tại, có thể là lỗi. Tắt để an toàn.
+            log "Tải bình thường và không có mốc thời gian. Tắt hệ thống."
+            disable_protection
+        else
+            ENABLED_AT_TIMESTAMP=$(cat "$STATE_FILE")
+            CURRENT_TIME=$(date +%s)
+            CAN_DISABLE_TIMESTAMP=$((ENABLED_AT_TIMESTAMP + MINIMUM_ON_TIME))
+
+            if [ "$CURRENT_TIME" -ge "$CAN_DISABLE_TIMESTAMP" ]; then
+                log "Tải bình thường và đã qua 24 tiếng. Tắt hệ thống."
+                disable_protection
+            else
+                log "Tải bình thường nhưng vẫn đang trong thời gian bật tối thiểu 24 tiếng. Giữ nguyên."
+            fi
+        fi
+    fi
+fi
+
+
