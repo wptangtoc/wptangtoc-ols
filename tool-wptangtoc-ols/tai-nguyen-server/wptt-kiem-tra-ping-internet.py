@@ -5,7 +5,7 @@ import statistics
 import sys
 
 def xac_dinh_isp(ip):
-    """Xác định nhà cung cấp dịch vụ (ISP) dựa trên địa chỉ IP."""
+    """Xác định nhà cung cấp dịch vụ dựa trên địa chỉ IP."""
     isp_mapping = {
         "8.8.8.8": "Google",
         "1.1.1.1": "Cloudflare",
