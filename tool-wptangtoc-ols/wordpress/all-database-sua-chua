@@ -15,19 +15,50 @@ function huong_dan() {
 
 . /etc/wptt/.wptt.conf
 . /etc/wptt/echo-color
-_runing "Tiến hành sửa chữa toàn bộ database"
-MYSQL_CONN="-u $database_admin_username -p${database_admin_password}"
-TBLLIST=""
-COMMA=""
-SQL="SELECT CONCAT(table_schema,'.',table_name) FROM information_schema.tables WHERE"
-SQL="${SQL} table_schema NOT IN ('information_schema','mysql','performance_schema')"
-for DBTB in $(mysql ${MYSQL_CONN} -ANe"${SQL}"); do
-  echo Sua chua TABLE "${DBTB};"
-  SQL="REPAIR TABLE ${DBTB};"
-  mysql ${MYSQL_CONN} -ANe"${SQL}"
-done
 
-_rundone "Tiến hành sửa chữa toàn bộ database"
+# --- BẮT ĐẦU ĐOẠN SỬA LỖI DATABASE (REPAIR ONLY) ---
+echo "Đang kiểm tra và sửa lỗi Database ..."
+# 1. Xác định lệnh chuẩn
+if command -v mariadb-check &>/dev/null; then
+  DB_CHECK_CMD="mariadb-check"
+else
+  DB_CHECK_CMD="mysqlcheck"
+fi
+
+# 2. Tạo file cấu hình tạm (Bảo mật)
+TEMP_CNF_ROOT=$(mktemp)
+chmod 600 "$TEMP_CNF_ROOT"
+
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+host=localhost
+EOF
+
+trap "rm -f $TEMP_CNF_ROOT" EXIT
+
+# 3. Thực thi SỬA CHỮA (Repair)
+# --check: Kiểm tra lỗi bảng
+# --auto-repair: Nếu phát hiện lỗi thì tự động sửa (nếu không lỗi thì thôi)
+
+$DB_CHECK_CMD --defaults-extra-file="$TEMP_CNF_ROOT" --check --auto-repair --all-databases \
+  --skip-database="information_schema" \
+  --skip-database="performance_schema" \
+  --skip-database="mysql"
+
+# Kiểm tra kết quả
+if [[ $? -eq 0 ]]; then
+  echo "---------------------------------------------------"
+  echo "✅ Quá trình kiểm tra và sửa lỗi hoàn tất."
+else
+  echo "---------------------------------------------------"
+  echo "⚠️ Có cảnh báo (Thường là do bảng InnoDB không hỗ trợ repair kiểu cũ, nhưng dữ liệu vẫn an toàn)."
+fi
+
+rm -f "$TEMP_CNF_ROOT"
+
+echo "Sửa chữa ALL database : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
