@@ -258,21 +258,108 @@ else
   exit
 fi
 
-_runing "$khoi_phuc_database website $NAME"
+# _runing "$khoi_phuc_database website $NAME"
 
-if [[ $(echo $file | grep '.sql.zst$') ]]; then
-  if [[ $(which zstd 2>/dev/null) = '' ]]; then # cai zstd
-    dnf install zstd -y
+# if [[ $(echo $file | grep '.sql.zst$') ]]; then
+#   if [[ $(which zstd 2>/dev/null) = '' ]]; then # cai zstd
+#     dnf install zstd -y
+#   fi
+#   zstd -d <$duong_dan_thu_muc | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false # sử dụng import .sql.zst
+# elif [[ $(echo $file | grep '.sql.gz$') ]]; then
+#   zcat $duong_dan_thu_muc | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false # sử dụng import .sql.gz
+# else
+#   mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false <$duong_dan_thu_muc #sử dụng import .sql
+# fi
+
+# rm -rf $TEMP_CNF
+# _rundone "$khoi_phuc_database website $NAME"
+echo "$khoi_phuc_database website $NAME"
+
+# 1. Kiểm tra và cài đặt PV (Pipe Viewer) nếu chưa có
+if ! command -v pv &>/dev/null; then
+  echo "Đang cài đặt công cụ hiển thị tiến trình (pv)..."
+  if [ -f /etc/redhat-release ]; then
+    dnf install pv -y -q >/dev/null 2>&1 || yum install pv -y -q >/dev/null 2>&1
+  elif [ -f /etc/debian_version ]; then
+    apt-get update -q >/dev/null 2>&1
+    apt-get install pv -y -q >/dev/null 2>&1
   fi
-  zstd -d <$duong_dan_thu_muc | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false # sử dụng import .sql.zst
-elif [[ $(echo $file | grep '.sql.gz$') ]]; then
-  zcat $duong_dan_thu_muc | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false # sử dụng import .sql.gz
-else
-  mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false <$duong_dan_thu_muc #sử dụng import .sql
 fi
 
-rm -rf $TEMP_CNF
-_rundone "$khoi_phuc_database website $NAME"
+# 2. Chuẩn bị các lệnh SQL tối ưu tốc độ (Turbo Import)
+# Tắt autocommit và check key để import nhanh gấp 3-5 lần
+# Đã bỏ SET SQL_LOG_BIN để tránh lỗi "Access denied" với user thường
+INIT_SQL="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET AUTOCOMMIT=0;"
+END_SQL="COMMIT; SET FOREIGN_KEY_CHECKS=1; SET UNIQUE_CHECKS=1; SET AUTOCOMMIT=1;"
+
+# 3. Xác định lệnh giải nén và thực thi Import
+# Logic: (SQL mở đầu + File dữ liệu + SQL kết thúc) | Đẩy vào MariaDB
+
+if command -v pv &>/dev/null; then
+
+  if [[ "$duong_dan_thu_muc" == *".sql.zst" ]]; then
+    # Cài zstd nếu thiếu
+    if ! command -v zstd &>/dev/null; then dnf install zstd -y -q >/dev/null 2>&1; fi
+
+    # PV đọc file -> zstd giải nén -> Nối SQL tối ưu -> MariaDB
+    (
+      echo "$INIT_SQL"
+      pv -N "Importing" "$duong_dan_thu_muc" | zstd -d
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+
+  elif [[ "$duong_dan_thu_muc" == *".sql.gz" ]]; then
+    # PV đọc file -> zcat giải nén -> Nối SQL tối ưu -> MariaDB
+    (
+      echo "$INIT_SQL"
+      pv -N "Importing" "$duong_dan_thu_muc" | zcat
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+
+  else
+    # File .sql thường: PV đọc file -> Nối SQL tối ưu -> MariaDB
+    (
+      echo "$INIT_SQL"
+      pv -N "Importing" "$duong_dan_thu_muc"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  fi
+
+else
+  # === TRƯỜNG HỢP KHÔNG CÓ PV (DỰ PHÒNG) ===
+  # Vẫn dùng tối ưu tốc độ nhưng không hiện thanh tiến trình
+
+  if [[ "$duong_dan_thu_muc" == *".sql.zst" ]]; then
+    (
+      echo "$INIT_SQL"
+      zstd -d <"$duong_dan_thu_muc"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  elif [[ "$duong_dan_thu_muc" == *".sql.gz" ]]; then
+    (
+      echo "$INIT_SQL"
+      zcat "$duong_dan_thu_muc"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  else
+    (
+      echo "$INIT_SQL"
+      cat "$duong_dan_thu_muc"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  fi
+fi
+
+# Kiểm tra mã lỗi sau khi chạy xong
+if [[ $? -eq 0 ]]; then
+  echo ""
+  _rundone "$khoi_phuc_database website $NAME"
+else
+  echo "---------------------------------------------------"
+  _runloi "$khoi_phuc_database website $NAME"
+fi
+
+rm -f "$TEMP_CNF"
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ -f $pathcheckwp ]]; then
