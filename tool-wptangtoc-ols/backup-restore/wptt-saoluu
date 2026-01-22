@@ -231,14 +231,57 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
+trap "rm -f $TEMP_CNF" EXIT
+
+# if [[ $sql_gz = '1' ]]; then
+#   mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >/usr/local/backup-website/$NAME/$NAME$times.sql.gz
+# elif [[ $sql_gz = '2' ]]; then
+#   mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >/usr/local/backup-website/$NAME/$NAME$times.sql.zst
+# else
+#   mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false >/usr/local/backup-website/$NAME/$NAME$times.sql
+# fi
+
+RAW_SIZE=$(mariadb --defaults-extra-file="$TEMP_CNF" -N -e "SELECT SUM(data_length) FROM information_schema.TABLES WHERE table_schema='$DB_Name_web'")
+if [[ -z "$RAW_SIZE" || "$RAW_SIZE" == "NULL" ]]; then RAW_SIZE=1024; fi
+ADJUSTED_SIZE=$((RAW_SIZE * 95 / 100))
+
+#Việc thêm pv và các hiệu ứng hiển thị (xóa dòng, hiện %) chỉ tác động lên Màn hình hiển thị (Standard Error) chứ không bao giờ chạm vào Dữ liệu (Standard Output) của file backup.
+if command -v pv &>/dev/null; then
+  # -q: Không cần thiết lắm, nhưng ở đây ta dùng các tham số hiển thị chuẩn
+  # Quan trọng: Không dùng -S (Stop) nữa để ta tự xử lý việc xóa
+  PV_CMD="pv -s $ADJUSTED_SIZE -N 'Exporting' -p -t -e -w 80"
+else
+  PV_CMD="cat"
+fi
+
+_runing "$sao_luu_database website $NAME"
+echo ""
+# ==================================================================
+# THỰC THI backup dump db
+# ==================================================================
 
 if [[ $sql_gz = '1' ]]; then
-  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >/usr/local/backup-website/$NAME/$NAME$times.sql.gz
+  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false |
+    $PV_CMD | gzip >"/usr/local/backup-website/$NAME/$NAME$times.sql.gz"
+
 elif [[ $sql_gz = '2' ]]; then
-  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >/usr/local/backup-website/$NAME/$NAME$times.sql.zst
+  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false |
+    $PV_CMD | zstd >"/usr/local/backup-website/$NAME/$NAME$times.sql.zst"
+
 else
-  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false >/usr/local/backup-website/$NAME/$NAME$times.sql
+  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false |
+    $PV_CMD >"/usr/local/backup-website/$NAME/$NAME$times.sql"
 fi
+
+# --- GIẢI THÍCH MÃ LỆNH ---
+# \033[1A : Di chuyển con trỏ lên 1 dòng (Để quay lại dòng chứa thanh pv)
+# \r      : Về đầu dòng
+# \033[K  : Xóa trắng toàn bộ dòng đó
+echo -ne "\033[1A\r\033[K"
+
+# Kiểm tra lại lần nữa cho chắc (nếu pv bị lag in ra 2 dòng)
+# Lệnh này để dọn dẹp thêm 1 lần nữa cho sạch bóng
+echo -ne "\033[1A\r\033[K"
 
 rm -rf $TEMP_CNF
 
