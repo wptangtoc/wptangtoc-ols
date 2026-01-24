@@ -1,99 +1,178 @@
 #!/bin/bash
+# =========================================================================
+# WPTangToc OLS - Image Optimizer (Lossy & Lossless Support)
+# =========================================================================
 
 function huong_dan() {
-  Tối ưu nén hình ảnh, giảm dung lượng hình ảnh.
-  chế độ nén ảnh là lossy
+  echo "  Công cụ tối ưu hóa hình ảnh với 2 chế độ:"
+  echo "  1. Lossy: Giảm dung lượng nhiều, giảm chất lượng nhẹ (Khuyên dùng cho Blog/Tin tức)."
+  echo "  2. Lossless: Giữ nguyên 100% chất lượng (Khuyên dùng cho Web ảnh)."
 }
 
+RED='\033[1;31m'
+GREEN='\033[1;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[1;36m'
+NC='\033[0m'
+
+# --- 1. SETUP MOI TRUONG ---
+if [ -f /etc/redhat-release ]; then
+  OS_TYPE="rhel"
+elif [ -f /etc/debian_version ]; then
+  OS_TYPE="debian"
+fi
+
+function install_tools() {
+  echo -e "${YELLOW}Dang kiem tra cong cu...${NC}"
+  if [[ "$OS_TYPE" == "rhel" ]]; then
+    if ! rpm -q epel-release >/dev/null 2>&1; then yum install epel-release -y -q; fi
+    yum install jpegoptim pngquant optipng pv -y -q
+  elif [[ "$OS_TYPE" == "debian" ]]; then
+    apt-get update -y -q >/dev/null 2>&1
+    apt-get install jpegoptim pngquant optipng pv -y -q
+  fi
+}
+
+if ! command -v jpegoptim &>/dev/null || ! command -v pngquant &>/dev/null || ! command -v optipng &>/dev/null; then
+  install_tools
+fi
+
+# --- 2. INPUT HANDLER ---
 . /etc/wptt/echo-color
 NAME=$1
-if [[ $NAME = "98" ]]; then
-  NAME=""
-fi
+MODE=$2
+
+if [[ $NAME = "98" ]]; then NAME=""; fi
 
 if [[ $NAME = "" ]]; then
   echo ""
-  echo ""
-  echo ""
   echo "========================================================================="
-  echo "|Quan ly WordPress => Tối ưu hoá hình ảnh                               |"
+  echo "|Quản lý WordPress => Tối ưu hoá hình ảnh          |"
   echo "========================================================================="
   . /etc/wptt/tenmien-them-lua-chon-tat-ca-website
   echo ""
-  echo ""
-  echo "Lựa chọn website muốn tối ưu hình ảnh: "
+  echo "Lua chon website: "
   echo ""
   lua_chon_NAME
 fi
 
+# Chon che do (Neu chua co)
+if [[ -z "$MODE" && "$NAME" != "0" ]]; then
+  echo ""
+  echo -e "${YELLOW}Chọn chế độ nén:${NC}"
+  echo " 1. Lossy (Giảm dung lượng nhiều - Khuyên dùng)"
+  echo " 2. Lossless (Giữ nguyên chất lượng ảnh)"
+  read -p "Nhập lựa chọn của bạn [1/2]: " mode_input
+  if [[ "$mode_input" == "2" ]]; then MODE="lossless"; else MODE="lossy"; fi
+fi
+
+# De quy "Tat ca website"
 if [[ $NAME = 'Tất cả website' ]]; then
   if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
       domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
       path_html="/usr/local/lsws/$domain/html/wp-config.php"
-      i=1
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
         if [[ -f "$path_html" ]]; then
-          _runing "Tối ưu hình ảnh website $domain"
-          (/etc/wptt/wordpress/image $domain >/dev/null 2>&1)
-          _rundone "Tối ưu hình ảnh website $domain"
+          $0 $domain $MODE
         fi
       fi
     done
   fi
-
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    . /etc/wptt/wptt-wordpress-main 1
-  fi
-
+  if [[ $1 = "98" ]]; then . /etc/wptt/wptt-wordpress-main 1; fi
   exit
 fi
 
-. /etc/wptt/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  . /etc/wptt/wptt-wordpress-main 1
-fi
-
+# Check hop le
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then . /etc/wptt/wptt-wordpress-main 1; fi
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 3
-  . /etc/wptt/wptt-wordpress-main 1
+  echoDo "Loi Ten Mien"
   exit
 fi
-
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
+path_root="/usr/local/lsws/$NAME/html"
+if [[ ! -f "$path_root/wp-load.php" ]]; then
   clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
-  sleep 3
-  . /etc/wptt/wptt-wordpress-main 1
+  echoDo "Khong phai WP"
   exit
-fi
-
-if [[ ! -f '/usr/bin/optipng' ]] || [[ ! -f '/usr/bin/jpegoptim' ]]; then
-  yum -y install jpegoptim pngquant
 fi
 
 . /etc/wptt/vhost/."$NAME".conf
-path=/usr/local/lsws/$NAME/html/wp-content/uploads
-if [[ ! -d $path ]]; then
-  clear
-  echo "Duong dan $path khong ton tai"
+path_uploads="$path_root/wp-content/uploads"
+
+if [[ ! -d $path_uploads ]]; then
+  echoDo "Khong co thu muc Uploads"
   exit
 fi
 
-echo "Dang tien hanh toi uu hinh anh cho website $NAME..."
-find "$path" -type f -name "*.jpg" -exec jpegoptim --strip-all -m76 {} \;
-find "$path" -type f -name "*.png" -exec pngquant --force --quality=83-100 --skip-if-larger --strip --verbose \{} --output \{} \;
-find $path -type f -print0 | xargs --max-procs=2 -0 chmod 644
-find $path -type d -print0 | xargs --max-procs=2 -0 chmod 755
-chown -R "$User_name_vhost":"$User_name_vhost" "$path"
+# --- 3. BAT DAU TOI UU ---
+clear
+echo "=========================================================="
+echo -e "Website: ${GREEN}$NAME${NC}"
+echo -e "Chế độ:  ${CYAN}${MODE^^}${NC} "
+echo "=========================================================="
+
+SIZE_BEFORE=$(du -s "$path_uploads" | awk '{print $1}')
+echo "Dang quet file..."
+TOTAL_FILES=$(find "$path_uploads" -type f \( -iname "*.jpg" -o -iname "*.jpeg" -o -iname "*.png" \) | wc -l)
+
+if [[ "$TOTAL_FILES" -eq 0 ]]; then
+  echoDo "Khong co anh."
+  exit
+fi
+
+# --- HAM AN TOAN (TRAP CTRL+C) ---
+# Toi them lai ham nay vi PV se giau con tro chuot, neu ban tat ngang se bi mat con tro
+function cleanup_exit() {
+  echo ""
+  echo -e "${RED}[!] Da huy thao tac.${NC}"
+  tput cnorm         # Hien lai con tro chuot
+  kill 0 2>/dev/null # Giet tien trinh con
+  exit 1
+}
+trap cleanup_exit SIGINT SIGTERM
+
+echo -e "Tìm thấy ${CYAN}$TOTAL_FILES${NC} hình ảnh. Bắt đầu xử lý..."
+
+# --- CORE LOGIC (DA CHUYEN VE 1 LUONG) ---
+# Luu y: Da xoa bo tham so -P (Parallel)
+
+if [[ "$MODE" == "lossless" ]]; then
+  # LOSSLESS
+  find "$path_uploads" -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) -print0 |
+    pv -0 -s "$TOTAL_FILES" -N "JPG Lossless" |
+    xargs -0 -n 1 -r jpegoptim --strip-all --all-progressive --quiet
+
+  find "$path_uploads" -type f -iname "*.png" -print0 |
+    xargs -0 -n 1 -r optipng -o2 -strip all -quiet
+else
+  # LOSSY
+  find "$path_uploads" -type f \( -iname "*.jpg" -o -iname "*.jpeg" \) -print0 |
+    pv -0 -s "$TOTAL_FILES" -N "JPG Lossy" |
+    xargs -0 -n 1 -r jpegoptim --strip-all --all-progressive -m76 --quiet
+
+  find "$path_uploads" -type f -iname "*.png" -print0 |
+    xargs -0 -n 1 -r pngquant --quality=80-95 --skip-if-larger --strip --force --ext .png
+fi
+
+# Go bo Trap
+trap - SIGINT SIGTERM
+
+chown -R "$User_name_vhost":"$User_name_vhost" "$path_uploads"
+find "$path_uploads" -type d -print0 | xargs -0 -r chmod 755
+find "$path_uploads" -type f -print0 | xargs -0 -r chmod 644
+
+SIZE_AFTER=$(du -s "$path_uploads" | awk '{print $1}')
+SAVED_KB=$((SIZE_BEFORE - SIZE_AFTER))
+SAVED_MB=$(awk "BEGIN {printf \"%.2f\", $SAVED_KB/1024}")
+
+echo ""
+echo "=========================================================="
+echo -e "                 ${GREEN}HOAN TAT!${NC}"
+echo "=========================================================="
+echo -e "Tiết kiệm được dung lượng:     ${CYAN}$SAVED_MB MB${NC}"
+echo "=========================================================="
 
 check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  . /etc/wptt/wptt-wordpress-main 1
-fi
+if [[ $check_menu_wptangtoc_active = "98" ]]; then . /etc/wptt/wptt-wordpress-main 1; fi
