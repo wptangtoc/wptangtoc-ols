@@ -1,7 +1,4 @@
 #!/bin/bash
-# =========================================================================
-# WPTangToc OLS - Ultimate Dashboard (Centered Menu + Perfect Align)
-# =========================================================================
 
 . /etc/wptt/.wptt.conf
 if [[ $ngon_ngu = '' ]]; then ngon_ngu='vi'; fi
@@ -18,7 +15,22 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 box_inner_width=71
 
-# --- HÀM VẼ THANH TIẾN TRÌNH ---
+# --- LOGIC KIỂM TRA CẬP NHẬT ---
+SHOW_UPDATE=0
+NEW_VERSION=""
+
+if [[ -f /tmp/wptangtoc-ols-version ]]; then
+  wptangtocols_version=$(cat /tmp/wptangtoc-ols-version)
+fi
+if [[ $wptangtocols_version = "" ]]; then
+  wptangtocols_version=$(curl -sf --connect-timeout 2 --max-time 5 https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' || curl -sf --connect-timeout 2 --max-time 5 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
+fi
+if [[ "$wptangtocols_version" != "" && "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
+  SHOW_UPDATE=1
+  NEW_VERSION="$wptangtocols_version"
+fi
+
+# --- CÁC HÀM HỖ TRỢ ---
 draw_bar() {
   local percent=$1
   local length=15
@@ -37,7 +49,6 @@ draw_bar() {
   printf "${NC}]"
 }
 
-# --- HÀM CĂN GIỮA (CHO HEADER CÓ KHUNG) ---
 center_text() {
   local text="$1"
   local clean_text=$(echo -e "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
@@ -52,7 +63,7 @@ center_text() {
   printf "${RED}|${NC}%*s%s%*s${RED}|${NC}\n" $pad_left "" "$text" $pad_right ""
 }
 
-# --- HEADER TĨNH ---
+# --- HEADER ---
 echo -e "${RED}+-----------------------------------------------------------------------+${NC}"
 center_text ""
 center_text "WPTANGTOC OLS $phien_ban: $version_wptangtoc_ols"
@@ -87,50 +98,35 @@ else
   echo "$thoi_diem - $chao_mung_ban_den_voi_wptangtoc_ols             "
 fi
 
-# --- KHỞI TẠO BIẾN LẦN ĐẦU ---
+# --- INIT VARS (MAIN LOOP STATE) ---
 read -r cpu a b c idle rest </proc/stat
 prev_total=$((a + b + c + idle))
 prev_idle=$idle
-
-# NETWORK INITIAL
+cpu_display_val=0
 read rx_prev tx_prev <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
 
-# --- HÀM TÍNH TOÁN VÀ HIỂN THỊ ---
-calculate_and_print() {
+# --- DISPLAY FUNCTION ---
+print_dashboard() {
   local rx_rate_in=$1
   local tx_rate_in=$2
+  local cpu_usage_in=$3
 
-  # 1. CPU
-  read -r cpu a b c idle rest </proc/stat
-  total=$((a + b + c + idle))
-  diff_idle=$((idle - prev_idle))
-  diff_total=$((total - prev_total))
-
-  prev_total=$total
-  prev_idle=$idle
-
-  if [ $diff_total -eq 0 ]; then
-    cpu_usage=0
-  else cpu_usage=$(((1000 * (diff_total - diff_idle) / diff_total + 5) / 10)); fi
-
-  # 2. RAM
+  # RAM
   ram_stats=$(free -m | awk 'NR==2{printf "%s %s %.0f", $3, $2, $3*100/$2 }')
   read -r ram_used ram_total ram_percent <<<"$ram_stats"
 
-  # 3. DISK
+  # DISK
   disk_stats=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | sed 's/G//g' | sed 's/%//g')
   read -r disk_used disk_total disk_percent <<<"$disk_stats"
 
-  # 4. NETWORK FORMAT
+  # NETWORK COLOR
   net_in_display="${rx_rate_in} KB/s"
   net_out_display="${tx_rate_in} KB/s"
   if [ "$rx_rate_in" -gt 5120 ]; then net_in_display="${RED}${rx_rate_in} KB/s${NC}"; fi
   if [ "$tx_rate_in" -gt 5120 ]; then net_out_display="${RED}${tx_rate_in} KB/s${NC}"; fi
 
-  # 5. LOAD AVERAGE
+  # LOAD & UPTIME
   load_avg=$(cat /proc/loadavg | awk '{print $1", " $2", " $3}')
-
-  # 6. UPTIME
   up_seconds=$(cat /proc/uptime | awk '{print $1}' | cut -d. -f1)
   d=$((up_seconds / 86400))
   h=$(((up_seconds % 86400) / 3600))
@@ -138,7 +134,7 @@ calculate_and_print() {
   s=$((up_seconds % 60))
   uptime_display="${d}d ${h}h ${m}m ${s}s"
 
-  # 7. SERVICE STATUS
+  # SERVICES
   if /usr/local/lsws/bin/lswsctrl status | grep -q 'litespeed is running'; then
     ols_status="${GREEN}Hoạt động${NC}"
   else
@@ -150,76 +146,96 @@ calculate_and_print() {
     db_status="${RED}Tạm dừng${NC}"
   fi
 
-  # Lấy tên OS
   os_name=$(hostnamectl | grep System | cut -f2 -d':' | sed 's/^ //g' | cut -f1 -d '(' | head -1)
 
-  # --- IN RA MÀN HÌNH ---
+  # PRINT LAYOUT
   echo "-------------------------------------------------------------------------"
-  printf "CPU : %3s%% %s  Load: %s\n" "$cpu_usage" "$(draw_bar $cpu_usage)" "$load_avg"
+  printf "CPU : %3s%% %s  Load: %s\n" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "$load_avg"
   printf "RAM : %3s%% %s  Used: %s/%s MB\n" "$ram_percent" "$(draw_bar $ram_percent)" "$ram_used" "$ram_total"
   printf "Disk: %3s%% %s  Used: %s/%s GB\n" "$disk_percent" "$(draw_bar $disk_percent)" "$disk_used" "$disk_total"
-
   echo "-------------------------------------------------------------------------"
-
   printf "Net In : %-15b |  OpenLiteSpeed : %b\n" "$net_in_display" "$ols_status"
   printf "Net Out: %-15b |  MariaDB       : %b\n" "$net_out_display" "$db_status"
   printf "Uptime : %-15s |  OS            : %s\n" "$uptime_display" "$os_name"
 
+  # MENU CENTERED
   echo '-------------------------------------------------------------------------'
+  menu_str="[ENTER] Menu  |  [2] Menu nhanh"
+  if [[ "$SHOW_UPDATE" == "1" ]]; then
+    menu_str="${menu_str}  |  ${YELLOW}[9] Cập nhật ($NEW_VERSION)${GREEN}"
+  fi
+  menu_str="${menu_str}  |  [0] Thoát"
 
-  # --- CĂN GIỮA DÒNG MENU ---
-  menu_visible="[ENTER] Menu  |  [2] Tìm kiếm nhanh  |  [0] Thoát"
-  width=73 # Độ rộng của đường kẻ ngang (đếm thực tế)
-  pad=$(((width - ${#menu_visible}) / 2))
+  clean_menu_str=$(echo -e "$menu_str" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  width=73
+  pad=$(((width - ${#clean_menu_str}) / 2))
+  if [ $pad -lt 0 ]; then pad=0; fi
   printf "%${pad}s" ""
-  echo -e "${GREEN}${menu_visible}${NC}"
-
+  echo -e "${GREEN}${menu_str}${NC}"
   echo '-------------------------------------------------------------------------'
 
-  # CẢNH BÁO
   if [ "$ram_percent" -gt 85 ]; then echo -e "${RED}Cảnh báo: RAM đang quá tải!${NC}"; fi
   if [ "$disk_percent" -gt 90 ]; then echo -e "${RED}Cảnh báo: Ổ cứng sắp đầy!${NC}"; fi
 }
 
-# --- VÒNG LẶP CHÍNH ---
+# --- VÒNG LẶP CHÍNH (MAIN LOOP) ---
 tput civis
 ACTION="menu"
 
 while true; do
-  # TÍNH TOÁN NETWORK (Main Shell)
+  # 1. NETWORK CALC
   read rx_now tx_now <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
-
   if ((rx_now < rx_prev)); then rx_rate=0; else rx_rate=$(((rx_now - rx_prev) / 1024)); fi
   if ((tx_now < tx_prev)); then tx_rate=0; else tx_rate=$(((tx_now - tx_prev) / 1024)); fi
-
   rx_prev=$rx_now
   tx_prev=$tx_now
 
-  # TÍNH TOÁN CPU (Main Shell)
+  # 2. CPU CALC (SMOOTHING)
   read -r cpu a b c idle rest </proc/stat
-  prev_total=$((a + b + c + idle))
+  total=$((a + b + c + idle))
+  diff_idle=$((idle - prev_idle))
+  diff_total=$((total - prev_total))
+
+  prev_total=$total
   prev_idle=$idle
 
-  # HIỂN THỊ
-  buffer=$(calculate_and_print "$rx_rate" "$tx_rate")
+  if [ $diff_total -eq 0 ]; then
+    cpu_now=0
+  else
+    cpu_now=$((100 * (diff_total - diff_idle) / diff_total))
+  fi
+
+  # LÀM MƯỢT: (Old + New) / 2
+  cpu_display_val=$(((cpu_display_val + cpu_now) / 2))
+
+  # 3. DISPLAY
+  buffer=$(print_dashboard "$rx_rate" "$tx_rate" "$cpu_display_val")
   echo -e "$buffer"
   lines=$(echo "$buffer" | wc -l)
 
+  # 4. HANDLE INPUT
   read -t 1 -n 1 -s key_input
   if [ $? -eq 0 ]; then
+    # === ĐOẠN NÀY ĐÃ ĐƯỢC SỬA LỖI CÚ PHÁP ===
     if [[ "$key_input" == "0" ]]; then
       ACTION="exit"
     elif [[ "$key_input" == "2" ]]; then
       ACTION="search"
-    else ACTION="menu"; fi
+    elif [[ "$key_input" == "9" && "$SHOW_UPDATE" == "1" ]]; then
+      ACTION="update"
+    else
+      # Mặc định (Enter hoặc phím bất kỳ khác)
+      ACTION="menu"
+    fi
     break
+    # ========================================
   fi
   tput cuu "$lines"
 done
 
 tput cnorm
 
-# --- XỬ LÝ ---
+# --- EXECUTE ACTION ---
 echo ""
 case $ACTION in
 "exit") echo -e "\033[1;33mĐã thoát ra WPTangToc OLS. Gõ 1 để quay lại menu.\033[0m" ;;
@@ -227,6 +243,12 @@ case $ACTION in
   if [ -f "/etc/wptt/search-wptangtoc" ]; then
     /etc/wptt/search-wptangtoc
   else echo "Lỗi file search"; fi
+  ;;
+"update")
+  if [ -f "/etc/wptt/wptt-update" ]; then
+    echo -e "${YELLOW}Đang tiến hành cập nhật hệ thống...${NC}"
+    /etc/wptt/wptt-update
+  else echo "Lỗi: Không tìm thấy file cập nhật"; fi
   ;;
 *)
   if [ -f "/usr/bin/wptangtoc" ]; then
