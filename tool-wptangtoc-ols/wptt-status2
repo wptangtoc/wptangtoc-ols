@@ -15,17 +15,6 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 box_inner_width=71
 
-# --- HÀM THOÁT AN TOÀN (TRAP CTRL+C) ---
-function cleanup_exit() {
-  tput cnorm # Hiện lại con trỏ chuột
-  echo ""
-  echo -e "Đã thoát ra WPTangToc OLS. Nhập lệnh ${GREEN}1${NC} hoặc ${GREEN}wptangtoc${NC} để quay lại menu."
-  exit 0
-}
-
-# Kích hoạt Trap: Bắt tín hiệu SIGINT (Ctrl+C)
-trap cleanup_exit SIGINT
-
 # --- LOGIC KIỂM TRA CẬP NHẬT ---
 SHOW_UPDATE=0
 NEW_VERSION=""
@@ -104,12 +93,15 @@ else
 fi
 
 if [[ $wptangtoc_ols_giatuan = "1" ]]; then
-  echo "$thoi_diem - WPTangToc OLS Premium $san_sang_phuc_vu             "
+  echo "$thoi_diem - WPTangToc OLS Premium $san_sang_phuc_vu              "
 else
-  echo "$thoi_diem - $chao_mung_ban_den_voi_wptangtoc_ols             "
+  echo "$thoi_diem - $chao_mung_ban_den_voi_wptangtoc_ols              "
 fi
 
 # --- INIT VARS (MAIN LOOP STATE) ---
+# [TỐI ƯU 1] Lấy OS Name 1 lần duy nhất, không chạy lại trong vòng lặp
+OS_NAME_STATIC=$(hostnamectl | grep System | cut -f2 -d':' | sed 's/^ //g' | cut -f1 -d '(' | head -1)
+
 read -r cpu a b c idle rest </proc/stat
 prev_total=$((a + b + c + idle))
 prev_idle=$idle
@@ -117,10 +109,13 @@ cpu_display_val=0
 read rx_prev tx_prev <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
 
 # --- DISPLAY FUNCTION ---
+# Hàm này nhận tham số trạng thái service thay vì tự kiểm tra
 print_dashboard() {
   local rx_rate_in=$1
   local tx_rate_in=$2
   local cpu_usage_in=$3
+  local ols_status_in=$4
+  local db_status_in=$5
 
   # RAM
   ram_stats=$(free -m | awk 'NR==2{printf "%s %s %.0f", $3, $2, $3*100/$2 }')
@@ -145,29 +140,16 @@ print_dashboard() {
   s=$((up_seconds % 60))
   uptime_display="${d}d ${h}h ${m}m ${s}s"
 
-  # SERVICES
-  if /usr/local/lsws/bin/lswsctrl status | grep -q 'litespeed is running'; then
-    ols_status="${GREEN}Hoạt động${NC}"
-  else
-    ols_status="${RED}Tạm dừng${NC}"
-  fi
-  if systemctl is-active mariadb.service >/dev/null 2>&1; then
-    db_status="${GREEN}Hoạt động${NC}"
-  else
-    db_status="${RED}Tạm dừng${NC}"
-  fi
-
-  os_name=$(hostnamectl | grep System | cut -f2 -d':' | sed 's/^ //g' | cut -f1 -d '(' | head -1)
-
   # PRINT LAYOUT
   echo "-------------------------------------------------------------------------"
   printf "CPU : %3s%% %s  Load: %s\n" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "$load_avg"
   printf "RAM : %3s%% %s  Used: %s/%s MB\n" "$ram_percent" "$(draw_bar $ram_percent)" "$ram_used" "$ram_total"
   printf "Disk: %3s%% %s  Used: %s/%s GB\n" "$disk_percent" "$(draw_bar $disk_percent)" "$disk_used" "$disk_total"
   echo "-------------------------------------------------------------------------"
-  printf "Net In : %-15b |  OpenLiteSpeed : %b\n" "$net_in_display" "$ols_status"
-  printf "Net Out: %-15b |  MariaDB       : %b\n" "$net_out_display" "$db_status"
-  printf "Uptime : %-15s |  OS            : %s\n" "$uptime_display" "$os_name"
+  # Hiển thị trạng thái đã được cache
+  printf "Net In : %-15b |  OpenLiteSpeed 	: %b\n" "$net_in_display" "$ols_status_in"
+  printf "Net Out: %-15b |  MariaDB 		: %b\n" "$net_out_display" "$db_status_in"
+  printf "Uptime : %-15s |  OS 			: %s\n" "$uptime_display" "$OS_NAME_STATIC"
 
   # MENU CENTERED
   echo '-------------------------------------------------------------------------'
@@ -192,6 +174,11 @@ print_dashboard() {
 # --- VÒNG LẶP CHÍNH (MAIN LOOP) ---
 tput civis
 ACTION="menu"
+
+# [TỐI ƯU 2] Khởi tạo biến đếm và cache
+counter=0
+cached_ols_status="${YELLOW}Đang kiểm tra...${NC}"
+cached_db_status="${YELLOW}Đang kiểm tra...${NC}"
 
 while true; do
   # NETWORK
@@ -219,8 +206,28 @@ while true; do
   # LÀM MƯỢT: (Old + New) / 2
   cpu_display_val=$(((cpu_display_val + cpu_now) / 2))
 
-  # HIỂN THỊ
-  buffer=$(print_dashboard "$rx_rate" "$tx_rate" "$cpu_display_val")
+  # [TỐI ƯU 3] CHỈ CHECK SERVICE MỖI 5 GIÂY
+  # Dùng phép chia lấy dư: 0, 5, 10, 15... thì mới chạy lệnh nặng
+  if ((counter % 5 == 0)); then
+    # Check OLS
+    if /usr/local/lsws/bin/lswsctrl status | grep -q 'litespeed is running'; then
+      cached_ols_status="${GREEN}Hoạt động${NC}"
+    else
+      cached_ols_status="${RED}Tạm dừng${NC}"
+    fi
+
+    # Check MariaDB
+    if systemctl is-active mariadb.service >/dev/null 2>&1; then
+      cached_db_status="${GREEN}Hoạt động${NC}"
+    else
+      cached_db_status="${RED}Tạm dừng${NC}"
+    fi
+  fi
+  # Tăng biến đếm
+  ((counter++))
+
+  # HIỂN THỊ (Truyền thêm 2 biến status đã cache)
+  buffer=$(print_dashboard "$rx_rate" "$tx_rate" "$cpu_display_val" "$cached_ols_status" "$cached_db_status")
   echo -e "$buffer"
   lines=$(echo "$buffer" | wc -l)
 
@@ -260,7 +267,7 @@ case $ACTION in
   ;;
 *)
   if [ -f "/usr/bin/wptangtoc" ]; then
-    /usr/bin/wptangtoc
+    exec /usr/bin/wptangtoc
   else echo "Lỗi file wptangtoc"; fi
   ;;
 esac
