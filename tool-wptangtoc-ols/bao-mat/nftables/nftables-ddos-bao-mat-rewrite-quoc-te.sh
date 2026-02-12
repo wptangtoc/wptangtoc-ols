@@ -16,7 +16,7 @@ echo ""
 lua_chon_NAME
 . /etc/wptt/echo-color
 if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  . /etc/wptt/wptt-wordpress-main 1
+  exec /etc/wptt/wptt-wordpress-main 1
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
@@ -24,7 +24,7 @@ if [[ ! -f "$pathcheck" ]]; then
   clear
   echoDo "Tên miền không tồn tại trên hệ thống này"
   sleep 3
-  . /etc/wptt/wptt-wordpress-main 1
+  exec /etc/wptt/wptt-wordpress-main 1
   exit
 fi
 
