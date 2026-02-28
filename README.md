@@ -12,10 +12,19 @@ AlmaLinux 9
 </li>
 
 <li>
+AlmaLinux 10
+</li>
+
+
+<li>
 Rocky linux 8
 </li>
 <li>
 Rocky linux 9
+</li>
+
+<li>
+Rocky linux 10
 </li>
 
 <li>
@@ -26,6 +35,11 @@ Red Hat Enterprise Linux 8
 Red Hat Enterprise Linux 9
 </li>
 
+
+<li>
+Red Hat Enterprise Linux 10
+</li>
+
 <li>
 Oracle Linux Server 8
 </li>
@@ -33,6 +47,7 @@ Oracle Linux Server 8
 <li>
 Oracle Linux Server 9
 </li>
+
 
 <li>
 Ubuntu 22.04
