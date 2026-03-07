@@ -1,0 +1,160 @@
+#!/bin/bash
+
+# ==============================================================================
+# SCRIPT CÀI ĐẶT VÀ CẤU HÌNH MONIT WPTANGTOC OLS
+# ==============================================================================
+
+#cấu hình biến sẵn
+if grep -qi "ubuntu" /etc/*release; then
+  OS_FAMILY="ubuntu"
+  FILE_MONITRC="/etc/monit/monitrc"
+  DIR_MONIT="/etc/monit/conf.d"
+  FILE_PID_MARIADB="/run/mysqld/mysqld.pid"
+  SOCK_MARIADB="/run/mysqld/mysqld.sock"
+  PATH_MEMCACHE_CONF="/etc/memcached.conf"
+else
+  OS_FAMILY="rhel"
+  FILE_MONITRC="/etc/monitrc"
+  DIR_MONIT="/etc/monit.d"
+  FILE_PID_MARIADB="/run/mariadb/mariadb.pid"
+  SOCK_MARIADB="/var/lib/mysql/mysql.sock"
+  PATH_MEMCACHE_CONF="/etc/sysconfig/memcached"
+fi
+
+# Nhận diện dịch vụ Redis vs Valkey
+if grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise Linux 10\|Oracle Linux Server 10" /etc/*release; then
+  name_service='valkey'
+else
+  name_service='redis'
+fi
+
+# Nhận diện file cấu hình Redis/Valkey
+if grep -q "AlmaLinux 8\|Rocky Linux 8\|Red Hat Enterprise Linux 8\|Oracle Linux Server 8" /etc/*release; then
+  PATH_REDIS_CONF="/etc/$name_service.conf"
+else
+  PATH_REDIS_CONF="/etc/$name_service/$name_service.conf"
+fi
+
+# Cờ theo dõi sự thay đổi (Nếu có cài mới thì mới Restart Monit ở cuối)
+RELOAD_MONIT=0
+
+# ------------------------------------------------------------------------------
+# 1. CÀI ĐẶT MONIT (Bypass nếu đã cài)
+# ------------------------------------------------------------------------------
+if command -v monit >/dev/null 2>&1; then
+  echo -e "\e[33m[!] Monit đã được cài đặt. Bỏ qua bước tải gói.\e[0m"
+else
+  echo -e "\e[32m[+] Hệ thống chưa có Monit. Đang tiến hành cài đặt...\e[0m"
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >/dev/null 2>&1
+    apt-get install monit -y >/dev/null 2>&1
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install epel-release -y >/dev/null 2>&1
+    dnf install monit -y >/dev/null 2>&1
+  elif command -v yum >/dev/null 2>&1; then
+    yum install epel-release -y >/dev/null 2>&1
+    yum install monit -y >/dev/null 2>&1
+  else
+    echo -e "\e[31m[x] Lỗi: Hệ điều hành này không được WPTangToc OLS hỗ trợ!\e[0m"
+    exit 1
+  fi
+  echo -e "\e[32m[✔] Cài đặt gói Monit thành công.\e[0m"
+fi
+
+# Tạo sẵn thư mục chứa rule
+mkdir -p $DIR_MONIT
+
+# Cấu hình Monit Core (Bypass nếu đã cấu hình)
+if grep -q "^set httpd port 2812" "$FILE_MONITRC"; then
+  echo -e "\e[33m[!] Monit Core đã được tối ưu. Bỏ qua.\e[0m"
+else
+  echo -e "\e[32m[+] Đang cấu hình Monit Core (HTTP & Daemon 30s)...\e[0m"
+  sed -i 's/# set httpd port 2812/set httpd port 2812/' $FILE_MONITRC
+  sed -i 's/#     use address localhost/    use address localhost/' $FILE_MONITRC
+  sed -i 's/#     allow localhost/    allow localhost/' $FILE_MONITRC
+  sed -i 's/set daemon  120/set daemon 30/; s/set daemon 120/set daemon 30/' $FILE_MONITRC
+  RELOAD_MONIT=1
+fi
+
+# ------------------------------------------------------------------------------
+# 2. RULE GIÁM SÁT OPENLITESPEED
+# ------------------------------------------------------------------------------
+if [ -f "$DIR_MONIT/lshttpd" ]; then
+  echo -e "\e[33m[!] Rule Monit cho OpenLiteSpeed đã tồn tại. Bỏ qua.\e[0m"
+else
+  echo -e "\e[32m[+] Đang thêm rule giám sát OpenLiteSpeed...\e[0m"
+  cat >$DIR_MONIT/lshttpd <<EOF
+check process lshttpd with pidfile /tmp/lshttpd/lshttpd.pid
+  start program = "/usr/bin/systemctl start lshttpd"
+  stop program  = "/usr/bin/systemctl stop lshttpd"
+  if failed host 127.0.0.1 port 80 protocol http with timeout 5 seconds then restart
+  if 5 restarts within 5 cycles then timeout
+EOF
+  RELOAD_MONIT=1
+fi
+
+# ------------------------------------------------------------------------------
+# 3. RULE GIÁM SÁT MARIADB
+# ------------------------------------------------------------------------------
+if [ -f "$DIR_MONIT/mariadb" ]; then
+  echo -e "\e[33m[!] Rule Monit cho MariaDB đã tồn tại. Bỏ qua.\e[0m"
+else
+  echo -e "\e[32m[+] Đang thêm rule giám sát MariaDB...\e[0m"
+  cat >$DIR_MONIT/mariadb <<EOF
+check process mariadb with pidfile $FILE_PID_MARIADB
+  start program = "/usr/bin/systemctl start mariadb"
+  stop program  = "/usr/bin/systemctl stop mariadb"
+  if failed unixsocket $SOCK_MARIADB protocol mysql then restart
+  if 5 restarts within 5 cycles then timeout
+EOF
+  RELOAD_MONIT=1
+fi
+
+# ------------------------------------------------------------------------------
+# 4. RULE GIÁM SÁT REDIS / VALKEY
+# ------------------------------------------------------------------------------
+if [ -f "$DIR_MONIT/$name_service" ]; then
+  echo -e "\e[33m[!] Rule Monit cho $name_service đã tồn tại. Bỏ qua.\e[0m"
+elif [[ -f "$PATH_REDIS_CONF" ]]; then
+  echo -e "\e[32m[+] Phát hiện $name_service. Đang thêm rule giám sát...\e[0m"
+  cat >$DIR_MONIT/$name_service <<EOF
+check process $name_service matching "$name_service-server"
+  start program = "/usr/bin/systemctl start $name_service"
+  stop program  = "/usr/bin/systemctl stop $name_service"
+  if failed unixsocket /var/run/$name_service/$name_service.sock protocol redis then restart
+  if 5 restarts within 5 cycles then timeout
+EOF
+  RELOAD_MONIT=1
+fi
+
+# ------------------------------------------------------------------------------
+# 5. RULE GIÁM SÁT MEMCACHED
+# ------------------------------------------------------------------------------
+if [ -f "$DIR_MONIT/memcached" ]; then
+  echo -e "\e[33m[!] Rule Monit cho Memcached đã tồn tại. Bỏ qua.\e[0m"
+elif [[ -f "$PATH_MEMCACHE_CONF" ]]; then
+  echo -e "\e[32m[+] Phát hiện Memcached. Đang thêm rule giám sát...\e[0m"
+  cat >$DIR_MONIT/memcached <<EOF
+check process memcached with pidfile /var/run/memcached/memcached.pid
+  start program = "/usr/bin/systemctl start memcached"
+  stop program  = "/usr/bin/systemctl stop memcached"
+  if failed unixsocket /var/run/memcached/memcached.sock protocol memcache then restart
+  if 5 restarts within 5 cycles then timeout
+EOF
+  RELOAD_MONIT=1
+fi
+
+# ------------------------------------------------------------------------------
+# KHỞI ĐỘNG VÀ ÁP DỤNG CẤU HÌNH
+# ------------------------------------------------------------------------------
+systemctl enable monit >/dev/null 2>&1
+
+if [ "$RELOAD_MONIT" -eq 1 ]; then
+  echo -e "\e[32m[+] Cập nhật cấu hình mới. Đang nạp lại Monit daemon...\e[0m"
+  systemctl daemon-reload
+  systemctl restart monit
+  echo -e "\e[32m[✔] HOÀN TẤT! Các rule mới đã được kích hoạt.\e[0m"
+else
+  echo -e "\e[32m[✔] KHÔNG CÓ SỰ THAY ĐỔI NÀO. Hệ thống đã ở trạng thái tối ưu nhất!\e[0m"
+fi
