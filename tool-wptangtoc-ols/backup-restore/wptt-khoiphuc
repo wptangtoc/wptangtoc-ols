@@ -1,8 +1,8 @@
-  #!/bin/bash
+#!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   Tính năng khôi phục website
@@ -54,6 +54,9 @@ if [[ ! -f "$pathcheck" ]]; then
   exec /etc/wptt/wptt-backup-restore-main 1
   exit
 fi
+
+
+
 
 . /etc/wptt/vhost/."$NAME".conf
 
@@ -280,6 +283,40 @@ clear
 
 echo "Khôi phục website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
+
+#đưa vào vị trí locking bắt đầu khoá để an toàn dữ liệu
+# ==============================================================================
+# BẮT ĐẦU CƠ CHẾ LOCKING (CHỐNG ĐỤNG ĐỘ TIẾN TRÌNH BACKUP/RESTORE)
+# ==============================================================================
+if [[ -n "$NAME" && "$NAME" != "Tất cả website" && "$NAME" != "98" ]]; then
+  # 1. Định nghĩa file khóa riêng biệt cho từng domain
+  LOCK_FILE="/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME}.lock" #ổ khoá riêng biệt của tiến trình
+
+  # 2. Gán File Descriptor 200 cho file khóa này
+  exec 200>"$LOCK_FILE"
+
+  # 3. Thử lấy khóa (Non-blocking với -n). Nếu thất bại sẽ chui vào vòng if
+  if ! flock -n 200; then
+    echo ""
+    echo "========================================================================="
+    _runloi "Lỗi Đụng Độ Tiến Trình"
+    echoDo "Website $NAME đang được thao tác bởi một tiến trình khác (Backup/Restore)."
+    echoDo "Vui lòng chờ tiến trình đó hoàn tất rồi thử lại để tránh hỏng dữ liệu!"
+    echo "========================================================================="
+
+    # Trả về menu nếu đang chạy qua menu
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" || -z "$check_menu_wptangtoc_active" ]]; then
+      sleep 3
+      exec /etc/wptt/wptt-backup-restore-main 1
+    fi
+    return 2>/dev/null
+    exit 1
+  fi
+fi
+# ==============================================================================
+# KẾT THÚC CƠ CHẾ LOCKING
+# ==============================================================================
 _runing "$xoa_toan_bo_du_lieu_database website $NAME"
 # echo "Đang tiến hành khôi phục database website $NAME ..."
 
@@ -605,6 +642,12 @@ if [[ -n $thong_bao_sql ]] && [[ -n $thong_bao_ma_nguon ]]; then
   fi
 fi
 echo "========================================================================="
+
+# 1. Báo cho Kernel mở khóa đồng bộ và chờ xác nhận (Synchronous)
+flock -u 200
+# 2. Đóng File Descriptor
+exec 200>&-
+rm -f "wptt_lock_sao_luu_khoi_phuc_${NAME}.lock" 2>/dev/null
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
