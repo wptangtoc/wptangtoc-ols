@@ -1,0 +1,71 @@
+#!/bin/bash
+
+function wptt_optimize_disk() {
+
+  # WordPress, OpenLiteSpeed, MariaDB, PHP... KHÔNG MỘT AI quan tâm đến Access Time cả.
+  # Bọn chúng chỉ quan tâm đến Modify Time (mtime - thời gian sửa file)
+
+  #chèn noatime cho all định dạng
+  #chèn logbsize 256k cho riêng xfs
+  echo "Đang tối ưu hóa Ổ cứng: Giải phóng lệnh thừa và ép xung I/O..."
+
+  # Bước 1: Xác định định dạng phân vùng gốc (/)
+  ROOT_FSTYPE=$(findmnt -n -o FSTYPE /)
+  echo "- Định dạng phân vùng gốc (/) là: $ROOT_FSTYPE"
+
+  # Biến cờ (flag) để kiểm tra xem hệ thống đã được tối ưu chưa
+  NEEDS_UPDATE=0
+  CURRENT_OPTIONS=$(awk '$2 == "/" {print $4}' /etc/fstab)
+
+  # Kiểm tra thiếu noatime
+  if [[ "$CURRENT_OPTIONS" != *"noatime"* ]]; then
+    NEEDS_UPDATE=1
+  fi
+
+  # Kiểm tra thiếu logbsize=256k nếu là XFS
+  if [[ "$ROOT_FSTYPE" == "xfs" ]] && [[ "$CURRENT_OPTIONS" != *"logbsize=256k"* ]]; then
+    NEEDS_UPDATE=1
+  fi
+
+  if [ $NEEDS_UPDATE -eq 0 ]; then
+    echo "- Tính năng tối ưu (noatime / logbsize) đã được bật sẵn trên hệ thống. Bỏ qua!"
+  else
+    # Bước 2: Tạo bản sao lưu an toàn trước khi đụng vào fstab
+    cp /etc/fstab /etc/fstab.wptt.bak
+
+    # Bước 3: Dùng awk thông minh truyền biến fstype vào để xử lý điều kiện kép
+    awk -v fstype="$ROOT_FSTYPE" '{ 
+      if ($2 == "/") { 
+        # Luôn nhét noatime nếu chưa có
+        if ($4 !~ /noatime/) { $4 = $4 ",noatime" } 
+        
+        # Nếu ổ là XFS thì nhét thêm logbsize=256k
+        if (fstype == "xfs" && $4 !~ /logbsize=256k/) { $4 = $4 ",logbsize=256k" }
+      } 
+      print 
+    }' /etc/fstab | column -t >/tmp/fstab.new
+
+    # Ghi đè an toàn vào fstab gốc
+    cat /tmp/fstab.new >/etc/fstab
+    rm -f /tmp/fstab.new
+
+    # Bước 4: Áp dụng cấu hình ngay lập tức (noatime sẽ ăn ngay trên ext4/xfs)
+    mount -o remount /
+
+    # Bước 5: Trị bệnh cứng đầu của XFS trên phân vùng Root
+    if [[ "$ROOT_FSTYPE" == "xfs" ]]; then
+      echo "- Phát hiện XFS: Đang tiêm cấu hình vào Bootloader (Grubby)..."
+      if command -v grubby >/dev/null 2>&1; then
+        grubby --update-kernel=ALL --args="rootflags=logbsize=256k,noatime"
+      fi
+      echo "- Lưu ý: Với XFS Root, tham số logbsize=256k sẽ chính thức sau khi Reboot."
+    fi
+
+    echo "- Đã tích hợp tối ưu I/O thành công! Ổ cứng của VPS đã được giảm tải."
+
+    # Lệnh để xem giá trị thực tế đang chạy: findmnt /
+  fi
+}
+
+# Gọi hàm thực thi
+wptt_optimize_disk
