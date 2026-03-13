@@ -57,7 +57,7 @@ Ubuntu 24.04
 </li>
 
 </ul>
-Hệ điều hành mà mình yêu thích nhất là AlmaLinux 8:
+Hệ điều hành mà mình yêu thích nhất là AlmaLinux 9:
 
 
 Bạn paste đoạn mã này vào terminal của bạn rồi phần mềm sẽ tự động thiết lập.
