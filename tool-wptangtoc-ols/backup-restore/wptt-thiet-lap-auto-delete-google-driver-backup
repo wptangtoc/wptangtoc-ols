@@ -26,7 +26,7 @@ checkactivate=$(grep -rnw '/root/.config/rclone/rclone.conf' -e "wptangtoc" >>/d
 if [[ "$checkactivate" = "2" ]]; then
   google=4
 else
-  echo "Bạn chưa kích hoạt rclone Google Driver"
+  echo "Bạn chưa kích hoạt rclone Google Drive"
   sleep 3
   exec /etc/wptt/wptt-backup-restore-main 1
   exit
@@ -43,8 +43,8 @@ if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     path="/etc/cron.d/delete-google-driver-$domain.cron"
     i=1
     if [[ -f "$path" ]]; then
-      checkauto="Da kich hoat gia tri thiet lap la "
-      checktuan0=$(cat /etc/wptt-auto/$domain-delete-backup-google-driver | grep "delete" | awk '{print $4}' | sed "s/d//g")
+      checkauto="Đã kích hoạt giá trị thiết lập là "
+      checktuan0=$(cat /etc/wptt-auto/$domain-delete-backup-google-driver | awk '{print $NF}' | grep -o '[0-9]\+$')
       themphut=" ngày"
     else
       checkauto="Chưa kích hoạt"
@@ -53,8 +53,16 @@ if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     fi
     echo "Website $domain $checkauto$checktuan0$themphut tự động xóa file backup hết hạn trên Drive"
   done
+
+  if [[ ! -f /etc/wptt-auto/delete-backup-google-driver-all-website ]]; then
+    echo "Toàn bộ website chưa thiết lập tự động xoá backup hết hạn trên drive"
+  else
+    checkauto="Đã kích hoạt giá trị thiết lập là "
+    checktuan0=$(cat /etc/wptt-auto/delete-backup-google-driver-all-website | awk '{print $NF}' | grep -o '[0-9]\+$')
+    themphut=" ngày"
+    echo "Toàn bộ website $checkauto$checktuan0$themphut tự động xóa file backup hết hạn trên Drive"
+  fi
   echo "========================================================================="
-  echo
 fi
 
 function lua_chon_NAME() {
@@ -68,6 +76,10 @@ function lua_chon_NAME() {
       fi
     done
 
+    if [[ ! -f /etc/cron.d/delete-google-driver-all-website-wptt-ols.cron ]]; then
+      selects+=("Tất cả website")
+    fi
+
     if [[ $selects = '' ]]; then
       echo "Tất cả domain trên hệ thống đã được kích hoạt xóa file backup tự động trên Google Drive hết rồi"
       exec /etc/wptt/wptt-backup-restore-main 1
@@ -75,7 +87,7 @@ function lua_chon_NAME() {
 
     PS3="
 -//- Nhập lựa chọn website của bạn [0=Thoát]: "
-    select select in ${selects[@]}; do
+    select select in "${selects[@]}"; do
       NAME=$select
       index=$REPLY
       break
@@ -97,16 +109,22 @@ if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
   exec /etc/wptt/wptt-backup-restore-main 1
 fi
 
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 3
-  exec /etc/wptt/wptt-backup-restore-main 1
-  exit
+if [[ $NAME != 'Tất cả website' ]]; then
+  pathcheck="/etc/wptt/vhost/.$NAME.conf"
+  if [[ ! -f "$pathcheck" ]]; then
+    clear
+    echoDo "Tên miền không tồn tại trên hệ thống này"
+    sleep 3
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-backup-restore-main 1
+    fi
+    return 2>/dev/null
+    exit
+  fi
 fi
 
-if [ -f /etc/cron.d/delete-google-driver-$NAME.cron ]; then
+if [ -f /etc/cron.d/delete-google-driver-"$NAME".cron ]; then
   echo "$NAME đã được kích hoạt tự động backup hết hạn trước đó rồi!"
   sleep 3
   exec /etc/wptt/wptt-backup-restore-main 1
@@ -126,23 +144,48 @@ if [[ ! $ngay =~ ^-?[0-9]+$ ]]; then
 fi
 
 _runing "Thiết lập xóa file backup trên Google Drive hết hạn"
-cat >"/etc/wptt-auto/$NAME-delete-backup-google-driver" <<END
+
+if [[ $NAME = 'Tất cả website' ]]; then
+  cat >"/etc/wptt-auto/delete-backup-google-driver-all-website" <<END
 #!/bin/bash
-. /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup $NAME $ngay
+nice -n 19 /bin/bash /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup "$NAME" $ngay
 END
+  chmod 740 /etc/wptt-auto/delete-backup-google-driver-all-website
+else
+  cat >"/etc/wptt-auto/$NAME-delete-backup-google-driver" <<END
+#!/bin/bash
+nice -n 19 /bin/bash /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup $NAME $ngay
+END
+  chmod 740 /etc/wptt-auto/$NAME-delete-backup-google-driver
+fi
 
-chmod 740 /etc/wptt-auto/$NAME-delete-backup-google-driver
-
-cat >"/etc/cron.d/delete-google-driver-$NAME.cron" <<END
+if [[ $NAME = 'Tất cả website' ]]; then
+  cat >"/etc/cron.d/delete-google-driver-all-website-wptt-ols.cron" <<END
+0 3 * * * root /etc/wptt-auto/delete-backup-google-driver-all-website >/dev/null 2>&1
+END
+else
+  cat >"/etc/cron.d/delete-google-driver-$NAME.cron" <<END
 0 3 * * * root /etc/wptt-auto/$NAME-delete-backup-google-driver >/dev/null 2>&1
 END
+fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  NAME_CRON_ubuntu=${NAME//[.]/_}
-  ln -sf /etc/cron.d/delete-google-driver-$NAME.cron /etc/cron.d/delete-google-driver-${NAME_CRON_ubuntu}_cron
-  systemctl restart cron.service
+if [[ $NAME = 'Tất cả website' ]]; then
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    ln -sf /etc/cron.d/delete-google-driver-all-website-wptt-ols.cron /etc/cron.d/delete-google-driver-all-website-wptt-ols_cron
+    systemctl restart cron.service
+  else
+    systemctl restart crond.service
+  fi
+
+  unset NAME #unset để print giá trị dưới là rỗng
 else
-  systemctl restart crond.service
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    NAME_CRON_ubuntu=${NAME//[.]/_}
+    ln -sf /etc/cron.d/delete-google-driver-$NAME.cron /etc/cron.d/delete-google-driver-${NAME_CRON_ubuntu}_cron
+    systemctl restart cron.service
+  else
+    systemctl restart crond.service
+  fi
 fi
 
 _rundone "Thiết lập xóa file backup trên Google Drive hết hạn"
@@ -150,7 +193,7 @@ echo "========================================================================="
 echo "Hoàn tất kích hoạt tự động xóa file backup hết hạn Google Drive"
 echo "========================================================================="
 echo "Vào lúc 3 giờ sáng hàng ngày"
-echo "Hệ thống sẽ tự động xóa các file backup trong thư mục backup google driver: wptangtoc_ols_backup/$NAME file nào đã được tạo trước ngày $ngay ngày sẽ tự động xóa đi"
+echo "Hệ thống sẽ tự động xóa các file backup trong thư mục backup google drive: wptangtoc_ols_backup/$NAME file nào đã được tạo trước ngày $ngay ngày sẽ tự động xóa đi"
 echo "========================================================================="
 
 check_menu_wptangtoc_active=$1
