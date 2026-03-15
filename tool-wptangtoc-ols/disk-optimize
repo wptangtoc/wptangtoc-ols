@@ -5,8 +5,8 @@ function wptt_optimize_disk() {
   # WordPress, OpenLiteSpeed, MariaDB, PHP... KHÔNG MỘT AI quan tâm đến Access Time cả.
   # Bọn chúng chỉ quan tâm đến Modify Time (mtime - thời gian sửa file)
 
-  #chèn noatime cho all định dạng
-  #chèn logbsize 256k cho riêng xfs
+  # chèn noatime cho all định dạng
+  # chèn logbsize=256k cho riêng xfs
   echo "Đang tối ưu hóa Ổ cứng: Giải phóng lệnh thừa và ép xung I/O..."
 
   # Bước 1: Xác định định dạng phân vùng gốc (/)
@@ -33,21 +33,29 @@ function wptt_optimize_disk() {
     # Bước 2: Tạo bản sao lưu an toàn trước khi đụng vào fstab
     cp /etc/fstab /etc/fstab.wptt.bak
 
-    # Bước 3: Dùng awk thông minh truyền biến fstype vào để xử lý điều kiện kép
+    # Bước 3: Dùng awk thông minh truyền biến fstype vào để xử lý
+    # (ĐÃ XÓA 'column -t' ĐỂ TRÁNH THẢM HỌA FILE RỖNG)
     awk -v fstype="$ROOT_FSTYPE" '{ 
-      if ($2 == "/") { 
-        # Luôn nhét noatime nếu chưa có
+      # Chỉ xử lý dòng không bị comment và mount point là /
+      if ($1 !~ /^#/ && $2 == "/") { 
         if ($4 !~ /noatime/) { $4 = $4 ",noatime" } 
-        
-        # Nếu ổ là XFS thì nhét thêm logbsize=256k
         if (fstype == "xfs" && $4 !~ /logbsize=256k/) { $4 = $4 ",logbsize=256k" }
       } 
-      print 
-    }' /etc/fstab | column -t >/tmp/fstab.new
+      print $0
+    }' /etc/fstab >/tmp/fstab.new
 
-    # Ghi đè an toàn vào fstab gốc
-    cat /tmp/fstab.new >/etc/fstab
-    rm -f /tmp/fstab.new
+    # BƯỚC PHÒNG THỦ THÉP: Kiểm tra file mới có dung lượng > 0 byte không?
+    if [[ -s /tmp/fstab.new ]]; then
+      # File an toàn, tiến hành ghi đè
+      cat /tmp/fstab.new >/etc/fstab
+      rm -f /tmp/fstab.new
+    else
+      # Cứu nạn khẩn cấp nếu lệnh awk bị lỗi
+      echo "- LỖI NGHIÊM TRỌNG: Quá trình tạo file fstab thất bại (file rỗng). Đang hủy bỏ thao tác!"
+      cat /etc/fstab.wptt.bak >/etc/fstab
+      rm -f /tmp/fstab.new
+      return 1
+    fi
 
     # Bước 4: Áp dụng cấu hình ngay lập tức (noatime sẽ ăn ngay trên ext4/xfs)
     mount -o remount /
