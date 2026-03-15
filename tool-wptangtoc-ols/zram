@@ -1,1 +1,321 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2025
 
+function huong_dan() {
+  1. Tính Năng Cài Đặt ZRAM [Install ZRAM Swap]
+  Cài đặt ZRAM là quá trình thiết lập một phân vùng Swap [bộ nhớ ảo] hoạt động hoàn toàn trên RAM vật lý, sử dụng thuật toán nén dữ liệu thời gian thực.
+
+  ZRAM là một công cụ chuẩn Enterprise giúp máy chủ:
+  * Tránh sập nguồn [OOM] khi bị quá tải RAM cục bộ.
+  * Tăng tốc độ đọc/ghi Swap lên gấp hàng nghìn lần so với Swap trên ổ cứng SSD/NVMe.
+  * Bảo vệ tuổi thọ ổ cứng vật lý do không còn phải ghi/xóa các file rác liên tục.
+  * Tự động điều chỉnh thông minh: Sử dụng 50% lượng RAM hiện có đối với máy chủ nhỏ, hoặc khóa trần ở mức tối đa 4GB đối với máy chủ lớn để bảo vệ CPU.
+  * Tự động dọn dẹp và xóa hoàn toàn Swap đĩa cũ để giải phóng dung lượng SSD.
+
+  Kết quả: Sau khi cài đặt, hệ thống sẽ có một ổ đĩa nén ZRAM [zram0] siêu tốc. Máy chủ sẽ lỳ lợm hơn khi chịu tải nặng.
+
+  2. Tính Năng Hủy Cài Đặt ZRAM [Uninstall ZRAM Swap]
+  Hủy cài đặt ZRAM là quá trình gỡ bỏ module nén bộ nhớ và trả lại không gian RAM vật lý cũng như trả lại cơ chế Swap đĩa truyền thống của Linux.
+
+  Mục đích chính:
+  * CPU của VPS quá yếu, không thể gánh được thuật toán nén.
+  * Máy chủ chuyên dụng cho Database [không dùng chung Web Server].
+
+  Kết quả: Dịch vụ ZRAM sẽ được dừng, xóa cấu hình và hệ thống sẽ tự động khởi tạo lại một Swap đĩa dung lượng 1GB [/var/swap.1] để đảm bảo an toàn cơ bản.
+}
+
+if [[ -f /etc/wptt/.wptt.conf ]]; then #nếu có thì mới được phép call chánh báo lỗi khi install lúc đầu install script
+  . /etc/wptt/.wptt.conf
+fi
+
+if [[ $ngon_ngu = '' ]]; then
+  ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+if [[ $1 = '98' ]]; then
+  echo "========================================================================="
+  echo "| Quản lý tối ưu RAM => Bật/Tắt ZRAM (Swap nén siêu tốc)                 |"
+  echo "========================================================================="
+fi
+
+. /etc/wptt/echo-color
+
+# ==============================================================================
+# NHẬN DIỆN HỆ ĐIỀU HÀNH ĐỂ THIẾT LẬP ĐƯỜNG DẪN CẤU HÌNH
+# ==============================================================================
+if grep -qiE "ubuntu|debian" /etc/os-release; then
+  OS_TYPE="UBUNTU"
+  duong_dan_config_zram="/etc/default/zramswap"
+else
+  OS_TYPE="RHEL"
+  duong_dan_config_zram="/etc/systemd/zram-generator.conf"
+fi
+
+# Xử lý đối số dòng lệnh (CLI Arguments)
+tham_so=$1
+bo_qua_xac_nhan="n"
+
+if [[ "$tham_so" == "on" ]]; then
+  if [[ -f "$duong_dan_config_zram" ]]; then
+    echo "ZRAM đã được kích hoạt từ trước!"
+    exit 0
+  fi
+  bo_qua_xac_nhan="y"
+elif [[ "$tham_so" == "off" ]]; then
+  if [[ ! -f "$duong_dan_config_zram" ]]; then
+    echo "ZRAM chưa được cài đặt, không thể tắt!"
+    exit 0
+  fi
+  bo_qua_xac_nhan="y"
+fi
+
+# ==============================================================================
+# PHẦN 1: CÀI ĐẶT ZRAM
+# ==============================================================================
+if [[ ! -f "$duong_dan_config_zram" ]]; then
+
+  if [[ "$bo_qua_xac_nhan" == "y" ]]; then
+    dongyconfig="y"
+  else
+    echo "$xac_nhan $ban_co_muon $cai ZRAM?"
+
+    prompt="$nhap_lua_chon_cua_ban [1-2]: "
+    bien=$1
+    dongyconfig='n'
+    options=("$dong_y" "$khong_dong_y")
+
+    PS3="$prompt"
+    select opt in "${options[@]}"; do
+      case "$REPLY" in
+      1)
+        dongyconfig="y"
+        break
+        ;;
+      2)
+        dongyconfig="n"
+        break
+        ;;
+      $((${#options[@]} + 1)))
+        printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+        break
+        ;;
+      *)
+        printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+        break
+        ;;
+      esac
+    done
+  fi
+
+  if [[ "$dongyconfig" != "y" ]]; then
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-cache-main 1
+    fi
+    exit
+  fi
+
+  echo "Kích hoạt ZRAM: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  _runing "$cai ZRAM"
+
+  # Thuật toán tính toán thông minh của WPTangToc OLS
+  tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+
+  if (($rong_ram_mb <= 8192)); then
+    # Máy <= 8GB: Lấy 50% RAM vật lý
+    ZRAM_SIZE_MB=$((rong_ram_mb / 2))
+  else
+    # Máy > 8GB: Khóa cứng túi khí ZRAM ở mức 4GB (4096MB)
+    ZRAM_SIZE_MB=4096
+  fi
+
+  _runing "$thiet_lap ZRAM (${ZRAM_SIZE_MB}MB)"
+
+  # ---------------------------------------------------------
+  # TÁCH LUỒNG CÀI ĐẶT PACKAGE VÀ GHI CẤU HÌNH THEO OS
+  # ---------------------------------------------------------
+  if [[ "$OS_TYPE" == "UBUNTU" ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get purge zram-generator -y >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install zram-tools -y >/dev/null 2>&1
+    BEST_ALGO="zstd"
+    cat <<EOF >$duong_dan_config_zram
+ALGO=$BEST_ALGO
+SIZE=$ZRAM_SIZE_MB
+PRIORITY=100
+EOF
+  else
+    yum install zram-generator -y >/dev/null 2>&1
+    SUPPORTED_ALGOS=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null)
+    if [[ "$SUPPORTED_ALGOS" == *"zstd"* ]]; then
+      BEST_ALGO="zstd"
+    elif [[ "$SUPPORTED_ALGOS" == *"lz4"* ]]; then
+      BEST_ALGO="lz4"
+    else
+      BEST_ALGO="lzo" # Đường cùng mới xài đồ cổ
+    fi
+    echo "[zram0]
+zram-size = $ZRAM_SIZE_MB
+compression-algorithm = $BEST_ALGO
+swap-priority = 100
+fs-type = swap" >$duong_dan_config_zram
+  fi
+
+  # ---------------------------------------------------------
+  # CẤU HÌNH KERNEL & DỌN DẸP SWAP (DÙNG CHUNG)
+  # ---------------------------------------------------------
+  echo "# wptangtoc-ols zram optimize
+vm.page-cluster = 0
+vm.swappiness = 100" >/etc/sysctl.d/99-wptt-zram.conf
+
+  if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then
+    sed -i '/vm.swappiness/d' /usr/lib/tuned/virtual-guest/tuned.conf
+    echo 'vm.swappiness = 100' >>/usr/lib/tuned/virtual-guest/tuned.conf
+  fi
+
+  if [[ -f /etc/sysctl.d/101-sysctl.conf ]]; then
+    sed -i '/vm.swappiness/d' /etc/sysctl.d/101-sysctl.conf
+    echo 'vm.swappiness = 100' >>/etc/sysctl.d/101-sysctl.conf
+  fi
+
+  # Áp dụng Kernel tức thì
+  sysctl -p /etc/sysctl.d/101-sysctl.conf >/dev/null 2>&1
+  sysctl -p /etc/sysctl.d/99-wptt-zram.conf >/dev/null 2>&1
+
+  # Vô hiệu hóa Swap đĩa cũ và xóa hẳn để giải phóng SSD
+  swapoff -a >/dev/null 2>&1
+  rm -rf /var/swap.1 /swapfile /swap.img 2>/dev/null
+  sed -i -e '/swap.1/d' -e '/swapfile/d' -e '/swap.img/d' /etc/fstab
+  sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+  # ---------------------------------------------------------
+  # KHỞI ĐỘNG DỊCH VỤ THEO OS
+  # ---------------------------------------------------------
+  systemctl daemon-reload >/dev/null 2>&1
+  if [[ "$OS_TYPE" == "UBUNTU" ]]; then
+    systemctl restart zramswap >/dev/null 2>&1
+    systemctl enable zramswap >/dev/null 2>&1
+  else
+    systemctl enable systemd-zram-setup@zram0.service >/dev/null 2>&1
+    systemctl start systemd-zram-setup@zram0.service >/dev/null 2>&1
+  fi
+
+  _rundone "$thiet_lap ZRAM"
+  echo ''
+  echo "========================================================================="
+  echo "ZRAM ĐÃ KÍCH HOẠT: ${ZRAM_SIZE_MB}MB (Thuật toán nén: $BEST_ALGO)"
+  echo "Đã xóa vĩnh viễn Swap đĩa cũ, giải phóng dung lượng ổ cứng."
+  echo "Máy chủ đã được trang bị bộ đệm chống tràn RAM siêu tốc!"
+  echo "========================================================================="
+
+# ==============================================================================
+# PHẦN 2: HỦY CÀI ĐẶT ZRAM
+# ==============================================================================
+else
+
+  if [[ "$bo_qua_xac_nhan" == "y" ]]; then
+    dongyconfig="y"
+  else
+    echo "$xac_nhan $ban_co_muon $xoa ZRAM?"
+    prompt="$nhap_lua_chon_cua_ban [1-2]: "
+    bien=$1
+    dongyconfig='n'
+    options=("$dong_y" "$khong_dong_y")
+
+    PS3="$prompt"
+    select opt in "${options[@]}"; do
+      case "$REPLY" in
+      1)
+        dongyconfig="y"
+        break
+        ;;
+      2)
+        dongyconfig="n"
+        break
+        ;;
+      $((${#options[@]} + 1)))
+        printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+        break
+        ;;
+      *)
+        printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+        break
+        ;;
+      esac
+    done
+  fi
+
+  if [[ "$dongyconfig" != "y" ]]; then
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-cache-main 1
+    fi
+    exit
+  fi
+
+  echo "Huỷ kích hoạt ZRAM: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  _runing "$xoa ZRAM"
+
+  # ---------------------------------------------------------
+  # DỪNG VÀ GỠ CÀI ĐẶT THEO OS
+  # ---------------------------------------------------------
+  if [[ "$OS_TYPE" == "UBUNTU" ]]; then
+    systemctl stop zramswap >/dev/null 2>&1
+    systemctl disable zramswap >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get remove --purge zram-tools -y >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1
+  else
+    systemctl stop systemd-zram-setup@zram0.service >/dev/null 2>&1
+    systemctl disable systemd-zram-setup@zram0.service >/dev/null 2>&1
+    swapoff /dev/zram0 >/dev/null 2>&1
+    yum remove zram-generator -y >/dev/null 2>&1
+  fi
+
+  # ---------------------------------------------------------
+  # DỌN DẸP CẤU HÌNH KERNEL (DÙNG CHUNG)
+  # ---------------------------------------------------------
+  rm -f $duong_dan_config_zram
+  rm -f /etc/sysctl.d/99-wptt-zram.conf
+
+  if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then #trả về swap truyền thống 10
+    sed -i '/vm.swappiness/d' /usr/lib/tuned/virtual-guest/tuned.conf
+    echo 'vm.swappiness = 10' >>/usr/lib/tuned/virtual-guest/tuned.conf
+  fi
+
+  if [[ -f /etc/sysctl.d/101-sysctl.conf ]]; then
+    sed -i '/vm.swappiness/d' /etc/sysctl.d/101-sysctl.conf
+    echo 'vm.swappiness = 10' >>/etc/sysctl.d/101-sysctl.conf
+  fi
+
+  # Khôi phục lại cấu hình Kernel gốc của WPTangToc
+  sysctl -p /etc/sysctl.d/101-sysctl.conf >/dev/null 2>&1
+
+  _rundone "$xoa ZRAM"
+
+  # BẮT ĐẦU: Khởi tạo lại Swap đĩa 1GB
+  _runing "Khởi tạo lại Swap đĩa 1024MB"
+  swapoff -a -v >/dev/null 2>&1
+  rm -rf /var/swap.1 /swapfile /swap.img
+  /bin/dd if=/dev/zero of=/var/swap.1 bs=1M count=1024 >/dev/null 2>&1
+  chmod 600 /var/swap.1
+  /sbin/mkswap /var/swap.1 >/dev/null 2>&1
+  /sbin/swapon /var/swap.1 >/dev/null 2>&1
+  sed -i -e '/swap.1/d' -e '/swapfile/d' -e '/swap.img/d' /etc/fstab
+  sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+  echo '/var/swap.1 none swap defaults 0 0' >>/etc/fstab
+  _rundone "Khởi tạo lại Swap đĩa 1024MB"
+
+  systemctl daemon-reload >/dev/null 2>&1
+fi
+
+# lệnh check: swapon --show
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  exec /etc/wptt/wptt-cache-main 1
+fi
