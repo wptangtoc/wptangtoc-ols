@@ -35,7 +35,7 @@ if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     i=1
     if [[ -f "$path" ]]; then
       checkauto="Đã kích hoạt giá trị thiết lập là "
-      checktuan0=$(cat /etc/wptt-auto/$domain-delete-backup | grep "backup" | cut -f6 -d " " | sed 's/+//g')
+      checktuan0=$(cat /etc/wptt-auto/$domain-delete-backup | sed 's/.*-mmin +\([0-9]*\).*/\1/' | awk '{print $NF}' | grep -o '[0-9]\+$')
       checktuan=$(expr $checktuan0 / 60 / 24)
       themphut=" ngày"
     else
@@ -45,6 +45,16 @@ if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     fi
     echo "Website $domain $checkauto$checktuan$themphut tự động xóa file backup hết hạn"
   done
+
+  if [[ ! -f /etc/wptt-auto/all-delete-backup-het-han-local && ! -f /etc/cron.d/delete-backup-all-website-wptt-ols-local.cron ]]; then
+    echo "Toàn bộ website chưa thiết lập xoá hết hạn backup"
+  else
+    checkauto="Đã kích hoạt giá trị thiết lập là "
+    checktuan0=$(cat /etc/wptt-auto/all-delete-backup-het-han-local | sed 's/.*-mmin +\([0-9]*\).*/\1/' | awk '{print $NF}' | grep -o '[0-9]\+$')
+    checktuan=$(expr $checktuan0 / 60 / 24)
+    themphut=" ngày"
+    echo "Toàn bộ website $checkauto$checktuan$themphut tự động xóa file backup hết hạn"
+  fi
   echo "========================================================================="
   echo
 fi
@@ -60,6 +70,10 @@ function lua_chon_NAME() {
       fi
     done
 
+    if [[ ! -f /etc/cron.d/delete-backup-all-website-wptt-ols-local.cron ]]; then
+      selects+=("Tất cả website")
+    fi
+
     if [[ $selects = '' ]]; then
       echo "Tất cả domain trên hệ thống đã được kích hoạt xóa file backup tự động hết rồi"
       exec /etc/wptt/wptt-backup-restore-main 1
@@ -67,7 +81,7 @@ function lua_chon_NAME() {
 
     PS3="
 -//- Nhập lựa chọn website của bạn [0=Thoát]: "
-    select select in ${selects[@]}; do
+    select select in "${selects[@]}"; do
       NAME=$select
       index=$REPLY
       break
@@ -85,14 +99,23 @@ echo "Lựa chọn website bạn muốn tự động file backup sao lưu hết 
 echo ""
 lua_chon_NAME
 
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" || "$NAME" = "0" ]]; then
-  clear
-  exec /etc/wptt/wptt-backup-restore-main 1
-  exit
+if [[ $NAME != 'Tất cả website' ]]; then
+  pathcheck="/etc/wptt/vhost/.$NAME.conf"
+  if [[ ! -f "$pathcheck" ]]; then
+    clear
+    . /etc/wptt/echo-color
+    echoDo "Tên miền không tồn tại trên hệ thống này"
+    sleep 3
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-backup-restore-main 1
+    fi
+    return 2>/dev/null
+    exit
+  fi
 fi
 
-if [ -f /etc/cron.d/delete$NAME.cron ]; then
+if [ -f /etc/cron.d/delete"$NAME".cron ]; then
   echo "$NAME da kich hoat tu dong xoa backup het han truoc roi!"
   sleep 3
   exec /etc/wptt/wptt-backup-restore-main 1
@@ -105,39 +128,64 @@ ví dụ: 10 hay 60 la số nguyên dương: " ngay
 
 if [[ ! $ngay =~ ^-?[0-9]+$ ]]; then
   clear
-  echo "So phut khong dung dinh dang"
+  echo "Số ngày không đúng định dạng"
+  echo "Vui lòng nhập số tự nhiên"
   exec /etc/wptt/wptt-backup-restore-main 1
   exit
 fi
 
-_runing "Thiết lập xóa file backup hết hạn website $NAME"
 phut=$(expr $ngay \* 60 \* 24)
 
-cat >"/etc/wptt-auto/$NAME-delete-backup" <<END
+if [[ $NAME != 'Tất cả website' ]]; then
+  _runing "Thiết lập xóa file backup hết hạn website $NAME"
+  cat >"/etc/wptt-auto/$NAME-delete-backup" <<END
 #!/bin/bash
-find /usr/local/backup-website/$NAME -type f -mmin +$phut -delete 2>/dev/null
+ionice -c 3 nice -n 19 find /usr/local/backup-website/$NAME -maxdepth 1 -type f -mmin +$phut -delete 2>/dev/null
 END
-chmod 740 /etc/wptt-auto/$NAME-delete-backup
+  chmod 740 /etc/wptt-auto/$NAME-delete-backup
 
-cat >"/etc/cron.d/delete$NAME.cron" <<END
+  cat >"/etc/cron.d/delete$NAME.cron" <<END
 0 2 * * * root /etc/wptt-auto/$NAME-delete-backup >/dev/null 2>&1
 END
+fi
+
+if [[ $NAME = 'Tất cả website' ]]; then
+  _runing "Thiết lập xóa file backup hết hạn toàn bộ website"
+  cat >"/etc/wptt-auto/all-delete-backup-het-han-local" <<END
+#!/bin/bash
+ionice -c 3 nice -n 19 find /usr/local/backup-website -maxdepth 2 -type f -mmin +$phut -delete 2>/dev/null
+END
+  chmod 740 /etc/wptt-auto/all-delete-backup-het-han-local
+
+  cat >"/etc/cron.d/delete-backup-all-website-wptt-ols-local.cron" <<END
+0 2 * * * root /etc/wptt-auto/all-delete-backup-het-han-local >/dev/null 2>&1
+END
+
+fi
 
 if $(cat /etc/*release | grep -q "Ubuntu"); then
   NAME_CRON_ubuntu=${NAME//[.]/_}
   ln -sf /etc/cron.d/delete$NAME.cron /etc/cron.d/delete${NAME_CRON_ubuntu}_cron
+  if [[ -f /etc/cron.d/delete-backup-all-website-wptt-ols-local.cron ]]; then
+    ln -sf /etc/cron.d/delete-backup-all-website-wptt-ols-local.cron /etc/cron.d/delete-backup-all-website-wptt-ols-local_cron
+  fi
   systemctl restart cron.service
 else
   systemctl restart crond.service
 fi
 
-_rundone "Thiết lập xóa file backup hết hạn website $NAME"
-
-echo "Thiết lập tự động xoá file backup website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+if [[ $NAME = 'Tất cả website' ]]; then
+  _rundone "Thiết lập xóa file backup hết hạn toàn bộ website"
+  echo "Thiết lập tự động xoá file backup website hết hạn toàn bộ website: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  unset NAME
+else
+  _rundone "Thiết lập xóa file backup hết hạn website $NAME"
+  echo "Thiết lập tự động xoá file backup hết hạn website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+fi
 
 echo "========================================================================="
 echo "cứ vào lúc 2 giờ sáng hàng ngày"
-echo "hệ thống sẽ tự động xóa file backup trong thư mục /usr/local/backup-website/$NAME file nào đã được tạo trước $ngay ngày sẽ tự động xóa"
+echo "hệ thống sẽ tự động xóa file backup trong thư mục /usr/local/backup-website/$NAME file nào đã được tạo quá hạn $ngay ngày sẽ tự động xóa"
 echo "========================================================================="
 
 check_menu_wptangtoc_active=$1
