@@ -1,0 +1,165 @@
+#!/bin/bash
+
+#cat <(crontab -l) <(echo '@reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1') | crontab -
+# @reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
+
+# Tính năng: Tự động đánh hơi và cấu hình lại hệ thống khi VPS được nâng cấp RAM
+PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' #bien moi truong full day du
+
+# 1. Đọc tổng RAM hiện tại của VPS (tính bằng MB)
+TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
+FILE_CACHE="/etc/wptt/.ram_hien_tai"
+
+# Nếu chạy lần đầu (mới cài OLS), lưu mốc RAM gốc và thoát
+if [ ! -f "$FILE_CACHE" ]; then
+  echo "$TOTAL_RAM" >"$FILE_CACHE"
+  exit 0
+fi
+
+# Đọc mốc RAM cũ
+OLD_RAM=$(cat "$FILE_CACHE")
+
+# 2. Tính toán độ chênh lệch phần cứng (Tránh việc RAM trồi sụt vài MB do hệ thống)
+DIFF=$((TOTAL_RAM - OLD_RAM))
+# Lấy trị tuyệt đối (Dùng cho cả trường hợp khách hạ cấp VPS)
+if [ $DIFF -lt 0 ]; then DIFF=$((-DIFF)); fi
+
+# 3. NẾU NÂNG CẤP HOẶC HẠ CẤP TRÊN 500MB -> KÍCH HOẠT AUTO-TUNING
+if [ $DIFF -gt 500 ]; then
+  echo "$(date '+%d-%m-%Y %H:%M') - Phát hiện đổi phần cứng: RAM từ ${OLD_RAM}MB sang ${TOTAL_RAM}MB. Đang Auto-Tune..." >>/var/log/wptangtoc-ols.log
+
+  #thực thi auto tune
+
+  #tính toán cấu hình
+  work_cpucore='1024'
+  cpucore=$(grep -c ^processor /proc/cpuinfo)
+  max_client=$(expr $work_cpucore \* $cpucore \* 2)
+  max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
+  max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
+  tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+  gioi_han_tien_trinh_bao_loi_503=$(expr $max_client \/ 8)
+  core_tien_lsphp_child=$(expr $cpucore \* 2)
+  if [[ "$rong_ram_mb" = "" ]]; then
+    rong_ram_mb="2048"
+  fi
+  tong_ram_mb_db=$(echo "scale=0;${rong_ram_mb}/4" | bc)
+
+  if [[ $tong_ram_mb_db = '' ]]; then
+    tong_ram_mb_db="2048"
+  fi
+
+  tong_ram_gb=$(expr ${rong_ram_mb} / 1024)
+  db_table_size=$(expr $tong_ram_gb \* 64)
+  buffer_db=$(expr $rong_ram_mb / 6)
+  max_conect_db=$(expr $max_client / 8)
+  max_connections=$(expr 64 \* ${tong_ram_gb})
+
+  # set cau hinh maria database
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+  else
+    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+  fi
+
+  cp -f $duong_dan_cau_hinh_mariadb /tmp/mariadb.conf #backup
+  cp -rf /usr/local/lsws/conf /tmp/conf-upgrade       #backup ols
+
+  sed -i '/key_buffer_size/d' $duong_dan_cau_hinh_mariadb
+  sed -i '/innodb_buffer_pool_size/d' $duong_dan_cau_hinh_mariadb
+  sed -i '/max_connections/d' $duong_dan_cau_hinh_mariadb
+  sed -i '/tmp_table_size/d' $duong_dan_cau_hinh_mariadb
+  sed -i '/max_heap_table_size/d' $duong_dan_cau_hinh_mariadb
+
+  echo "key_buffer_size = ${buffer_db}M
+innodb_buffer_pool_size = ${tong_ram_mb_db}M
+max_connections = $max_connections
+tmp_table_size = ${db_table_size}M
+max_heap_table_size = ${db_table_size}M
+" >>$duong_dan_cau_hinh_mariadb
+  #end setup mariadb
+
+  #setup OLS
+  OLS_CONF='/usr/local/lsws/conf/httpd_config.conf'
+  sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers           $cpucore/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity           $cpucore/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections           $max_client_max/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections           $max_client_max/g" "$OLS_CONF"
+
+  #lsphp
+  # 1. Cập nhật maxConns (Chỉ trong phạm vi block extprocessor lsphp)
+  sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
+  # 2. Cập nhật PHP_LSAPI_CHILDREN (Chỉ trong phạm vi block extprocessor lsphp)
+  sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
+
+  #setup vhost update
+  #setup vhost update
+  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+      VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+
+      if [[ -f "$VHOST_CONF" ]]; then
+        # 1. Cập nhật các thông số bên trong block extprocessor
+        # Lưu ý: Tìm từ khóa /extprocessor/ cho đến dấu đóng ngoặc /\}/
+
+        # Số lượng worker và kết nối
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$VHOST_CONF"
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$VHOST_CONF"
+
+        # Giới hạn RAM (Soft/Hard Limit)
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/g" "$VHOST_CONF"
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/g" "$VHOST_CONF"
+
+        # Giới hạn Tiến trình (Tránh lỗi 503 hoặc quá tải CPU)
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/g" "$VHOST_CONF"
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/g" "$VHOST_CONF"
+
+      fi
+    done
+  fi
+  #end setup vhost update
+  #end setup vhost update
+
+  #kết thúc OLS
+
+  #kết thúc auto tune
+
+  # ==========================================
+  # C. CẬP NHẬT TRẠNG THÁI VÀ KHỞI ĐỘNG LẠI
+  # ==========================================
+  # Lưu lại mốc RAM mới
+  echo "$TOTAL_RAM" >"$FILE_CACHE"
+
+  # Khởi động lại dịch vụ với cấu hình phần cứng mới
+  if mariadbd --help --verbose >/dev/null 2>&1; then
+    echo "Cập nhật MariaDB thành công! Đang Restart MariaDB..."
+    systemctl restart mariadb
+    rm -f /tmp/mariadb.conf #xoá backup
+    echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
+  else
+    cp -f /tmp/mariadb.conf $duong_dan_cau_hinh_mariadb #restore cấu hình
+    echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại!" >>/var/log/wptangtoc-ols.log
+  fi
+
+  if /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
+    echo "Cập nhật OLS thành công! Đang Restart OLS..."
+    /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+    rm -rf /tmp/conf-upgrade
+    echo "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
+  else
+    echo "Lỗi cú pháp OLS! Không thể Restart."
+    echo "Restore về cấu hình cũ"
+    cp -rf /tmp/conf-upgrade/* /usr/local/lsws/conf/
+    if $(cat /etc/*release | grep -q "Ubuntu"); then
+      tuong_thich_nhom_litespeed="nogroup"
+    else
+      tuong_thich_nhom_litespeed="nobody"
+    fi
+    chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf/vhosts && chmod -R 750 /usr/local/lsws/conf/vhosts
+    rm -rf /tmp/conf-upgrade
+    echo "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning nhưng thất bại!" >>/var/log/wptangtoc-ols.log
+  fi
+
+  echo "$(date '+%d-%m-%Y %H:%M') - Auto-Tuning hoàn tất!" >>/var/log/wptangtoc-ols.log
+fi
