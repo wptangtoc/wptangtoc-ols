@@ -27,16 +27,16 @@ if [ ! "$(ls -A /usr/local/lsws/$NAME/backup-website/)" ]; then
 fi
 
 c=1
-for entry in $(ls -At /usr/local/lsws/$NAME/backup-website | grep ".zip$"); do
+for entry in $(ls -At /usr/local/lsws/$NAME/backup-website | grep ".zip$\|.tar.gz$\|.tar.zst$"); do
   c=$((c + 1))
 done
 
 echo "========================================================================="
-echo "Số lượng file Zip mã nguồn của website $NAME: $((c - 1))"
+echo "Số lượng file mã nguồn của website $NAME: $((c - 1))"
 echo "========================================================================="
 
 selects=()
-for entry in $(ls -At /usr/local/lsws/$NAME/backup-website/ | grep ".zip$"); do
+for entry in $(ls -At /usr/local/lsws/$NAME/backup-website/ | grep ".zip$\|.tar.gz$\|.tar.zst$"); do
   selects+=("$entry")
 done
 
@@ -59,7 +59,7 @@ fi
 duong_dan_thu_muc="/usr/local/lsws/$NAME/backup-website/$file"
 
 b=1
-for entry in $(ls -At /usr/local/lsws/$NAME/backup-website | grep ".sql$\|.sql.gz$"); do
+for entry in $(ls -At /usr/local/lsws/$NAME/backup-website | grep ".sql$\|.sql.gz$\|.sql.zst$"); do
   b=$((b + 1))
 done
 echo "========================================================================="
@@ -67,7 +67,7 @@ echo "Số lượng file backup Database của website $NAME: $((b - 1))"
 echo "========================================================================="
 
 selects=()
-for entry in $(ls -At /usr/local/lsws/$NAME/backup-website/ | grep ".sql$\|.sql.gz$"); do
+for entry in $(ls -At /usr/local/lsws/$NAME/backup-website/ | grep ".sql$\|.sql.gz$\|.sql.zst$"); do
   selects+=("$entry")
 done
 
@@ -99,21 +99,113 @@ fi
 
 clear
 
-echo "Khôi phục website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
 _runing "Làm sạch database website $NAME"
 # echo "Đang tiến hành khôi phục database website $NAME ..."
-mariadb -u "$DB_User_web" -p"$DB_Password_web" -e "DROP DATABASE IF EXISTS ${DB_Name_web}"
-mariadb -u "$DB_User_web" -p"$DB_Password_web" -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web}"
+
+TEMP_CNF=$(mktemp)
+chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+cat >"$TEMP_CNF" <<EOF
+[client]
+user=${DB_User_web}
+password=${DB_Password_web}
+host=localhost
+max_allowed_packet=1G
+default-character-set=utf8mb4
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet=1G
+EOF
+# trap "rm -f $TEMP_CNF" EXIT
+mariadb --defaults-extra-file="$TEMP_CNF" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS ${DB_Name_web}"
+mariadb --defaults-extra-file="$TEMP_CNF" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web}"
+
 _rundone "Làm sạch database website $NAME"
 
 _runing "Khôi phục database website $NAME"
 #khôi phục database bằng định đang .sql thông thường
-if [[ $(echo $filesql | grep '.sql$') ]]; then
-  mariadb -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" <$duong_dan_thu_muc_sql
+
+# Chuẩn bị các lệnh SQL tối ưu tốc độ (Turbo Import)
+# Tắt autocommit và check key để import nhanh gấp 3-5 lần
+# Đã bỏ SET SQL_LOG_BIN để tránh lỗi "Access denied" với user thường
+INIT_SQL="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET AUTOCOMMIT=0;"
+END_SQL="COMMIT; SET FOREIGN_KEY_CHECKS=1; SET UNIQUE_CHECKS=1; SET AUTOCOMMIT=1;"
+
+# 3. Xác định lệnh giải nén và thực thi Import
+# Logic: (SQL mở đầu + File dữ liệu + SQL kết thúc) | Đẩy vào MariaDB
+
+if command -v pv &>/dev/null; then
+
+  if [[ "$duong_dan_thu_muc_sql" == *".sql.zst" ]]; then
+    # Cài zstd nếu thiếu
+    if ! command -v zstd &>/dev/null; then dnf install zstd -y -q >/dev/null 2>&1; fi
+
+    # PV đọc file -> zstd giải nén -> Nối SQL tối ưu -> MariaDB
+    (
+      echo "$INIT_SQL"
+      pv -N "Importing" "$duong_dan_thu_muc_sql" | zstd -d
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+
+  elif [[ "$duong_dan_thu_muc_sql" == *".sql.gz" ]]; then
+    # PV đọc file -> zcat giải nén -> Nối SQL tối ưu -> MariaDB
+    (
+      echo "$INIT_SQL"
+      pv -N "Importing" "$duong_dan_thu_muc_sql" | zcat
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+
+  else
+    # File .sql thường: PV đọc file -> Nối SQL tối ưu -> MariaDB
+    (
+      echo "$INIT_SQL"
+      pv -N "Importing" "$duong_dan_thu_muc_sql"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  fi
+
 else
-  zcat $duong_dan_thu_muc_sql | mariadb -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web"
+  # === TRƯỜNG HỢP KHÔNG CÓ PV (DỰ PHÒNG) ===
+  # Vẫn dùng tối ưu tốc độ nhưng không hiện thanh tiến trình
+
+  if [[ "$duong_dan_thu_muc_sql" == *".sql.zst" ]]; then
+    (
+      echo "$INIT_SQL"
+      zstd -d <"$duong_dan_thu_muc_sql"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  elif [[ "$duong_dan_thu_muc_sql" == *".sql.gz" ]]; then
+    (
+      echo "$INIT_SQL"
+      zcat "$duong_dan_thu_muc_sql"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  else
+    (
+      echo "$INIT_SQL"
+      cat "$duong_dan_thu_muc_sql"
+      echo "$END_SQL"
+    ) | mariadb --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false
+  fi
 fi
+
+# Kiểm tra mã lỗi sau khi chạy xong
+if [[ $? -eq 0 ]]; then
+  echo ""
+  _rundone "Khôi phục database website $NAME"
+else
+  echo "---------------------------------------------------"
+  _runloi "Khôi phục database website $NAME"
+fi
+
+rm -f "$TEMP_CNF"
+
+# if [[ $(echo $filesql | grep '.sql$') ]]; then
+#   mariadb -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" <$duong_dan_thu_muc_sql
+# else
+#   zcat $duong_dan_thu_muc_sql | mariadb -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web"
+# fi
 
 _rundone "Khôi phục database website $NAME"
 
@@ -126,7 +218,18 @@ _rundone "Làm sạch mã nguồn website $NAME"
 
 _runing "Giải nén mã nguồn website $NAME"
 echo ''
-unzip -n "$duong_dan_thu_muc" -d /usr/local/lsws/"$NAME"/html/
+if [[ $(echo $file | grep '.zip$') ]]; then
+  unzip -o $duong_dan_thu_muc -d /usr/local/lsws/"$NAME"/html/ #unzip dù lỗi hoặc không phải mã nguồn WordPress
+fi
+
+if [[ $(echo $file | grep '.tar.zst$') ]]; then #giải nén mã nguồn sử dụng zstd
+  tar --use-compress-program="zstd" -xvf $duong_dan_thu_muc -C /usr/local/lsws/"$NAME"/html --overwrite
+fi
+
+if [[ $(echo $file | grep '.tar.gz$') ]]; then
+  tar -xvf $duong_dan_thu_muc -C /usr/local/lsws/"$NAME"/html --overwrite
+fi
+
 _rundone "Giải nén mã nguồn website $NAME"
 
 # echo "Hoàn tất khôi phục mã nguồn thành công website $NAME"
