@@ -123,6 +123,7 @@ if [[ $check ]]; then
     echo '[[ $- != *i* ]] && return' >>/usr/local/lsws/$NAME/.bashrc
     echo "alias 1='/etc/wptt-user/wptt-status'" >>/usr/local/lsws/$NAME/.bashrc
     echo "/etc/wptt-user/wptt-status" >>/usr/local/lsws/$NAME/.bashrc
+    echo "export EDITOR=vi" >>/usr/local/lsws/$NAME/.bashrc
 
     # -----------------------------------------------------------------
     # SÁT CHIÊU ENTERPRISE: XÂY DỰNG CHROOT JAIL
@@ -176,7 +177,7 @@ if [[ $check ]]; then
       "/usr/bin/grep" "/usr/bin/tail" "/usr/bin/vi" "/usr/bin/nano" "/usr/bin/stat" "/usr/bin/tar" "/usr/bin/head"
       "/usr/bin/sed" "/usr/bin/awk" "/usr/bin/cut" "/usr/bin/tr" "/usr/bin/wc" "/usr/bin/gzip" "/usr/bin/du" "/usr/bin/nice" "/usr/bin/ionice"
       "/usr/bin/tput" "/usr/bin/php" "/usr/bin/find" "/usr/bin/xargs" "/usr/bin/chmod" "/usr/bin/mktemp" "/usr/bin/sleep" "/usr/bin/chown" "/usr/bin/nl"
-      "/usr/bin/wget" "/usr/bin/env" "/usr/bin/date" "/usr/bin/which" "/usr/bin/mysqldump" "/usr/bin/mariadb-dump" "/usr/bin/stty" "/usr/bin/zcat" "/usr/bin/top" "/usr/bin/crontab"
+      "/usr/bin/wget" "/usr/bin/env" "/usr/bin/date" "/usr/bin/which" "/usr/bin/mysqldump" "/usr/bin/mariadb-dump" "/usr/bin/stty" "/usr/bin/zcat" "/usr/bin/top"
     )
     if [ -f "/usr/local/bin/wp" ]; then COMMANDS+=("/usr/local/bin/wp"); fi
     if [ -f "/usr/bin/vim" ]; then COMMANDS+=("/usr/bin/vim"); fi
@@ -261,12 +262,8 @@ if [[ $check ]]; then
     # =======================================================
     mkdir -p $JAIL_PATH/etc/wptt
     mkdir -p $JAIL_PATH/etc/wptt-user
-
-    # Dùng mount bind để file trong lồng luôn đồng bộ với máy chủ thật
     mount --bind /etc/wptt $JAIL_PATH/etc/wptt
     mount --bind /etc/wptt-user $JAIL_PATH/etc/wptt-user
-
-    # Nối file thực thi chính
     touch $JAIL_PATH/usr/bin/wptangtoc-user 2>/dev/null || true
     mount --bind /usr/bin/wptangtoc-user $JAIL_PATH/usr/bin/wptangtoc-user
 
@@ -275,14 +272,51 @@ if [[ $check ]]; then
     ln -s / $JAIL_PATH/usr/local/lsws/$NAME 2>/dev/null || true
 
     # -----------------------------------------------------------------
-    # NỐI ỐNG CRON (Cho phép User tự cài đặt Auto Backup)
+    # NỐI ỐNG CRON (Bypass hoàn toàn PAM và Auditd bằng Fake Crontab)
     # -----------------------------------------------------------------
-    # 1. Trả lại quyền SetUID cho lệnh crontab bên trong lồng
-    chmod 4755 $JAIL_PATH/usr/bin/crontab 2>/dev/null || true
+    # 1. Khởi tạo file cron thật trên Host
+    touch /var/spool/cron/$User_name_vhost
+    chown $User_name_vhost:root /var/spool/cron/$User_name_vhost
+    chmod 600 /var/spool/cron/$User_name_vhost
 
-    # 2. Đục lỗ cắm ống thư mục chứa lịch Cron
-    mkdir -p $JAIL_PATH/var/spool/cron
-    mount --bind /var/spool/cron $JAIL_PATH/var/spool/cron
+    # 2. Tạo điểm nối trong lồng (Nằm ngay gốc / của User)
+    CRON_JAIL_FILE="$JAIL_PATH/.cron_spool"
+    touch "$CRON_JAIL_FILE"
+    chown $User_name_vhost:$User_name_vhost "$CRON_JAIL_FILE"
+    chmod 600 "$CRON_JAIL_FILE"
+
+    # 3. Nối ống thông nhau
+    mount --bind /var/spool/cron/$User_name_vhost "$CRON_JAIL_FILE"
+
+    # 4. Xóa file crontab gốc bị dính lỗi PAM (nếu có)
+    rm -f $JAIL_PATH/usr/bin/crontab
+
+    # 5. Đúc lệnh Fake Crontab (Hoạt động mượt mà 100%)
+    cat <<'EOF' >$JAIL_PATH/usr/bin/crontab
+#!/bin/bash
+USER_CRON="/.cron_spool"
+
+if [[ "$1" == "-e" ]]; then
+    TMP_FILE=$(mktemp)
+    cat "$USER_CRON" > "$TMP_FILE" 2>/dev/null
+    ${EDITOR:-vi} "$TMP_FILE"
+    cat "$TMP_FILE" > "$USER_CRON"
+    rm -f "$TMP_FILE"
+    echo "crontab: installing new crontab"
+elif [[ "$1" == "-l" ]]; then
+    cat "$USER_CRON" 2>/dev/null
+elif [[ "$1" == "-r" ]]; then
+    > "$USER_CRON"
+    echo "crontab: removing crontab"
+elif [[ "$1" == "-" ]] || [[ ! -t 0 && -z "$1" ]]; then
+    cat > "$USER_CRON"
+    echo "crontab: installing new crontab"
+else
+    echo "crontab: usage error: unrecognized option"
+    echo "usage: crontab [-e | -l | -r | -]"
+fi
+EOF
+    chmod 755 $JAIL_PATH/usr/bin/crontab
     # -----------------------------------------------------------------
 
     usermod $User_name_vhost -s /bin/bash
@@ -391,14 +425,14 @@ if [[ $check = '' ]]; then
   umount -fl $JAIL_PATH/etc/wptt-user 2>/dev/null || true
   umount -fl $JAIL_PATH/usr/bin/wptangtoc-user 2>/dev/null || true
 
-  # Rút ống Cron
-  umount -fl $JAIL_PATH/var/spool/cron 2>/dev/null || true
+  # Rút ống Cron (Tháo chốt trước khi đập)
+  umount -fl $JAIL_PATH/.cron_spool 2>/dev/null || true
 
   # 2. Rút ống Database MariaDB
   REAL_SOCK=$(mariadb -N -e "select @@socket;" 2>/dev/null || echo "/var/lib/mysql/mysql.sock")
   umount -fl "$JAIL_PATH$REAL_SOCK" 2>/dev/null || true
 
-  # 3. Đập bỏ lồng (Thêm cả usr, var vào danh sách quét)
+  # 3. Đập bỏ lồng
   rm -rf $JAIL_PATH/{bin,lib,lib64,sbin,usr,dev,etc,tmp,var}
 
   _rundone "$tat $dang_nhap domain user"
