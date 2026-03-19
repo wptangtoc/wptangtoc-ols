@@ -1,62 +1,100 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
 
 function huong_dan() {
-  Giới thiệu ngắn gọn tính năng Xóa Cache Redis trong WPTangToc OLS
+  Giới thiệu ngắn gọn tính năng Xóa Cache Object Cache trong WPTangToc OLS
 
-  Redis là một hệ thống lưu trữ key-value trong bộ nhớ [in-memory data structure store] tốc độ cao, thường được sử dụng để làm cơ chế caching [lưu trữ đệm] cho website nhằm tăng tốc độ tải trang và giảm tải cho máy chủ. WPTangToc OLS, với mục tiêu đơn giản hóa quản trị máy chủ OpenLiteSpeed cho WordPress, thường tích hợp các tiện ích quản lý Redis, bao gồm cả tính năng xóa cache Redis.
+  Object Cache [Redis/Valkey/KeyDB] là hệ thống lưu trữ key-value trong bộ nhớ [in-memory data structure store] tốc độ cao, thường được sử dụng để làm cơ chế caching cho website nhằm tăng tốc độ tải trang và giảm tải cho máy chủ Database.
 
-  Tại sao cần xóa cache Redis?
-  * Cập nhật nội dung: Khi bạn thực hiện các thay đổi quan trọng trên website [ví dụ: cập nhật bài viết, thay đổi giao diện, cài đặt plugin mới], cache Redis có thể vẫn lưu trữ phiên bản cũ của dữ liệu. Xóa cache sẽ buộc website tải lại dữ liệu mới nhất.
-  * Gỡ lỗi: Nếu website gặp sự cố hiển thị hoặc hoạt động không chính xác, việc xóa cache Redis là một trong những bước khắc phục sự cố phổ biến để loại trừ nguyên nhân do dữ liệu cache cũ gây ra.
-  * Giải phóng bộ nhớ: Mặc dù hiếm khi là vấn đề chính với Redis được cấu hình tốt, nhưng trong một số trường hợp, việc xóa cache có thể giúp giải phóng một phần bộ nhớ trên máy chủ.
-  * Sau khi thay đổi cấu hình: Nếu bạn thay đổi cấu hình liên quan đến Redis hoặc cách website tương tác với Redis, việc xóa cache cũ là cần thiết.
+  Tại sao cần xóa cache?
+  * Cập nhật nội dung: Khi thay đổi quan trọng trên website, cache có thể vẫn giữ bản cũ. Xóa cache buộc tải lại dữ liệu mới nhất.
+  * Gỡ lỗi: Giải quyết sự cố hiển thị do dữ liệu cache bị kẹt hoặc lỗi đồng bộ.
+  * Giải phóng RAM: Làm sạch bộ nhớ đệm rác tích tụ lâu ngày.
 
-  Tóm lại, tính năng xóa cache Redis trong WPTangToc OLS là một công cụ hữu ích giúp người quản trị website dễ dàng làm mới dữ liệu cache, khắc phục sự cố và đảm bảo nội dung website luôn được hiển thị chính xác mà không cần can thiệp sâu vào các dòng lệnh phức tạp của Redis.
+  Tính năng này tự động nhận diện Engine đang chạy [Valkey, KeyDB, Redis], kết nối an toàn qua Unix Socket và dọn sạch dữ liệu mà không làm gián đoạn máy chủ.
 }
 
+. /etc/wptt/.wptt.conf
 if [[ $ngon_ngu = '' ]]; then
   ngon_ngu='vi'
 fi
 . /etc/wptt/lang/$ngon_ngu.sh
 
 echo "========================================================================="
-echo "|$quan_ly_cache => $xoa_cache_redis 		                             |"
+echo "|$quan_ly_cache => $xoa_cache_redis/valkey/keydb                        |"
 echo "========================================================================="
 
-OUTPUT=$(cat /etc/*release)
-if echo $OUTPUT | grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise Linux 10\|Oracle Linux Server 10"; then
-  name_service='valkey'
-else
-  name_service='redis'
+# =========================================================================
+# 1. TỰ ĐỘNG NHẬN DIỆN ENGINE ĐANG CHẠY & ĐƯỜNG DẪN SOCKET
+# =========================================================================
+ACTIVE_CACHE=""
+CLI_TOOL=""
+SOCKET_PATH=""
+
+if systemctl is-active --quiet valkey 2>/dev/null; then
+  ACTIVE_CACHE="Valkey"
+  CLI_TOOL="valkey-cli"
+  SOCKET_PATH="/var/run/valkey/valkey.sock"
+elif systemctl is-active --quiet keydb 2>/dev/null; then
+  ACTIVE_CACHE="KeyDB"
+  CLI_TOOL="keydb-cli"
+  SOCKET_PATH="/var/run/keydb/keydb.sock"
+elif systemctl is-active --quiet redis 2>/dev/null; then
+  ACTIVE_CACHE="Redis"
+  CLI_TOOL="redis-cli"
+  SOCKET_PATH="/var/run/redis/redis.sock"
 fi
 
-if $(cat /etc/*release | grep -q "AlmaLinux 8\|Rocky Linux 8\|Red Hat Enterprise Linux 8\|Oracle Linux Server 8"); then #mỗi almalinux 8 đường bố trí kiểu này
-  duong_dan_config_redis="/etc/$name_service.conf"
-else
-  duong_dan_config_redis="/etc/$name_service/$name_service.conf"
-fi
-
-if [[ ! -f $duong_dan_config_redis ]]; then
-  echo "$ban_chua_kich_hoat Redis"
+# =========================================================================
+# 2. KIỂM TRA TRẠNG THÁI TỒN TẠI
+# =========================================================================
+if [[ -z "$ACTIVE_CACHE" ]]; then
+  echo "$ban_chua_kich_hoat Object Cache (Valkey/KeyDB/Redis)"
   sleep 3
-  exec /etc/wptt/wptt-cache-main 1
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-cache-main 1
+  fi
   exit
 fi
 
-if [ ! "$($name_service-cli ping)" = "PONG" ]; then
+# =========================================================================
+# 3. KIỂM TRA SỨC KHỎE (PING -> PONG QUA SOCKET)
+# =========================================================================
+# Vì hệ thống dùng port 0 (Bypass TCP), ta PHẢI dùng cờ -s để gọi qua Socket
+if [[ -S "$SOCKET_PATH" ]]; then
+  PING_CMD="$CLI_TOOL -s $SOCKET_PATH ping"
+  FLUSH_CMD="$CLI_TOOL -s $SOCKET_PATH flushall"
+else
+  # Fallback nếu ai đó lỡ cấu hình TCP thủ công
+  PING_CMD="$CLI_TOOL ping"
+  FLUSH_CMD="$CLI_TOOL flushall"
+fi
+
+if [ ! "$($PING_CMD 2>/dev/null)" = "PONG" ]; then
   clear
   echo "========================================================================="
-  echo "Redis service $dang_gap_su_co"
+  echo "Dịch vụ $ACTIVE_CACHE $dang_gap_su_co (Không phản hồi PING)"
   echo "========================================================================="
   check_menu_wptangtoc_active=$1
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-cache-main 1
   fi
+  exit
 fi
+
+# =========================================================================
+# 4. THỰC THI LỆNH DỌN DẸP CACHE
+# =========================================================================
 . /etc/wptt/echo-color
-_runing "$don_dep cache Redis (valkey)"
-(echo "flushall") | ${name_service}-cli >/dev/null 2>&1
-_rundone "$don_dep cache Redis (valkey)"
+_runing "$don_dep cache $ACTIVE_CACHE"
+
+# Thực thi lệnh xả RAM
+$FLUSH_CMD >/dev/null 2>&1
+
+_rundone "$don_dep cache $ACTIVE_CACHE"
+
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-cache-main 1
