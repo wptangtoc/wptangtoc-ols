@@ -1,10 +1,6 @@
 #!/bin/bash
 
-# ==============================================================================
-# SCRIPT CÀI ĐẶT VÀ CẤU HÌNH MONIT WPTANGTOC OLS
-# ==============================================================================
-
-#cấu hình biến sẵn
+# Cấu hình biến sẵn
 if grep -qi "ubuntu" /etc/*release; then
   OS_FAMILY="ubuntu"
   FILE_MONITRC="/etc/monit/monitrc"
@@ -21,25 +17,11 @@ else
   PATH_MEMCACHE_CONF="/etc/sysconfig/memcached"
 fi
 
-# Nhận diện dịch vụ Redis vs Valkey
-if grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise Linux 10\|Oracle Linux Server 10" /etc/*release; then
-  name_service='valkey'
-else
-  name_service='redis'
-fi
-
-# Nhận diện file cấu hình Redis/Valkey
-if grep -q "AlmaLinux 8\|Rocky Linux 8\|Red Hat Enterprise Linux 8\|Oracle Linux Server 8" /etc/*release; then
-  PATH_REDIS_CONF="/etc/$name_service.conf"
-else
-  PATH_REDIS_CONF="/etc/$name_service/$name_service.conf"
-fi
-
-# Cờ theo dõi sự thay đổi (Nếu có cài mới thì mới Restart Monit ở cuối)
+# Cờ theo dõi sự thay đổi (Nếu có thay đổi mới thì mới Restart Monit ở cuối)
 RELOAD_MONIT=0
 
 # ------------------------------------------------------------------------------
-# 1. CÀI ĐẶT MONIT (Bypass nếu đã cài)
+# 1. CÀI ĐẶT MONIT
 # ------------------------------------------------------------------------------
 if command -v monit >/dev/null 2>&1; then
   echo -e "\e[33m[!] Monit đã được cài đặt. Bỏ qua bước tải gói.\e[0m"
@@ -65,7 +47,7 @@ fi
 # Tạo sẵn thư mục chứa rule
 mkdir -p $DIR_MONIT
 
-# Cấu hình Monit Core (Bypass nếu đã cấu hình)
+# Cấu hình Monit Core
 if grep -q "^set httpd port 2812" "$FILE_MONITRC"; then
   echo -e "\e[33m[!] Monit Core đã được tối ưu. Bỏ qua.\e[0m"
 else
@@ -75,73 +57,94 @@ else
   sed -i 's/#     allow localhost/    allow localhost/' $FILE_MONITRC
   sed -i 's/set daemon  120/set daemon 30/; s/set daemon 120/set daemon 30/' $FILE_MONITRC
 
-  #ép dùng ipv4 172.0.0.1 thay cho localhost tránh phải tốn thời gian phân giải dns từ localhost thành 172.0.0.1
+  # Ép dùng IPv4 127.0.0.1 thay cho localhost tránh tốn thời gian phân giải dns
   sed -i 's/use address localhost/use address 127.0.0.1/g' /etc/monitrc 2>/dev/null
   sed -i 's/allow localhost/allow 127.0.0.1/g' /etc/monitrc 2>/dev/null
   sed -i 's/use address localhost/use address 127.0.0.1/g' /etc/monit/monitrc 2>/dev/null
   sed -i 's/allow localhost/allow 127.0.0.1/g' /etc/monit/monitrc 2>/dev/null
 
+  if grep -qi "ubuntu" /etc/*release; then
+    echo -e "\nset httpd port 2812\n    use address 127.0.0.1\n    allow 127.0.0.1" >>/etc/monit/monitrc
+  fi
   RELOAD_MONIT=1
 fi
 
 # ------------------------------------------------------------------------------
 # 2. RULE GIÁM SÁT OPENLITESPEED
 # ------------------------------------------------------------------------------
-if [ -f "$DIR_MONIT/lshttpd" ]; then
-  echo -e "\e[33m[!] Rule Monit cho OpenLiteSpeed đã tồn tại. Bỏ qua.\e[0m"
-else
-  echo -e "\e[32m[+] Đang thêm rule giám sát OpenLiteSpeed...\e[0m"
-  cat >$DIR_MONIT/lshttpd <<EOF
+echo -e "\e[32m[+] Đang cập nhật rule giám sát OpenLiteSpeed...\e[0m"
+cat >$DIR_MONIT/lshttpd <<EOF
 check process lshttpd with pidfile /var/run/openlitespeed.pid
   start program = "/usr/bin/systemctl start lshttpd"
   stop program  = "/usr/bin/systemctl stop lshttpd"
   if failed host 127.0.0.1 port 80 with timeout 5 seconds then restart
   if 5 restarts within 5 cycles then timeout
 EOF
-  RELOAD_MONIT=1
-fi
+RELOAD_MONIT=1
 
 # ------------------------------------------------------------------------------
 # 3. RULE GIÁM SÁT MARIADB
 # ------------------------------------------------------------------------------
-if [ -f "$DIR_MONIT/mariadb" ]; then
-  echo -e "\e[33m[!] Rule Monit cho MariaDB đã tồn tại. Bỏ qua.\e[0m"
-else
-  echo -e "\e[32m[+] Đang thêm rule giám sát MariaDB...\e[0m"
-  cat >$DIR_MONIT/mariadb <<EOF
+echo -e "\e[32m[+] Đang cập nhật rule giám sát MariaDB...\e[0m"
+cat >$DIR_MONIT/mariadb <<EOF
 check process mariadb matching "mariadbd|mysqld"
   start program = "/usr/bin/systemctl start mariadb"
   stop program  = "/usr/bin/systemctl stop mariadb"
   if failed unixsocket $SOCK_MARIADB protocol mysql then restart
   if 5 restarts within 5 cycles then timeout
 EOF
-  RELOAD_MONIT=1
-fi
+RELOAD_MONIT=1
 
 # ------------------------------------------------------------------------------
-# 4. RULE GIÁM SÁT REDIS / VALKEY
+# 4. RULE GIÁM SÁT OBJECT CACHE (TỰ ĐỘNG NHẬN DIỆN ENGINE DUY NHẤT)
 # ------------------------------------------------------------------------------
-if [ -f "$DIR_MONIT/$name_service" ]; then
-  echo -e "\e[33m[!] Rule Monit cho $name_service đã tồn tại. Bỏ qua.\e[0m"
-elif [[ -f "$PATH_REDIS_CONF" ]]; then
-  echo -e "\e[32m[+] Phát hiện $name_service. Đang thêm rule giám sát...\e[0m"
-  cat >$DIR_MONIT/$name_service <<EOF
-check process $name_service matching "$name_service-server"
-  start program = "/usr/bin/systemctl start $name_service"
-  stop program  = "/usr/bin/systemctl stop $name_service"
-  if failed unixsocket /var/run/$name_service/$name_service.sock protocol redis then restart
+# Xóa trắng toàn bộ file Monit cũ của 3 Engine để tránh xung đột
+for cache_engine in valkey keydb redis; do
+  if [ -f "$DIR_MONIT/$cache_engine" ]; then
+    rm -f "$DIR_MONIT/$cache_engine"
+    RELOAD_MONIT=1
+  fi
+done
+
+# Kiểm tra xem máy chủ đang thực sự chạy Engine nào
+ACTIVE_CACHE=""
+if systemctl is-enabled --quiet valkey 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
+  ACTIVE_CACHE="valkey"
+elif systemctl is-enabled --quiet keydb 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
+  ACTIVE_CACHE="keydb"
+elif systemctl is-enabled --quiet redis 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+  ACTIVE_CACHE="redis"
+fi
+
+if [[ -n "$ACTIVE_CACHE" ]]; then
+  echo -e "\e[32m[+] Phát hiện $ACTIVE_CACHE. Đang khởi tạo rule giám sát độc quyền...\e[0m"
+
+  # Xác định tên tiến trình cho từng thằng
+  if [[ "$ACTIVE_CACHE" == "valkey" ]]; then
+    PROC_MATCH="valkey-server"
+  elif [[ "$ACTIVE_CACHE" == "keydb" ]]; then
+    PROC_MATCH="keydb-server"
+  else
+    PROC_MATCH="redis-server"
+  fi
+
+  cat >$DIR_MONIT/$ACTIVE_CACHE <<EOF
+check process $ACTIVE_CACHE matching "$PROC_MATCH"
+  start program = "/usr/bin/systemctl start $ACTIVE_CACHE"
+  stop program  = "/usr/bin/systemctl stop $ACTIVE_CACHE"
+  if failed unixsocket /var/run/$ACTIVE_CACHE/${ACTIVE_CACHE}.sock protocol redis then restart
   if 5 restarts within 5 cycles then timeout
 EOF
   RELOAD_MONIT=1
+else
+  echo -e "\e[33m[!] Không tìm thấy Object Cache nào trên hệ thống. Bỏ qua.\e[0m"
 fi
 
 # ------------------------------------------------------------------------------
 # 5. RULE GIÁM SÁT MEMCACHED
 # ------------------------------------------------------------------------------
-if [ -f "$DIR_MONIT/memcached" ]; then
-  echo -e "\e[33m[!] Rule Monit cho Memcached đã tồn tại. Bỏ qua.\e[0m"
-elif [[ -f "$PATH_MEMCACHE_CONF" ]]; then
-  echo -e "\e[32m[+] Phát hiện Memcached. Đang thêm rule giám sát...\e[0m"
+if [[ -f "$PATH_MEMCACHE_CONF" ]]; then
+  echo -e "\e[32m[+] Phát hiện Memcached. Đang cập nhật rule giám sát...\e[0m"
   cat >$DIR_MONIT/memcached <<EOF
 check process memcached matching "memcached"
   start program = "/usr/bin/systemctl start memcached"
@@ -150,6 +153,11 @@ check process memcached matching "memcached"
   if 5 restarts within 5 cycles then timeout
 EOF
   RELOAD_MONIT=1
+else
+  if [ -f "$DIR_MONIT/memcached" ]; then
+    rm -f "$DIR_MONIT/memcached"
+    RELOAD_MONIT=1
+  fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -161,13 +169,11 @@ if [ "$RELOAD_MONIT" -eq 1 ]; then
   echo -e "\e[32m[+] Cập nhật cấu hình mới. Đang nạp lại Monit daemon...\e[0m"
   systemctl daemon-reload
   systemctl restart monit
-  monit monitor all
+  monit monitor all >/dev/null 2>&1
   echo -e "\e[32m[✔] HOÀN TẤT! Các rule mới đã được kích hoạt.\e[0m"
 else
   echo -e "\e[32m[✔] KHÔNG CÓ SỰ THAY ĐỔI NÀO. Hệ thống đã ở trạng thái tối ưu nhất!\e[0m"
 fi
 
-#guide: lệnh monit summary để kiểm tra
-# nếu: Not monitored tức là sập 5 lận mà restart không online sẽ báo như thế này
-
-#lệnh: monit status để xem các thông tin
+# Lệnh: monit summary để kiểm tra
+# Lệnh: monit status để xem các thông tin chi tiết
