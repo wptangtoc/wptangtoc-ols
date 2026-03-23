@@ -92,8 +92,19 @@ if [[ "$check" = "y" ]]; then
   echo "$cong_cu_cau_hinh: $editor_cau_hinh $de $chinh_sua"
   sleep 2
   if [[ $editor_cau_hinh = "nano" ]]; then
-    echo "$chinh_sua $xong $nhap ctrl + o $de $luu_lai && ctrl + x $de $exit_thoat , ctrl + W $de search"
-    sleep 3
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[0;33m'
+    CYAN='\033[0;36m'
+    NC='\033[0m'
+    echo -e "${YELLOW}--- HƯỚNG DẪN LƯU FILE php.ini ---${NC}"
+    echo -e "1. Chỉnh sửa xong, ấn ${GREEN}Ctrl + O${NC} để lưu."
+    echo -e "2. Ấn ${GREEN}Enter${NC} để xác nhận tên file."
+    echo -e "3. Ấn ${GREEN}Ctrl + X${NC} để thoát ra ngoài."
+    echo -e "${YELLOW}--------------------------${NC}"
+    echo "Đang mở trình soạn thảo..."
+    echo "$hay_het_suc_can_than_trong_qua_trinh_chinh_sua webserver LiteSpeed !!"
+    sleep 4
   fi
   # php_server=$(php -i | grep php.ini | grep Loaded | cut -c 30-80 | cut -f5 -d "/")
   php=$(echo "$duong_dan_php_ini")
@@ -102,17 +113,44 @@ if [[ "$check" = "y" ]]; then
     exit
   fi
 
-  check_thay_doi=$(md5sum $php | cut -f1 -d ' ' >/tmp/php_cau_hinh_wptangtoc)
-  echo "$php" >/tmp/php_cau_hinh_wptangtoc2
+  TEMP_PHP_INIT_EDIT_WPTT=$(mktemp)
+  check_thay_doi=$(md5sum $php | cut -f1 -d ' ' >$TEMP_PHP_INIT_EDIT_WPTT)
+  echo "$php" >$TEMP_PHP_INIT_EDIT_WPTT
   $editor_cau_hinh "$php"
-  php=$(cat /tmp/php_cau_hinh_wptangtoc2)
-  if [[ $(cat /tmp/php_cau_hinh_wptangtoc) != $(md5sum $php | cut -f1 -d ' ') ]]; then
-    echo "Cấu hình lại PHP phiển bản $phien_ban_php_co_cham: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  php=$(cat $TEMP_PHP_INIT_EDIT_WPTT)
+  if [[ $(cat $TEMP_PHP_INIT_EDIT_WPTT) != $(md5sum $php | cut -f1 -d ' ') ]]; then
+    echo "Cấu hình lại PHP phiên bản $phien_ban_php_co_cham: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
     _runing "$khoi_dong_lai PHP $de_cap_nhat_gia_tri $thay_doi"
-    /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-    _rundone "$khoi_dong_lai PHP $de_cap_nhat_gia_tri $thay_doi"
-  fi
+    rm -f $TEMP_PHP_INIT_EDIT_WPTT
+    # KẾT HỢP KIỂM TRA LỖI PHP.INI TRƯỚC KHI RESTART
+    # Gọi nháp tiến trình PHP với file php.ini vừa sửa để xem có văng lỗi Parse/Fatal không
+    unset kiem_tra_php
+    kiem_tra_php=$(/usr/local/lsws/$LSPHP/bin/php -c "$php" -v 2>&1 | grep -iE "warning|error|exception")
+    if [[ -z "$kiem_tra_php" ]]; then
+      # Nếu chuỗi lỗi trống rỗng (Không có lỗi) -> An toàn để chạy
+      /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+      _rundone "$khoi_dong_lai PHP $de_cap_nhat_gia_tri $thay_doi"
+    else
+      # Nếu bắt được lỗi -> Hủy restart và cảnh báo
+      _runloi "$khoi_dong_lai PHP $de_cap_nhat_gia_tri $thay_doi"
+      echo "Cấu hình lại PHP gây ra lỗi : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+      echo ''
+      echoDo "Cấu hình $php bị lỗi (Sai cú pháp)! Hệ thống tự động hủy lệnh Restart để tránh sập web."
+      echo -e "\e[33mLỗi chi tiết từ PHP:\e[0m $kiem_tra_php"
 
+      # Trả khách hàng về lại Menu để sửa tiếp
+      check_menu_wptangtoc_active=$1
+      if [[ $check_menu_wptangtoc_active = "98" ]]; then
+        exec /etc/wptt/wptt-php-ini-main 1
+      fi
+
+      if [[ $check_menu_wptangtoc_active = "99" ]]; then
+        exec /etc/wptt/wptt-cau-hinh-websever-main 1
+      fi
+
+      return 2>/dev/null || exit 1
+    fi
+  fi
 fi
 
 check_menu_wptangtoc_active=$1
@@ -120,7 +158,6 @@ if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-php-ini-main 1
 fi
 
-check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "99" ]]; then
   exec /etc/wptt/wptt-cau-hinh-websever-main 1
 fi
