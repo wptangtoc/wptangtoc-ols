@@ -77,6 +77,23 @@ if [[ $disk_kha_dung =~ ^-?[0-9]+$ ]]; then
   fi
 fi
 
+# ---------------------------------------------------------
+# BƯỚC 0: RÀO CHẮN AN TOÀN (Kiểm tra ổ cứng)
+# ---------------------------------------------------------
+DB_SIZE=$(du -sm /var/lib/mysql 2>/dev/null | awk '{print $1}')
+FREE_SPACE=$(df -m /var/lib/mysql | awk 'NR==2 {print $4}')
+REQUIRED_SPACE=$((DB_SIZE + 1024))
+
+if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+  echo -e "\e[31m[LỖI NGHIÊM TRỌNG] Ổ cứng không đủ dung lượng để tạo bản sao lưu an toàn!\e[0m"
+  rm -f "$TEMP_CNF_ROOT"
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-db-main 1
+  fi
+  exit 1
+fi
+
 echo "Lưu ý: vui lòng backup website trước khi sử dụng tính năng này"
 echo "tránh rủi ro mất dữ liệu khi trong quá trình chuyển đổi bị gặp sự cố"
 echo ""
@@ -466,6 +483,41 @@ done
 rm -rf /usr/local/backup-website/move-db-version
 rm -rf $TEMP_CNF_ROOT
 unset TEMP_CNF_ROOT
+
+#tái cấu trúc
+TEMP_CNF_ROOT=$(mktemp)
+chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới có quyền đọc
+# Ghi thông tin xác thực vào file tạm ẩn (Tuyệt đối KHÔNG có host=localhost)
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+
+[mysqladmin]
+user=${database_admin_username}
+password=${database_admin_password}
+
+[mariadb-upgrade]
+user=${database_admin_username}
+password=${database_admin_password}
+
+[mysql_upgrade]
+user=${database_admin_username}
+password=${database_admin_password}
+EOF
+
+# Chạy lệnh tái cấu trúc (Dùng file ẩn TEMP_CNF_ROOT)
+if command -v mariadb-upgrade >/dev/null 2>&1; then
+  mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
+elif command -v mysql_upgrade >/dev/null 2>&1; then
+  mysql_upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
+else
+  echo -e "\e[31m[LỖI] Không tìm thấy công cụ nâng cấp cấu trúc!\e[0m"
+fi
+echo -e "✅ Tái cấu trúc (Upgrade Schema) hoàn tất!"
+rm -f "$TEMP_CNF_ROOT"
+#end tái cấu trúc
+
 systemctl restart mariadb.service
 
 echo ''

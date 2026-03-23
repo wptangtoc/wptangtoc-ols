@@ -1,0 +1,204 @@
+#!/bin/bash
+# WPTangToc OLS - Upgrade MariaDB chuẩn Enterprise
+# Zero Data Loss
+
+# Thêm luật cấm dnf/yum tự động cập nhật bất kỳ gói nào có tên là mariadb hoặc MariaDB
+#if ! grep -q "exclude=.*mariadb" /etc/dnf/dnf.conf; then
+#    echo "exclude=MariaDB-* mariadb-*" >> /etc/dnf/dnf.conf
+#    echo -e "\e[32m[*] Đã khóa an toàn (Freeze) MariaDB. Không sợ bị đè bản cập nhật lỗi!\e[0m"
+#fi
+
+set -euo pipefail
+
+echo -e "\e[32m[WPTangToc OLS] BẮT ĐẦU QUY TRÌNH NÂNG CẤP MARIADB AN TOÀN...\e[0m"
+
+. /etc/wptt/.wptt.conf
+BACKUP_DIR=""
+MONIT_WAS_RUNNING=0
+
+TEMP_CNF_ROOT=$(mktemp)
+chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới có quyền đọc
+
+# Ghi thông tin xác thực vào file tạm ẩn (Tuyệt đối KHÔNG có host=localhost)
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+
+[mysqladmin]
+user=${database_admin_username}
+password=${database_admin_password}
+
+[mariadb-upgrade]
+user=${database_admin_username}
+password=${database_admin_password}
+
+[mysql_upgrade]
+user=${database_admin_username}
+password=${database_admin_password}
+EOF
+
+# =========================================================
+# HÀM TỰ ĐỘNG KHÔI PHỤC (AUTO ROLLBACK)
+# =========================================================
+auto_rollback() {
+  set +e
+  echo -e "\n\e[41m\e[97m [ CẢNH BÁO ] PHÁT HIỆN LỖI TRONG QUÁ TRÌNH NÂNG CẤP! \e[0m"
+  echo -e "\e[33m[*] Đang kích hoạt giao thức Tự Động Khôi Phục (Auto-Rollback)...\e[0m"
+
+  systemctl stop mariadb >/dev/null 2>&1
+
+  if [ -n "$BACKUP_DIR" ] && [ -d "$BACKUP_DIR" ]; then
+    echo -e "\e[33m[*] 1. Đang dọn dẹp cấu trúc dữ liệu bị lỗi...\e[0m"
+    rm -rf /var/lib/mysql
+
+    echo -e "\e[33m[*] 2. Đang phục hồi dữ liệu từ bản sao lưu: $BACKUP_DIR...\e[0m"
+    cp -a "$BACKUP_DIR" /var/lib/mysql
+
+    echo -e "\e[33m[*] 3. Đang khởi động lại MariaDB với dữ liệu gốc...\e[0m"
+    systemctl daemon-reload
+    systemctl start mariadb
+
+    if systemctl is-active --quiet mariadb; then
+      echo -e "\e[32m[OK] ĐÃ KHÔI PHỤC THÀNH CÔNG! Website của bạn đã hoạt động bình thường trở lại.\e[0m"
+    else
+      echo -e "\e[31m[LỖI NGHIÊM TRỌNG] Khôi phục dữ liệu thành công nhưng MariaDB không thể khởi động.\e[0m"
+    fi
+  else
+    echo -e "\e[31m[!] Không tìm thấy thư mục Backup gốc. Vui lòng kiểm tra và xử lý thủ công!\e[0m"
+  fi
+
+  # LUÔN LUÔN dọn dẹp file chứa mật khẩu để bảo mật tuyệt đối
+  rm -f "$TEMP_CNF_ROOT"
+
+  # Bật lại Monit nếu trước đó nó đang chạy
+  if [[ "$MONIT_WAS_RUNNING" -eq 1 ]] && ! systemctl is-active --quiet monit; then
+    systemctl start monit
+  fi
+
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-update-main 1
+  fi
+  exit 1
+}
+
+# ---------------------------------------------------------
+# BƯỚC 0: RÀO CHẮN AN TOÀN (Kiểm tra ổ cứng)
+# ---------------------------------------------------------
+DB_SIZE=$(du -sm /var/lib/mysql 2>/dev/null | awk '{print $1}')
+FREE_SPACE=$(df -m /var/lib/mysql | awk 'NR==2 {print $4}')
+REQUIRED_SPACE=$((DB_SIZE + 1024))
+
+if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+  echo -e "\e[31m[LỖI NGHIÊM TRỌNG] Ổ cứng không đủ dung lượng để tạo bản sao lưu an toàn!\e[0m"
+  rm -f "$TEMP_CNF_ROOT"
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-update-main 1
+  fi
+  exit 1
+fi
+
+# ---------------------------------------------------------
+# BƯỚC 1: SAO LƯU TOÀN BỘ VÀ BẬT BẪY LỖI
+# ---------------------------------------------------------
+BACKUP_DIR="/var/lib/mysql_wptt_backup_$(date +%Y%m%d_%H%M%S)"
+echo -e "\e[33m[1/5] Đang sao lưu vật lý toàn bộ /var/lib/mysql sang thư mục $BACKUP_DIR...\e[0m"
+cp -a /var/lib/mysql "$BACKUP_DIR"
+echo -e "✅ Sao lưu hoàn tất!"
+
+# KÍCH HOẠT BẪY LỖI
+trap 'auto_rollback' ERR SIGINT SIGTERM
+
+# TẠM DỪNG MONIT (Tránh tình trạng Monit tự động bật DB khi đang cài đặt)
+if systemctl is-active --quiet monit; then
+  systemctl stop monit
+  MONIT_WAS_RUNNING=1
+fi
+
+# BƯỚC 2: TẮT DATABASE
+echo -e "\e[33m[2/5] Đang tắt tiến trình MariaDB...\e[0m"
+systemctl stop mariadb
+if systemctl is-active --quiet mariadb; then
+  false
+fi
+echo -e "✅ Đã tắt MariaDB an toàn!"
+
+# BƯỚC 3: GỠ RÀO CẢN VÀ CÀI ĐẶT BẢN MỚI
+echo -e "\e[33m[3/5] Đang tải và cài đặt MariaDB phiên bản mới...\e[0m"
+if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update >/dev/null 2>&1
+  apt-mark unhold mariadb-server mariadb-client >/dev/null 2>&1 #mở khoá
+  apt-get install -y --only-upgrade mariadb-server mariadb-client
+  apt-mark hold mariadb-server mariadb-client >/dev/null 2>&1
+else
+  dnf clean all >/dev/null 2>&1
+  dnf update MariaDB-server MariaDB-client MariaDB-shared MariaDB-common -y --disableexcludes=all
+fi
+echo -e "✅ Nâng cấp phần mềm hoàn tất!"
+
+# BƯỚC 4: BẬT DATABASE VÀ TÁI CẤU TRÚC (Upgrade Schema)
+echo -e "\e[33m[4/5] Khởi động Database và chạy lệnh Nắn lại cấu trúc...\e[0m"
+systemctl start mariadb
+
+# Đợi DB khởi động (Sử dụng cả 2 cách ping để đảm bảo vượt rào thành công)
+DB_READY=0
+for i in {1..15}; do
+  # Cách 1: Thử Ping qua Socket tự do HOẶC Cách 2: Ping qua file ẩn xác thực
+  if mysqladmin ping >/dev/null 2>&1 || mysqladmin --defaults-extra-file="$TEMP_CNF_ROOT" ping >/dev/null 2>&1; then
+    DB_READY=1
+    break
+  fi
+  echo "Đợi MariaDB khởi động ($i/15)..."
+  sleep 2
+done
+
+if [ "$DB_READY" -eq 0 ]; then
+  echo -e "\e[31m[LỖI] Dịch vụ đã chạy nhưng không thể kết nối vào Database!\e[0m"
+  false
+fi
+
+# Chạy lệnh tái cấu trúc (Dùng file ẩn TEMP_CNF_ROOT)
+if command -v mariadb-upgrade >/dev/null 2>&1; then
+  mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
+elif command -v mysql_upgrade >/dev/null 2>&1; then
+  mysql_upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
+else
+  echo -e "\e[31m[LỖI] Không tìm thấy công cụ nâng cấp cấu trúc!\e[0m"
+  false
+fi
+echo -e "✅ Tái cấu trúc (Upgrade Schema) hoàn tất!"
+
+# BƯỚC 5: KHỞI ĐỘNG LẠI LẦN CUỐI VÀ DỌN DẸP
+echo -e "\e[33m[5/5] Tải lại systemd và khởi động MariaDB lần cuối...\e[0m"
+systemctl daemon-reload
+systemctl restart mariadb
+
+# Báo cáo kết quả
+if systemctl is-active --quiet mariadb; then
+  # VÔ HIỆU HÓA BẪY LỖI: Tiến trình đã thành công, gỡ bỏ trap
+  trap - ERR SIGINT SIGTERM
+
+  DB_VER=$(mariadb -V | awk -F' ' '{print $3}' | cut -d- -f1)
+  echo -e "[THÀNH CÔNG] MariaDB ĐÃ ĐƯỢC NÂNG CẤP AN TOÀN LÊN PHIÊN BẢN: $DB_VER"
+
+  # Dọn dẹp an toàn: Xóa file backup vật lý và TIÊU HỦY file pass ẩn
+  rm -rf "$BACKUP_DIR"
+  rm -f "$TEMP_CNF_ROOT"
+
+  #gọi monit start
+  if [[ "$MONIT_WAS_RUNNING" -eq 1 ]]; then
+    systemctl start monit
+  fi
+
+else
+  # Nếu dịch vụ sập, kích hoạt rollback
+  false
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  exec /etc/wptt/wptt-update-main 1
+fi
