@@ -7,21 +7,23 @@ function huong_dan() {
 
   Nói một cách đơn giản, máy chủ đang nói rằng: Tôi biết bạn muốn gì, nhưng bạn không có quyền truy cập vào tài nguyên đó.
 
-  bằng cách các địa chỉ IP bị trả về lỗi 404 trang không tồn tại là trang động, html không phải là những file static như css,js,png,jpg,woff... trong vòng 15 giây mà phải trả về 404 hơn tận 5 lần sẽ bị tạm khoá ip trong vòng 2 tiếng.
+  Bằng cách theo dõi các địa chỉ IP bị trả về lỗi 404 là trang động, html không phải là những file static như css, js, png, jpg, woff...
+  Nếu trong vòng 15 giây mà IP đó yêu cầu và trả về 404 hơn tận 5 lần sẽ bị tạm khoá IP trong vòng 2 tiếng.
+  [Bản nâng cấp Enterprise: Tích hợp Ipset tốc độ cao, nhận diện HTTP/3 UDP và tối ưu pyinotify]
 }
 
 echo ""
 echo ""
 echo ""
 echo "========================================================================="
-echo "|Bảo mật => Kích hoạt chống ddos 404                                |"
+echo "|Bảo mật => Kích hoạt chống ddos 404                                    |"
 echo "========================================================================="
 echo ""
 echo ""
 echo ""
 
 . /etc/wptt/echo-color
-check=$(cat /etc/fail2ban/jail.local | grep '#begin-ddos-404-website')
+check=$(cat /etc/fail2ban/jail.local 2>/dev/null | grep '#begin-ddos-404-website')
 
 if [[ $check = '' ]]; then
   echo "Xác nhận muốn kích hoạt chống ddos 404"
@@ -57,6 +59,21 @@ if [[ $check = '' ]]; then
   fi
 
   _runing "Kích hoạt chặn ddos 404"
+
+  # =========================================================
+  # AUTO-INSTALL DEPENDENCIES (IPSET & PYINOTIFY)
+  # =========================================================
+  if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+    dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update >/dev/null 2>&1
+      apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
+    }
+  else
+    rpm -q python3-inotify ipset >/dev/null 2>&1 || {
+      dnf install -y python3-inotify ipset >/dev/null 2>&1
+    }
+  fi
 
   if [ "$(ls -At /etc/wptt/vhost)" ]; then
     selects=()
@@ -113,34 +130,50 @@ accesslog $VH_ROOT/logs/access.log {
     done
   fi
 
-  #kiểm tra đang sử dụng nền tảng tường firewall nào
+  # =========================================================
+  # TÍNH TOÁN BIẾN VÀ CẤU HÌNH FAIL2BAN ENTERPRISE
+  # =========================================================
+  rule_fail2ban_name="ddos-404-wptt"
+
   if [[ -f /etc/csf/csf.conf ]]; then
-    action_thuc_thi_block='iptables-multiport[name=wordpress, port="http,https", protocol=tcp]'
+    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
   elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-    action_thuc_thi_block='nftables-allports'
+    action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
+  elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
+    action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
   else
-    action_thuc_thi_block='firewallcmd-allports'
+    echo "Hiện tại không support một tường lửa nào để sử dụng"
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
+    return 2>/dev/null
+    exit
   fi
 
-  echo '#begin-ddos-404-website
+  echo "
+#begin-ddos-404-website
 [wptangtoc-404]
 enabled = true
-action = '$action_thuc_thi_block'
+action = $action_thuc_thi_block
 filter = wptangtoc-404
 logpath = /usr/local/lsws/*/logs/access.log
+backend = pyinotify
 maxretry = 5
 bantime = 7200
 findtime = 15
-#end-ddos-404-website' >>/etc/fail2ban/jail.local
+#end-ddos-404-website" >>/etc/fail2ban/jail.local
 
+  # Tối ưu lại biểu thức regex để hoạt động nhanh hơn, tránh back-tracking
   echo '[Definition]
-failregex = ^<HOST> - .* "(GET|POST|HEAD).*HTTP.*" 404 .*$
-ignoreregex =.*(robots.txt|favicon.ico|jpg|png|webp|css|js|jpeg|woff2|avif|gif|svg)' >/etc/fail2ban/filter.d/wptangtoc-404.conf
+failregex = ^<HOST> .* "(GET|POST|HEAD) .* HTTP\/.*" 404 .*$
+ignoreregex = \.(?i)(robots\.txt|favicon\.ico|jpg|png|webp|css|js|jpeg|woff2|avif|gif|svg)(\?.*)?$' >/etc/fail2ban/filter.d/wptangtoc-404.conf
 
-  fail2ban-client reload >/dev/null 2>&1
-  systemctl restart fail2ban
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
   _rundone "Kích hoạt chặn ddos 404"
-  echo "Nếu trong 15 giây mà yêu cầu 5 yêu cầu 404 thì IP sẽ bị khóa trong 2 tiếng"
+  echo "Nếu trong 15 giây mà yêu cầu 5 lần lỗi 404 thì IP sẽ bị khóa trong 2 tiếng"
 fi
 
 if [[ $check ]]; then
@@ -178,11 +211,9 @@ if [[ $check ]]; then
   fi
 
   _runing "Hủy kích hoạt chống ddos 404"
-  # sed -i '/chan 404 wptangtoc/,+8d' /etc/fail2ban/jail.local
   sed -i -e '/^#begin-ddos-404-website/,/^#end-ddos-404-website$/d' /etc/fail2ban/jail.local
   rm -f /etc/fail2ban/filter.d/wptangtoc-404.conf
-  fail2ban-client reload >/dev/null 2>&1
-  systemctl restart fail2ban
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
   _rundone "Hủy kích hoạt chống ddos 404"
 fi
 
@@ -190,6 +221,3 @@ check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-bao-mat-main 1
 fi
-
-# echo '[Definition]
-# failregex = ^<HOST> - .* "(GET|POST|HEAD) /?s=.*HTTP.*" 200 .*$' >/etc/fail2ban/filter.d/wptangtoc-404.conf

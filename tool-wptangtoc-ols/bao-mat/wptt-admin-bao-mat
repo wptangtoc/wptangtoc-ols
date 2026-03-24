@@ -20,14 +20,11 @@ function huong_dan() {
 }
 
 echo ""
-echo ""
-echo ""
 echo "========================================================================="
-echo "|Bảo mật => Kích hoạt chống Brute Force wp-admin                        |"
+echo "| Bảo mật => Kích hoạt chống Brute Force wp-admin                       |"
 echo "========================================================================="
 echo ""
-echo ""
-echo ""
+
 NAME=$1
 if [[ $NAME = "98" ]]; then
   NAME=""
@@ -42,7 +39,6 @@ if [[ $NAME = '' ]]; then
       domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
       domain2=${domain//[-._]/wp}
       path="/etc/fail2ban/filter.d/wordpress-dangnhap-$domain2.conf"
-      i=1
       if [[ -f "$path" ]]; then
         checkauto="Đã kích hoạt"
       else
@@ -54,7 +50,6 @@ if [[ $NAME = '' ]]; then
     echo
   fi
 
-  echo ""
   echo ""
   echo "Lựa chọn website kích hoạt chống Brute Force wp-admin: "
   echo ""
@@ -77,7 +72,6 @@ if [[ $NAME = '' ]]; then
         exec /etc/wptt/wptt-bao-mat-main 1
       fi
 
-      #check tổng số website, nếu 2 website trở lên thì sẽ tự động có tính năng tất cả
       a=0
       for select in ${selects[@]}; do
         a=$(expr $a + 1)
@@ -91,7 +85,6 @@ if [[ $NAME = '' ]]; then
 -//- Nhập lựa chọn website của bạn [0=Thoát]: "
       select select in "${selects[@]}"; do
         NAME=$select
-        index=$REPLY
         break
       done
     else
@@ -111,8 +104,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
     for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
       domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
       path="/usr/local/lsws/$domain/html/wp-config.php"
-      path_html="/usr/local/lsws/$domain/html"
-      i=1
       if [[ -f "$path" ]]; then
         _runing "Thiết lập chống Brute Force wp-admin website $domain"
         NAME2=${domain//[-._]/wp}
@@ -145,7 +136,28 @@ if [[ -f /etc/fail2ban/filter.d/wordpress-dangnhap-$NAME2.conf ]]; then
 fi
 
 _runing "Kích hoạt chống Brute Force WP-admin cho website $NAME"
-if [[ ! $(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | grep 'accesslog') ]]; then
+
+# =========================================================
+# AUTO-INSTALL DEPENDENCIES (IPSET & PYINOTIFY)
+# =========================================================
+if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+  # Ubuntu/Debian dùng tên gói python3-pyinotify
+  dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update >/dev/null 2>&1
+    apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
+  }
+else
+  # AlmaLinux/CentOS dùng tên gói python3-inotify
+  rpm -q python3-inotify ipset >/dev/null 2>&1 || {
+    dnf install -y python3-inotify ipset >/dev/null 2>&1
+  }
+fi
+
+# =========================================================
+# TẠO LOG RIÊNG CHO WEBSITE (Tách biệt accesslog để bảo mật)
+# =========================================================
+if [[ ! $(grep 'accesslog' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf) ]]; then
   sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
   sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
   echo '
@@ -165,8 +177,7 @@ fi
 
 mkdir -p /usr/local/lsws/"$NAME"/logs
 
-#tuong thich ubuntu tuong thich nhom litespeed
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if $(grep -qi "Ubuntu" /etc/*release 2>/dev/null); then
   tuong_thich_nhom_litespeed="nogroup"
 else
   tuong_thich_nhom_litespeed="nobody"
@@ -176,45 +187,58 @@ chown -R nobody:$tuong_thich_nhom_litespeed /usr/local/lsws/"$NAME"/logs
 chmod 700 /usr/local/lsws/"$NAME"/logs
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
-#kiểm tra đang sử dụng nền tảng tường firewall nào
-if [[ -f /etc/csf/csf.conf ]]; then
-  action_thuc_thi_block='iptables-multiport[name=wordpress, port="http,https", protocol=tcp]'
-elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-  action_thuc_thi_block='nftables-allports'
-else
-  action_thuc_thi_block='firewallcmd-allports'
-fi
-
-#rules firewalld chưa chứa tối đa 28 ký tự: f2b- + với tên rules
+# =========================================================
+# TÍNH TOÁN BIẾN VÀ CẤU HÌNH FAIL2BAN ENTERPRISE
+# =========================================================
+# Quy định ký tự tối đa (Cắt xuống 20 ký tự để chừa chỗ cho hậu tố -tcp/-udp)
 rule_fail2ban_name="wp-admin-$NAME2"
-#ky tu toi da là 32 ký tự user trong linux
-check_ky_tu=$(echo $rule_fail2ban_name | wc -c)
-if (($check_ky_tu > 24)); then
-  rule_fail2ban_name=$(echo $rule_fail2ban_name | cut -c 1-23)
+if ((${#rule_fail2ban_name} > 20)); then
+  rule_fail2ban_name=$(echo $rule_fail2ban_name | cut -c 1-20)
 fi
 
-echo '#begin-wordpress-dangnhap-'$NAME2'
-['$rule_fail2ban_name']
+# Kiểm tra nền tảng tường lửa
+if [[ -f /etc/csf/csf.conf ]]; then
+  # Sửa lỗi đụng hàng: Thêm actname và tách name ra làm 2 túi riêng biệt
+  action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+         iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+
+elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
+  # Nftables hỗ trợ allports mặc định siêu mượt
+  action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
+
+else
+  # Sửa lỗi đụng hàng Firewalld: Thêm actname và tách túi iptables
+  action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+         firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+fi
+
+# Ghi cấu hình Jail với backend pyinotify
+echo "
+#begin-wordpress-dangnhap-$NAME2
+[$rule_fail2ban_name]
 enabled = true
-action = '$action_thuc_thi_block'
-filter = wordpress-dangnhap-'$NAME2'
-logpath = /usr/local/lsws/'$NAME'/logs/access.log
+action = $action_thuc_thi_block
+filter = wordpress-dangnhap-$NAME2
+logpath = /usr/local/lsws/$NAME/logs/access.log
+backend = pyinotify
 bantime = 7200
 maxretry = 3
 findtime = 300
-#end-wordpress-dangnhap-'$NAME2'
-' >>/etc/fail2ban/jail.local
+#end-wordpress-dangnhap-$NAME2
+" >>/etc/fail2ban/jail.local
 
-#/+: Khớp với một hoặc nhiều dấu gạch chéo (/). Điều này sẽ khớp với cả / và //. tương thích cả /wp-login.php và //wp-login.php
-
+# Regex cực chặt chẽ, chống hacker bypass ký tự
 echo '[Definition]
-failregex = ^<HOST> .* "POST /+wp-login.php HTTP.* 200' >>/etc/fail2ban/filter.d/wordpress-dangnhap-$NAME2.conf
-fail2ban-client reload >/dev/null 2>&1
-systemctl restart fail2ban
+failregex = ^<HOST> .* "POST \/+wp-login\.php HTTP\/.*" 200' >/etc/fail2ban/filter.d/wordpress-dangnhap-$NAME2.conf
+
+# =========================================================
+# KHỞI ĐỘNG LẠI FAIL2BAN
+# =========================================================
+fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
 
 _rundone "Kích hoạt chống Brute Force WP-admin cho website $NAME"
 
-echo "Khi đăng nhập vào wp-admin nhập sai password 3 lần trong vòng 5 phút sẽ bị tạm khóa trong vòng 2 tiếng"
+echo -e "Khi đăng nhập vào wp-admin nhập sai password 3 lần trong vòng 5 phút sẽ bị tạm khóa trong vòng 2 tiếng."
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
