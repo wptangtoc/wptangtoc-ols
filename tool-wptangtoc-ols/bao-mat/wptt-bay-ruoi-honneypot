@@ -1,0 +1,226 @@
+#!/bin/bash
+
+function huong_dan() {
+  Tính năng Bẫy Ruồi Honeypot [Bắt Hacker từ trong trứng nước]
+  🛡️ Mục đích:
+  Hacker thường sử dụng các công cụ rà quét tự động để tìm kiếm các lỗ hổng lộ lọt thông tin nhạy cảm trước khi chính thức tấn công. Chúng sẽ dò tìm các file như biến môi trường [.env], cấu hình mã nguồn [.git], file backup cơ sở dữ liệu [db.sql], hay file debug [phpinfo.php].
+
+  ⚙️ Cơ chế hoạt động:
+  * Người dùng bình thường không bao giờ truy cập vào các đường dẫn này.
+  * Nếu một địa chỉ IP cố tình truy vấn các đường dẫn nhạy cảm nằm trong "Danh sách Đen" của bẫy ruồi.
+  * Hành động: IP đó sẽ bị Tường lửa khóa ngay lập tức CHỈ VỚI 1 LẦN TRUY CẬP DUY NHẤT.
+  * Thời gian khóa: 24 tiếng [86400 giây] - Đánh chặn từ xa trước khi chúng kịp tìm ra lỗ hổng web.
+
+  [Lưu ý: Quản trị viên cũng không nên tự truy cập các file như info.php hay .env trên trình duyệt để tránh bị block nhầm]
+}
+
+echo ""
+echo ""
+echo ""
+echo "========================================================================="
+echo "|Bảo mật => Kích hoạt Bẫy ruồi Honeypot [Bắt Hacker]                    |"
+echo "========================================================================="
+echo ""
+echo ""
+echo ""
+
+. /etc/wptt/echo-color
+check=$(cat /etc/fail2ban/jail.local 2>/dev/null | grep '#begin-honeypot-wptangtoc')
+if [[ $check = '' ]]; then
+  echo "Xác nhận muốn kích hoạt Bẫy ruồi Honeypot"
+  prompt="Nhập lựa chọn của bạn [1-2]: "
+  dongy="n"
+  options=("Đồng ý" "Không đồng ý")
+  PS3="$prompt"
+  select opt in "${options[@]}"; do
+    case "$REPLY" in
+    1)
+      dongy="y"
+      break
+      ;;
+
+    2)
+      dongy="n"
+      break
+      ;;
+
+    $((${#options[@]} + 1)))
+      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+      break
+      ;;
+    *)
+      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+      break
+      ;;
+    esac
+  done
+
+  if [[ $dongy = 'n' ]]; then
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  _runing "Kích hoạt Bẫy ruồi Honeypot"
+
+  # =========================================================
+  # AUTO-INSTALL DEPENDENCIES (IPSET & PYINOTIFY)
+  # =========================================================
+  if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+    dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update >/dev/null 2>&1
+      apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
+    }
+  else
+    rpm -q python3-inotify ipset >/dev/null 2>&1 || {
+      dnf install -y python3-inotify ipset >/dev/null 2>&1
+    }
+  fi
+
+  if [ "$(ls -At /etc/wptt/vhost)" ]; then
+    selects=()
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+      if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+
+        unset TRACE_OUTPUT
+        TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
+        # Kiểm tra output có chứa các key đặc trưng của Cloudflare không
+        if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then #check xem có đang sử dụng cloudflare cdn không
+          if [[ $(cat /usr/local/lsws/conf/httpd_config.conf | grep 'allow' | grep '103.21.244.0') = '' ]]; then
+            _runloi "Kích hoạt Bẫy ruồi Honeypot"
+            echo "Phát hiện website $NAME đang sử dụng Cloudflare CDN"
+            echo "Vui lòng phải kích hoạt sử dụng tính năng Hiện thị IP Log Real bypass Cloudflare CDN (MENU add ons 35=>8)"
+            echo "Thì mới có thể sử dụng được tính năng này để tránh bị chặn nhầm"
+            check_menu_wptangtoc_active=$1
+            if [[ $check_menu_wptangtoc_active = "98" ]]; then
+              exec /etc/wptt/wptt-bao-mat-main 1
+            fi
+            return 2>/dev/null
+            exit
+          fi
+        fi
+
+        if [[ ! $(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | grep 'accesslog') ]]; then
+          sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+          sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+          echo '
+errorlog $VH_ROOT/logs/error.log {
+  useServer               1
+  logLevel                ERROR
+  rollingSize             10M
+}
+
+accesslog $VH_ROOT/logs/access.log {
+  useServer               0
+  rollingSize             10M
+  keepDays                30
+  compressArchive         1
+}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+          mkdir -p /usr/local/lsws/"$NAME"/logs
+
+          #tuong thich ubuntu tuong thich nhom litespeed
+          if $(cat /etc/*release | grep -q "Ubuntu"); then
+            tuong_thich_nhom_litespeed="nogroup"
+          else
+            tuong_thich_nhom_litespeed="nobody"
+          fi
+
+          chown -R nobody:$tuong_thich_nhom_litespeed /usr/local/lsws/"$NAME"/logs
+          chmod 700 /usr/local/lsws/"$NAME"/logs
+          /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+        fi
+      fi
+    done
+  fi
+
+  # =========================================================
+  # TÍNH TOÁN BIẾN VÀ CẤU HÌNH FAIL2BAN ENTERPRISE
+  # =========================================================
+  rule_fail2ban_name="honeypot-wptt"
+
+  if [[ -f /etc/csf/csf.conf ]]; then
+    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+  elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
+    action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
+  elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
+    action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+  else
+    # Fallback tiêu chuẩn
+    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+  fi
+
+  echo "
+#begin-honeypot-wptangtoc
+[honeypot-wptangtoc]
+enabled = true
+action = $action_thuc_thi_block
+filter = honeypot-wptangtoc
+logpath = /usr/local/lsws/*/logs/access.log
+backend = pyinotify
+maxretry = 1
+bantime = 86400
+findtime = 60
+#end-honeypot-wptangtoc" >>/etc/fail2ban/jail.local
+
+  # =========================================================
+  # REGEX BẪY RUỒI (HONEYPOT TRAPS)
+  # =========================================================
+  # Bắt các file lộ lọt môi trường, git, svn, backup wp-config, database dump, công cụ quét PHP
+  echo '[Definition]
+traps = \.env.*|\.git\/.*|\.svn\/.*|\.aws\/.*|wp-config\.(?:php\.bak|bak|txt|save|swp|old)|(?:phpinfo|info|pi|test)\.php|eval-stdin\.php|(?:db|dump|backup|database)\.sql
+failregex = ^<HOST> .* "(GET|POST|HEAD) \/+(?:%(traps)s) HTTP\/.*" .*$
+ignoreregex =' >/etc/fail2ban/filter.d/honeypot-wptangtoc.conf
+
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+  _rundone "Kích hoạt Bẫy ruồi Honeypot thành công"
+  echo "Hacker rà quét lỗ hổng (.env, .git, db.sql, backup...) sẽ bị BAN NGAY LẬP TỨC 24 tiếng!"
+fi
+
+if [[ $check ]]; then
+  echo "Bạn đang kích họat Bẫy ruồi Honeypot"
+  echo "Xác nhận muốn hủy kích hoạt Bẫy ruồi Honeypot"
+  prompt="Nhập lựa chọn của bạn [1-2]: "
+  dongy="n"
+  options=("Đồng ý" "Không đồng ý")
+  PS3="$prompt"
+  select opt in "${options[@]}"; do
+    case "$REPLY" in
+    1)
+      dongy="y"
+      break
+      ;;
+
+    2)
+      dongy="n"
+      break
+      ;;
+
+    $((${#options[@]} + 1)))
+      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+      break
+      ;;
+    *)
+      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+      break
+      ;;
+    esac
+  done
+
+  if [[ $dongy = 'n' ]]; then
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  _runing "Hủy kích hoạt Bẫy ruồi Honeypot"
+  sed -i -e '/^#begin-honeypot-wptangtoc/,/^#end-honeypot-wptangtoc$/d' /etc/fail2ban/jail.local
+  rm -f /etc/fail2ban/filter.d/honeypot-wptangtoc.conf
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+  _rundone "Hủy kích hoạt Bẫy ruồi Honeypot"
+fi
+
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  exec /etc/wptt/wptt-bao-mat-main 1
+fi
