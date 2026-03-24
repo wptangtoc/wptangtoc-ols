@@ -4,21 +4,22 @@ function huong_dan() {
   Nếu ai đó truy vấn cố tình spam tính năng search sẽ bị chặn lại.
   Ví dụ tính năng search khi truy cập: https://domain.com?s=abc
   cái query sting là ?s= thường là giá trị search tính năng của WordPress, hoặc một số nền tảng khác...
-  Nếu IP nào đó trong 15 giây mà yêu cầu 5 yêu cầu search thì IP sẽ bị khóa trong 2 tiếng
+  Nếu IP nào đó trong 15 giây mà yêu cầu 5 yêu cầu search thì IP sẽ bị khóa trong 2 tiếng.
+  [Bản nâng cấp Enterprise: Tích hợp Ipset tốc độ cao, nhận diện HTTP/3 UDP và tối ưu pyinotify]
 }
 
 echo ""
 echo ""
 echo ""
 echo "========================================================================="
-echo "|Bảo mật => Kích hoạt chống search                                |"
+echo "|Bảo mật => Kích hoạt chống search                                      |"
 echo "========================================================================="
 echo ""
 echo ""
 echo ""
 
 . /etc/wptt/echo-color
-check=$(cat /etc/fail2ban/jail.local | grep '#begin-ddos-search-wordpress')
+check=$(cat /etc/fail2ban/jail.local 2>/dev/null | grep '#begin-ddos-search-wordpress')
 if [[ $check = '' ]]; then
   echo "Xác nhận muốn kích hoạt chống ddos search"
   prompt="Nhập lựa chọn của bạn [1-2]: "
@@ -53,6 +54,21 @@ if [[ $check = '' ]]; then
   fi
 
   _runing "Kích hoạt chặn chống ddos search"
+
+  # =========================================================
+  # AUTO-INSTALL DEPENDENCIES (IPSET & PYINOTIFY)
+  # =========================================================
+  if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+    dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update >/dev/null 2>&1
+      apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
+    }
+  else
+    rpm -q python3-inotify ipset >/dev/null 2>&1 || {
+      dnf install -y python3-inotify ipset >/dev/null 2>&1
+    }
+  fi
 
   if [ "$(ls -At /etc/wptt/vhost)" ]; then
     selects=()
@@ -111,15 +127,21 @@ accesslog $VH_ROOT/logs/access.log {
     done
   fi
 
-  #kiểm tra đang sử dụng nền tảng tường firewall nào
+  # =========================================================
+  # TÍNH TOÁN BIẾN VÀ CẤU HÌNH FAIL2BAN ENTERPRISE
+  # =========================================================
+  rule_fail2ban_name="ddos-search-wptt"
+
   if [[ -f /etc/csf/csf.conf ]]; then
-    action_thuc_thi_block='iptables-multiport[name=wordpress, port="http,https", protocol=tcp]'
+    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
   elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-    action_thuc_thi_block='nftables-allports'
+    action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
   elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-    action_thuc_thi_block='firewallcmd-allports'
+    action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
   else
-    echo "Hiện tại không support một tường lừa nào để sử dụng"
+    echo "Hiện tại không support một tường lửa nào để sử dụng"
     check_menu_wptangtoc_active=$1
     if [[ $check_menu_wptangtoc_active = "98" ]]; then
       exec /etc/wptt/wptt-bao-mat-main 1
@@ -128,22 +150,24 @@ accesslog $VH_ROOT/logs/access.log {
     exit
   fi
 
-  echo '#begin-ddos-search-wordpress
+  echo "
+#begin-ddos-search-wordpress
 [ddos-search-wptangtoc]
 enabled = true
-action = '$action_thuc_thi_block'
+action = $action_thuc_thi_block
 filter = ddos-search-wptangtoc
 logpath = /usr/local/lsws/*/logs/access.log
+backend = pyinotify
 maxretry = 5
 bantime = 7200
 findtime = 15
-#end-ddos-search-wordpress' >>/etc/fail2ban/jail.local
+#end-ddos-search-wordpress" >>/etc/fail2ban/jail.local
 
+  # Regex tối ưu chặt chẽ hơn để không bắt nhầm các file tĩnh có chứa "?s="
   echo '[Definition]
-failregex = ^<HOST> - .* "(GET|POST|HEAD).*\/?s=.*HTTP.*200.*$' >/etc/fail2ban/filter.d/ddos-search-wptangtoc.conf
+failregex = ^<HOST> .* "(GET|POST|HEAD) .*[\?&]s=.* HTTP\/.*" 200' >/etc/fail2ban/filter.d/ddos-search-wptangtoc.conf
 
-  fail2ban-client reload >/dev/null 2>&1
-  systemctl restart fail2ban
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
   _rundone "Kích hoạt chặn chống ddos search"
   echo "Nếu trong 15 giây mà yêu cầu 5 yêu cầu search thì IP sẽ bị khóa trong 2 tiếng"
 fi
@@ -182,12 +206,10 @@ if [[ $check ]]; then
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
 
-  _runing "Hủy kích hoạt chống ddos 404"
-  # sed -i '/chan search ddos wptangtoc/,+8d' /etc/fail2ban/jail.local
+  _runing "Hủy kích hoạt chống ddos search"
   sed -i -e '/^#begin-ddos-search-wordpress/,/^#end-ddos-search-wordpress$/d' /etc/fail2ban/jail.local
-  fail2ban-client reload >/dev/null 2>&1
-  systemctl restart fail2ban
-  _rundone "Hủy kích hoạt chống ddos 404"
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+  _rundone "Hủy kích hoạt chống ddos search"
 fi
 
 check_menu_wptangtoc_active=$1
