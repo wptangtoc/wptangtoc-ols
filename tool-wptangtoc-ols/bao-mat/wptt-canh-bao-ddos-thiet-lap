@@ -7,7 +7,7 @@ function huong_dan() {
 
   ⚙️ Quy tắc hoạt động cụ thể:
   * Công cụ: Sử dụng Fail2ban, một phần mềm giám sát log và chặn IP.
-  * Điều kiện Kích hoạt [Trigger]: Fail2ban sẽ theo dõi log truy cập [access.log] của OpenLiteSpeed. Nếu một địa chỉ IP thực hiện 20 yêu cầu [requests] đến các tệp tin động [html document], tức các trang cần xử lý bởi WordPress/PHP, không phải file tĩnh như ảnh, css, js] trong vòng 30 giây.
+  * Điều kiện Kích hoạt [Trigger]: Fail2ban sẽ theo dõi log truy cập [access.log] của OpenLiteSpeed. Nếu một địa chỉ IP thực hiện 20 yêu cầu [requests] đến các tệp tin động [html document, tức các trang cần xử lý bởi WordPress/PHP, không phải file tĩnh như ảnh, css, js] trong vòng 30 giây.
   * Hành động [Action]: Ngay lập tức, Fail2ban sẽ ra lệnh cho tường lửa [firewall] của máy chủ chặn [block] địa chỉ IP đó.
   * Thời gian Chặn [Duration]: Địa chỉ IP bị chặn sẽ không thể truy cập vào website [hoặc toàn bộ server, tùy cấu hình] trong vòng 2 tiếng.
 
@@ -18,7 +18,7 @@ function huong_dan() {
 
   giải thích đơn giản: ip nào trong 30 giây mà yêu cầu 20 yêu cầu [html document] tức file động thì IP sẽ bị khóa trong 2 tiếng
 
-  Tóm lại: Tính năng này trong WPTangToc OLS là một cấu hình Fail2ban, giúp tự động hóa việc bảo vệ website khỏi các truy cập động quá mức, góp phần tăng cường an ninh và ổn định cho máy chủ OpenLiteSpeed của bạn.
+  [Bản nâng cấp Enterprise: Tích hợp Ipset tốc độ cao, nhận diện HTTP/3 UDP và tối ưu pyinotify không gây nghẽn CPU]
 }
 
 . /etc/wptt/.wptt.conf
@@ -43,7 +43,6 @@ if [[ $NAME = '' ]]; then
       domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
       domain2=${domain//[-._]/wp}
       path="/etc/fail2ban/filter.d/ddos-$domain2.conf"
-      i=1
       if [[ -f "$path" ]]; then
         checkauto="Đã kích hoạt"
       else
@@ -76,7 +75,6 @@ if [[ $NAME = '' ]]; then
         exec /etc/wptt/wptt-bao-mat-main 1
       fi
 
-      #check tổng số website, nếu 2 website trở lên thì sẽ tự động có tính năng tất cả
       a=0
       for select in ${selects[@]}; do
         a=$(expr $a + 1)
@@ -88,9 +86,8 @@ if [[ $NAME = '' ]]; then
 
       PS3="
 -//- Nhập lựa chọn website của bạn [0=Thoát]: "
-      select select in ${selects[@]}; do
+      select select in "${selects[@]}"; do
         NAME=$select
-        index=$REPLY
         break
       done
     else
@@ -136,10 +133,25 @@ read -p "Bạn có muốn bật tính năng chống ddos website? (y/n): " dongy
 if [[ "$dongy" = "y" ]]; then
   _runing "Thiết lập chống ddos cho website $NAME"
 
+  # =========================================================
+  # AUTO-INSTALL DEPENDENCIES (IPSET & PYINOTIFY)
+  # =========================================================
+  if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+    dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update >/dev/null 2>&1
+      apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
+    }
+  else
+    rpm -q python3-inotify ipset >/dev/null 2>&1 || {
+      dnf install -y python3-inotify ipset >/dev/null 2>&1
+    }
+  fi
+
   unset TRACE_OUTPUT
   TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
-  # Kiểm tra output có chứa các key đặc trưng của Cloudflare không
-  if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then #check xem có đang sử dụng cloudflare cdn không
+
+  if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
     if [[ $(cat /usr/local/lsws/conf/httpd_config.conf | grep 'allow' | grep '103.21.244.0') = '' ]]; then
       _runloi "Thiết lập chống ddos cho website $NAME"
       echo "Phát hiện website $NAME đang sử dụng Cloudflare CDN"
@@ -174,7 +186,6 @@ accesslog $VH_ROOT/logs/access.log {
 
   mkdir -p /usr/local/lsws/"$NAME"/logs
 
-  #tuong thich ubuntu tuong thich nhom litespeed
   if $(cat /etc/*release | grep -q "Ubuntu"); then
     tuong_thich_nhom_litespeed="nogroup"
   else
@@ -184,50 +195,46 @@ accesslog $VH_ROOT/logs/access.log {
   chown -R nobody:$tuong_thich_nhom_litespeed /usr/local/lsws/"$NAME"/logs
   chmod 700 /usr/local/lsws/"$NAME"/logs
 
-  #kiểm tra đang sử dụng nền tảng tường firewall nào
-  if [[ -f /etc/csf/csf.conf ]]; then
-    action_thuc_thi_block='iptables-multiport[name=wordpress, port="http,https", protocol=tcp]'
-  elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-    action_thuc_thi_block='nftables-allports'
-  else
-    action_thuc_thi_block='firewallcmd-allports'
-  fi
-
-  #rules firewalld chưa chứa tối đa 28 ký tự: f2b- + với tên rules
+  # =========================================================
+  # TÍNH TOÁN BIẾN VÀ CẤU HÌNH FAIL2BAN ENTERPRISE
+  # =========================================================
   rule_fail2ban_name="ddos-$NAME2"
-  #ky tu toi da là 32 ký tự user trong linux
-  check_ky_tu=$(echo $rule_fail2ban_name | wc -c)
-  if (($check_ky_tu > 24)); then
-    rule_fail2ban_name=$(echo $rule_fail2ban_name | cut -c 1-23)
+  if ((${#rule_fail2ban_name} > 20)); then
+    rule_fail2ban_name=$(echo $rule_fail2ban_name | cut -c 1-20)
   fi
 
-  echo '#begin-ddos-website-'$NAME2'
-['$rule_fail2ban_name']
+  if [[ -f /etc/csf/csf.conf ]]; then
+    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+  elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
+    action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
+  elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
+    action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+  else
+    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+  fi
+
+  echo "
+#begin-ddos-website-$NAME2
+[$rule_fail2ban_name]
 enabled = true
-action = '$action_thuc_thi_block'
-filter = ddos-'$NAME2'
-logpath = /usr/local/lsws/'$NAME'/logs/access.log
+action = $action_thuc_thi_block
+filter = ddos-$NAME2
+logpath = /usr/local/lsws/$NAME/logs/access.log
+backend = pyinotify
 bantime = 7200
 maxretry = 20
 findtime = 30
-#end-ddos-website-'$NAME2'' >>/etc/fail2ban/jail.local
+#end-ddos-website-$NAME2" >>/etc/fail2ban/jail.local
 
-  #kiểm tra log get html, sẽ loại bỏ những file static
+  # Regex Tối ưu: Bắt mọi method GET/POST, bỏ qua các định dạng file tĩnh.
   echo '[Definition]
-failregex = ^<HOST> -.*"(GET|POST) ([_0-9a-zA-Z-\/?&=]+) .*
-ignoreregex =' >>/etc/fail2ban/filter.d/ddos-$NAME2.conf
-  #loai bo static và có thể giảm maxretry xuống thấp hơn nhiều khoảng 20 trống ddos theo dạng dynamic hmtl file
+failregex = ^<HOST> .* "(GET|POST|HEAD) .* HTTP\/.*"
+ignoreregex = \.(?i)(robots\.txt|favicon\.ico|jpg|png|webp|css|js|jpeg|woff2|avif|gif|svg|woff|ttf)(\?.*)?$' >/etc/fail2ban/filter.d/ddos-$NAME2.conf
 
-  # echo '[Definition]
-  # failregex = ^<HOST> -.*"(GET|POST).*
-  # ignoreregex = ^<HOST> .* "GET /wp-content/.* HTTP.* 200' >>/etc/fail2ban/filter.d/ddos-$NAME2.conf
-
-  #fail2ban-client reload >/dev/null 2>&1
-
-  #xoá access cho nó nhẹ hơn để fail2ban đọc nhanh hơn, tránh fail2ban ăn quá nhiều cpu, sẽ sử dụng nếu bị đánh rát quá
-  #*/1 * * * * truncate -s 0 /var/usr/local/lsws/$NAME/access.log
-
-  systemctl restart fail2ban
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
   _rundone "Thiết lập chống ddos cho website $NAME"
   echo "Nếu trong 30 giây mà yêu cầu 20 yêu cầu (html document) thì IP sẽ bị khóa trong 2 tiếng"
