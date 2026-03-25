@@ -173,14 +173,15 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Sao lưu và khôi phục website</li>
 <li>Sao lưu website tự động</li>
 <li>Sao lưu database</li>
+<li>Giao thức QUIC HTTP/3</li>
 <li>Hỗ trợ Google Drive và Onedrive, Telegram lưu trữ đám mây backup website</li>
 <li>Preload Cache</li>
 <li>Thêm Không giới hạn domain & subdomain</li>
 <li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
 <li>Hỗ trợ cài đặt SSL trả phí (Sectigo, Geotrust,...)</li>
-<li>PhpSuExec mỗi một website một username, để nâng cao bảo mật tránh bị một website bị hack lây sang website khác</li>
+<li>PhpSuExec + chroot + namespace cô lập website để nâng cao bảo mật cháy lan (nếu có 1 website bị hack) sang website khác</li>
 <li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
-<li>Hỗ trợ object Cache (Redis & Memcached)</li>
+<li>Hỗ trợ object Cache (Redis & Memcached & valkey & KeyDB)</li>
 <li>Hỗ trợ OPcache (LSOpcache)</li>
 <li>Tối ưu wp cron</li>
 <li>Hỗ trợ IPv4 và IPv6</li>
@@ -189,7 +190,6 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Hỗ trợ PHPMyAdmin và FileManager (Trực tiếp trên web)</li>
 <li>Hỗ trợ php ioncube</li>
 <li>Sử dụng LSPHP tùy biến hiệu suất tốt hơn PHP Thuần</li>
-<li>Hỗ trợ giao thức QUIC http/3</li>
 <li>Chống brute force WordPress</li>
 <li>Chống DDOS cơ bản</li>
 <li>Hỗ trợ nhiều IP cùng lúc trên 1 máy chủ</li>
@@ -205,17 +205,21 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Quản lý PHP</li>
 <li>Quản lý SSH</li>
 <li>Quản lý Cache</li>
-<li>Quản lý Swap</li>
+<li>Quản lý Swap/Zram</li>
 <li>Mod Security</li>
+<li>Multi-PHP (Mỗi Web một phiên bản PHP riêng)</li>
+<li>Backup Gia tăng (Incremental Backup)</li>
 <li>Tường lửa 8G for WordPress</li>
+<li>Tối ưu Object Cache tầng Socket</li>
 <li>Tường lửa firewalld (Tường lửa CSF, NFtables tuỳ chọn)</li>
 <li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive, Telegram)</li>
 <li>Quản lý Wordpress</li>
+<li>LockDown Wordpress bảo mật</li>
 <li>Hỗ trợ update WPTangToc OLS, WordPress, máy chủ...</li>
 <li>Hỗ trợ chặn quốc gia truy cập website hoặc chỉ cho quốc gia nào đó được phép truy cập thôi</li>
 <li>Cảnh báo login ssh thông báo qua Telegram</li>
 <li>Theo dõi lưu lượng mạng,cpu,ram...</li>
-<li>Cảnh báo service webserver quan trọng và tự động reboot lại service đó nếu nó dừng hoạt động</li>
+<li>Tự động reboot lại service đó nếu nó dừng hoạt động</li>
 <li>Vân vân và mây mây... đầy đủ các tính năng cho anh em system admin cơ bản đến chuyên nghiệp</li>
 </ul>
 
