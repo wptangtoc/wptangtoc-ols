@@ -1,10 +1,10 @@
 #!/bin/bash
-
 function huong_dan() {
   TÍNH NĂNG CẬP NHẬT MARIADB AN TOÀN [ZERO DATA LOSS]
   - Mục đích: Cập nhật máy chủ MariaDB lên bản vá mới nhất để vá lỗ hổng
   bảo mật và tăng cường hiệu suất.
   - Cơ chế An toàn:
+  + Tự động kiểm tra phiên bản: Khước từ chạy nếu DB đã ở bản mới nhất.
   + Tự động kiểm tra ổ cứng và sao lưu vật lý toàn bộ Database trước khi chạy.
   + Tạm ngưng hệ thống giám sát [Monit] để tránh xung đột tiến trình.
   + Bẫy lỗi thông minh [Auto-Rollback]: Nếu quá trình cập nhật bị đứt mạng
@@ -14,12 +14,6 @@ function huong_dan() {
 
 # WPTangToc OLS - Upgrade MariaDB chuẩn Enterprise
 # Zero Data Loss
-
-# Thêm luật cấm dnf/yum tự động cập nhật bất kỳ gói nào có tên là mariadb hoặc MariaDB
-#if ! grep -q "exclude=.*mariadb" /etc/dnf/dnf.conf; then
-#    echo "exclude=MariaDB-* mariadb-*" >> /etc/dnf/dnf.conf
-#    echo -e "\e[32m[*] Đã khóa an toàn (Freeze) MariaDB. Không sợ bị đè bản cập nhật lỗi!\e[0m"
-#fi
 
 set -euo pipefail
 
@@ -89,15 +83,51 @@ auto_rollback() {
     systemctl start monit
   fi
 
-  check_menu_wptangtoc_active=$1
+  check_menu_wptangtoc_active=${1:-}
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-update-main 1
   fi
-  exit 1
+  return 2>/dev/null || exit 0
 }
 
 # ---------------------------------------------------------
-# BƯỚC 0: RÀO CHẮN AN TOÀN (Kiểm tra ổ cứng)
+# BƯỚC 0: KIỂM TRA PHIÊN BẢN (TRÁNH NÂNG CẤP THỪA)
+# ---------------------------------------------------------
+echo -e "\e[33m[0/5] Đang kiểm tra phiên bản MariaDB trên hệ thống và Repository...\e[0m"
+UPDATE_AVAILABLE=0
+
+if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
+  apt-get update >/dev/null 2>&1
+  CURRENT_VER=$(dpkg-query -W -f='${Version}' mariadb-server 2>/dev/null || echo "none")
+  CANDIDATE_VER=$(apt-cache policy mariadb-server | grep "Candidate:" | awk '{print $2}' || echo "none")
+
+  if [ "$CURRENT_VER" != "none" ] && [ "$CURRENT_VER" != "$CANDIDATE_VER" ] && [ -n "$CANDIDATE_VER" ]; then
+    UPDATE_AVAILABLE=1
+  fi
+else
+  dnf clean expire-cache >/dev/null 2>&1
+  set +e # Tạm tắt bẫy lỗi vì dnf check-update trả về code 100 nếu có bản cập nhật
+  dnf check-update MariaDB-server --disableexcludes=all >/dev/null 2>&1
+  RET=$?
+  set -e
+  if [ $RET -eq 100 ]; then
+    UPDATE_AVAILABLE=1
+  fi
+fi
+
+if [ "$UPDATE_AVAILABLE" -eq 0 ]; then
+  echo -e "\e[32m[✓] TUYỆT VỜI! MariaDB của bạn đang ở phiên bản MỚI NHẤT rồi. Hệ thống sẽ bỏ qua quá trình nâng cấp!\e[0m"
+  rm -f "$TEMP_CNF_ROOT"
+
+  check_menu_wptangtoc_active=${1:-}
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-update-main 1
+  fi
+  return 2>/dev/null || exit 0
+fi
+
+# ---------------------------------------------------------
+# BƯỚC 1: RÀO CHẮN AN TOÀN (Kiểm tra dung lượng ổ cứng)
 # ---------------------------------------------------------
 DB_SIZE=$(du -sm /var/lib/mysql 2>/dev/null | awk '{print $1}')
 FREE_SPACE=$(df -m /var/lib/mysql | awk 'NR==2 {print $4}')
@@ -106,7 +136,7 @@ REQUIRED_SPACE=$((DB_SIZE + 1024))
 if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
   echo -e "\e[31m[LỖI NGHIÊM TRỌNG] Ổ cứng không đủ dung lượng để tạo bản sao lưu an toàn!\e[0m"
   rm -f "$TEMP_CNF_ROOT"
-  check_menu_wptangtoc_active=$1
+  check_menu_wptangtoc_active=${1:-}
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-update-main 1
   fi
@@ -114,7 +144,7 @@ if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
 fi
 
 # ---------------------------------------------------------
-# BƯỚC 1: SAO LƯU TOÀN BỘ VÀ BẬT BẪY LỖI
+# BƯỚC 2: SAO LƯU TOÀN BỘ VÀ BẬT BẪY LỖI
 # ---------------------------------------------------------
 BACKUP_DIR="/var/lib/mysql_wptt_backup_$(date +%Y%m%d_%H%M%S)"
 echo -e "\e[33m[1/5] Đang sao lưu vật lý toàn bộ /var/lib/mysql sang thư mục $BACKUP_DIR...\e[0m"
@@ -130,7 +160,7 @@ if systemctl is-active --quiet monit; then
   MONIT_WAS_RUNNING=1
 fi
 
-# BƯỚC 2: TẮT DATABASE
+# BƯỚC 3: TẮT DATABASE
 echo -e "\e[33m[2/5] Đang tắt tiến trình MariaDB...\e[0m"
 systemctl stop mariadb
 if systemctl is-active --quiet mariadb; then
@@ -138,12 +168,12 @@ if systemctl is-active --quiet mariadb; then
 fi
 echo -e "✅ Đã tắt MariaDB an toàn!"
 
-# BƯỚC 3: GỠ RÀO CẢN VÀ CÀI ĐẶT BẢN MỚI
+# BƯỚC 4: GỠ RÀO CẢN VÀ CÀI ĐẶT BẢN MỚI
 echo -e "\e[33m[3/5] Đang tải và cài đặt MariaDB phiên bản mới...\e[0m"
 if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update >/dev/null 2>&1
-  apt-mark unhold mariadb-server mariadb-client >/dev/null 2>&1 #mở khoá
+  apt-mark unhold mariadb-server mariadb-client >/dev/null 2>&1 # Mở khóa
   apt-get install -y --only-upgrade mariadb-server mariadb-client
   apt-mark hold mariadb-server mariadb-client >/dev/null 2>&1
 else
@@ -152,14 +182,13 @@ else
 fi
 echo -e "✅ Nâng cấp phần mềm hoàn tất!"
 
-# BƯỚC 4: BẬT DATABASE VÀ TÁI CẤU TRÚC (Upgrade Schema)
+# BƯỚC 5: BẬT DATABASE VÀ TÁI CẤU TRÚC (Upgrade Schema)
 echo -e "\e[33m[4/5] Khởi động Database và chạy lệnh Nắn lại cấu trúc...\e[0m"
 systemctl start mariadb
 
 # Đợi DB khởi động (Sử dụng cả 2 cách ping để đảm bảo vượt rào thành công)
 DB_READY=0
 for i in {1..15}; do
-  # Cách 1: Thử Ping qua Socket tự do HOẶC Cách 2: Ping qua file ẩn xác thực
   if mysqladmin ping >/dev/null 2>&1 || mysqladmin --defaults-extra-file="$TEMP_CNF_ROOT" ping >/dev/null 2>&1; then
     DB_READY=1
     break
@@ -173,7 +202,7 @@ if [ "$DB_READY" -eq 0 ]; then
   false
 fi
 
-# Chạy lệnh tái cấu trúc (Dùng file ẩn TEMP_CNF_ROOT)
+# Chạy lệnh tái cấu trúc
 if command -v mariadb-upgrade >/dev/null 2>&1; then
   mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
 elif command -v mysql_upgrade >/dev/null 2>&1; then
@@ -184,7 +213,7 @@ else
 fi
 echo -e "✅ Tái cấu trúc (Upgrade Schema) hoàn tất!"
 
-# BƯỚC 5: KHỞI ĐỘNG LẠI LẦN CUỐI VÀ DỌN DẸP
+# BƯỚC 6: KHỞI ĐỘNG LẠI LẦN CUỐI VÀ DỌN DẸP
 echo -e "\e[33m[5/5] Tải lại systemd và khởi động MariaDB lần cuối...\e[0m"
 systemctl daemon-reload
 systemctl restart mariadb
@@ -201,7 +230,7 @@ if systemctl is-active --quiet mariadb; then
   rm -rf "$BACKUP_DIR"
   rm -f "$TEMP_CNF_ROOT"
 
-  #gọi monit start
+  # Gọi monit start
   if [[ "$MONIT_WAS_RUNNING" -eq 1 ]]; then
     systemctl start monit
   fi
@@ -211,7 +240,7 @@ else
   false
 fi
 
-check_menu_wptangtoc_active=$1
+check_menu_wptangtoc_active=${1:-}
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-update-main 1
 fi
