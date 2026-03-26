@@ -1,5 +1,4 @@
 #!/bin/bash
-
 function huong_dan() {
   Tính năng Mở khóa IP [hay gỡ chặn IP] trong WPTangToc OLS là chức năng đối ngược với tính năng Chặn IP. Nó cho phép người quản trị máy chủ loại bỏ một địa chỉ IP cụ thể ra khỏi danh sách bị chặn, khôi phục quyền truy cập của IP đó vào website hoặc toàn bộ máy chủ.
 
@@ -29,20 +28,107 @@ echo "========================================================================="
 echo "|$quan_ly_ip => $mo_khoa_ip                                       |"
 echo "========================================================================="
 
-read -p "$nhap $ip_ban_muon_mo_khoa [Thoát = 0]: " ip
+# Cập nhật thông báo thêm phím tắt 00
+if command -v fzf >/dev/null 2>&1; then
+  read -p "$nhap $ip_ban_muon_mo_khoa [Thoát = 0, Chọn nhanh = 00]: " ip
+else
+  read -p "$nhap $ip_ban_muon_mo_khoa [Thoát = 0]: " ip
+fi
+
 . /etc/wptt/echo-color
+
+# Lõi Regex bắt chính xác IP dùng chung cho toàn bộ file
+REGEX_IP='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|\b([0-9a-fA-F:]+:+)+[0-9a-fA-F]+\b'
 
 if [[ $ip = '' || $ip = '0' ]]; then
   check_menu_wptangtoc_active=${1:-}
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-bao-mat-main 1
+    exec /etc/wptt/wptt-khoa-ip-main 1
   fi
-  return 2>/dev/null
-  exit
+  return 2>/dev/null || exit
+
+# =========================================================
+# TÍNH NĂNG CHỌN NHANH QUA FZF (Khi người dùng nhập 00)
+# =========================================================
+elif [[ "$ip" == "00" ]]; then
+
+  # Kiểm tra và cài đặt fzf nếu chưa có
+  if ! command -v fzf >/dev/null 2>&1; then
+    check_menu_wptangtoc_active=${1:-}
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-khoa-ip-main 1
+    fi
+    return 2>/dev/null || exit
+  fi
+
+  echo -e "\e[36mĐang quét danh sách IP bị chặn trên toàn hệ thống...\e[0m"
+  TMP_LIST=$(mktemp)
+
+  # 1. Quét Fail2ban
+  if systemctl is-active --quiet fail2ban; then
+    for JAIL in $(fail2ban-client status 2>/dev/null | grep 'Jail list:' | cut -d ':' -f2 | tr ',' '\n' | sed -e 's/^[ \t]*//'); do
+      if [[ -n "$JAIL" ]]; then
+        fail2ban-client status "$JAIL" 2>/dev/null | grep 'Banned IP list:' | grep -oE "$REGEX_IP" | awk -v j="$JAIL" '{print "Fail2ban-"j, $1}' >>"$TMP_LIST"
+      fi
+    done
+  fi
+
+  # 2. Quét Firewalld
+  if systemctl is-active --quiet firewalld; then
+    firewall-cmd --zone=drop --list-sources 2>/dev/null | tr ' ' '\n' | grep -oE "$REGEX_IP" | awk '{print "Firewalld", $1}' >>"$TMP_LIST"
+  fi
+
+  # 3. Quét OLS (Dynamic)
+  if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1; then
+    grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -oE "$REGEX_IP" | awk '{print "OLS-Dynamic", $1}' >>"$TMP_LIST"
+  fi
+
+  # 4. Quét CSF
+  if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.deny ]]; then
+    grep -vE '^#|^$' /etc/csf/csf.deny | grep -oE "$REGEX_IP" | awk '{print "CSF", $1}' >>"$TMP_LIST"
+  fi
+
+  # Định dạng lại dữ liệu cho đẹp mắt
+  FINAL_LIST=$(awk '{
+    ip = $2; source = $1;
+    if (map[ip] == "") { map[ip] = source }
+    else if (index(map[ip], source) == 0) { map[ip] = map[ip] ", " source }
+  } END {
+    for (ip in map) printf "%-39s | %s\n", ip, map[ip]
+  }' "$TMP_LIST" | sort -V)
+
+  rm -f "$TMP_LIST"
+
+  if [[ -z "$FINAL_LIST" ]]; then
+    echo -e "\e[32m[✓] Hiện tại không có địa chỉ IP nào bị chặn!\e[0m"
+    sleep 2
+    exec /etc/wptt/wptt-khoa-ip-main 1
+    exit
+  fi
+
+  # Bật giao diện FZF
+  CHON_IP=$(echo "$FINAL_LIST" | fzf --prompt="🔍 Chọn IP cần Mở khóa (Enter để chọn, ESC để thoát): " --header="ĐỊA CHỈ IP                              | NGUỒN CHẶN" --layout=reverse --border --height=60%)
+
+  # Nếu người dùng bấm ESC thoát fzf
+  if [[ -z "$CHON_IP" ]]; then
+    echo -e "\e[33mĐã hủy thao tác mở khóa.\e[0m"
+    sleep 1
+    exec /etc/wptt/wptt-khoa-ip-main 1
+    exit
+  fi
+
+  # Lấy lại giá trị IP nguyên chất từ dòng vừa chọn (Loại bỏ các tag đằng sau)
+  ip=$(echo "$CHON_IP" | grep -oE "$REGEX_IP" | head -n 1)
+
+  clear
+  echo "========================================================================="
+  echo "|$quan_ly_ip => $mo_khoa_ip                                       |"
+  echo "========================================================================="
+  echo "Đã chọn IP từ danh sách: $ip"
 fi
 
 # =========================================================
-# 1. NHẬN DIỆN IP (Tối ưu Regex siêu gọn đồng bộ với Khóa IP)
+# 1. NHẬN DIỆN IP (Kiểm tra lại tính hợp lệ)
 # =========================================================
 IP_VERSION=0
 
@@ -87,7 +173,7 @@ elif systemctl is-active --quiet firewalld; then
 fi
 
 # =========================================================
-# 4. Nếu địa chỉ ip đó nằm trong dynamic OLS BLOCK thì sẽ restart lại lsws để unban
+# 4. MỞ KHÓA OLS-DYNAMIC BLOCK (Restart lsws)
 # =========================================================
 if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1 && grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -qE "\b$ip\b"; then
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
