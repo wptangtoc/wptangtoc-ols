@@ -1,19 +1,7 @@
 #!/bin/bash
 
 function huong_dan() {
-  Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hiện đang bị ngăn chặn truy cập vào máy chủ hoặc website do WPTangToc OLS quản lý.
-
-  Mục đích chính:
-  * Kiểm tra và giám sát: Giúp quản trị viên có cái nhìn tổng quan về những IP nào đang bị chặn, hữu ích cho việc theo dõi tình hình an ninh.
-  * Xác minh việc chặn/mở khóa: Đảm bảo rằng các hành động chặn IP hoặc mở khóa IP đã được thực thi chính xác và IP mong muốn có trong [hoặc đã được gỡ khỏi] danh sách.
-  * Phân tích và đánh giá: Cung cấp dữ liệu để phân tích các mối đe dọa tiềm ẩn hoặc các kiểu tấn công lặp lại từ những dải IP cụ thể.
-  * Hỗ trợ quản lý: Là cơ sở để thực hiện các thao tác tiếp theo như mở khóa một IP cụ thể hoặc cập nhật danh sách chặn.
-
-  Lợi ích:
-  * Minh bạch hóa quản lý IP: Giúp quản trị viên biết chính xác những IP nào đang bị hạn chế truy cập.
-  * Dễ dàng kiểm tra: Không cần phải truy cập vào các tệp cấu hình phức tạp hoặc sử dụng nhiều lệnh khác nhau để xem danh sách này.
-  * Hỗ trợ ra quyết định: Cung cấp thông tin cần thiết để quyết định có nên tiếp tục chặn một IP hay cần mở khóa.
-  Tóm lại, tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ thiết yếu cho việc quản lý an ninh, giúp người quản trị dễ dàng theo dõi, kiểm tra và xác minh các địa chỉ IP đang bị ngăn chặn truy cập vào hệ thống của mình.
+  Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hiện đang bị ngăn chặn truy cập vào máy chủ.
 
 }
 
@@ -28,35 +16,104 @@ echo ""
 echo ""
 echo ""
 echo "========================================================================="
-echo "|$quan_ly_ip => $danh_sach_ip_da_bi_khoa                             |"
+echo "| $quan_ly_ip => $danh_sach_ip_da_bi_khoa                               |"
 echo "========================================================================="
 echo ""
 echo ""
 
-#fail2ban block
-zgrep -h "Ban " /var/log/fail2ban.log* | awk '{print $NF}' | sort | uniq >/tmp/banip_list
+# Tạo một file tạm an toàn để gom data thô
+TMP_LIST=$(mktemp)
 
-#csf block
-if [[ -f /etc/csf/csf.deny ]]; then
-  grep -v '^#' /etc/csf/csf.deny | awk '{print $1}' >>/tmp/banip_list
+# Biến Regex bắt chính xác IPv4 và IPv6 (Tối đa 39 ký tự)
+REGEX_IP='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|\b([0-9a-fA-F:]+:+)+[0-9a-fA-F]+\b'
+
+# =========================================================
+# 1. QUÉT FAIL2BAN (Dán nhãn chi tiết đến từng Jail)
+# =========================================================
+if systemctl is-active --quiet fail2ban; then
+  for JAIL in $(fail2ban-client status 2>/dev/null | grep 'Jail list:' | cut -d ':' -f2 | tr ',' '\n' | sed -e 's/^[ \t]*//'); do
+    if [[ -n "$JAIL" ]]; then
+      fail2ban-client status "$JAIL" 2>/dev/null | grep 'Banned IP list:' | grep -oE "$REGEX_IP" | awk -v j="$JAIL" '{print "Fail2ban-"j, $1}' >>"$TMP_LIST"
+    fi
+  done
 fi
 
-#litespeed block
-cat /usr/local/lsws/conf/httpd_config.conf | grep 'deny' | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' >>/tmp/banip_list
-
-#check tuong lua firewalld
-if [[ $(systemctl status firewalld.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = 'active' ]]; then
-  firewall-cmd --permanent --list-all | grep "rule family" | grep 'reject' | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' >>/tmp/banip_list
+# =========================================================
+# 2. QUÉT CSF
+# =========================================================
+if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.deny ]]; then
+  grep -vE '^#|^$' /etc/csf/csf.deny | grep -oE "$REGEX_IP" | awk '{print "CSF", $1}' >>"$TMP_LIST"
 fi
 
-list_ip=$(cat /tmp/banip_list | sed '/^$/d' | sort -u | uniq)
-if [[ $list_ip = '' ]]; then
-  echo "Hiện tại chưa có IP nào đang bị chặn"
+# =========================================================
+# 3. QUÉT OPENLITESPEED (Khóa Tĩnh & Khóa Động)
+# =========================================================
+# A. Quét config tĩnh (OLS-Static)
+if [[ -f /usr/local/lsws/conf/httpd_config.conf ]]; then
+  grep -E '^[ \t]*deny' /usr/local/lsws/conf/httpd_config.conf | grep -oE "$REGEX_IP" | awk '{print "OLS-Static", $1}' >>"$TMP_LIST"
+fi
+
+# B. Quét Block động từ hệ thống Anti-DDoS của OLS (OLS-Dynamic)
+if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1; then
+  grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -oE "$REGEX_IP" | awk '{print "OLS-Dynamic", $1}' >>"$TMP_LIST"
+fi
+
+# =========================================================
+# 4. QUÉT FIREWALLD (Native Zone Drop - Siêu Sạch)
+# =========================================================
+if systemctl is-active --quiet firewalld; then
+  firewall-cmd --zone=drop --list-sources 2>/dev/null | tr ' ' '\n' | grep -oE "$REGEX_IP" | awk '{print "Firewalld", $1}' >>"$TMP_LIST"
+fi
+
+# =========================================================
+# LÕI LỌC IP THÔNG MINH & HIỂN THỊ GIAO DIỆN BẢNG 3 CỘT
+# =========================================================
+. /etc/wptt/echo-color
+
+# Dùng awk gom nhóm tag và tạo dấu phân cách "|" để cắt cột
+FINAL_LIST=$(awk '{
+  ip = $2; source = $1;
+  if (map[ip] == "") { map[ip] = source }
+  else if (index(map[ip], source) == 0) { map[ip] = map[ip] ", " source }
+} END {
+  for (ip in map) print ip "|" map[ip]
+}' "$TMP_LIST" | sort -V)
+
+if [[ -z "$FINAL_LIST" ]]; then
+  echo -e "\e[32m[✓] TUYỆT VỜI! Hệ thống của bạn hiện tại không có IP nào bị chặn.\e[0m"
 else
-  echo $list_ip | tr ' ' "\n"
+  # Giao diện Bảng 3 Cột (Tổng chiều rộng 83 ký tự - Chống vỡ khung)
+  echo "+-------+-----------------------------------------+-------------------------------+"
+  echo "| STT   | ĐỊA CHỈ IP BỊ CHẶN (BLACKLIST)          | NGUỒN CHẶN (TAGS)             |"
+  echo "+-------+-----------------------------------------+-------------------------------+"
+
+  # Đọc từng dòng, tách IP và Tag thông qua dấu "|"
+  STT=1
+  while IFS='|' read -r ip tags; do
+    if [[ -n "$ip" ]]; then
+      # %-5s: Cột STT, %-39s: Cột IP (Vừa khít IPv6), %-29s: Cột Tag
+      printf "| %-5s | %-39s | %-29s |\n" "[$STT]" "$ip" "$tags"
+      ((STT++))
+    fi
+  done <<<"$FINAL_LIST"
+
+  echo "+-------+-----------------------------------------+-------------------------------+"
+
+  # Thuật toán tính toán Padding hoàn hảo cho Footer
+  COUNT=$((STT - 1))
+  TEXT=" IP dang bi khoa an toan tren he thong"
+  FULL_TEXT="$COUNT$TEXT"
+
+  printf -v PADDED_TEXT "%-71s" "$FULL_TEXT"
+  echo -e "| TONG: | \e[31m${COUNT}\e[0m${PADDED_TEXT:${#COUNT}} |"
+
+  echo "+-------+-----------------------------------------+-------------------------------+"
 fi
 
-check_menu_wptangtoc_active=$1
+# Dọn rác file tạm
+rm -f "$TMP_LIST"
+
+check_menu_wptangtoc_active=${1:-}
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-khoa-ip-main 1
 fi
