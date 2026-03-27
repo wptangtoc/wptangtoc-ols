@@ -26,7 +26,7 @@ function huong_dan() {
   Kết quả: Dịch vụ ZRAM sẽ được dừng, xóa cấu hình và hệ thống sẽ tự động khởi tạo lại một Swap đĩa dung lượng 1GB [/var/swap.1] để đảm bảo an toàn cơ bản.
 }
 
-if [[ -f /etc/wptt/.wptt.conf ]]; then #nếu có thì mới được phép call chánh báo lỗi khi install lúc đầu install script
+if [[ -f /etc/wptt/.wptt.conf ]]; then
   . /etc/wptt/.wptt.conf
 fi
 
@@ -81,12 +81,10 @@ if [[ ! -f "$duong_dan_config_zram" ]]; then
     dongyconfig="y"
   else
     echo "$xac_nhan $ban_co_muon $cai ZRAM?"
-
     prompt="$nhap_lua_chon_cua_ban [1-2]: "
     bien=$1
     dongyconfig='n'
     options=("$dong_y" "$khong_dong_y")
-
     PS3="$prompt"
     select opt in "${options[@]}"; do
       case "$REPLY" in
@@ -119,25 +117,21 @@ if [[ ! -f "$duong_dan_config_zram" ]]; then
   fi
 
   echo "Kích hoạt ZRAM: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
   _runing "$cai ZRAM"
 
-  # Thuật toán tính toán thông minh của WPTangToc OLS
   tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
   rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
 
   if (($rong_ram_mb <= 8192)); then
-    # Máy <= 8GB: Lấy 50% RAM vật lý
     ZRAM_SIZE_MB=$((rong_ram_mb / 2))
   else
-    # Máy > 8GB: Khóa cứng túi khí ZRAM ở mức 4GB (4096MB)
     ZRAM_SIZE_MB=4096
   fi
 
   _runing "$thiet_lap ZRAM (${ZRAM_SIZE_MB}MB)"
 
   # ---------------------------------------------------------
-  # TÁCH LUỒNG CÀI ĐẶT PACKAGE VÀ GHI CẤU HÌNH THEO OS
+  # TÁCH LUỒNG CÀI ĐẶT VÀ GHI CẤU HÌNH THEO OS (ĐÃ FIX LỖI REDHAT)
   # ---------------------------------------------------------
   if [[ "$OS_TYPE" == "UBUNTU" ]]; then
     DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1
@@ -157,9 +151,13 @@ EOF
     elif [[ "$SUPPORTED_ALGOS" == *"lz4"* ]]; then
       BEST_ALGO="lz4"
     else
-      BEST_ALGO="lzo" # Đường cùng mới xài đồ cổ
+      BEST_ALGO="lzo"
     fi
+
+    # [VÁ LỖI]: Áp dụng đòn "kẹp chả" cho RHEL
     echo "[zram0]
+zram-fraction = 1.0
+max-zram-size = $ZRAM_SIZE_MB
 zram-size = $ZRAM_SIZE_MB
 compression-algorithm = $BEST_ALGO
 swap-priority = 100
@@ -167,7 +165,7 @@ fs-type = swap" >$duong_dan_config_zram
   fi
 
   # ---------------------------------------------------------
-  # CẤU HÌNH KERNEL & DỌN DẸP SWAP (DÙNG CHUNG)
+  # CẤU HÌNH KERNEL & DỌN DẸP SWAP
   # ---------------------------------------------------------
   echo "# wptangtoc-ols zram optimize
 vm.page-cluster = 0
@@ -183,26 +181,24 @@ vm.swappiness = 100" >/etc/sysctl.d/99-wptt-zram.conf
     echo 'vm.swappiness = 100' >>/etc/sysctl.d/101-sysctl.conf
   fi
 
-  # Áp dụng Kernel tức thì
   sysctl -p /etc/sysctl.d/101-sysctl.conf >/dev/null 2>&1
   sysctl -p /etc/sysctl.d/99-wptt-zram.conf >/dev/null 2>&1
 
-  # Vô hiệu hóa Swap đĩa cũ và xóa hẳn để giải phóng SSD
   swapoff -a >/dev/null 2>&1
   rm -rf /var/swap.1 /swapfile /swap.img 2>/dev/null
   sed -i -e '/swap.1/d' -e '/swapfile/d' -e '/swap.img/d' /etc/fstab
   sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
   # ---------------------------------------------------------
-  # KHỞI ĐỘNG DỊCH VỤ THEO OS
+  # KHỞI ĐỘNG DỊCH VỤ (ĐÃ CHUẨN HÓA LỆNH RHEL)
   # ---------------------------------------------------------
   systemctl daemon-reload >/dev/null 2>&1
   if [[ "$OS_TYPE" == "UBUNTU" ]]; then
     systemctl restart zramswap >/dev/null 2>&1
     systemctl enable zramswap >/dev/null 2>&1
   else
-    systemctl enable systemd-zram-setup@zram0.service >/dev/null 2>&1
-    systemctl start systemd-zram-setup@zram0.service >/dev/null 2>&1
+    # [VÁ LỖI]: Gọi thẳng Unit Swap thay vì Service mồi
+    systemctl start dev-zram0.swap >/dev/null 2>&1
   fi
 
   _rundone "$thiet_lap ZRAM"
@@ -226,7 +222,6 @@ else
     bien=$1
     dongyconfig='n'
     options=("$dong_y" "$khong_dong_y")
-
     PS3="$prompt"
     select opt in "${options[@]}"; do
       case "$REPLY" in
@@ -259,11 +254,10 @@ else
   fi
 
   echo "Huỷ kích hoạt ZRAM: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
   _runing "$xoa ZRAM"
 
   # ---------------------------------------------------------
-  # DỪNG VÀ GỠ CÀI ĐẶT THEO OS
+  # DỪNG VÀ GỠ CÀI ĐẶT THEO OS (DỌN SẠCH RÁC RAM)
   # ---------------------------------------------------------
   if [[ "$OS_TYPE" == "UBUNTU" ]]; then
     systemctl stop zramswap >/dev/null 2>&1
@@ -271,19 +265,19 @@ else
     DEBIAN_FRONTEND=noninteractive apt-get remove --purge zram-tools -y >/dev/null 2>&1
     DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1
   else
-    systemctl stop systemd-zram-setup@zram0.service >/dev/null 2>&1
-    systemctl disable systemd-zram-setup@zram0.service >/dev/null 2>&1
-    swapoff /dev/zram0 >/dev/null 2>&1
+    # [VÁ LỖI]: Stop swap -> Đập nát ổ ảo -> Xóa phần mềm
+    systemctl stop dev-zram0.swap >/dev/null 2>&1
+    zramctl --reset /dev/zram0 >/dev/null 2>&1
     yum remove zram-generator -y >/dev/null 2>&1
   fi
 
   # ---------------------------------------------------------
-  # DỌN DẸP CẤU HÌNH KERNEL (DÙNG CHUNG)
+  # DỌN DẸP CẤU HÌNH KERNEL
   # ---------------------------------------------------------
   rm -f $duong_dan_config_zram
   rm -f /etc/sysctl.d/99-wptt-zram.conf
 
-  if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then #trả về swap truyền thống 10
+  if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then
     sed -i '/vm.swappiness/d' /usr/lib/tuned/virtual-guest/tuned.conf
     echo 'vm.swappiness = 10' >>/usr/lib/tuned/virtual-guest/tuned.conf
   fi
@@ -293,9 +287,7 @@ else
     echo 'vm.swappiness = 10' >>/etc/sysctl.d/101-sysctl.conf
   fi
 
-  # Khôi phục lại cấu hình Kernel gốc của WPTangToc
   sysctl -p /etc/sysctl.d/101-sysctl.conf >/dev/null 2>&1
-
   _rundone "$xoa ZRAM"
 
   # BẮT ĐẦU: Khởi tạo lại Swap đĩa 1GB
