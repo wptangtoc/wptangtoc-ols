@@ -13,7 +13,7 @@ FILE_CACHE="/etc/wptt/.ram_hien_tai"
 # Nếu chạy lần đầu (mới cài OLS), lưu mốc RAM gốc và thoát
 if [ ! -f "$FILE_CACHE" ]; then
   echo "$TOTAL_RAM" >"$FILE_CACHE"
-  exit 0
+  return 2>/dev/null || exit 0
 fi
 
 # Đọc mốc RAM cũ
@@ -169,4 +169,70 @@ max_heap_table_size = ${db_table_size}M
   fi
 
   echo "$(date '+%d-%m-%Y %H:%M') - Auto-Tuning hoàn tất!" >>/var/log/wptangtoc-ols.log
+
+  # ==========================================
+  # D. THIẾT LẬP ZRAM TỐI ƯU & APPLY NÓNG
+  # ==========================================
+  tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+
+  if (($rong_ram_mb <= 8192)); then
+    # Máy <= 8GB: Lấy 50% RAM vật lý
+    ZRAM_SIZE_MB=$((rong_ram_mb / 2))
+  else
+    # Máy > 8GB: Khóa cứng túi khí ZRAM ở mức 4GB (4096MB)
+    ZRAM_SIZE_MB=4096
+  fi
+
+  if grep -qiE "ubuntu" /etc/os-release; then
+    OS_TYPE="UBUNTU"
+    duong_dan_config_zram="/etc/default/zramswap"
+  else
+    OS_TYPE="RHEL"
+    duong_dan_config_zram="/etc/systemd/zram-generator.conf"
+  fi
+
+  if [[ -f $duong_dan_config_zram ]]; then #xác định đang dùng zram swap
+    if [[ "$OS_TYPE" == "RHEL" ]]; then    #thiết lập zram config REDHAT
+      SUPPORTED_ALGOS=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null)
+      if [[ "$SUPPORTED_ALGOS" == *"zstd"* ]]; then
+        BEST_ALGO="zstd"
+      elif [[ "$SUPPORTED_ALGOS" == *"lz4"* ]]; then
+        BEST_ALGO="lz4"
+      else
+        BEST_ALGO="lzo" # Đường cùng mới xài đồ cổ
+      fi
+
+      # [VÁ LỖI] Đòn "kẹp chả" để tương thích mọi phiên bản zram-generator
+      echo "[zram0]
+zram-fraction = 1.0
+max-zram-size = $ZRAM_SIZE_MB
+zram-size = $ZRAM_SIZE_MB
+compression-algorithm = $BEST_ALGO
+swap-priority = 100
+fs-type = swap" >$duong_dan_config_zram
+
+      # [VÁ LỖI] Combo Reset nóng ZRAM trên RHEL
+      systemctl stop dev-zram0.swap >/dev/null 2>&1
+      zramctl --reset /dev/zram0 >/dev/null 2>&1
+      systemctl daemon-reload >/dev/null 2>&1
+      systemctl start dev-zram0.swap >/dev/null 2>&1
+
+      echo "$(date '+%d-%m-%Y %H:%M') - ZRAM (RHEL) Auto-Tuned: ${ZRAM_SIZE_MB}MB với thuật toán ${BEST_ALGO}" >>/var/log/wptangtoc-ols.log
+    fi
+
+    if [[ "$OS_TYPE" == "UBUNTU" ]]; then #thiết lập zram ubuntu
+      BEST_ALGO="zstd"
+      cat <<EOF >$duong_dan_config_zram
+ALGO=$BEST_ALGO
+SIZE=$ZRAM_SIZE_MB
+PRIORITY=100
+EOF
+
+      # Restart chuẩn của Ubuntu
+      systemctl restart zramswap >/dev/null 2>&1
+
+      echo "$(date '+%d-%m-%Y %H:%M') - ZRAM (Ubuntu) Auto-Tuned: ${ZRAM_SIZE_MB}MB với thuật toán ${BEST_ALGO}" >>/var/log/wptangtoc-ols.log
+    fi
+  fi
 fi
