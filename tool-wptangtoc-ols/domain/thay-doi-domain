@@ -2,7 +2,7 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   Tính năng Đổi domain [hay Đổi tên miền] là quá trình thay thế tên miền chính đang được sử dụng cho một website hoặc một tài khoản hosting bằng một tên miền mới. Sau khi thay đổi, website của bạn sẽ hoạt động chủ yếu dưới tên miền mới này, và lý tưởng nhất là tên miền cũ sẽ tự động chuyển hướng người dùng sang tên miền mới.
@@ -126,6 +126,12 @@ if [[ -f /usr/local/lsws/$NAME2/html/robots.txt ]]; then
 fi
 
 . /etc/wptt/vhost/.$NAME.conf
+
+# -------------------------------------------------------------
+# DỌN DẸP USER CŨ VÀ CHROOT CŨ
+# -------------------------------------------------------------
+sed -i -e "/^#begin-WPTT_JAIL_$User_name_vhost/,/^#end-WPTT_JAIL_$User_name_vhost$/d" /etc/ssh/sshd_config 2>/dev/null || true
+
 pkill -9 -u $User_name_vhost >/dev/null 2>&1
 
 if [[ $(cat /etc/group | grep '^wptangtoc-ols:') ]]; then
@@ -162,6 +168,9 @@ if [[ -d /home/$User_name_vhost ]]; then
   rm -rf /home/$User_name_vhost
 fi
 
+# -------------------------------------------------------------
+# TẠO USER MỚI
+# -------------------------------------------------------------
 USER=${NAME2//[-._]/wp}
 
 #ky tu toi da là 32 ký tự user trong linux
@@ -170,7 +179,6 @@ if (($check_ky_tu > 32)); then
   USER=$(echo $USER | cut -c 1-30)
 fi
 
-# useradd $USER -p -m -d /home/$USER >/dev/null 2>&1
 useradd -p -m -d /usr/local/lsws/$NAME2 $USER >/dev/null 2>&1
 cp -rf /etc/skel/. /usr/local/lsws/$NAME2
 
@@ -186,7 +194,6 @@ if [[ $(cat /etc/passwd | cut -f1 -d ':' | grep -w $USER) = '' ]]; then
     USER=$(echo $USER | cut -c 1-30)
   fi
   useradd -p -m -d /usr/local/lsws/$NAME2 $USER >/dev/null 2>&1
-# useradd "$USER" -p -m -d /home/"$USER" >/dev/null 2>&1
 fi
 
 #xac dinh user đã được tạo lập chưa
@@ -206,9 +213,6 @@ echo '[[ $- != *i* ]] && return' >>/usr/local/lsws/$NAME2/.bashrc
 echo "alias 1='wptangtoc-user'" >>/usr/local/lsws/$NAME2/.bashrc
 echo "alias 11='wptangtoc-user'" >>/usr/local/lsws/$NAME2/.bashrc
 echo ". /etc/wptt-user/wptt-status" >>/usr/local/lsws/$NAME2/.bashrc
-
-# add group
-#usermod -a -G wptangtoc-ols $USER
 
 work_cpucore='1024'
 cpucore=$(grep -c ^processor /proc/cpuinfo)
@@ -240,11 +244,55 @@ sed -i '/Duong_Dan_thu_muc_web/d' /etc/wptt/vhost/.$NAME2.conf
 echo "User_name_vhost=$USER" >>/etc/wptt/vhost/.$NAME2.conf
 echo "Duong_Dan_thu_muc_web=/usr/local/lsws/$NAME2/html" >>/etc/wptt/vhost/.$NAME2.conf
 
-if [[ -f /usr/local/lsws/$NAME2/html/wp-load.php ]]; then #xác định wordpress, nếu là wordpress thì thực thi search and replace
-  wp search-replace "//${NAME}" "//${NAME2}" --path="/usr/local/lsws/$NAME2/html" --allow-root >/dev/null 2>&1
-fi
-
 . /etc/wptt/.wptt.conf
+
+# -------------------------------------------------------------
+# XỬ LÝ SEARCH & REPLACE CHO CẢ MARIA-DB & SQLITE
+# -------------------------------------------------------------
+if [[ -f /usr/local/lsws/$NAME2/html/wp-load.php ]]; then
+  . /etc/wptt/php/php-cli-domain-config $NAME 2>/dev/null #dùng phiên bản PHP của website gốc
+  if [[ -z $phien_ban_php_domain_thuc_thi ]]; then
+    phien_ban_php_domain_thuc_thi=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+' | sed 's/\.//')
+  fi
+  PHP_EXEC="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+
+  IS_SQLITE=0
+  if [[ -f "/usr/local/lsws/$NAME2/html/wp-content/db.php" ]] && grep -q -i "sqlite" "/usr/local/lsws/$NAME2/html/wp-content/db.php"; then
+    IS_SQLITE=1
+    # Kích hoạt AST Driver cho SQLite
+    /usr/local/bin/wp config set WP_SQLITE_AST_DRIVER true --raw --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+    /usr/local/bin/wp config set DB_ENGINE "'sqlite'" --raw --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+  fi
+
+  # Replace Tên miền cũ -> Tên miền mới
+  $PHP_EXEC /usr/local/bin/wp search-replace "//${NAME}" "//${NAME2}" --path="/usr/local/lsws/$NAME2/html" --allow-root --all-tables >/dev/null 2>&1
+  # Replace Đường dẫn vật lý cũ -> Đường dẫn vật lý mới
+  $PHP_EXEC /usr/local/bin/wp search-replace "/usr/local/lsws/${NAME}/html" "/usr/local/lsws/${NAME2}/html" --path="/usr/local/lsws/$NAME2/html" --allow-root --all-tables >/dev/null 2>&1
+
+  if [[ $IS_SQLITE -eq 1 ]]; then
+    # Dọn rác transient cũ
+    $PHP_EXEC /usr/local/bin/wp transient delete --all --allow-root --path="/usr/local/lsws/$NAME2/html" >/dev/null 2>&1
+
+    # Diệt bóng ma URL bằng VACUUM
+    if [[ -f "/usr/local/lsws/$NAME2/html/wp-content/database/.ht.sqlite" ]]; then
+      sqlite3 "/usr/local/lsws/$NAME2/html/wp-content/database/.ht.sqlite" "VACUUM;" >/dev/null 2>&1
+    fi
+
+    # Tắt AST Driver
+    /usr/local/bin/wp config delete WP_SQLITE_AST_DRIVER --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+    /usr/local/bin/wp config delete DB_ENGINE --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+
+    # Trả lại quyền sở hữu để không lỗi đăng nhập
+    chown -R $USER:$USER "/usr/local/lsws/$NAME2/html/wp-content/database" 2>/dev/null
+    find "/usr/local/lsws/$NAME2/html/wp-content/database" -type f -print0 2>/dev/null | xargs -0 chmod 644 2>/dev/null
+  fi
+
+  # Xóa Cache sau khi Replace xong
+  $PHP_EXEC /usr/local/bin/wp cache flush --allow-root --path="/usr/local/lsws/$NAME2/html" >/dev/null 2>&1
+fi
+# -------------------------------------------------------------
+
+mkdir -p /usr/local/backup-website/$NAME2
 
 mkdir -p /etc/wptt-ssl-tu-ky/$NAME2
 cd /etc/wptt-ssl-tu-ky/$NAME2
@@ -278,7 +326,7 @@ echo "vhssl  {
 }
 " >>/usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
 
-if [[ -f /etc/letsencrypt/live/$NAME2/cert.pem ]]; then #add ssl letsencrypt khi domain đó đã có sẵn ssl letsencrypt trước đó rồi, là trường hợp họ xoá domain xong rồi đi add lại lúc xoá domain chọn vào phần không xoá ssl letsencrypt, thì đoạn này sẽ khởi tạo lại ssl letsencrypt luôn
+if [[ -f /etc/letsencrypt/live/$NAME2/cert.pem ]]; then
   sed -i -e '/^vhssl /,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
   echo "vhssl  {
 keyFile                 /etc/letsencrypt/live/$NAME2/privkey.pem
@@ -303,7 +351,41 @@ chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/backup-website
 
 chown $USER:$USER /usr/local/lsws/$NAME2/.*
 
-mv /usr/local/backup-website/$NAME /usr/local/backup-website/$NAME2
+# mv /usr/local/backup-website/$NAME /usr/local/backup-website/$NAME2
+check_thu_muc_backup=$(ls /usr/local/backup-website/"$NAME" | grep '.zip$\|.sql$\|.sql.gz$\|.zst$\|.tar.gz$')
+if [[ $check_thu_muc_backup ]]; then
+  echo "$xac_nhan $ban_co_muon $xoa $thu_muc backup website $cua website $NAME? "
+  prompt="$nhap_lua_chon_cua_ban [1-2]: "
+  dongy2="n"
+  options=("$dong_y" "$khong_dong_y")
+  PS3="$prompt"
+  select opt in "${options[@]}"; do
+    case "$REPLY" in
+    1)
+      dongy2="y"
+      break
+      ;;
+
+    2)
+      dongy2="n"
+      break
+      ;;
+
+    $((${#options[@]} + 1)))
+      printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+      break
+      ;;
+    *)
+      printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+      break
+      ;;
+    esac
+  done
+
+  if [[ "$dongy2" = "y" ]]; then
+    rm -rf /usr/local/backup-website/"$NAME"
+  fi
+fi
 
 #update user vhosts
 sed -i '/extUser/d' /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
@@ -337,12 +419,20 @@ ln -s /home /usr/local/lsws/$NAME2
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
-# USER2=${NAME2//[-._]/wptt}
-# check_ky_tu=$(echo $USER2 | wc -c)
-# if (($check_ky_tu > 32)); then
-#   USER2=$(echo $USER2 | cut -c 1-30)
-# fi
-# . /etc/wptt/domain/wptt-thay-doi-user $NAME2 $USER2 #thay đổi username
+# -------------------------------------------------------------
+# THIẾT LẬP LẠI SSH CHROOT CHO USER MỚI
+# -------------------------------------------------------------
+sed -i -e "/^#begin-WPTT_JAIL_$USER/,/^#end-WPTT_JAIL_$USER$/d" /etc/ssh/sshd_config 2>/dev/null || true
+cat <<EOF >>/etc/ssh/sshd_config
+#begin-WPTT_JAIL_$USER
+Match User $USER
+    ChrootDirectory /usr/local/lsws/$NAME2
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    X11Forwarding no
+#end-WPTT_JAIL_$USER
+EOF
+systemctl restart sshd
 
 echo "$hoan_tat $thay_doi domain $NAME sang $NAME2"
 
