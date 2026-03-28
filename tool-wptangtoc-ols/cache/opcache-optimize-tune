@@ -1,22 +1,25 @@
 #!/bin/bash
 # ==========================================
-# AUTO-TUNE PHP OPCACHE & JIT COMPILER
+# AUTO-TUNE PHP OPCACHE
 # ==========================================
-
 
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
 if [ "$TOTAL_RAM_MB" -le 1200 ]; then
-    OPCACHE_MEM="64"
-    JIT_BUFFER="0M"      # Tắt JIT cho máy siêu yếu (1GB) để tiết kiệm RAM
+  OPCACHE_MEM="64"
+  JIT_BUFFER="0M"      # Tắt JIT cho máy siêu yếu (1GB) để tiết kiệm RAM
+  REALPATH_SIZE="512K" # VPS 1GB: 512K là quá đủ cho 1000+ file
 elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
-    OPCACHE_MEM="128"
-    JIT_BUFFER="64M"     # VPS 2GB: OPcache 128MB (JIT ăn 64MB, còn 64MB lưu file)
+  OPCACHE_MEM="128"
+  JIT_BUFFER="64M"      # VPS 2GB: OPcache 128MB (JIT ăn 64MB, còn 64MB lưu file)
+  REALPATH_SIZE="1024K" # VPS 2GB: 1MB
 elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
-    OPCACHE_MEM="256"
-    JIT_BUFFER="128M"    # VPS 4GB
+  OPCACHE_MEM="256"
+  JIT_BUFFER="128M"     # VPS 4GB
+  REALPATH_SIZE="2048K" # VPS to: 2MB (Mức trần thực tế, 4M là hơi quá tay)
 else
-    OPCACHE_MEM="512"
-    JIT_BUFFER="256M"    # Mức trần cho VPS >= 8GB
+  OPCACHE_MEM="512"
+  JIT_BUFFER="256M"     # Mức trần cho VPS >= 8GB
+  REALPATH_SIZE="2048K" # VPS to: 2MB (Mức trần thực tế)
 fi
 
 # 2. Lấy danh sách các thư mục lsphp (ví dụ: lsphp74, lsphp81, lsphp82)
@@ -35,17 +38,22 @@ for php_dir in "${lsphp_list[@]}"; do
   fi
 
   if [[ -f "$php_ini_path" ]]; then
-    
+
     # --- ÁP DỤNG OPCACHE (Cho MỌI phiên bản PHP) ---
     # Dọn dẹp dòng cũ (Cách dọn bạo lực này bao sạch, không lo lặp dòng)
     sed -i '/^opcache.memory_consumption/d' "$php_ini_path"
     sed -i '/^opcache.interned_strings_buffer/d' "$php_ini_path"
     sed -i '/^opcache.max_accelerated_files/d' "$php_ini_path"
-    
+
     # Nối thẳng cấu hình OPcache Auto-tune vào cuối file
-    echo "opcache.memory_consumption=$OPCACHE_MEM" >> "$php_ini_path"
-    echo "opcache.interned_strings_buffer=16" >> "$php_ini_path"
-    echo "opcache.max_accelerated_files=16229" >> "$php_ini_path"
+    echo "opcache.memory_consumption=$OPCACHE_MEM" >>"$php_ini_path"
+    echo "opcache.interned_strings_buffer=16" >>"$php_ini_path"
+    echo "opcache.max_accelerated_files=16229" >>"$php_ini_path"
+
+    sed -i '/^realpath_cache_size/d' "$php_ini_path"
+    sed -i '/^realpath_cache_ttl/d' "$php_ini_path"
+    echo "realpath_cache_size=${REALPATH_SIZE}" >>"$php_ini_path"
+    echo "realpath_cache_ttl=7200" >>"$php_ini_path" # Nâng lên 2 tiếng cho web bay như gió
 
     # --- ÁP DỤNG JIT (Chỉ cho PHP >= 8.0) ---
     if ((version_num >= 80)); then
@@ -55,8 +63,8 @@ for php_dir in "${lsphp_list[@]}"; do
 
       # Chỉ bật JIT nếu JIT_BUFFER > 0M
       if [[ "$JIT_BUFFER" != "0M" ]]; then
-        echo "opcache.jit=tracing" >> "$php_ini_path"
-        echo "opcache.jit_buffer_size=$JIT_BUFFER" >> "$php_ini_path"
+        echo "opcache.jit=tracing" >>"$php_ini_path"
+        echo "opcache.jit_buffer_size=$JIT_BUFFER" >>"$php_ini_path"
         echo "Đã Tune OPcache=${OPCACHE_MEM}M & JIT=${JIT_BUFFER} cho $php_dir" >>/var/log/wptangtoc-ols.log
       else
         echo "Đã Tune OPcache=${OPCACHE_MEM}M (Tắt JIT vì RAM thấp) cho $php_dir" >>/var/log/wptangtoc-ols.log
@@ -67,6 +75,4 @@ for php_dir in "${lsphp_list[@]}"; do
   fi
 done
 
-
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-
