@@ -216,7 +216,6 @@ if (($check_ky_tu > 32)); then
   USER=$(echo $USER | cut -c 1-30)
 fi
 
-# useradd $USER -p -m -d /usr/local/lsws/$NAME2 >/dev/null 2>&1
 useradd -p -m -d /usr/local/lsws/$NAME2 $USER >/dev/null 2>&1
 
 if [[ $(cat /etc/passwd | cut -f1 -d ':' | grep -w $USER) = '' ]]; then
@@ -228,7 +227,6 @@ if [[ $(cat /etc/passwd | cut -f1 -d ':' | grep -w $USER) = '' ]]; then
   if (($check_ky_tu2 > 32)); then
     USER=$(echo $USER | cut -c 1-30)
   fi
-  # useradd $USER -p -m -d /usr/local/lsws/$NAME2 >/dev/null 2>&1
   useradd -p -m -d /usr/local/lsws/$NAME2 $USER >/dev/null 2>&1
 fi
 
@@ -374,7 +372,6 @@ mkdir -p /etc/wptt-ssl-tu-ky/$NAME2
 cd /etc/wptt-ssl-tu-ky/$NAME2
 openssl req -new -newkey rsa:2048 -nodes -keyout $NAME2.key -out $NAME2.csr -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$NAME2/emailAddress=admin@example.com" >/dev/null 2>&1
 openssl x509 -req -in $NAME2.csr -signkey $NAME2.key -out cert.crt -days 3650 >/dev/null 2>&1
-#end khởi tạo ssl tự ký
 
 #tuong thich ubuntu tuong thich nhom litespeed
 if $(cat /etc/*release | grep -q "Ubuntu"); then
@@ -418,13 +415,11 @@ database=${name_db}_${ramdom_db}_dbname
 username=${name_db}_${ramdom_db}_username
 password=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 36)
 
-#toi ky tu database la 64
 check_ky_tu_database_name=$(echo $database | wc -c)
 if (($check_ky_tu_database_name > 60)); then
   database=$(echo $database | cut -c 1-60)
 fi
 
-#toi ky tu database la 64
 check_ky_tu_user_name=$(echo $username | wc -c)
 if (($check_ky_tu_user_name > 60)); then
   username=$(echo $username | cut -c 1-60)
@@ -432,7 +427,7 @@ fi
 _runing "Thêm database mới cho website $NAME2"
 
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -456,92 +451,134 @@ mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e
 mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES"
 _rundone "Thêm database mới cho website $NAME2"
 
-# php_ver_chon=${php_version_check//[-._]/}
-# sed -E -i "s/lsphp[0-9]+/lsphp$php_ver_chon/g" /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
 _runing "Sao chép website $NAME sang website $NAME2"
 . /etc/wptt/vhost/."$NAME".conf
 
-#config phiên bản php của website gốc
 if [[ $phien_ban_php_domain = '' ]]; then
   phien_ban_php_domain=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
 fi
-
 php_ver_chon=${phien_ban_php_domain//[-._]/}
-
 sed -E -i "s/lsphp[0-9]+/lsphp$php_ver_chon/g" /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
+
+# Load config PHP để sử dụng chung một biến đường dẫn
+. /etc/wptt/php/php-cli-domain-config $NAME
+PHP_EXEC="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi:-$php_ver_chon}/bin/php"
+
+# ==============================================================================
+# BƯỚC 1: KIỂM TRA MÔI TRƯỜNG & LUÔN XUẤT MARIADB DỰ PHÒNG
+# ==============================================================================
+IS_SQLITE_SOURCE=0
+if [[ -f "/usr/local/lsws/$NAME/html/wp-content/db.php" ]] && grep -q -i "sqlite" "/usr/local/lsws/$NAME/html/wp-content/db.php"; then
+  IS_SQLITE_SOURCE=1
+fi
 
 mkdir -p "/usr/local/lsws/database"
 file_sql=${database}.sql
 duong_dan_thu_muc="/usr/local/lsws/database/$file_sql"
-ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false >"$duong_dan_thu_muc"
 
-#import database của website gốc
-# Định nghĩa các lệnh tối ưu
+# Luôn Dump MariaDB gốc dự phòng (để web bản sao có MariaDB fallback)
+ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false >"$duong_dan_thu_muc"
 INIT_SQL="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET AUTOCOMMIT=0;"
 END_SQL="COMMIT; SET FOREIGN_KEY_CHECKS=1; SET UNIQUE_CHECKS=1; SET AUTOCOMMIT=1;"
-# Thực thi Import với cấu trúc Gộp Nhóm (Grouping)
 (
   echo "$INIT_SQL"
   cat "$duong_dan_thu_muc"
   echo "$END_SQL"
 ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$database" --ssl-verify-server-cert=false
-#kết thúc import database của website gốc
-
 rm -f "$duong_dan_thu_muc"
-rm -rf $TEMP_CNF_ROOT #delete cấu hình tạm tài khoản sql
+rm -rf $TEMP_CNF_ROOT
+# ==============================================================================
+
+# ==============================================================================
+# BƯỚC 2: COPY MÃ NGUỒN VÀ SQLITE NGUYÊN BẢN (VẬT LÝ 100%)
+# ==============================================================================
 duong_dan_nguon_cu="/usr/local/lsws/$NAME/html"
 duong_dan_nguon_moi21="/usr/local/lsws/$NAME2"
 duong_dan_nguon_moi="/usr/local/lsws/$NAME2/html"
 
-#ionice -c 3 nice -n 19 để hạ độ ưu tiên disk và cpu copy để tránh quá tải máy chủ
+# Copy toàn bộ, bao gồm cả file .ht.sqlite bên trong (không dùng Import tránh lỗi hash)
 ionice -c 3 nice -n 19 cp -r "$duong_dan_nguon_cu" "$duong_dan_nguon_moi21"
 
-if [[ $(lsattr /usr/local/lsws/$NAME2/html/wp-config.php | cut -f1 -d ' ' | grep 'i') ]]; then #lockdown check sử lý nếu website nguồn triển khai lockdown, tắt lockdown mã nguồn mới
+chown -R $USER:$USER "$duong_dan_nguon_moi"
+find "$duong_dan_nguon_moi" -type d -print0 | xargs -0 chmod 755
+find "$duong_dan_nguon_moi" -type f -print0 | xargs -0 chmod 644
+
+# Bắt buộc quyền Write cho thư mục SQLite nếu có
+if [[ $IS_SQLITE_SOURCE -eq 1 ]]; then
+  chmod 755 "$duong_dan_nguon_moi/wp-content/database"
+  chown -R $USER:$USER "$duong_dan_nguon_moi/wp-content/database"
+fi
+
+if [[ $(lsattr /usr/local/lsws/$NAME2/html/wp-config.php | cut -f1 -d ' ' | grep 'i') ]]; then
   . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME2 off
   find /usr/local/lsws/"$NAME2"/html -type f -print0 | xargs -0 chmod 644
   find /usr/local/lsws/"$NAME2"/html -type d -print0 | xargs -0 chmod 755
 fi
 
-# sed -i "/DB_HOST/s/'[^']*'/'localhost'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
-# sed -i "/DB_NAME/s/'[^']*'/'$database'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
-# sed -i "/DB_USER/s/'[^']*'/'$username'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
-# sed -i "/DB_PASSWORD/s/'[^']*'/'$password'/2" "/usr/local/lsws/$NAME2/html/wp-config.php"
-
 /usr/local/bin/wp config set DB_HOST 'localhost' --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet
-
-# Cấu hình DB Name
 /usr/local/bin/wp config set DB_NAME "$database" --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet
-
-# Cấu hình DB User
 /usr/local/bin/wp config set DB_USER "$username" --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet
-
-# Cấu hình DB Password
 /usr/local/bin/wp config set DB_PASSWORD "$password" --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet
 
 cd /usr/local/lsws/"$NAME2"/html/ || exit 1
 
-. /etc/wptt/php/php-cli-domain-config $NAME #sử dụng php của NAME domain gốc
-
-#thay cache_key tránh xung đột khi dùng object cache
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path=/usr/local/lsws/$NAME2/html --allow-root >/dev/null 2>&1
-
-for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" /usr/local/lsws/$NAME2/html/wp-config.php | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" /usr/local/lsws/$NAME2/html/wp-config.php; done #để sửa trùng loọp nếu có WP_CACHE_KEY_SALT chỉ dữ liệu một cái WP_CACHE_KEY_SALT
-
-if [[ $(cat /usr/local/lsws/$NAME2/html/wp-config.php | grep WP_CACHE_KEY_SALT) = '' ]]; then #chưa add WP_CACHE_KEY_SALT, thì add lại điều kiện
+$PHP_EXEC /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path=/usr/local/lsws/$NAME2/html --allow-root >/dev/null 2>&1
+for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" /usr/local/lsws/$NAME2/html/wp-config.php | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" /usr/local/lsws/$NAME2/html/wp-config.php; done
+if [[ $(cat /usr/local/lsws/$NAME2/html/wp-config.php | grep WP_CACHE_KEY_SALT) = '' ]]; then
   sed -i "/define( 'WP_CACHE_KEY_SALT'/d" /usr/local/lsws/$NAME2/html/wp-config.php && sed -i "/^define( 'NONCE_SALT'/a define( 'WP_CACHE_KEY_SALT', '$NAME2' );" /usr/local/lsws/$NAME2/html/wp-config.php
-  /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path=/usr/local/lsws/$NAME2/html --allow-root >/dev/null 2>&1
-  for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" /usr/local/lsws/$NAME2/html/wp-config.php | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" /usr/local/lsws/$NAME2/html/wp-config.php; done #để sửa trùng loọp nếu có WP_CACHE_KEY_SALT chỉ dữ liệu một cái WP_CACHE_KEY_SALT
+  $PHP_EXEC /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path=/usr/local/lsws/$NAME2/html --allow-root >/dev/null 2>&1
+  for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" /usr/local/lsws/$NAME2/html/wp-config.php | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" /usr/local/lsws/$NAME2/html/wp-config.php; done
 fi
 
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp search-replace "//${NAME}" "//${NAME2}" --path="$duong_dan_nguon_moi" --allow-root >/dev/null 2>&1
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp cache flush --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp rewrite flush --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+# ==============================================================================
+# BƯỚC 3: SEARCH & REPLACE TRÊN MARIA-DB TRƯỚC (DỰ PHÒNG)
+# ==============================================================================
+if [[ $IS_SQLITE_SOURCE -eq 1 ]]; then
+  # Tạm giấu db.php để lòi MariaDB ra
+  mv "$duong_dan_nguon_moi/wp-content/db.php" "$duong_dan_nguon_moi/wp-content/db.php.bak" 2>/dev/null
+fi
+
+$PHP_EXEC /usr/local/bin/wp search-replace "//${NAME}" "//${NAME2}" --path="$duong_dan_nguon_moi" --allow-root --all-tables >/dev/null 2>&1
+$PHP_EXEC /usr/local/bin/wp search-replace "/usr/local/lsws/${NAME}/html" "/usr/local/lsws/${NAME2}/html" --path="$duong_dan_nguon_moi" --allow-root --all-tables >/dev/null 2>&1
+
+# ==============================================================================
+# BƯỚC 4: SEARCH & REPLACE TRỰC TIẾP LÊN SQLITE
+# ==============================================================================
+if [[ $IS_SQLITE_SOURCE -eq 1 ]]; then
+  # Trả lại db.php
+  mv "$duong_dan_nguon_moi/wp-content/db.php.bak" "$duong_dan_nguon_moi/wp-content/db.php" 2>/dev/null
+  chown $USER:$USER "$duong_dan_nguon_moi/wp-content/db.php"
+
+  # Bật AST Driver tạm thời
+  /usr/local/bin/wp config set WP_SQLITE_AST_DRIVER true --raw --type=constant --allow-root --path="$duong_dan_nguon_moi" --quiet
+  /usr/local/bin/wp config set DB_ENGINE "'sqlite'" --raw --type=constant --allow-root --path="$duong_dan_nguon_moi" --quiet
+
+  # Chạy Replace (Sẽ tự động cập nhật SQLite do db.php đang bật)
+  $PHP_EXEC /usr/local/bin/wp search-replace "//${NAME}" "//${NAME2}" --path="$duong_dan_nguon_moi" --allow-root --all-tables >/dev/null 2>&1
+  $PHP_EXEC /usr/local/bin/wp search-replace "/usr/local/lsws/${NAME}/html" "/usr/local/lsws/${NAME2}/html" --path="$duong_dan_nguon_moi" --allow-root --all-tables >/dev/null 2>&1
+
+  # Hủy bóng ma và fix quyền
+  if [[ -f "$duong_dan_nguon_moi/wp-content/database/.ht.sqlite" ]]; then
+    sqlite3 "$duong_dan_nguon_moi/wp-content/database/.ht.sqlite" "VACUUM;" >/dev/null 2>&1
+  fi
+
+  /usr/local/bin/wp config delete WP_SQLITE_AST_DRIVER --type=constant --allow-root --path="$duong_dan_nguon_moi" --quiet 2>/dev/null
+  /usr/local/bin/wp config delete DB_ENGINE --type=constant --allow-root --path="$duong_dan_nguon_moi" --quiet 2>/dev/null
+
+  # QUAN TRỌNG: Quét quyền lại phòng khi Root tạo ra file log Read-Only
+  chown -R $USER:$USER "$duong_dan_nguon_moi/wp-content/database" 2>/dev/null
+  find "$duong_dan_nguon_moi/wp-content/database" -type f -print0 2>/dev/null | xargs -0 chmod 644 2>/dev/null
+fi
+_rundone "Sao chép website $NAME sang website $NAME2"
+# ==============================================================================
+
+$PHP_EXEC /usr/local/bin/wp cache flush --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+$PHP_EXEC /usr/local/bin/wp rewrite flush --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
 checkplugin="/usr/local/lsws/$NAME2/html/wp-content/plugins/litespeed-cache"
 if [[ -d $checkplugin ]]; then
-  /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-purge all --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+  $PHP_EXEC /usr/local/bin/wp litespeed-purge all --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
 fi
 
-chown -R $USER:$USER /usr/local/lsws/$NAME2/html
 chown -R $USER:$USER /usr/local/lsws/$NAME2/backup-website
 
 if [[ ! -f /usr/local/lsws/$NAME2/.bashrc ]]; then
@@ -551,41 +588,27 @@ fi
 chown $USER:$USER /usr/local/lsws/$NAME2/.*
 
 chmod 700 /usr/local/lsws/$NAME2/backup-website
-
 mkdir -p /usr/local/backup-website/"$NAME2"
-
 mkdir -p /wptangtoc-ols
 mkdir -p /wptangtoc-ols/"$NAME2"
 mkdir -p /wptangtoc-ols/"$NAME2"/backup-website
 
 ln -s /usr/local/lsws/"$NAME2"/html /wptangtoc-ols/"$NAME2"
 ln -s /usr/local/backup-website/"$NAME2"/ /wptangtoc-ols/"$NAME2"/backup-website
-
-#anh xa thu muc home
 ln -s /usr/local/lsws/$NAME2 /home/$NAME2
 
 if [[ -f /usr/local/lsws/$NAME2/html/wp-content/db.php ]]; then
-  rm -f /usr/local/lsws/$NAME2/html/wp-content/db.php
+  if ! grep -q -i "sqlite" "/usr/local/lsws/$NAME2/html/wp-content/db.php"; then
+    rm -f /usr/local/lsws/$NAME2/html/wp-content/db.php
+  fi
 fi
 
-#usermod -a -G wptangtoc-ols $USER
-
-# khong cho login quyen tai khoan trực tiếp chỉ sử dụng để làm sử dụng php exec
 usermod $USER -s /sbin/nologin
-
-# echo '[[ $- != *i* ]] && return' >> /home/$USER/.bashrc
-# echo ". /etc/wptt-user/wptt-status" >> /home/$USER/.bashrc
-# echo "alias 1='wptangtoc-user'" >> /home/$USER/.bashrc
-# echo "alias 11='wptangtoc-user'" >> /home/$USER/.bashrc
 
 echo '[[ $- != *i* ]] && return' >>/usr/local/lsws/$NAME2/.bashrc
 echo ". /etc/wptt-user/wptt-status" >>/usr/local/lsws/$NAME2/.bashrc
 echo "alias 1='wptangtoc-user'" >>/usr/local/lsws/$NAME2/.bashrc
 echo "alias 11='wptangtoc-user'" >>/usr/local/lsws/$NAME2/.bashrc
-
-# mkdir -p /home/$USER/$NAME2
-# ln -s /usr/local/lsws/$NAME2/html /home/$USER/$NAME2/public_html
-# ln -s /usr/local/lsws/$NAME2/backup-website /home/$USER/$NAME2/backup-website
 
 if [[ -f /usr/local/lsws/$NAME2/html/wp-config.php ]]; then
   sed -i "/WP_SITEURL/d" /usr/local/lsws/$NAME2/html/wp-config.php
@@ -595,7 +618,6 @@ if [[ -f /usr/local/lsws/$NAME2/html/wp-config.php ]]; then
   fi
 fi
 
-#xoá chuyển hướng
 sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' /usr/local/lsws/$NAME2/html/.htaccess
 sed -i -e '/^#begin-chuyen-huong-non-www-to-www-wptangtoc-ols/,/^#end-chuyen-huong-non-www-to-www-wptangtoc-ols$/d' /usr/local/lsws/$NAME2/html/.htaccess
 
@@ -606,7 +628,7 @@ fi
 
 if [[ $hostname_custom != 'WPTangTocOLS' ]]; then
   if [[ $hostname_custom ]]; then
-    sed -i "/extraHeaders /a X-Powered-By $hostname_custom" /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf #custom hostname
+    sed -i "/extraHeaders /a X-Powered-By $hostname_custom" /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
   fi
 fi
 
@@ -627,21 +649,16 @@ phien_ban_php_domain=$phien_ban_php_domain" >/etc/wptt/vhost/."$NAME2".conf
 chown root:root /etc/wptt/vhost/.$NAME2.conf
 chmod 700 /etc/wptt/vhost/.$NAME2.conf
 
-# _runing "Xóa cache"
 . /etc/wptt/cache/wptt-xoacache $NAME2 >/dev/null 2>&1
-# _rundone "Xóa cache"
 . /etc/wptt/wordpress/thay-salt $NAME2 >/dev/null 2>&1
 
-#đếm số lượng website nếu lớn 5 sẽ chuyển sang mode nhiều web
 if (($(ls -A /etc/wptt/vhost | wc -l) > 10)); then
   . /etc/wptt/cau-hinh/wptt-litespeed-config-cau-hinh-optimize-nhieu-web >/dev/null 2>&1
 fi
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
-#setup lại vhost nếu trong trường hợp người dùng đã kích hoạt ssl trả phí trước đó để clean lại
-
-if [[ -f /etc/letsencrypt/live/$NAME2/cert.pem ]]; then #nếu domain cũ đã có ssl letsencrypt sẵn thì config vào luôn
+if [[ -f /etc/letsencrypt/live/$NAME2/cert.pem ]]; then
   sed -i -e '/^vhssl /,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME2/$NAME2.conf
   echo "vhssl  {
 keyFile                 /etc/letsencrypt/live/$NAME2/privkey.pem
@@ -660,7 +677,6 @@ enableQuic              1
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 fi
 
-#chroot
 sed -i -e "/^#begin-WPTT_JAIL_$USER/,/^#end-WPTT_JAIL_$USER$/d" /etc/ssh/sshd_config 2>/dev/null || true
 cat <<EOF >>/etc/ssh/sshd_config
 #begin-WPTT_JAIL_$USER
@@ -672,15 +688,13 @@ Match User $USER
 #end-WPTT_JAIL_$USER
 EOF
 systemctl restart sshd
-#chroot
-_rundone "Sao chép website $NAME_NGUON sang website $NAME2"
 
 echo "==================================================================="
-echo "Hoàn tất sao chép $NAME_NGUON sang $NAME2               "
+echo "Hoàn tất sao chép $NAME_NGUON sang $NAME2                "
 echo "==================================================================="
 echo "==================================================================="
 echo "Disk  : $(df -BG | awk '$NF=="/"{printf "%d/%dGB (%s)\n", $3,$2,$5}')                        "
-echo "RAM   : $(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)\n", $3,$2,$3*100/$2 }')                         "
+echo "RAM   : $(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)\n", $3,$2,$3*100/$2 }')                          "
 echo "==================================================================="
 echo "Đường dẫn thư mục website: /usr/local/lsws/$NAME2/html              "
 echo "==================================================================="
