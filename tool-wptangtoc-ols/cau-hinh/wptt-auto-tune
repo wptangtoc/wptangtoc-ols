@@ -56,32 +56,48 @@ if [ $DIFF -gt 500 ]; then
   max_connections=$(expr 64 \* ${tong_ram_gb})
 
   # set cau hinh maria database
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
-    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
-  else
-    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+  # ==========================================
+  # CẤU HÌNH MARIADB (Chỉ chạy khi KHÔNG có SQLite)
+  # ==========================================
+  HAS_SQLITE=0
+  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+      # Nếu tìm thấy file db.php có chứa chữ sqlite -> Bật cờ và thoát vòng lặp
+      if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -q -i "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then
+        HAS_SQLITE=1
+        break
+      fi
+    done
   fi
 
-  TEMP_mariadb_config=$(mktemp)
+  if [[ $HAS_SQLITE -eq 0 ]]; then
+    if $(cat /etc/*release | grep -q "Ubuntu"); then
+      duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+    else
+      duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+    fi
 
-  TEMP_OLS_config_DIR=$(mktemp -d)
+    TEMP_mariadb_config=$(mktemp)
 
-  cp -f $duong_dan_cau_hinh_mariadb $TEMP_mariadb_config #backup
-  cp -rf /usr/local/lsws/conf/* $TEMP_OLS_config_DIR     #backup ols
+    TEMP_OLS_config_DIR=$(mktemp -d)
 
-  sed -i '/key_buffer_size/d' $duong_dan_cau_hinh_mariadb
-  sed -i '/innodb_buffer_pool_size/d' $duong_dan_cau_hinh_mariadb
-  sed -i '/max_connections/d' $duong_dan_cau_hinh_mariadb
-  sed -i '/tmp_table_size/d' $duong_dan_cau_hinh_mariadb
-  sed -i '/max_heap_table_size/d' $duong_dan_cau_hinh_mariadb
+    cp -f $duong_dan_cau_hinh_mariadb $TEMP_mariadb_config #backup
+    cp -rf /usr/local/lsws/conf/* $TEMP_OLS_config_DIR     #backup ols
 
-  #mini mariadb sed remove
-  sed -i '/max_allowed_packet/d' $duong_dan_cau_hinh_mariadb
-  sed -i '/table_cache/d' $duong_dan_cau_hinh_mariadb
-  sed -i '/thread_cache_size/d' $duong_dan_cau_hinh_mariadb
-  #end mini mariadb
+    sed -i '/key_buffer_size/d' $duong_dan_cau_hinh_mariadb
+    sed -i '/innodb_buffer_pool_size/d' $duong_dan_cau_hinh_mariadb
+    sed -i '/max_connections/d' $duong_dan_cau_hinh_mariadb
+    sed -i '/tmp_table_size/d' $duong_dan_cau_hinh_mariadb
+    sed -i '/max_heap_table_size/d' $duong_dan_cau_hinh_mariadb
 
-  echo "table_cache = 2000
+    #mini mariadb sed remove
+    sed -i '/max_allowed_packet/d' $duong_dan_cau_hinh_mariadb
+    sed -i '/table_cache/d' $duong_dan_cau_hinh_mariadb
+    sed -i '/thread_cache_size/d' $duong_dan_cau_hinh_mariadb
+    #end mini mariadb
+
+    echo "table_cache = 2000
 thread_cache_size = 81
 key_buffer_size = ${buffer_db}M
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
@@ -90,28 +106,41 @@ tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 max_allowed_packet = 64M
 " >>$duong_dan_cau_hinh_mariadb
+  fi
   #end setup mariadb
 
   #setup OLS
-
   TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
   # Tính toán mức trần theo công thức bậc thang
   if [ "$TOTAL_RAM_MB" -le 1200 ]; then
     BUFFER_SIZE="60M"
+    MMAP_CACHE_SIZE="20M"
   elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
     BUFFER_SIZE="120M"
+    MMAP_CACHE_SIZE="40M"
   elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
     BUFFER_SIZE="180M"
+    MMAP_CACHE_SIZE="80M"
   elif [ "$TOTAL_RAM_MB" -le 8500 ]; then
     BUFFER_SIZE="256M"
+    MMAP_CACHE_SIZE="80M"
   else
     # Mức trần cho các VPS siêu to (16GB, 32GB...)
+    MMAP_CACHE_SIZE="80M"
     BUFFER_SIZE="384M"
   fi
 
   # Áp dụng vào file cấu hình (Tự động tìm dòng inMemBufSize và thay thế)
   OLS_CONF='/usr/local/lsws/conf/httpd_config.conf'
   sed -i -E "s/^\s*inMemBufSize\s+.*/inMemBufSize          ${BUFFER_SIZE}/" "$OLS_CONF"
+
+  # ==========================================
+  # AUTO-TUNE totalInMemCacheSize (Mmap Cache File Tĩnh)
+  # ==========================================
+  sed -i -E "s/^\s*totalInMemCacheSize\s+.*/totalInMemCacheSize    ${MMAP_CACHE_SIZE}/" "$OLS_CONF"
+  # ==========================================
+  # AUTO-TUNE totalInMemCacheSize (Mmap Cache File Tĩnh)
+  # ==========================================
 
   sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers           $cpucore/g" "$OLS_CONF"
   sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity           $cpucore/g" "$OLS_CONF"
@@ -261,6 +290,13 @@ EOF
       systemctl restart zramswap >/dev/null 2>&1
 
       echo "$(date '+%d-%m-%Y %H:%M') - ZRAM (Ubuntu) Auto-Tuned: ${ZRAM_SIZE_MB}MB với thuật toán ${BEST_ALGO}" >>/var/log/wptangtoc-ols.log
+
+      #cải tiến hiệu suất opcache + JIT
+      (/etc/wptt/cache/opcache-optimize-tune)
+
+      #Cải tiến hiệu suất object cache auto tune
+      (/etc/wptt/cache/object-cache-optimize-tune)
+
     fi
   fi
 fi
