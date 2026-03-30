@@ -1,0 +1,100 @@
+#!/bin/bash
+
+. /etc/wptt/echo-color
+
+NAME=$1
+if [[ $NAME = "98" ]];then
+NAME=""
+fi
+
+if [[ "$NAME" = "" ]]; then
+    . /etc/wptt/tenmien
+    echo ""
+    echo ""
+    echo "Lựa chọn website muốn khóa Uploads bằng WHITELIST (Chỉ cho phép Ảnh/Media/Tài liệu):"
+    echo ""
+    lua_chon_NAME
+fi
+
+if [[ $NAME = "0" || $NAME = '' ]];then
+exit
+fi
+
+# Tự động loại bỏ khoảng trắng nếu người dùng nhập dư
+NAME="${NAME//[[:space:]]/}"
+
+path="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! -f "$path" ]]; then
+    clear
+    echoDo "Domain khong ton tai tren VPS."
+    exit
+fi
+
+pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
+if [[ ! -f "$pathcheckwp" ]]; then
+  clear
+  echoDo "He thong xac nhan ban chua kich hoat su dung WordPress"
+  sleep 3
+  exit
+fi
+
+# Kiểm tra xem đã kích hoạt Whitelist trước đó chưa (tìm từ khóa WHITELIST)
+check_anti_shell=$(grep -c "WHITELIST" /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf)
+
+if [[ $check_anti_shell -gt 0 ]];then
+  echo 'Trước đó đã kích hoạt bảo mật Whitelist cho thư mục Uploads rồi!'
+  exit
+fi
+
+_runing "Thiết lập bảo mật Whitelist thư mục uploads"
+
+# Kiểm tra xem Context của thư mục Uploads đã tồn tại chưa (Ví dụ: do từng bật WebP)
+check_context=$(grep -c "context /wp-content/uploads/" /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf)
+
+if [[ $check_context -eq 0 ]]; then
+    # Nếu chưa có Context nào, bơm nguyên khối Context mới vào
+    echo "
+context /wp-content/uploads/ {
+  location                /usr/local/lsws/$NAME/html/wp-content/uploads/
+  allowBrowse             1
+
+  rewrite  {
+    enable                1
+    inherit               1
+    # [BẢO MẬT WHITELIST CỰC ĐOAN] Chỉ cho phép các định dạng an toàn
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteCond %{REQUEST_URI} !\.(jpe?g|png|gif|ico|webp|mp4|webm|mpeg|mp3|pdf|docx?|xlsx?|css|js|woff2?|ttf|svg|eot)$ [NC]
+    RewriteRule ^(.*)$ - [F,L]
+  }
+  addDefaultCharset       off
+
+  phpIniOverride  {
+
+  }
+}
+" >> /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+
+else
+    # Nếu đã có Context (từ WebP), dùng sed chèn thêm luật bảo mật vào bên trong khối rewrite
+    sed -i '/context \/wp-content\/uploads\//,/}/ { /enable.*1/a\
+    # [BẢO MẬT WHITELIST CỰC ĐOAN] Chỉ cho phép các định dạng an toàn\
+    RewriteCond %{REQUEST_FILENAME} -f\
+    RewriteCond %{REQUEST_URI} !\\.(jpe?g|png|gif|ico|webp|mp4|webm|mpeg|mp3|pdf|docx?|xlsx?|css|js|woff2?|ttf|svg|eot)$ [NC]\
+    RewriteRule ^(.*)$ - [F,L]
+    }' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+fi
+
+# Tuong thich ubuntu va litespeed group
+if $(cat /etc/*release | grep -q "Ubuntu"); then
+  tuong_thich_nhom_litespeed="nogroup"
+else
+  tuong_thich_nhom_litespeed="nobody"
+fi
+
+chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf/vhosts/$NAME
+chmod -R 750 /usr/local/lsws/conf/vhosts/$NAME
+
+# Thay vì restart giết chết tiến trình, sử dụng reload để OLS tải lại cấu hình êm ái
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+_rundone "Thiết lập bảo mật Whitelist thư mục uploads"
