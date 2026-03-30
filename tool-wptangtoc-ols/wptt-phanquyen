@@ -26,6 +26,9 @@ if [[ $ngon_ngu = '' ]]; then
 fi
 . /etc/wptt/lang/$ngon_ngu.sh
 
+# LƯU Ý BẢO MẬT: Bắt lại đối số menu ngay từ đầu để tránh thất lạc biến
+check_menu_wptangtoc_active=$1
+
 domain=$1
 if [[ $domain = '98' ]]; then
   domain=''
@@ -66,7 +69,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
 
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
-  check_menu_wptangtoc_active=$1                     #cho đổi số ra bên ngoài tránh bị ghi đè đối số NAME
   if [[ $check_menu_wptangtoc_active = "98" ]]; then #từ menu nhánh
     exec /etc/wptt/wptt-domain-main 1
   fi
@@ -106,6 +108,31 @@ if [[ ! -f "$pathcheck" ]]; then
   exit
 fi
 
+# ==============================================================================
+# BẮT ĐẦU CƠ CHẾ LOCKING (CHỐNG ĐỤNG ĐỘ TIẾN TRÌNH PHÂN QUYỀN)
+# ==============================================================================
+LOCK_FILE="/tmp/wptt_lock_phan_quyen_${domain}.lock"
+# Gán File Descriptor 201 cho khóa phân quyền
+exec 201>"$LOCK_FILE"
+
+# Lấy khóa non-blocking. Nếu có ai đó đang phân quyền website này thì báo lỗi và văng ra.
+if ! flock -n 201; then
+  echo ""
+  echo "========================================================================="
+  _runloi "Lỗi Đụng Độ Tiến Trình"
+  echoDo "Website $domain đang được phân quyền bởi một tác vụ khác."
+  echoDo "Hệ thống tự động khóa để bảo vệ dữ liệu. Vui lòng chờ lát nữa thử lại!"
+  echo "========================================================================="
+  sleep 3
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  elif [[ $check_menu_wptangtoc_active = "99" ]]; then
+    exec /usr/bin/wptangtoc 1
+  fi
+  return 2>/dev/null || exit 1
+fi
+# ==============================================================================
+
 . /etc/wptt/echo-color
 
 _runing "$phan_quyen website $domain"
@@ -142,9 +169,6 @@ if [[ -f /usr/local/lsws/"$domain"/.bashrc ]]; then
 fi
 
 chmod 755 /usr/local/lsws/"$domain"/html
-
-# find /usr/local/lsws/"$domain"/html -type d -exec chmod 755 {} \;
-# find /usr/local/lsws/"$domain"/html -type f -exec chmod 644 {} \;
 
 if [[ $lock_down ]]; then
 
@@ -230,9 +254,17 @@ if [[ $id_dang_nhap_phpmyadmin && $Website_chinh = $domain && -d /usr/local/lsws
 fi
 
 _rundone "$phan_quyen website $domain"
+
+# ==============================================================================
+# MỞ KHÓA BẢO VỆ TIẾN TRÌNH (RELEASE LOCK)
+# ==============================================================================
+flock -u 201
+exec 201>&-
+rm -f "$LOCK_FILE" 2>/dev/null
+# ==============================================================================
+
 echo ''
 echo ''
-check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then #từ menu nhánh
   exec /etc/wptt/wptt-domain-main 1
 fi
