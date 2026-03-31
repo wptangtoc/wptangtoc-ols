@@ -10,12 +10,43 @@ echo ""
 echo "========================================================================="
 echo "|Quản lý WordPress => Chuyển đổi unix socket database                   |"
 echo "========================================================================="
-. /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lựa chọn website muốn chuyển đổi unix socket database: "
-echo ""
-lua_chon_NAME
+NAME=$1
+if [[ $NAME = "98" ]]; then
+  NAME=""
+fi
+
+if [[ $NAME = "" ]]; then
+  . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
+  echo ""
+  echo ""
+  echo "Lựa chọn website muốn chuyển đổi unix socket database: "
+  echo ""
+  lua_chon_NAME
+fi
+
+if [[ $NAME = 'Tất cả website' ]]; then
+  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+      path="/usr/local/lsws/$domain/html/wp-config.php"
+      path_html="/usr/local/lsws/$domain/html"
+      i=1
+      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+        if [[ -f "$path" ]]; then
+          _runing "unix-stocket database website $domain"
+          (/etc/wptt/wordpress/unix-stocket-wpconfig $domain >/dev/null 2>&1)
+          _rundone "unix-stocket database website $domain"
+        fi
+      fi
+    done
+  fi
+
+  check_menu_wptangtoc_active=${1:-}
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  exit
+fi
 
 . /etc/wptt/echo-color
 if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
@@ -35,28 +66,54 @@ pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
   echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  echoDo "Tính năng này chỉ có thể hoạt động trên WordPress"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
   exit
 fi
 
-check1=$(grep -c '.sock' /usr/local/lsws/"$NAME"/html/wp-config.php)
-if [[ "$check1" = "1" ]]; then
-  echo "Đã kích hoạt socket database truoc do"
-  exit
+wp_config_file="/usr/local/lsws/$NAME/html/wp-config.php"
+
+if [[ ! -f "$wp_config_file" ]]; then
+  clear
+  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
+  echoDo "Tính năng này chỉ có thể hoạt động trên WordPress"
+  sleep 3
+  check_menu_wptangtoc_active=${1:-}
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  return 2>/dev/null || exit
 fi
 
-_runing "Chuyển đổi unix stocket database"
+# 1. Kiem tra xem da co socket chua (Dung grep -q chay ngam va Regex bọc thép)
+# Bỏ qua các dòng comment (//), chỉ tìm đúng dòng lệnh define DB_HOST đang chạy
+if grep -qE "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_HOST['\"].*\.sock" "$wp_config_file" 2>/dev/null; then
+  echo "Đã kích hoạt socket database trước đó"
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  return 2>/dev/null || exit
+fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  sed -i "/DB_HOST/s/'[^']*'/':\/run\/mysqld\/mysqld.sock'/2" /usr/local/lsws/"$NAME"/html/wp-config.php
+_runing "Chuyển đổi unix socket database"
+
+. /etc/wptt/vhost/.$NAME.conf
+
+# 2. Kiem tra he dieu hanh chuan xac bang file os-release
+if grep -iq "ubuntu" /etc/os-release 2>/dev/null; then
+  sock_path=":/run/mysqld/mysqld.sock"
 else
-  sed -i "/DB_HOST/s/'[^']*'/':\/var\/lib\/mysql\/mysql.sock'/2" /usr/local/lsws/"$NAME"/html/wp-config.php
+  sock_path=":/var/lib/mysql/mysql.sock"
 fi
 
-_rundone "Chuyển đổi unix stocket database"
-check_menu_wptangtoc_active=$1
+# 3. Ghi de thong so DB_HOST bang WP-CLI (An toan 100%)
+sudo -u "$User_name_vhost" /usr/local/bin/wp config set DB_HOST "$sock_path" --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+
+_rundone "Chuyển đổi unix socket database"
+
+check_menu_wptangtoc_active=${1:-}
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
