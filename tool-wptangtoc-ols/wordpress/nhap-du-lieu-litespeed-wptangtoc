@@ -187,30 +187,35 @@ if [[ -d "$pathcheckplugin" ]]; then
     duong_path_memcached_config="/etc/sysconfig/memcached"
   fi
 
-  if [[ ! -f $duong_dan_config_redis ]]; then
-    if [[ -f $duong_path_memcached_config ]]; then
-      sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-port 0 --allow-root --path=$path >/dev/null 2>&1
-      sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object true --allow-root --path=$path >/dev/null 2>&1
-      sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-host /var/run/memcached/memcached.sock --allow-root --path=$path >/dev/null 2>&1
-      sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-kind '' --allow-root --path=$path >/dev/null 2>&1
-    fi
+  if systemctl is-active --quiet valkey 2>/dev/null; then
+    ACTIVE_CACHE="Valkey"
+    CLI_TOOL="valkey-cli"
+    SOCKET_PATH="/var/run/valkey/valkey.sock"
+  elif systemctl is-active --quiet keydb 2>/dev/null; then
+    ACTIVE_CACHE="KeyDB"
+    CLI_TOOL="keydb-cli"
+    SOCKET_PATH="/var/run/keydb/keydb.sock"
+  elif systemctl is-active --quiet redis 2>/dev/null; then
+    ACTIVE_CACHE="Redis"
+    CLI_TOOL="redis-cli"
+    SOCKET_PATH="/var/run/redis/redis.sock"
   fi
 
-  if [[ -f $duong_dan_config_redis ]]; then
+  if [[ -S "$SOCKET_PATH" ]]; then
+    PING_CMD="$CLI_TOOL -s $SOCKET_PATH ping"
+  else
+    # Fallback nếu ai đó lỡ cấu hình TCP thủ công
+    PING_CMD="$CLI_TOOL ping"
+  fi
+
+  if [ "$($PING_CMD 2>/dev/null)" = "PONG" ]; then #kiểm tra xem thưc redis/valkey/keydb có hoạt động cái nào không
     sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-port 0 --allow-root --path=$path >/dev/null 2>&1
     sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object true --allow-root --path=$path >/dev/null 2>&1
     sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-kind 1 --allow-root --path=$path >/dev/null 2>&1
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-host /var/run/redis/redis.sock --allow-root --path=$path >/dev/null 2>&1
+    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-host "$SOCKET_PATH" --allow-root --path=$path >/dev/null 2>&1
   fi
 
-  if [[ -d /var/run/valkey ]]; then #almalinux 10 sử dụng valkey thay cho redis
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-port 0 --allow-root --path=$path >/dev/null 2>&1
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object true --allow-root --path=$path >/dev/null 2>&1
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-kind 1 --allow-root --path=$path >/dev/null 2>&1
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object-host /var/run/valkey/valkey.sock --allow-root --path=$path >/dev/null 2>&1
-  fi
-
-  if [[ -f $duong_dan_config_redis || -f $duong_path_memcached_config || -d /var/run/valkey ]]; then
+  if [ "$($PING_CMD 2>/dev/null)" = "PONG" ] || [[ -f $duong_path_memcached_config ]]; then        #kiểm tra xem thưc redis/valkey/keydb có hoạt động cái nào không
     if [[ -f /usr/local/lsws/$NAME/html/wp-config.php ]]; then                                     #file wp-config.php tồn tại, xác định
       if [[ $(cat /usr/local/lsws/$NAME/html/wp-config.php | grep WP_CACHE_KEY_SALT) = '' ]]; then #không có cấu hình WP_CACHE_KEY_SALT, xác định
         sed -i "/define( 'WP_CACHE_KEY_SALT'/d" /usr/local/lsws/$NAME/html/wp-config.php && sed -i "/^define( 'NONCE_SALT'/a define( 'WP_CACHE_KEY_SALT', '$NAME' );" /usr/local/lsws/$NAME/html/wp-config.php
@@ -219,7 +224,7 @@ if [[ -d "$pathcheckplugin" ]]; then
     fi
   fi
 
-  if [[ ! -f $duong_dan_config_redis && ! -f $duong_path_memcached_config ]]; then
+  if [ ! "$($PING_CMD 2>/dev/null)" = "PONG" ] && [[ ! -f $duong_path_memcached_config ]]; then
     sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-option set object false --allow-root --path=$path >/dev/null 2>&1
   fi
 
@@ -234,7 +239,7 @@ if [[ -d "$pathcheckplugin" ]]; then
     sed -i "/<?php/a define('LITESPEED_NO_LAZY', true);" /usr/local/lsws/$NAME/html/wp-config.php
     sed -i "/LITESPEED_NO_OPTM/d" /usr/local/lsws/$NAME/html/wp-config.php
     sed -i "/<?php/a define('LITESPEED_NO_OPTM', true);" /usr/local/lsws/$NAME/html/wp-config.php
-    sudo -u "$User_name_vhost" wp option patch update litespeed.conf.media-iframe_lazy '' --path=/usr/local/lsws/$NAME/html --allow-root 2>/dev/null
+    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option patch update litespeed.conf.media-iframe_lazy '' --path=/usr/local/lsws/$NAME/html --allow-root 2>/dev/null
   fi
 
   rm -f $data_wptangtoc
