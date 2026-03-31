@@ -69,9 +69,9 @@ if [[ $NAME = 'Tất cả website' ]]; then
 
   check_menu_wptangtoc_active=$1
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-wordpress-main 1
+    exec /etc/wptt/wptt-cache-main 1
   fi
-  exit
+  return 2>/dev/null || exit
 fi
 
 . /etc/wptt/echo-color
@@ -108,7 +108,7 @@ path2="/usr/local/lsws/$NAME/html"
 
 . /etc/wptt/php/php-cli-domain-config $NAME
 
-plugins_active=$(/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp plugin list --fields=name --status=active --path=$path2 --allow-root 2>/dev/null | sed '1d')
+plugins_active=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp plugin list --fields=name --status=active --path=$path2 --allow-root 2>/dev/null | sed '1d')
 
 if [[ $plugins_active = '' ]]; then
   plugins_active=$(ls -At $path2/wp-content/plugins)
@@ -123,6 +123,7 @@ _runing "$don_dep WP object cache"
 sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp cache flush --path=$path2 --allow-root >/dev/null 2>&1
 _rundone "$don_dep WP object cache"
 
+#bắt đầu xoá cache redis/valkey/keydb
 if systemctl is-active --quiet valkey 2>/dev/null; then
   ACTIVE_CACHE="Valkey"
   CLI_TOOL="valkey-cli"
@@ -153,6 +154,8 @@ if [ "$($PING_CMD 2>/dev/null)" = "PONG" ]; then
   _rundone "$don_dep cache $ACTIVE_CACHE"
 fi
 
+#két thức xoá cache redis/valkey/keydb
+
 if $(cat /etc/*release | grep -q "Ubuntu"); then
   duong_path_memcached_config="/etc/memcached.conf"
 else
@@ -172,8 +175,18 @@ fi
 pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/litespeed-cache"
 if [[ $(echo $plugins_active | grep 'litespeed-cache') ]]; then
   _runing "$don_dep cache LiteSpeed cache"
-  sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-purge all --path=$path2 --allow-root >/dev/null 2>&1
-  _rundone "$don_dep cache LiteSpeed cache"
+  # 1. Chạy lệnh WP-CLI và hứng toàn bộ kết quả (Cả lỗi và thành công) vào biến purge_output
+  # litespeed nó xoá bằng http API chứ nó không xoá thẳng trong ổ cứng
+  purge_output=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-purge all --path=$path2 --allow-root 2>&1)
+  # 2. Kiểm tra xem kết quả có chứa chuỗi báo lỗi DNS không
+  if [[ "$purge_output" == *"cURL error 6"* ]] || [[ "$purge_output" == *"Could not resolve host"* ]]; then
+    _runloi "$don_dep cache LiteSpeed cache"
+    echo "   -> Lỗi DNS: Tên miền '$NAME' chưa được trỏ IP về máy chủ! này"
+    echo ""
+  else
+    # Nếu mọi thứ êm đẹp
+    _rundone "$don_dep cache LiteSpeed cache"
+  fi
 
   if [[ -f /usr/local/lsws/$NAME/html/wp-content/object-cache.php ]]; then
     if [[ $(cat /usr/local/lsws/$NAME/html/wp-content/object-cache.php | grep 'litespeed_conf') ]]; then
