@@ -176,30 +176,38 @@ max_allowed_packet = 64M
 
   #setup vhost update
   #setup vhost update
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+  # 1. Bật nullglob và quét trực tiếp (Zero-forking, không dùng ls)
+  shopt -s nullglob
+  for filepath in /etc/wptt/vhost/.*.conf; do
 
-      if [[ -f "$VHOST_CONF" ]]; then
-        # 1. Cập nhật các thông số bên trong block extprocessor
-        # Lưu ý: Tìm từ khóa /extprocessor/ cho đến dấu đóng ngoặc /\}/
+    # Bỏ qua nếu là file rác hoặc thư mục trống
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-        # Số lượng worker và kết nối
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$VHOST_CONF"
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$VHOST_CONF"
+    # Gọt chuỗi lấy tên miền trực tiếp trên RAM (Nhanh gấp 100 lần sed)
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-        # Giới hạn RAM (Soft/Hard Limit)
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/g" "$VHOST_CONF"
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/g" "$VHOST_CONF"
+    VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
 
-        # Giới hạn Tiến trình (Tránh lỗi 503 hoặc quá tải CPU)
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/g" "$VHOST_CONF"
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/g" "$VHOST_CONF"
+    # Kiểm tra tên miền hợp lệ và file cấu hình tồn tại
+    if [[ "$domain" == ?*.?* ]] && [[ -f "$VHOST_CONF" ]]; then
 
-      fi
-    done
-  fi
+      # 1. Số lượng worker và kết nối (LSPHP Children)
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
+
+      # 2. Giới hạn dung lượng RAM (Tránh 1 web ăn sập RAM của VPS)
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
+
+      # 3. Giới hạn số lượng tiến trình (Ngăn chặn tấn công DDoS làm cạn kiệt tài nguyên / Lỗi 503)
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
+
+    fi
+  done
+  shopt -u nullglob
   #end setup vhost update
   #end setup vhost update
 
