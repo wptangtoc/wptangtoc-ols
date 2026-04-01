@@ -175,17 +175,42 @@ fi
 pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/litespeed-cache"
 if [[ $(echo $plugins_active | grep 'litespeed-cache') ]]; then
   _runing "$don_dep cache LiteSpeed cache"
-  # 1. Chạy lệnh WP-CLI và hứng toàn bộ kết quả (Cả lỗi và thành công) vào biến purge_output
-  # litespeed nó xoá bằng http API chứ nó không xoá thẳng trong ổ cứng
-  purge_output=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-purge all --path=$path2 --allow-root 2>&1)
-  # 2. Kiểm tra xem kết quả có chứa chuỗi báo lỗi DNS không
-  if [[ "$purge_output" == *"cURL error 6"* ]] || [[ "$purge_output" == *"Could not resolve host"* ]]; then
-    _runloi "$don_dep cache LiteSpeed cache"
-    echo "   -> Lỗi DNS: Tên miền '$NAME' chưa được trỏ IP về máy chủ! này"
-    echo ""
+
+  # 1. Chạy lệnh WP-CLI lần 1 (Thử bằng DNS thật)
+  purge_output=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-purge all --path="$path2" --allow-root 2>&1)
+
+  # 2. Bắt lỗi DNS (Tên miền chưa trỏ IP)
+  if [[ "$purge_output" == *"cURL error 6"* ]] || [[ "$purge_output" == *"Could not resolve host"* ]] || [[ "$purge_output" == *"cURL error 7"* ]]; then
+
+    # --- KÍCH HOẠT KỊCH BẢN FAKE DNS ---
+
+    # Thêm tên miền vào /etc/hosts trỏ về localhost.
+    # Mẹo: Gắn thêm tag '#wptt_dns_local_clear_cache' ở cuối để lát nữa xóa cho an toàn và chính xác.
+    echo "127.0.0.1 $NAME www.$NAME #wptt_dns_local_clear_cache" >>/etc/hosts
+
+    # Chạy lại lệnh purge lần 2 (Lúc này cURL sẽ nhìn thấy IP 127.0.0.1 và bỏ qua DNS public)
+    purge_output_retry=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp litespeed-purge all --path="$path2" --allow-root 2>&1)
+
+    # DỌN DẸP: Xóa ngay dòng Fake DNS vừa thêm vào để trả lại nguyên trạng cho hệ thống
+    sed -i '/#wptt_dns_local_clear_cache/d' /etc/hosts
+
+    # Kiểm tra kết quả lần 2
+    if [[ "$purge_output_retry" == *"cURL error"* ]] || [[ "$purge_output_retry" == *"Could not resolve"* ]]; then
+      _runloi "$don_dep cache LiteSpeed cache"
+      echo "   -> Lỗi: Đã dùng DNS ảo (localhost) nhưng vẫn không thể xóa cache cho '$NAME'."
+      echo "   -> Chi tiết: $purge_output_retry"
+    else
+      _rundone "$don_dep cache LiteSpeed cache"
+    fi
+
   else
-    # Nếu mọi thứ êm đẹp
-    _rundone "$don_dep cache LiteSpeed cache"
+    # Nếu lần 1 không dính lỗi DNS, ta check xem có báo Success (Thành công) không
+    if [[ "$purge_output" == *"Success"* ]] || [ $? -eq 0 ]; then
+      _rundone "$don_dep cache LiteSpeed cache"
+    else
+      _runloi "$don_dep cache LiteSpeed cache"
+      echo "   -> Lỗi không xác định: $purge_output"
+    fi
   fi
 
   if [[ -f /usr/local/lsws/$NAME/html/wp-content/object-cache.php ]]; then
