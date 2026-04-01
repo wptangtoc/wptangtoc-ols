@@ -118,14 +118,84 @@ echo "Xoá chuyển hướng website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/l
 
 if [[ $xoa_ma_nguon = 'y' || $xoa_ma_nguon = '' ]]; then
   #xoá chuyển hướng toàn bộ mã nguồn
+  # 1. Đọc chính xác User_name_vhost từ file config (vhost_bk hoặc vhost)
+  if [[ -f "/etc/wptt/vhost_bk/.$NAME.conf" ]]; then
+    . "/etc/wptt/vhost_bk/.$NAME.conf"
+  elif [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
+    . "/etc/wptt/vhost/.$NAME.conf"
+  fi
+
   rm -rf /usr/local/lsws/conf/vhosts/"$NAME"
-  User_name_vhost=${NAME//[-._]/wp}
-  userdel "$User_name_vhost"
+  # User_name_vhost=${NAME//[-._]/wp}
+  if [[ -n "$User_name_vhost" ]]; then
+    usermod -R wptangtoc-ols "$User_name_vhost" >/dev/null 2>&1
+    userdel -f "$User_name_vhost" >/dev/null 2>&1
+  fi
+
+  #dự phòng người dùng thiết lập login riêng xong rồi thiết lập chuyển hướng xong rồi chuyển hướng, fix tương thích
+  JAIL_PATH="/usr/local/lsws/$NAME"
+  if [[ -d "$JAIL_PATH/etc/wptt" ]]; then
+    # Rút toàn bộ ống nối WPTangToc
+    umount -fl "$JAIL_PATH/etc/wptt" 2>/dev/null || true
+    umount -fl "$JAIL_PATH/etc/wptt-user" 2>/dev/null || true
+    umount -fl "$JAIL_PATH/usr/bin/wptangtoc-user" 2>/dev/null || true
+    umount -fl "$JAIL_PATH/.cron_spool" 2>/dev/null || true
+
+    # Rút ống nối Database
+    REAL_SOCK=$(mariadb -N -e "select @@socket;" 2>/dev/null || echo "/var/lib/mysql/mysql.sock")
+    umount -fl "$JAIL_PATH$REAL_SOCK" 2>/dev/null || true
+  fi
+  # =================================================================
+
+  # 2. Xé toạc Namespace (nsfs) của OpenLiteSpeed (Sát thủ 503 - khi xoá xong rồi add lại)
+  OLS_NS_PATH="/var/lsns/*/$NAME"
+  if ls $OLS_NS_PATH 1>/dev/null 2>&1; then
+    # Bắn bỏ tiến trình đang kẹt trong namespace
+    fuser -k -9 $OLS_NS_PATH/* $OLS_NS_PATH/*/mnt 2>/dev/null || true
+    # Tháo ống từ trong ra ngoài
+    umount -fl $OLS_NS_PATH/*/mnt 2>/dev/null || true
+    umount -fl $OLS_NS_PATH/* 2>/dev/null || true
+    rm -rf /var/lsns/*/$NAME 2>/dev/null || true
+  fi
+  #end dự phòng người dùng thiết lập login riêng xong rồi thiết lập chuyển hướng xong rồi chuyển hướng, fix tương thích
+
   rm -rf /home/$NAME
   rm -rf /wptangtoc-ols/"$NAME"
   rm -rf /usr/local/lsws/"$NAME"
-  sed -i "/$NAME $NAME/d" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/$NAME/,+10d" /usr/local/lsws/conf/httpd_config.conf
+
+  sed -i "/${NAME} ${NAME}/d" /usr/local/lsws/conf/httpd_config.conf
+  sed -i -e '/^virtualhost '$NAME'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+
+  #xoá database của website chuyển hướng
+  if [[ -n $DB_User_web ]] && [[ -n $DB_Name_web ]]; then #yêu cầu DB_Name_web và DB_User_web phải có giá trị
+    TEMP_CNF_ROOT=$(mktemp)
+    chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+    cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+host=localhost
+max_allowed_packet=1G
+default-character-set=utf8mb4
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet=1G
+EOF
+
+    #kill user, để trong một số trường hợp bị kẹt sql, sẽ kill database rồi xoá website
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "KILL USER ${DB_User_web}"
+
+    #xoá database
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE ${DB_Name_web}"
+
+    #xoá user database
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER '${DB_User_web}'@'localhost'"
+    rm -f $TEMP_CNF_ROOT
+  fi
+  #kết thúc xoá db chuyển hướng
+
 else
   #xoá chuyển hướng htaccess only
   sed -i -e '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/d' /usr/local/lsws/$NAME/html/.htaccess
