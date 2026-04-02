@@ -14,60 +14,65 @@ function huong_dan() {
 }
 
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
+[[ $ngon_ngu == '' ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$bao_mat => $bat/$tat Lock Down 	                                      |"
-echo "========================================================================="
-echo ""
+echo -e "\n========================================================================="
+echo -e "|$bao_mat => $bat/$tat Lock Down                                         |"
+echo -e "=========================================================================\n"
 
 RED='\033[0;31m'
 NC='\033[0m'
 xanh='\033[0;32m'
 
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  echo
-  echo "Kiểm tra website Lock Down:"
-  echo "========================================================================="
-  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-    domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+# --- 1. KIỂM TRA TRẠNG THÁI TOÀN BỘ WEBSITE (SIÊU TỐC) ---
+echo "Kiểm tra trạng thái Lock Down:"
+echo "========================================================================="
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+  domain="${filepath##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
+
+  if [[ "$domain" == ?*.?* ]]; then
     path="/usr/local/lsws/$domain/html"
-    i=1
     if [[ -d "$path" ]]; then
       unset lock_down
-      . /etc/wptt/vhost/.$domain.conf
-      if [[ $lock_down = '' ]]; then
-        hoatdong="Đang được tắt"
-        echo -e "Hệ thống kiểm tra website $domain tính năng :${RED} $hoatdong${NC}"
+      . "$filepath"
+      if [[ -z "$lock_down" ]]; then
+        echo -e "Hệ thống kiểm tra website $domain: ${RED}Đang tắt${NC}"
       else
-        hoatdong="Đang được bật"
-        echo -e "Hệ thống kiểm tra website $domain tính năng :${xanh} $hoatdong${NC}"
+        echo -e "Hệ thống kiểm tra website $domain: ${xanh}Đang bật${NC}"
       fi
     fi
-  done
-  echo "========================================================================="
-  echo
-fi
+  fi
+done
+echo "========================================================================="
+echo ""
 
 . /etc/wptt/tenmien
-echo ""
-echo ""
-echo "$lua_chon_website_ban_muon $bat/$tat Lock Down: "
-echo ""
+echo -e "\n$lua_chon_website_ban_muon $bat/$tat Lock Down: \n"
 lua_chon_NAME
+
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+
+path_conf="/etc/wptt/vhost/.$NAME.conf"
+[[ ! -f "$path_conf" ]] && {
+  echoDo "Tên miền không tồn tại trên hệ thống này"
+  sleep 2
+  exec /etc/wptt/wptt-wordpress-main 1
+}
 
 . /etc/wptt/echo-color
 unset lock_down
-. /etc/wptt/vhost/.$NAME.conf
+path_conf="/etc/wptt/vhost/.$NAME.conf"
+. "$path_conf"
+path="/usr/local/lsws/$NAME/html"
 
-if [[ $lock_down = '' ]]; then
-  echo "Xác nhận bạn muốn bật tính năng Lock Down cho website ${NAME}? "
+# --- 2. BẬT TÍNH NĂNG LOCK DOWN ---
+if [[ -z "$lock_down" ]]; then
+  echo "Xác nhận bạn muốn BẬT tính năng Lock Down cho website ${NAME}? "
   prompt="Nhập lựa chọn của bạn [1-2]: "
   dongy="n"
   options=("Đồng ý" "Không đồng ý")
@@ -78,83 +83,65 @@ if [[ $lock_down = '' ]]; then
       dongy="y"
       break
       ;;
-
     2)
       dongy="n"
       break
       ;;
-
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
     *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
       break
       ;;
     esac
   done
 
-  if [[ $dongy = 'y' ]]; then
+  if [[ "$dongy" == 'y' ]]; then
+    UI_STRING="Kích hoạt tính năng Lock Down cho $NAME"
+    _runing "$UI_STRING"
 
-    _runing "Kích hoạt tính năng lock down"
-    find /usr/local/lsws/"$NAME"/html -type f -print0 | xargs -0 chmod 404
-    find /usr/local/lsws/"$NAME"/html -type d -print0 | xargs -0 chmod 515
+    # Lockdown toàn bộ (Khóa chốt chặn)
+    find "$path" -type f -print0 | xargs -0 chmod 404
+    find "$path" -type d -print0 | xargs -0 chmod 515
 
-    if [[ -f /usr/local/lsws/"$NAME"/html/wp-content/preload-wptangtoc-url.txt ]]; then
-      chmod 644 /usr/local/lsws/"$NAME"/html/wp-content/preload-wptangtoc-url.txt
+    # Trả quyền các file Preload của WPTangToc
+    [[ -f "$path/wp-content/preload-wptangtoc-url.txt" ]] && chmod 644 "$path/wp-content/preload-wptangtoc-url.txt"
+    [[ -f "$path/wp-content/preload-wptangtoc.json" ]] && chmod 644 "$path/wp-content/preload-wptangtoc.json"
+
+    # Trả quyền thư mục Uploads
+    if [[ -d "$path/wp-content/uploads" ]]; then
+      find "$path/wp-content/uploads" -type d -print0 | xargs -0 chmod 755
+      # Khóa toàn bộ index.php trong Uploads (Fix mảng khoảng trắng)
+      find "$path/wp-content/uploads" -type f -name "index.php" -print0 | xargs -0 chmod 404
     fi
 
-    if [[ -f /usr/local/lsws/"$NAME"/html/wp-content/preload-wptangtoc.json ]]; then
-      chmod 644 /usr/local/lsws/"$NAME"/html/wp-content/preload-wptangtoc.json
+    # Gọi module Chattr
+    . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on
+
+    # Tương thích Plugin Cache & Litespeed
+    for bypass_dir in "cache" "litespeed"; do
+      if [[ -d "$path/wp-content/$bypass_dir" ]]; then
+        find "$path/wp-content/$bypass_dir" -type d -print0 | xargs -0 chmod 755
+        find "$path/wp-content/$bypass_dir" -type f -print0 | xargs -0 chmod 644
+      fi
+    done
+
+    # Tương thích SQLite
+    if [[ -d "$path/wp-content/database" ]]; then
+      chmod 755 "$path/wp-content/database"
+      find "$path/wp-content/database" -type f -print0 | xargs -0 chmod 644
+      find "$path/wp-content/database" -type f -name ".ht.sqlite*" -print0 | xargs -0 chmod 644
     fi
 
-    #lockdown vẫn có thể uploads được dữ liệu wp-uploads
-    if [[ -d /usr/local/lsws/"$NAME"/html/wp-content/uploads ]]; then
-      find /usr/local/lsws/"$NAME"/html/wp-content/uploads -type d -print0 | xargs -0 chmod 755
-    fi
+    # Cập nhật config
+    sed -i '/lock_down/d' "$path_conf"
+    echo "lock_down=1" >>"$path_conf"
 
-    #chmod những file index.php trong thư mục uploads, bảo mật tránh bị chèn uploads php vào thư mục uploads
-    unset uploads_dir_all
-    uploads_dir_all=($(find /usr/local/lsws/$NAME/html/wp-content/uploads -type f -name "index.php"))
-    if [[ $uploads_dir_all ]]; then
-      for pull_index_path in ${uploads_dir_all[@]}; do
-        chmod 404 $pull_index_path
-      done
-    fi
-
-    . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME on
-
-    #lockdown tương thích với một số plugin cache
-    if [[ -d /usr/local/lsws/"$NAME"/html/wp-content/cache ]]; then
-      find /usr/local/lsws/"$NAME"/html/wp-content/cache -type d -print0 | xargs -0 chmod 755
-      find /usr/local/lsws/"$NAME"/html/wp-content/cache -type f -print0 | xargs -0 chmod 644
-    fi
-
-    #lockdown tương thích với một số plugin litespeed một số người dùng sử dụng tính năng nén gộp css,js
-    if [[ -d /usr/local/lsws/"$NAME"/html/wp-content/litespeed ]]; then
-      find /usr/local/lsws/"$NAME"/html/wp-content/litespeed -type d -print0 | xargs -0 chmod 755
-      find /usr/local/lsws/"$NAME"/html/wp-content/litespeed -type f -print0 | xargs -0 chmod 644
-    fi
-
-    # Trả lại quyền sống sót cho SQLite sau khi Lockdown, tương thích người dùng SQLite
-    if [[ -d /usr/local/lsws/"$NAME"/html/wp-content/database ]]; then
-      chmod 755 /usr/local/lsws/"$NAME"/html/wp-content/database
-      find /usr/local/lsws/"$NAME"/html/wp-content/database -type f -print0 | xargs -0 chmod 644
-      find /usr/local/lsws/"$NAME"/html/wp-content/database -type f -name ".ht.sqlite*" -print0 | xargs -0 chmod 644
-    fi
-
-    if [[ -f /etc/wptt/vhost/.$NAME.conf ]]; then
-      sed -i '/lock_down/d' /etc/wptt/vhost/.$NAME.conf
-      echo "lock_down=1" >>/etc/wptt/vhost/.$NAME.conf
-    fi
-    _rundone "Kích hoạt tính năng lock down"
-
+    _rundone "$UI_STRING"
   fi
 fi
 
-if [[ $lock_down ]]; then
-  echo "Xác nhận bạn muốn tắt tính năng Lock Down cho website ${NAME}? "
+# --- 3. TẮT TÍNH NĂNG LOCK DOWN ---
+if [[ -n "$lock_down" ]]; then
+  echo "Xác nhận bạn muốn TẮT tính năng Lock Down cho website ${NAME}? "
   prompt="Nhập lựa chọn của bạn [1-2]: "
   dongy="n"
   options=("Đồng ý" "Không đồng ý")
@@ -165,39 +152,30 @@ if [[ $lock_down ]]; then
       dongy="y"
       break
       ;;
-
     2)
       dongy="n"
       break
       ;;
-
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
     *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
       break
       ;;
     esac
   done
 
-  if [[ $dongy = 'y' ]]; then
-    _runing "Tắt tính năng lock down"
+  if [[ "$dongy" == 'y' ]]; then
+    UI_STRING="Tắt tính năng Lock Down cho $NAME"
+    _runing "$UI_STRING"
 
-    . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME off
+    . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off
 
-    find /usr/local/lsws/"$NAME"/html -type f -print0 | xargs -0 chmod 644
-    find /usr/local/lsws/"$NAME"/html -type d -print0 | xargs -0 chmod 755
+    find "$path" -type f -print0 | xargs -0 chmod 644
+    find "$path" -type d -print0 | xargs -0 chmod 755
 
-    if [[ -f /etc/wptt/vhost/.$NAME.conf ]]; then
-      sed -i '/lock_down/d' /etc/wptt/vhost/.$NAME.conf
-    fi
-    _rundone "Tắt tính năng lock down"
+    sed -i '/lock_down/d' "$path_conf"
+
+    _rundone "$UI_STRING"
   fi
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-bao-mat-main 1
-fi
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1

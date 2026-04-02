@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   Tính năng Xóa SSL trả phí là quá trình gỡ bỏ một chứng chỉ SSL/TLS thương mại [mà bạn đã mua từ các nhà cung cấp như DigiCert, Sectigo, Comodo, v.v.] khỏi máy chủ web cho một tên miền cụ thể. Việc này thường đi kèm với việc vô hiệu hóa cấu hình HTTPS liên quan đến chứng chỉ đó, có thể khiến website quay lại sử dụng HTTP hoặc chuyển sang một chứng chỉ SSL khác.
@@ -19,41 +19,80 @@ function huong_dan() {
   Sau khi xóa, website sẽ không còn sử dụng chứng chỉ SSL trả phí đó nữa. Nếu không có chứng chỉ nào khác thay thế, kết nối HTTPS sẽ thất bại.
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý SSL => Xóa trả phí paid                                        |"
-echo "========================================================================="
+echo -e "\n========================================================================="
+echo -e "|Quản lý SSL => Xóa trả phí paid                                        |"
+echo -e "=========================================================================\n"
 
 . /etc/wptt/.wptt.conf
-. /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lựa chọn website muốn xóa SSL trả phí (HTTPS): "
-echo ""
+. /etc/wptt/echo-color
+
+echo -e "\nLựa chọn website muốn xóa SSL trả phí (HTTPS): \n"
+
+# --- GHI ĐÈ HÀM LỰA CHỌN TÊN MIỀN (CHỈ LỌC SSL TRẢ PHÍ) ---
+function lua_chon_NAME() {
+  NAME=""
+  selects=()
+
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* ]]; then
+      if [[ -d "/usr/local/lsws/$domain/ssl" ]]; then
+        selects+=("$domain")
+      fi
+    fi
+  done
+
+  if [[ -d "/etc/wptt/chuyen-huong" ]]; then
+    for filepath in /etc/wptt/chuyen-huong/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+      if [[ "$domain" == ?*.?* ]]; then
+        if [[ -d "/usr/local/lsws/$domain/ssl" ]]; then
+          selects+=("$domain")
+        fi
+      fi
+    done
+  fi
+
+  if [[ ${#selects[@]} -gt 0 ]]; then
+    PS3="$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) "
+    select opt in "${selects[@]}"; do
+      NAME=$opt
+      break
+    done
+  else
+    clear
+    echoDo "Không có domain nào trên hệ thống đang sử dụng SSL trả phí (/ssl/)."
+    sleep 2
+    exec /etc/wptt/wptt-ssl-main 1
+  fi
+}
+
 lua_chon_NAME
 
-. /etc/wptt/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
-fi
+# --- CHỐT CHẶN THOÁT HIỂM BẮT BUỘC ---
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-ssl-main 1
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
+[[ ! -f "$pathcheck" ]] && {
   clear
   echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 3
+  sleep 2
   exec /etc/wptt/wptt-ssl-main 1
-  exit
+}
+
+if [[ ! -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  echoDo "Website $NAME chưa thiết lập SSL trả phí (Không tìm thấy thư mục /ssl/)"
+  sleep 2
+  exec /etc/wptt/wptt-ssl-main 1
 fi
 
-if [[ ! -d /usr/local/lsws/"$NAME"/ssl ]]; then
-  echo "website $NAME chưa thiết lập SSL trả phí"
-  exec /etc/wptt/wptt-ssl-main 1
-fi
-
-echo "Xác nhận bạn muốn xóa SSL trả phí cho website $NAME"
+echo "Xác nhận bạn muốn xóa SSL trả phí cho website $NAME?"
 prompt="Nhập lựa chọn của bạn [1-2]: "
 dongy="n"
 options=("Đồng ý" "Không đồng ý")
@@ -64,44 +103,68 @@ select opt in "${options[@]}"; do
     dongy="y"
     break
     ;;
-
   2)
     dongy="n"
     break
     ;;
-
-  $((${#options[@]} + 1)))
-    printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-    break
-    ;;
   *)
-    printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+    printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
     break
     ;;
   esac
 done
 
-if [[ $dongy != 'y' ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
+[[ "$dongy" != 'y' ]] && exec /etc/wptt/wptt-ssl-main 1
+
+UI_STRING="Hủy kích hoạt SSL trả phí website $NAME"
+_runing "$UI_STRING"
+
+# --- 1. SSL FALLBACK (XỬ LÝ CHUẨN TỰ KÝ VÀ LETS ENCRYPT) ---
+if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" ]]; then
+  ssl_type="letsencrypt"
+  ssl_key="/etc/letsencrypt/live/$NAME/privkey.pem"
+  ssl_cert="/etc/letsencrypt/live/$NAME/cert.pem"
+  ssl_ca="/etc/letsencrypt/live/$NAME/chain.pem"
+else
+  ssl_type="self-signed"
+  mkdir -p "/etc/wptt-ssl-tu-ky/$NAME"
+  cd "/etc/wptt-ssl-tu-ky/$NAME" || exit
+  openssl req -new -newkey rsa:2048 -nodes -keyout "$NAME.key" -out "$NAME.csr" -subj "/C=VN/ST=Hanoi/L=Hanoi/O=WPTangToc OLS/OU=IT Department/CN=$NAME/emailAddress=admin@example.com" >/dev/null 2>&1
+  openssl x509 -req -in "$NAME.csr" -signkey "$NAME.key" -out "cert.crt" -days 3650 >/dev/null 2>&1
+
+  ssl_key="/etc/wptt-ssl-tu-ky/$NAME/$NAME.key"
+  ssl_cert="/etc/wptt-ssl-tu-ky/$NAME/cert.crt"
 fi
 
-_runing "Hủy kích hoạt SSL trả phí website $NAME"
+# --- 2. ÁP DỤNG CẤU HÌNH SSL MỚI CHO HTTPD (Nếu là Web Chính) ---
+if [[ "$NAME" == "$Website_chinh" ]]; then
+  if [[ -f /usr/local/lsws/conf/httpd_config.conf ]]; then
+    # Luôn xóa sạch 3 dòng cũ
+    sed -i "/keyFile/d" /usr/local/lsws/conf/httpd_config.conf
+    sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
+    sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
 
-if [[ "$NAME" = "$Website_chinh" ]]; then
-  sed -i "/keyFile/d" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a keyFile              \/etc\/letsencrypt\/live\/$NAME\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a certFile             \/etc\/letsencrypt\/live\/$NAME\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a CACertFile           \/etc\/letsencrypt\/live\/$NAME\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
+    # Thêm Key và Cert
+    sed -i "/https/a \    keyFile                $ssl_key" /usr/local/lsws/conf/httpd_config.conf
+    sed -i "/https/a \    certFile               $ssl_cert" /usr/local/lsws/conf/httpd_config.conf
+
+    # Chỉ thêm CACertFile nếu là Let's Encrypt
+    if [[ "$ssl_type" == "letsencrypt" ]]; then
+      sed -i "/https/a \    CACertFile             $ssl_ca" /usr/local/lsws/conf/httpd_config.conf
+    fi
+  fi
 fi
 
-sed -i -e '/^vhssl /,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-echo "vhssl  {
-  keyFile                 /etc/letsencrypt/live/$NAME/privkey.pem
-  certFile                /etc/letsencrypt/live/$NAME/cert.pem
+# --- 3. ÁP DỤNG CẤU HÌNH SSL MỚI CHO VHOST ---
+if [[ -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" ]]; then
+  sed -i -e '/^vhssl /,/^}$/d' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+
+  if [[ "$ssl_type" == "letsencrypt" ]]; then
+    echo "vhssl  {
+  keyFile                 $ssl_key
+  certFile                $ssl_cert
   certChain               0
-  CACertFile              /etc/letsencrypt/live/$NAME/chain.pem
+  CACertFile              $ssl_ca
   sslProtocol             24
   renegProtection         1
   sslSessionCache         1
@@ -109,29 +172,41 @@ echo "vhssl  {
   enableSpdy              15
   enableQuic              1
 }
-
-" >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
-if [[ -d /usr/local/lsws/"$NAME"/ssl ]]; then
-  rm -rf /usr/local/lsws/"$NAME"/ssl
-fi
-
-path2="/usr/local/lsws/$NAME/html/.htaccess"
-grepwww=$(grep -c 'RewriteCond %{HTTP_HOST} ^www' $path2)
-grepssl=$(grep -c 'RewriteCond %{HTTPS} !=on' $path2)
-
-if [[ "$grepssl" != "0" ]]; then
-  if [[ "$grepwww" = "0" ]]; then
-    sed -i '/RewriteCond %{HTTPS} !=on/,+1d' $path2
+" >>"/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
   else
-    sed -i '/RewriteCond %{HTTP_HOST} ^www/,+3d' $path2
+    echo "vhssl  {
+  keyFile                 $ssl_key
+  certFile                $ssl_cert
+  certChain               0
+  sslProtocol             24
+  renegProtection         1
+  sslSessionCache         1
+  sslSessionTickets       1
+  enableSpdy              15
+  enableQuic              1
+}
+" >>"/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
   fi
 fi
 
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-_rundone "Hủy kích hoạt SSL trả phí website $NAME"
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
+# --- 4. XÓA THƯ MỤC SSL TRẢ PHÍ CŨ ---
+if [[ -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  rm -rf "/usr/local/lsws/$NAME/ssl"
 fi
+
+# --- 5. XÓA RULE CHUYỂN HƯỚNG TRONG HTACCESS (CHUẨN WPTANGTOC) ---
+path2="/usr/local/lsws/$NAME/html/.htaccess"
+if [[ -f "$path2" ]]; then
+  sed -i -e '/^#begin-chuyen-huong-http-to-https-wptangtoc-ols/,/^#end-chuyen-huong-http-to-https-wptangtoc-ols$/d' "$path2" 2>/dev/null
+  sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' "$path2" 2>/dev/null
+  sed -i -e '/^#begin-chuyen-huong-non-www-to-www-wptangtoc-ols/,/^#end-chuyen-huong-non-www-to-www-wptangtoc-ols$/d' "$path2" 2>/dev/null
+fi
+
+# Reload OLS không gây downtime
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+_rundone "$UI_STRING"
+
+echo "Xóa cài đặt ssl trả phí website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
