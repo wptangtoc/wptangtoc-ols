@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   WPTangToc OLS có tính năng Renew thiết lập lại chuyển hướng HTTP to HTTPS, thì đây là một chức năng quan trọng giúp bạn kiểm tra, sửa chữa và áp dụng lại một cách dứt khoát quy tắc chuyển hướng toàn bộ truy cập từ giao thức http:// không an toàn sang https:// an toàn cho website của bạn.
@@ -22,166 +22,138 @@ function huong_dan() {
 . /etc/wptt/echo-color
 NAME=$1
 
-if [[ $NAME = "98" ]]; then
-  NAME=""
-fi
+[[ "$NAME" == "98" ]] && NAME=""
 
-if [[ $NAME = "" ]]; then
-  echo ""
-  echo ""
-  echo ""
-  echo "========================================================================="
+if [[ -z "$NAME" ]]; then
+  echo -e "\n========================================================================="
   echo "|Quản lý SSL => Renew chuyển hướng HTTP TO HTTPS                        |"
-  echo "========================================================================="
+  echo -e "=========================================================================\n"
   . /etc/wptt/tenmien-them-lua-chon-tat-ca-website
-  echo ""
-  echo ""
-  echo "Lựa chọn website renew chuyển hướng (HTTPS): "
-  echo ""
+  echo -e "\nLựa chọn website renew chuyển hướng (HTTPS): \n"
   lua_chon_NAME
 fi
 
-if [[ $NAME = 'Tất cả website' ]]; then
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      path="/usr/local/lsws/$domain/html"
-      i=1
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ -d "$path" ]]; then
-          if [[ ! -f "/etc/letsencrypt/live/$domain/cert.pem" && ! -f "/etc/letsencrypt/live/www.$domain/cert.pem" && ! -d "/usr/local/lsws/$domain/ssl" ]]; then
-            continue
-          fi
-          _runing "Renew chuyển hướng SSL $domain"
-          (/etc/wptt/ssl/wptt-renew-chuyen-huong $domain >/dev/null 2>&1)
-          _rundone "Renew chuyển hướng SSL $domain"
-        fi
-      fi
-    done
-  fi
+# --- CHỐT CHẶN THOÁT HIỂM BẮT BUỘC ---
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-ssl-main 1
 
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-ssl-main 1
-  fi
-  return 2>/dev/null
+# --- KHỐI TẤT CẢ WEBSITE (SIÊU TỐC) ---
+if [[ "$NAME" == 'Tất cả website' ]]; then
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
+      path="/usr/local/lsws/$domain/html"
+      if [[ -d "$path" ]]; then
+        # Kiểm tra chứng chỉ SSL hoặc Cloudflare
+        if [[ ! -f "/etc/letsencrypt/live/$domain/cert.pem" && ! -f "/etc/letsencrypt/live/www.$domain/cert.pem" && ! -d "/usr/local/lsws/$domain/ssl" ]]; then
+          continue
+        fi
+
+        UI_STRING="Renew chuyển hướng SSL $domain"
+        _runing "$UI_STRING"
+        (/etc/wptt/ssl/wptt-renew-chuyen-huong "$domain" >/dev/null 2>&1)
+        _rundone "$UI_STRING"
+      fi
+    fi
+  done
+
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
   exit
 fi
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
-fi
-
-path="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$path" && ! -f /etc/wptt/chuyen-huong/.$NAME.conf ]]; then
+path_conf="/etc/wptt/vhost/.$NAME.conf"
+[[ ! -f "$path_conf" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]] && {
   clear
   echoDo "$ten_mien_nay_khong_ton_tai_tren_he_thong"
-  sleep 3
+  sleep 2
   exec /etc/wptt/wptt-ssl-main 1
-  return 2>/dev/null
-  exit
-fi
+}
 
-#curl -Is https://$NAME | grep -q 'cloudflare kiểm tra xem ssl có để chế độ flexbile không?
-if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -f "/etc/letsencrypt/live/www.$NAME/cert.pem" && ! -d "/usr/local/lsws/$NAME/ssl" && ! $(curl -Is https://$NAME | grep 'cloudflare') ]]; then
-  echoDo "website $NAME bạn chưa được cài đặt chứng chỉ SSL"
-  return 2>/dev/null
-  exit
-fi
-
-_runing "Cấu hình renew chuyển hướng"
-
-. /etc/wptt/php/php-cli-domain-config $NAME
-if [[ -f /usr/local/lsws/$NAME/html/wp-config.php ]]; then
-  giatuanwww=$(/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option get home --path=/usr/local/lsws/$NAME/html --allow-root 2>/dev/null | grep 'www.')
-  if [[ $giatuanwww ]]; then
-    /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option update home "https://www.$NAME" --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
-    /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option update siteurl "https://www.$NAME" --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
-  else
-    /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option update home "https://$NAME" --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
-    /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option update siteurl "https://$NAME" --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
+# Kiểm tra xem có SSL không (Bao gồm check siêu tốc Cloudflare)
+if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -f "/etc/letsencrypt/live/www.$NAME/cert.pem" && ! -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  if ! curl -sI -m 5 "https://$NAME" 2>/dev/null | grep -qi 'cloudflare'; then
+    echoDo "Website $NAME bạn chưa được cài đặt chứng chỉ SSL"
+    exit 1
   fi
 fi
 
-checkdns=$(host $NAME | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-if [[ "$checkdns" = "" ]]; then
-  checkdns=$(nslookup $NAME | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+UI_STRING="Cấu hình renew chuyển hướng website $NAME"
+_runing "$UI_STRING"
+
+# --- 1. UPDATE URL WORDPRESS ---
+. /etc/wptt/php/php-cli-domain-config $NAME
+. /etc/wptt/vhost/.$NAME.conf
+
+if [[ -f "/usr/local/lsws/$NAME/html/wp-config.php" ]]; then
+  WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+  giatuanwww=$($WP_EXEC option get home --path="/usr/local/lsws/$NAME/html" 2>/dev/null | grep 'www.')
+  if [[ -n "$giatuanwww" ]]; then
+    $WP_EXEC option update home "https://www.$NAME" --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+    $WP_EXEC option update siteurl "https://www.$NAME" --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+  else
+    $WP_EXEC option update home "https://$NAME" --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+    $WP_EXEC option update siteurl "https://$NAME" --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+  fi
 fi
 
-ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+# --- 2. CHECK DNS ---
+checkdns=$(host "$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+[[ -z "$checkdns" ]] && checkdns=$(nslookup "$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 
-checkdnscname=$(host www.$NAME | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-if [[ "$checkdnscname" = "" ]]; then
-  checkdnscname=$(nslookup www.$NAME | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-fi
+checkdnscname=$(host "www.$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+[[ -z "$checkdnscname" ]] && checkdnscname=$(nslookup "www.$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 
+# --- 3. CẤU HÌNH HTACCESS ---
 path2="/usr/local/lsws/$NAME/html/.htaccess"
 
-grepwww=$(grep -c 'RewriteCond %{HTTP_HOST} ^www' $path2)
-grepwww2=$(grep -c 'RewriteCond %{HTTP_HOST} !^www' $path2)
-grepssl=$(grep -c 'RewriteCond %{HTTPS}' $path2)
+# Xóa các rules chuyển hướng cũ của WPTangToc
+sed -i -e '/^#begin-chuyen-huong-http-to-https-wptangtoc-ols/,/^#end-chuyen-huong-http-to-https-wptangtoc-ols$/d' "$path2" 2>/dev/null
+sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' "$path2" 2>/dev/null
+sed -i -e '/^#begin-chuyen-huong-non-www-to-www-wptangtoc-ols/,/^#end-chuyen-huong-non-www-to-www-wptangtoc-ols$/d' "$path2" 2>/dev/null
 
-#xóa chuyển hướng http to https
-#sed -i '/RewriteCond %{HTTPS} !=on/,+1d' "$path2"
-sed -i -e '/^#begin-chuyen-huong-http-to-https-wptangtoc-ols/,/^#end-chuyen-huong-http-to-https-wptangtoc-ols$/d' /usr/local/lsws/$NAME/html/.htaccess
-# if [[ ! -f /etc/wptt/chuyen-huong/.$NAME.conf ]];then #tương thích không thực thi lệnh này với website chuyển hướng
-#xóa chuyển hướng www to non-www
-sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' /usr/local/lsws/$NAME/html/.htaccess
-# sed -i '/RewriteCond %{HTTP_HOST} ^www/,+1d' "$path2"
-#xóa chuyển hướng non-www to www
-sed -i -e '/^#begin-chuyen-huong-non-www-to-www-wptangtoc-ols/,/^#end-chuyen-huong-non-www-to-www-wptangtoc-ols$/d' /usr/local/lsws/$NAME/html/.htaccess
-# sed -i '/RewriteCond %{HTTP_HOST} ^'$NAME' /,+1d' "$path2"
-# fi
-#end xóa chuyển hướng http to https
-
-#chuyển hướng http to https
+# Thêm rule HTTP -> HTTPS
 sed -i '1 i #begin-chuyen-huong-http-to-https-wptangtoc-ols\
 RewriteCond %{HTTPS} !=on\
 RewriteRule ^(.*)$ https:\/\/%{HTTP_HOST}%{REQUEST_URI} [L,R=301,NE]\
-#end-chuyen-huong-http-to-https-wptangtoc-ols' /usr/local/lsws/"$NAME"/html/.htaccess
+#end-chuyen-huong-http-to-https-wptangtoc-ols' "$path2"
 
-if [[ "$checkdns" = "$checkdnscname" ]]; then
-  #chuyển hướng www to non www
+# Thêm rule WWW -> non-WWW (Nếu DNS trỏ giống nhau)
+if [[ "$checkdns" == "$checkdnscname" && -n "$checkdns" ]]; then
   sed -i '1 i #begin-chuyen-huong-www-to-non-www-wptangtoc-ols\
 RewriteCond %{HTTP_HOST} ^www.'$NAME' [NC]\
 RewriteRule ^(.*)$ https:\/\/'$NAME'/$1 [L,R=301,NC]\
-#end-chuyen-huong-www-to-non-www-wptangtoc-ols' /usr/local/lsws/"$NAME"/html/.htaccess
+#end-chuyen-huong-www-to-non-www-wptangtoc-ols' "$path2"
 fi
 
-if [[ ! -f /etc/wptt/chuyen-huong/.$NAME.conf ]]; then #tương thích không thực thi lệnh này với website chuyển hướng
-  if [[ -f /usr/local/lsws/$NAME/html/wp-config.php ]]; then
-    . /etc/wptt/php/php-cli-domain-config $NAME
+# Chuyển đổi WWW nếu option của WordPress chứa WWW
+if [[ ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]]; then
+  if [[ -f "/usr/local/lsws/$NAME/html/wp-config.php" ]]; then
+    giatuanwww=$($WP_EXEC option get home --path="/usr/local/lsws/$NAME/html" 2>/dev/null | grep "$NAME" | grep 'www.')
+    if [[ -n "$giatuanwww" && "$checkdns" == "$checkdnscname" ]]; then
 
-    giatuanwww=$(/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option get home --path=/usr/local/lsws/$NAME/html --allow-root 2>/dev/null | grep $NAME | grep 'www.')
+      # Xóa rule WWW -> non-WWW vừa nãy (nếu có)
+      sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' "$path2"
 
-    if [[ $giatuanwww ]]; then
-      if [[ "$checkdns" = "$checkdnscname" ]]; then
-
-        #xóa chuyển hướng www to non www
-        sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' /usr/local/lsws/$NAME/html/.htaccess
-        # sed -i '/RewriteCond %{HTTP_HOST} ^www/,+1d' "$path2"
-
-        #chuyển hướng non-www to www
-        # sed -i '1 i RewriteCond %{HTTP_HOST} ^'$NAME' [NC]\
-        # RewriteRule ^(.*)$ https:\/\/www.'$NAME'/$1 [L,R=301,NC]' /usr/local/lsws/"$NAME"/html/.htaccess
-        #chuyển hướng non-www to www
-        sed -i '1 i #begin-chuyen-huong-non-www-to-www-wptangtoc-ols\
+      # Thêm rule non-WWW -> WWW
+      sed -i '1 i #begin-chuyen-huong-non-www-to-www-wptangtoc-ols\
 RewriteCond %{HTTP_HOST} ^'$NAME' [NC]\
 RewriteRule ^(.*)$ https:\/\/www\.'$NAME'/$1 [L,R=301,NC]\
-#end-chuyen-huong-non-www-to-www-wptangtoc-ols' /usr/local/lsws/"$NAME"/html/.htaccess
-
-      fi
+#end-chuyen-huong-non-www-to-www-wptangtoc-ols' "$path2"
     fi
-
   fi
 fi
 
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+# --- 4. HOÀN TẤT ---
+# Reload Litespeed không làm downtime
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
 echo "Cấu hình renew chuyển hướng website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-_rundone "Cấu hình renew chuyển hướng"
+_rundone "$UI_STRING"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
-fi
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1

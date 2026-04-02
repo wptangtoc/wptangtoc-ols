@@ -1,25 +1,41 @@
 #!/bin/bash
+
+# --- 1. SETUP BIẾN & MÔI TRƯỜNG ---
 NAME=$1
-PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' #bien moi truong full day du
-if [[ -z $(wp option get home --allow-root --path=/usr/local/lsws/$NAME/html 2>/dev/null) ]]; then
-  echo "chua hoan tat"
-  exit
+[[ -z "$NAME" ]] && exit 1
+
+PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
+
+# --- 2. KIỂM TRA TRẠNG THÁI CÀI ĐẶT ---
+# Sử dụng đường dẫn tuyệt đối cho WP-CLI để tránh lỗi môi trường Cron
+if [[ -z $(/usr/local/bin/wp option get home --allow-root --path="/usr/local/lsws/$NAME/html" 2>/dev/null) ]]; then
+  echo "Chưa hoàn tất cài đặt WordPress cho $NAME. Đang chờ..."
+  exit 0
 fi
 
-#delete bảo mật login thiết lập wp-admin/install.php
-sed -i -e '/^realm '${NAME}wordpress-setup'/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-rm -f /usr/local/lsws/"$NAME"/passwd/.mk-setup
+# --- 3. GỠ BỎ KHIÊN BẢO VỆ HTTP AUTH ---
+vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 
-rm -f /etc/cron.d/wp-delete-setup-bao-mat-$NAME.cron
+if [[ -f "$vhost_conf" ]]; then
+  # Xóa Realm và Context của LiteSpeed (Đã dùng ngoặc kép "" an toàn)
+  sed -i -e "/^realm ${NAME}wordpress-setup/,/^}$/d" "$vhost_conf"
+  sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' "$vhost_conf"
+fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+# Xóa file chứa user/password
+rm -f "/usr/local/lsws/$NAME/passwd/.mk-setup"
+
+# --- 4. TỰ HỦY CRONJOB DỌN DẸP ---
+rm -f "/etc/cron.d/wp-delete-setup-bao-mat-$NAME.cron"
+
+# Xử lý riêng cho đặc thù của Ubuntu (đổi dấu chấm thành gạch dưới)
+if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
   NAME_CRON_ubuntu=${NAME//[.]/_}
-  rm -f /etc/cron.d/wp-delete-setup-bao-mat-${NAME_CRON_ubuntu}_cron
-  systemctl restart cron.service
+  rm -f "/etc/cron.d/wp-delete-setup-bao-mat-${NAME_CRON_ubuntu}_cron"
+  systemctl reload cron >/dev/null 2>&1
 else
-  systemctl restart crond.service
+  systemctl reload crond >/dev/null 2>&1
 fi
 
-#sử dụng reload thay vì restart, reload để nạp lại cấu hình nhưng không downtime, còn restart thì có thể downtime một chút nhưng không đáng kể
+# Sử dụng reload để nạp lại cấu hình (Zero Downtime)
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
