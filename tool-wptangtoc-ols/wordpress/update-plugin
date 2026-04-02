@@ -41,6 +41,11 @@ if [[ $NAME = "" ]]; then
   lua_chon_NAME
 fi
 
+# =====================================================================
+# KHỐI 1: CẬP NHẬT TẤT CẢ WEBSITE (Mass Update)
+# Vì là chế độ chạy hàng loạt, hệ thống vẫn sẽ ngầm cập nhật TẤT CẢ
+# plugin cho mọi website để tiết kiệm thời gian cho quản trị viên.
+# =====================================================================
 if [[ $NAME = 'Tất cả website' ]]; then
   if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
@@ -49,11 +54,11 @@ if [[ $NAME = 'Tất cả website' ]]; then
       path="/usr/local/lsws/$domain/html/wp-config.php"
       path_html="/usr/local/lsws/$domain/html"
       i=1
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
         if [[ -f "$path" ]]; then
-          _runing "$cap_nhat plugins website $domain"
+          _runing "Đang cập nhật TẤT CẢ plugins cho website $domain..."
           (/etc/wptt/wordpress/update-plugin $domain >/dev/null 2>&1)
-          _rundone "$cap_nhat plugins website $domain"
+          _rundone "Cập nhật TẤT CẢ plugins cho website $domain"
         fi
       fi
     done
@@ -82,28 +87,93 @@ fi
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
-  echo "He thong xac nhan ban chua kich hoat su dung WordPress"
+  echo "Hệ thống xác nhận bạn chưa kích hoạt sử dụng WordPress"
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
   exit
 fi
 
+# =====================================================================
+# KHỐI 2: CẬP NHẬT CHO 1 WEBSITE CỤ THỂ (Interactive Menu)
+# =====================================================================
 path="/usr/local/lsws/$NAME/html"
-echo "Thông tin cập nhật plugin website $NAME"
 . /etc/wptt/php/php-cli-domain-config $NAME
-
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp plugin list --fields=name,version,update_version --allow-root --path=$path 2>/dev/null
 . /etc/wptt/vhost/.$NAME.conf
 
-_runing "$cap_nhat plugins website $domain"
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp plugin update --all --path="$path" --allow-root >/dev/null 2>&1
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp language plugin update --all --path="$path" --allow-root >/dev/null 2>&1
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp cache flush --path="$path" --allow-root >/dev/null 2>&1
-. /etc/wptt/wptt-phanquyen $NAME >/dev/null 2>&1
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp rewrite flush --path="$path" --allow-root >/dev/null 2>&1
-_rundone "$cap_nhat plugins website $domain"
+# Khai báo biến WP_EXEC để tái sử dụng, đồng bộ 100% quyền User và phiên bản PHP
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
-check_menu_wptangtoc_active=$1
+echo "Đang quét các bản cập nhật plugin cho website $NAME..."
+# Chỉ lấy danh sách plugin CÓ BẢN CẬP NHẬT MỚI
+plugins_need_update=$($WP_EXEC plugin list --update=available --field=name --allow-root --path="$path" 2>/dev/null)
+
+if [[ -z "$plugins_need_update" ]]; then
+  echo ""
+  echoDone "Tuyệt vời! Tất cả plugin trên website $NAME đều đã ở phiên bản mới nhất."
+  echo ""
+else
+  echo ""
+  echo "========================================================================="
+  echo " Danh sách plugin CẦN CẬP NHẬT trên website $NAME:"
+  echo "-------------------------------------------------------------------------"
+  $WP_EXEC plugin list --update=available --fields=name,version,update_version --allow-root --path="$path" 2>/dev/null
+  echo "========================================================================="
+  echo ""
+
+  # Chuyển danh sách plugin thành mảng Bash
+  selects=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && selects+=("$line")
+  done <<<"$plugins_need_update"
+
+  # Tạo Menu Lựa chọn động
+  options=("Cập nhật TẤT CẢ plugin đang có bản mới")
+  for p in "${selects[@]}"; do
+    options+=("Chỉ cập nhật plugin: $p")
+  done
+
+  PS3="
+$(tput setab 0)-//- Chọn thao tác bạn muốn thực hiện (1-$((${#options[@]}))) [0=Thoát]:$(tput sgr0) "
+
+  plugin_target=""
+  select opt in "${options[@]}"; do
+    if [[ "$REPLY" == "0" ]]; then
+      exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+    elif [[ "$REPLY" == "1" ]]; then
+      plugin_target="all"
+      break
+    elif [[ "$REPLY" -gt 1 && "$REPLY" -le ${#options[@]} ]]; then
+      idx=$((REPLY - 2))
+      plugin_target="${selects[$idx]}"
+      break
+    else
+      echoDo "Lựa chọn không hợp lệ, vui lòng chọn lại."
+    fi
+  done
+
+  echo ""
+  # Xử lý cập nhật dựa trên lựa chọn
+  if [[ "$plugin_target" == "all" ]]; then
+    _runing "Đang cập nhật TẤT CẢ plugins cho website $NAME"
+    $WP_EXEC plugin update --all --path="$path" --allow-root >/dev/null 2>&1
+    $WP_EXEC language plugin update --all --path="$path" --allow-root >/dev/null 2>&1
+    _rundone "Cập nhật TẤT CẢ plugins cho website $NAME"
+  else
+    _runing "Đang cập nhật riêng plugin: $plugin_target"
+    $WP_EXEC plugin update "$plugin_target" --path="$path" --allow-root >/dev/null 2>&1
+    $WP_EXEC language plugin update "$plugin_target" --path="$path" --allow-root >/dev/null 2>&1
+    _rundone "Cập nhật riêng plugin: $plugin_target"
+  fi
+
+  # Dọn dẹp hậu kỳ
+  _runing "Dọn dẹp cache và phân quyền sau cập nhật"
+  $WP_EXEC cache flush --path="$path" --allow-root >/dev/null 2>&1
+  . /etc/wptt/wptt-phanquyen $NAME >/dev/null 2>&1
+  $WP_EXEC rewrite flush --path="$path" --allow-root >/dev/null 2>&1
+  _rundone "Dọn dẹp cache và phân quyền sau cập nhật"
+fi
+
+check_menu_wptangtoc_active=${1:-}
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
 fi
