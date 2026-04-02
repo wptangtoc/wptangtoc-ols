@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   Gia hạn chứng chỉ SSL letsencrypt thủ công. Tính năng này sẽ gia hạn xin cấp gia hạn chứng chỉ ssl letsencrypt
@@ -10,109 +10,176 @@ function huong_dan() {
   Có thể vì lý do lỗi nào đó bạn không thể gia hạn được, có thể sử dụng tính năng này
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý SSL => Gia hạn thủ công chứng chỉ SSL FREE letsencrypt         |"
-echo "========================================================================="
-echo ""
-echo ""
-. /etc/wptt/echo-color
+echo -e "\n========================================================================="
+echo -e "|Quản lý SSL => Gia hạn thủ công chứng chỉ SSL FREE letsencrypt         |"
+echo -e "=========================================================================\n"
 
+. /etc/wptt/echo-color
 . /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-ssl-main 1"
 fi
 
 wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị lỗi, Không cho phép gia hạn thủ công SSL letsencrypt"
 
-selects=()
-for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-  NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-  if [[ -f /etc/letsencrypt/live/$NAME/cert.pem ]]; then
-    selects+=("$NAME")
+# --- Quét Server xem có SSL Let's Encrypt nào không ---
+ssl_count=0
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+  domain="${filepath##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
+
+  if [[ "$domain" == ?*.?* ]]; then
+    if [[ -f "/etc/letsencrypt/live/$domain/cert.pem" ]]; then
+      ((ssl_count++))
+    fi
   fi
 done
 
-if [[ $selects = '' ]]; then
-  echo "Tất cả domain trên hệ thống không có domain nào sử dụng SSL letsencrypt"
+if [[ "$ssl_count" -eq 0 ]]; then
+  echoDo "Tất cả domain trên hệ thống không có domain nào sử dụng SSL letsencrypt"
+  sleep 2
   exec /etc/wptt/wptt-ssl-main 1
 fi
 
-echo "Bạn muốn gia hạn chứng chỉssl Free letsencrypt?: "
+echo "Bạn muốn gia hạn chứng chỉ SSL Free letsencrypt trên toàn Server?: "
 prompt="Nhập lựa chọn của bạn [1-2]: "
-renew="n"
+dongy="n"
 options=("Đồng ý" "Không đồng ý")
 PS3="$prompt"
 select opt in "${options[@]}"; do
   case "$REPLY" in
   1)
-    renew="y"
+    dongy="y"
     break
     ;;
-
   2)
-    renew="n"
-    break
-    ;;
-
-  $((${#options[@]} + 1)))
-    printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+    dongy="n"
     break
     ;;
   *)
-    printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
+    printf "\nBạn nhập sai, hệ thống sẽ chọn là không đồng ý\n"
     break
     ;;
   esac
 done
 
-if [[ "$renew" = "y" ]]; then
-  _runing "Gia hạn chứng chỉ SSL Free letsencrypt"
+if [[ "$dongy" == "y" ]]; then
+
+  # --- MODULE AUTO-HEAL: KIỂM TRA & CÀI ĐẶT CERTBOT NẾU BỊ MẤT ---
+  if [[ ! -f /usr/bin/certbot ]]; then
+    UI_HEAL="Hệ thống phát hiện thiếu Certbot, đang tự động cài đặt lại"
+    _runing "$UI_HEAL"
+
+    if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+      apt-get update >/dev/null 2>&1
+      apt-get install -y certbot >/dev/null 2>&1
+    else
+      dnf install epel-release -y >/dev/null 2>&1
+      dnf install certbot -y >/dev/null 2>&1
+    fi
+
+    if [[ ! -f /usr/bin/certbot ]]; then
+      _runloi "$UI_HEAL"
+      echoDo "Lỗi nghiêm trọng: Không thể cài đặt tự động Certbot. Vui lòng kiểm tra lại Network/Repo."
+      sleep 3
+      exec /etc/wptt/wptt-ssl-main 1
+    else
+      _rundone "$UI_HEAL"
+    fi
+  fi
+  # -------------------------------------------------------------
+
+  UI_STRING="Gia hạn chứng chỉ SSL Free letsencrypt"
+  _runing "$UI_STRING"
 
   echo "Gia hạn thủ công SSL free letsencrypt all: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
+  # --- 1. MỞ CỬA TƯỜNG LỬA (Tránh Block IP Let's Encrypt) ---
   if [[ -f /etc/csf/csf.conf ]]; then
-    countryblicklist=$(grep "CC_ALLOW_FILTER =\ " /etc/csf/csf.conf | awk 'NR==1 {print $3}' | cut -d \" -f 2)
-    if [ "$countryblicklist" ]; then
+    countryblicklist=$(awk -F'"' '/^CC_ALLOW_FILTER/ {print $2}' /etc/csf/csf.conf)
+    if [[ -n "$countryblicklist" ]]; then
       csf -x >/dev/null 2>&1
     fi
   fi
 
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
+  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
     path_nftables_config="/etc/nftables.conf"
   else
     path_nftables_config="/etc/sysconfig/nftables.conf"
   fi
 
-  if [[ -f $path_nftables_config ]]; then
-    if [[ $(cat $path_nftables_config | grep 'ipvietnam') ]]; then
+  if [[ -f "$path_nftables_config" ]]; then
+    if grep -q 'ipvietnam' "$path_nftables_config"; then
       systemctl stop nftables >/dev/null 2>&1
     fi
   fi
 
-  /usr/bin/certbot renew --quiet
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  # --- 2. THỰC THI GIA HẠN VÀ LƯU LOG ---
+  # Bỏ cờ --quiet, thu thập toàn bộ luồng báo cáo của Certbot vào biến
+  certbot_output=$(/usr/bin/certbot renew 2>&1)
 
-  if [[ -f /etc/csf/csf.conf ]]; then
-    countryblicklist=$(grep "CC_ALLOW_FILTER =\ " /etc/csf/csf.conf | awk 'NR==1 {print $3}' | cut -d \" -f 2)
-    if [ "$countryblicklist" ]; then
-      csf -e >/dev/null 2>&1
-    fi
+  # --- 3. ĐÓNG LẠI TƯỜNG LỬA (Khôi phục trạng thái ban đầu) ---
+  if [[ -f /etc/csf/csf.conf && -n "$countryblicklist" ]]; then
+    csf -e >/dev/null 2>&1
   fi
 
-  if [[ -f $path_nftables_config ]]; then
-    if [[ $(cat $path_nftables_config | grep 'ipvietnam') ]]; then
+  if [[ -f "$path_nftables_config" ]]; then
+    if grep -q 'ipvietnam' "$path_nftables_config"; then
       systemctl start nftables >/dev/null 2>&1
     fi
   fi
 
-  _rundone "Gia hạn chứng chỉ SSL Free letsencrypt"
+  # Reload OpenLiteSpeed không làm sập tiến trình hiện tại
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+  _rundone "$UI_STRING"
+
+  # --- 4. HIỂN THỊ BÁO CÁO UX ---
+  echo -e "\n\033[1;36m=========================================================================\033[0m"
+  echo -e "\033[1;33m                BÁO CÁO GIA HẠN CERTBOT (SSL LETSENCRYPT)                \033[0m"
+  echo -e "\033[1;36m=========================================================================\033[0m\n"
+
+  # 4.1 Lọc danh sách gia hạn THÀNH CÔNG
+  if echo "$certbot_output" | grep -qiE "Congratulations|succeeded"; then
+    echo -e "\033[1;32m[+] GIA HẠN THÀNH CÔNG:\033[0m"
+    echo "$certbot_output" | grep -i "succeeded" -A 50 | grep "/live/" | while read -r line; do
+      domain_success=$(echo "$line" | grep -oP '/live/\K[^/]+')
+      [[ -n "$domain_success" ]] && printf "    ✔️  %-35s | \033[1;32mThành công\033[0m\n" "$domain_success"
+    done
+    echo ""
+  fi
+
+  # 4.2 Lọc danh sách BỎ QUA (Chưa tới hạn)
+  if echo "$certbot_output" | grep -q "not yet due for renewal"; then
+    echo -e "\033[1;34m[*] CHƯA TỚI HẠN (BỎ QUA):\033[0m"
+    echo "$certbot_output" | grep "expires on" | while read -r line; do
+      domain_skip=$(echo "$line" | grep -oP '/live/\K[^/]+')
+      date_exp=$(echo "$line" | grep -oP 'expires on \K[0-9-]+')
+      [[ -n "$domain_skip" ]] && printf "    ⏳ %-35s | Hết hạn: \033[1;33m%s\033[0m\n" "$domain_skip" "$date_exp"
+    done
+    echo ""
+  fi
+
+  # 4.3 Lọc danh sách LỖI (Failed)
+  if echo "$certbot_output" | grep -qiE "failed|error"; then
+    echo -e "\033[1;31m[-] GIA HẠN THẤT BẠI (CẦN KIỂM TRA):\033[0m"
+    echo -e "    ❌ Phát hiện lỗi trong quá trình gia hạn."
+    echo -e "    👉 Vui lòng xem chi tiết tại: \033[4;37m/var/log/letsencrypt/letsencrypt.log\033[0m"
+    echo ""
+  fi
+
+  # 4.4 Chốt tóm tắt
+  if echo "$certbot_output" | grep -q "No renewals were attempted"; then
+    echo -e "    \033[3;37m(Không có hành động gia hạn nào được thực thi trong lần chạy này)\033[0m"
+  fi
+
+  echo -e "\033[1;36m=========================================================================\033[0m\n"
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
-fi
+# --- FOOTER SIÊU TỐC ---
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
