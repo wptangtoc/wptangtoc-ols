@@ -1,70 +1,117 @@
 #!/bin/bash
 
 function huong_dan() {
-  Đây là tính năng xem real time hoạt động của litespeed webserver
+  Tính năng Giám sát Real-time [Thời gian thực] là công cụ đo lường sức khỏe của website đang chạy trên OpenLiteSpeed ngay tại thời điểm hiện tại.
+
+  Mục đích chính:
+  * Theo dõi lưu lượng: Biết được website đang có bao nhiêu người truy cập [RPS - Yêu cầu/giây].
+  * Kiểm tra hiệu quả Cache: Xem tỷ lệ Cache Hits để biết WPTangToc OLS đang phục vụ nội dung tĩnh tốt đến mức nào, giảm tải cho CPU/RAM ra sao.
+  * Phát hiện bất thường: Nếu thông số 'Đang xử lý [Active]' tăng đột biến, rất có thể website đang bị tấn công DDoS hoặc quá tải Database.
+
+  Các thông số hiển thị:
+  - Đang xử lý [Active]: Số lượng kết nối đang được CPU/PHP xử lý trực tiếp.
+  - Yêu cầu/giây [RPS]: Tổng số lượt truy cập [hit] dội vào máy chủ trong 1 giây.
+  - Cache chung/riêng: Số lượng truy cập được phục vụ thẳng từ bộ nhớ đệm [siêu nhanh].
+  - File tĩnh/giây: Số lượng hình ảnh, CSS, JS được tải.
+
+  Hướng dẫn: Màn hình sẽ tự động làm mới sau mỗi 1 giây. Để thoát khỏi chế độ giám sát, bạn chỉ cần nhấn phím '0' hoặc tổ hợp phím Ctrl+C.
 }
 
-clear
+. /etc/wptt/.wptt.conf
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/echo-color
 
 check_menu_wptangtoc_active=$1
 
-if [[ $check_menu_wptangtoc_active = "99" ]]; then
-  echo "========================================================================="
-  echo "|Quan ly Logs => Real-Time Statistics Monitoring                        |"
-  echo "========================================================================="
-else
-  echo "========================================================================="
-  echo "|Quan ly Domain => Real-Time Statistics Monitoring                      |"
-  echo "========================================================================="
+. /etc/wptt/tenmien
+lua_chon_NAME
+
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  elif [[ $check_menu_wptangtoc_active = "99" ]]; then
+    exec /etc/wptt/wptt-logs-main 1
+  else
+    exec /usr/bin/wptangtoc 1
+  fi
 fi
 
-echo ""
+clear
+# Đổi tên domain cho gọn để xử lý grep
+domain="$NAME"
 
-has_domain=0
+# ==========================================================
+# TỐI ƯU UX: ẨN CON TRỎ CHUỘT
+tput civis
 
-# Vòng lặp thuần Bash trên RAM
-for filepath in /etc/wptt/vhost/.*.conf; do
-  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+# ĐẢM BẢO AN TOÀN: Bẫy phím Ctrl+C để hiện lại con trỏ chuột
+trap 'tput cnorm; break' SIGINT
+# ==========================================================
 
-  domain="${filepath##*/}"
-  domain="${domain%.conf}"
-  domain="${domain#.}"
+while true; do
+  # Đưa con trỏ về đầu màn hình [giảm nhấp nháy hơn clear]
+  tput cup 0 0
+  echo "========================================================================="
+  echo -e "  \e[1;35mGIÁM SÁT REAL-TIME WEBSITE:\e[0m \e[1;32m$domain\e[0m"
+  echo -e "  \e[1;37mThời gian:\e[0m $(date '+%H:%M:%S')"
+  echo "========================================================================="
 
-  path="/usr/local/lsws/$domain/html"
+  # Lấy dữ liệu từ file report của Litespeed
+  giatuan_raw=$(grep -h "^REQ_RATE \[$domain\]" /tmp/lshttpd/.rtreport* 2>/dev/null | head -n 1)
 
-  if [[ -d "$path" ]]; then
-    # Lấy dòng thông số thô
-    giatuan_raw=$(grep -h "^REQ_RATE \[$domain\]" /tmp/lshttpd/.rtreport* 2>/dev/null | head -n 1)
+  if [[ -n "$giatuan_raw" ]]; then
+    # Định dạng lại chuỗi trực quan
+    giatuan_display=$(echo "$giatuan_raw" | sed "s/REQ_RATE \[$domain\]: //" |
+      sed "s/REQ_PROCESSING/Đang xử lý [Active]/g" |
+      sed "s/REQ_PER_SEC/Yêu cầu\/giây [RPS]/g" |
+      sed "s/TOT_REQS/Tổng số yêu cầu/g" |
+      sed "s/PUB_CACHE_HITS_PER_SEC/Cache chung\/giây/g" |
+      sed "s/TOTAL_PUB_CACHE_HITS/Tổng Cache chung/g" |
+      sed "s/PRIVATE_CACHE_HITS_PER_SEC/Cache riêng\/giây/g" |
+      sed "s/TOTAL_PRIVATE_CACHE_HITS/Tổng Cache riêng/g" |
+      sed "s/STATIC_HITS_PER_SEC/File tĩnh\/giây/g" |
+      sed "s/TOTAL_STATIC_HITS/Tổng File tĩnh/g" |
+      sed "s/, /|/g")
 
-    if [[ -n "$giatuan_raw" ]]; then
-      # Lột xác bằng sed: Dịch sang tiếng Việt, ngắt dòng và tô màu
-      giatuan_vi=$(echo "$giatuan_raw" | sed \
-        -e "s/REQ_RATE \[$domain\]: //" \
-        -e 's/REQ_PROCESSING/\\e[33mĐang xử lý (Active)\\e[0m/g' \
-        -e 's/REQ_PER_SEC/\\e[32mYêu cầu\/giây (RPS)\\e[0m/g' \
-        -e 's/TOT_REQS/\\e[36mTổng số yêu cầu\\e[0m/g' \
-        -e 's/PUB_CACHE_HITS_PER_SEC/\\e[32mCache chung\/giây\\e[0m/g' \
-        -e 's/TOTAL_PUB_CACHE_HITS/\\e[36mTổng Cache chung\\e[0m/g' \
-        -e 's/PRIVATE_CACHE_HITS_PER_SEC/\\e[32mCache riêng\/giây\\e[0m/g' \
-        -e 's/TOTAL_PRIVATE_CACHE_HITS/\\e[36mTổng Cache riêng\\e[0m/g' \
-        -e 's/STATIC_HITS_PER_SEC/\\e[32mFile tĩnh\/giây\\e[0m/g' \
-        -e 's/TOTAL_STATIC_HITS/\\e[36mTổng File tĩnh\\e[0m/g' \
-        -e 's/, /\n  - /g') # Biến dấu phẩy thành dấu xuống dòng và gạch đầu dòng
+    # In từng dòng với màu sắc chuẩn
+    IFS='|' read -ra ADDR <<<"$giatuan_display"
+    for i in "${ADDR[@]}"; do
+      if [[ $i == *"giây"* || $i == *"RPS"* ]]; then
+        echo -e "  - \e[32m$i\e[0m" # Màu xanh lá cho tốc độ
+      elif [[ $i == *"Tổng"* ]]; then
+        echo -e "  - \e[36m$i\e[0m" # Màu xanh lơ cho chỉ số tổng
+      elif [[ $i == *"Active"* ]]; then
+        echo -e "  - \e[33m$i\e[0m" # Màu vàng cho kết nối đang hoạt động
+      else
+        echo -e "  - $i"
+      fi
+    done
+  else
+    echo -e "  \e[1;31m[Chưa có dữ liệu truy cập cho tên miền này]\e[0m"
+  fi
 
-      echo "========================================================================="
-      echo -e "\\e[1;37mThông tin Real-time website:\\e[0m \\e[1;32m$domain\\e[0m"
-      echo "-------------------------------------------------------------------------"
-      echo -e "  - $giatuan_vi"
-      echo "========================================================================="
-    fi
+  # Dọn dẹp các dòng văn bản rác bên dưới do sự chênh lệch độ dài
+  tput ed
+
+  echo "========================================================================="
+  echo -e " \e[1;30mẤn phím\e[0m \e[1;31m0\e[0m \e[1;30mđể thoát về Menu\e[0m"
+  echo "========================================================================="
+
+  # Bắt phím bấm trong 1 giây để thực hiện realtime
+  read -t 1 -n 1 phim_bam
+  if [[ "$phim_bam" == "0" ]]; then
+    break
   fi
 done
 
-[[ $has_domain -eq 1 ]] && echo ""
+tput cnorm
 
-# Điều hướng quay lại menu bằng 1 cấu trúc kiểm tra duy nhất
+clear
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-domain-main 1
 elif [[ $check_menu_wptangtoc_active = "99" ]]; then
   exec /etc/wptt/wptt-logs-main 1
+else
+  exec /usr/bin/wptangtoc 1
 fi
