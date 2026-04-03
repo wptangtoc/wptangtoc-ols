@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng Format trắng database [hay Làm trắng/Xóa sạch cơ sở dữ liệu] là hành động xóa bỏ hoàn toàn tất cả các đối tượng [như bảng, view, stored procedure] và toàn bộ dữ liệu bên trong một cơ sở dữ liệu [database] hiện có, đưa nó về trạng thái trống rỗng như lúc mới được tạo.
@@ -13,59 +16,83 @@ function huong_dan() {
 
   LUÔN LUÔN SAO LƯU [BACKUP] TRƯỚC KHI THỰC HIỆN: Đây là điều bắt buộc. Hãy đảm bảo bạn có một bản sao lưu tin cậy trước khi tiến hành.
   Hãy thực hiện thao tác này với sự cẩn trọng tối đa và chỉ khi bạn hoàn toàn chắc chắn về việc mình đang làm.
-
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Format trắng database                       |"
-echo "========================================================================="
-. /etc/wptt/.wptt.conf
+echo -e "\n========================================================================="
+echo -e "| Quản lý Database => Format trắng Database (Wipe)                      |"
+echo -e "=========================================================================\n"
 
+. /etc/wptt/.wptt.conf
 . /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
+
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối không cho phép format database website."
 
 NAME=$1
-if [[ $NAME = '98' ]]; then
-  NAME=''
-fi
+[[ "$NAME" == '98' ]] && NAME=''
 
-if [[ $NAME = '' ]]; then
+if [[ -z "$NAME" ]]; then
   . /etc/wptt/tenmien
-  echo ""
-  echo ""
-  echo "Lựa chọn website bạn muốn xóa toàn bộ dữ liệu Database: "
-  echo ""
+  echo -e "\nLựa chọn website bạn muốn xóa toàn bộ dữ liệu Database:\n"
   lua_chon_NAME
 fi
 
 . /etc/wptt/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+
+# --- CHỐT CHẶN THOÁT HIỂM QUAY VỀ MENU ---
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-db-main 1
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
+[[ ! -f "$pathcheck" ]] && {
   clear
   echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 3
+  sleep 2
   exec /etc/wptt/wptt-db-main 1
-  exit
+}
+
+. "$pathcheck"
+
+# --- XÁC NHẬN BẢO MẬT: CHỈ HỎI KHI CHẠY THỦ CÔNG QUA MENU ---
+if [[ "${1:-}" == "98" || -z "${1:-}" ]]; then
+  echo -e "\n\033[1;31m⚠️ CẢNH BÁO NGUY HIỂM: Hành động này sẽ xóa SẠCH SÀNH SANH toàn bộ dữ liệu của website $NAME!\033[0m"
+  echo "Bạn có CHẮC CHẮN muốn Format trắng Database [$DB_Name_web] của website $NAME không?"
+  prompt="Nhập lựa chọn của bạn [1-2]: "
+  dongy="n"
+  options=("Đồng ý XÓA TOÀN BỘ" "KHÔNG đồng ý (Quay lại)")
+  PS3="$prompt"
+  select opt in "${options[@]}"; do
+    case "$REPLY" in
+    1)
+      dongy="y"
+      break
+      ;;
+    2)
+      dongy="n"
+      break
+      ;;
+    *)
+      printf "\nLựa chọn không hợp lệ, hệ thống tự động HỦY BỎ.\n"
+      break
+      ;;
+    esac
+  done
+else
+  # Kích hoạt chế độ Non-interactive (Auto Wipe) nếu truyền thẳng biến $NAME
+  dongy="y"
 fi
 
-_runing "Xóa toàn bộ dữ liệu database của website $NAME"
-. /etc/wptt/vhost/."$NAME".conf
-echo "Wipe format xoá dữ liệu database website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+if [[ "$dongy" == "y" ]]; then
+  UI_STRING="Format trắng toàn bộ dữ liệu database của website $NAME"
+  _runing "$UI_STRING"
+  echo "Wipe format xoá dữ liệu database website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
-cat >"$TEMP_CNF_ROOT" <<EOF
+  TEMP_CNF_ROOT=$(mktemp)
+  chmod 600 "$TEMP_CNF_ROOT"
+  cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
 password=${database_admin_password}
@@ -79,15 +106,23 @@ quote-names
 max_allowed_packet=1G
 EOF
 
-trap "rm -f $TEMP_CNF_ROOT" EXIT
+  # Bẫy an toàn xóa file Temp
+  trap "rm -f $TEMP_CNF_ROOT" EXIT
 
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE $DB_Name_web"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS $DB_Name_web"
+  # 1. Xóa Database (Lúc này quyền của User cũng bị MariaDB xóa theo)
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`$DB_Name_web\`;"
 
-rm -rf $TEMP_CNF_ROOT
-_rundone "Xóa toàn bộ dữ liệu database của website $NAME"
+  # 2. Tạo lại Database trắng
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE DATABASE IF NOT EXISTS \`$DB_Name_web\`;"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  # 3. Phục hồi quyền (Grant) cho User để website không bị lỗi Access Denied
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON \`$DB_Name_web\`.* TO '$DB_User_web'@'localhost';"
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES;"
+
+  rm -rf "$TEMP_CNF_ROOT"
+  _rundone "$UI_STRING"
+else
   exec /etc/wptt/wptt-db-main 1
 fi
+
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-db-main 1
