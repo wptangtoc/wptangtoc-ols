@@ -2,214 +2,184 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
-  Tính năng Kết nối database tài khoản database mà wptangtoc ols cung cấp kết nối với WordPress [qua file wp-config.php] chính là việc WordPress sử dụng tệp tin cấu hình wp-config.php để lưu trữ và truy xuất các thông tin quan trọng cần thiết để giao tiếp với cơ sở dữ liệu [database] MySQL hoặc MariaDB của nó.
-
-  Nói một cách đơn giản, wp-config.php hoạt động như một chìa khóa và địa chỉ giúp WordPress tìm và mở đúng kho chứa dữ liệu [database] của mình. Nếu không có thông tin này hoặc thông tin sai, website WordPress sẽ không thể hoạt động và thường hiển thị lỗi Error establishing a database connection.
+  Tính năng Kết nối database tự động giúp mã nguồn [WordPress, Laravel, Joomla...] kết nối với MariaDB một cách mượt mà thông qua việc tự động chỉnh sửa các tệp tin cấu hình [wp-config.php, .env, configuration.php].
 
   Mục Đích Chính
-  * Lưu trữ thông tin kết nối database: Đây là nơi WordPress cất giữ các chi tiết quan trọng như:
-  * DB_NAME: Tên của database.
-  * DB_USER: Tên người dùng [username] có quyền truy cập database đó.
-  * DB_PASSWORD: Mật khẩu của người dùng database.
-  * DB_HOST: Địa chỉ máy chủ database [thường là localhost].
-  Cho phép WordPress hoạt động: WordPress cần kết nối với database để lưu trữ và lấy ra mọi nội dung [bài viết, trang, bình luận, cài đặt, thông tin người dùng, v.v.].
-
+  * Lưu trữ thông tin kết nối database: Tự động tiêm DB_NAME, DB_USER, DB_PASSWORD, DB_HOST vào đúng chuẩn của từng loại mã nguồn.
+  * Hỗ trợ Đa Mã Nguồn: Không chỉ giới hạn ở WordPress, hệ thống tự động nhận diện và cấu hình cho Laravel và Joomla.
+  * Giảm thao tác thủ công: Ngăn chặn triệt để lỗi "Error establishing a database connection" do gõ sai pass/user.
 }
 
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Kết nối database với WordPress (wp-config.php)     |"
-echo "========================================================================="
-. /etc/wptt/.wptt.conf
+echo -e "\n========================================================================="
+echo -e "| Quản lý Database => Kết nối Database với Mã nguồn (WP, Laravel...)    |"
+echo -e "=========================================================================\n"
+
 . /etc/wptt/echo-color
 
 NAME=$1
-if [[ $NAME = '98' ]]; then
-  NAME=''
-fi
+[[ "$NAME" == '98' ]] && NAME=''
 
-if [[ $NAME = '' ]]; then
+if [[ -z "$NAME" ]]; then
   . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
-  echo ""
-  echo ""
-  echo "$nhap_lua_chon_website_cua_ban Kết nối database với WordPress (wp-config.php): "
-  echo ""
+  echo -e "\n$nhap_lua_chon_website_cua_ban Kết nối database với mã nguồn: \n"
   lua_chon_NAME
 fi
 
-if [[ $NAME = 'Tất cả website' ]]; then
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      path="/usr/local/lsws/$domain/html/wp-config.php"
+# ==============================================================================
+# HÀM TRUNG TÂM: TỰ ĐỘNG NHẬN DIỆN MÃ NGUỒN VÀ KẾT NỐI
+# ==============================================================================
+function thiet_lap_ket_noi_db() {
+  local target_dir="$1"
+  local db_name="$2"
+  local db_user="$3"
+  local db_pass="$4"
+  local domain_name="$5"
+
+  # Hàm "Tráng men" ký tự đặc biệt cho sed Regex
+  escape_sed() { printf '%s\n' "$1" | sed -e 's/[\/&]/\\&/g'; }
+  local SAFE_DB_NAME=$(escape_sed "$db_name")
+  local SAFE_DB_USER=$(escape_sed "$db_user")
+  local SAFE_DB_PASS=$(escape_sed "$db_pass")
+
+  # 1. NHẬN DIỆN WORDPRESS
+  if [[ -f "$target_dir/wp-config.php" ]]; then
+    local conf_file="$target_dir/wp-config.php"
+    [[ -n "$lock_down" ]] && chattr -i "$conf_file"
+
+    . /etc/wptt/php/php-cli-domain-config "$domain_name"
+    local WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+    if ! (
+      $WP_EXEC config set DB_HOST 'localhost' --type=constant --path="$target_dir" --quiet &&
+        $WP_EXEC config set DB_NAME "$db_name" --type=constant --path="$target_dir" --quiet &&
+        $WP_EXEC config set DB_USER "$db_user" --type=constant --path="$target_dir" --quiet &&
+        $WP_EXEC config set DB_PASSWORD "$db_pass" --type=constant --path="$target_dir" --quiet
+    ); then
+      sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_HOST['\"].*/define( 'DB_HOST', 'localhost' );/" "$conf_file"
+      sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_NAME['\"].*/define( 'DB_NAME', '$SAFE_DB_NAME' );/" "$conf_file"
+      sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_USER['\"].*/define( 'DB_USER', '$SAFE_DB_USER' );/" "$conf_file"
+      sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_PASSWORD['\"].*/define( 'DB_PASSWORD', '$SAFE_DB_PASS' );/" "$conf_file"
+    fi
+    $WP_EXEC rewrite flush --path="$target_dir" >/dev/null 2>&1
+    [[ -n "$lock_down" ]] && chattr +i "$conf_file"
+
+  # 2. NHẬN DIỆN LARAVEL
+  elif [[ -f "$target_dir/artisan" && -f "$target_dir/.env" ]]; then
+    local conf_file="$target_dir/.env"
+    [[ -n "$lock_down" ]] && chattr -i "$conf_file"
+
+    sed -i -E "s/^DB_HOST=.*/DB_HOST=127.0.0.1/" "$conf_file"
+    sed -i -E "s/^DB_DATABASE=.*/DB_DATABASE=$SAFE_DB_NAME/" "$conf_file"
+    sed -i -E "s/^DB_USERNAME=.*/DB_USERNAME=$SAFE_DB_USER/" "$conf_file"
+    sed -i -E "s/^DB_PASSWORD=.*/DB_PASSWORD=$SAFE_DB_PASS/" "$conf_file"
+
+    [[ -n "$lock_down" ]] && chattr +i "$conf_file"
+
+  # 3. NHẬN DIỆN JOOMLA
+  elif [[ -f "$target_dir/configuration.php" ]]; then
+    local conf_file="$target_dir/configuration.php"
+    [[ -n "$lock_down" ]] && chattr -i "$conf_file"
+
+    sed -i -E "s/^[[:space:]]*public[[:space:]]+\\$host[[:space:]]*=[[:space:]]*['\"].*['\"];/public \$host = 'localhost';/" "$conf_file"
+    sed -i -E "s/^[[:space:]]*public[[:space:]]+\\$db[[:space:]]*=[[:space:]]*['\"].*['\"];/public \$db = '$SAFE_DB_NAME';/" "$conf_file"
+    sed -i -E "s/^[[:space:]]*public[[:space:]]+\\$user[[:space:]]*=[[:space:]]*['\"].*['\"];/public \$user = '$SAFE_DB_USER';/" "$conf_file"
+    sed -i -E "s/^[[:space:]]*public[[:space:]]+\\$password[[:space:]]*=[[:space:]]*['\"].*['\"];/public \$password = '$SAFE_DB_PASS';/" "$conf_file"
+
+    [[ -n "$lock_down" ]] && chattr +i "$conf_file"
+
+  else
+    echo -e "\033[1;33m  -> Không tìm thấy mã nguồn tương thích (WP/Laravel/Joomla) tại: $target_dir\033[0m"
+  fi
+}
+# ==============================================================================
+
+# ==============================================================================
+# KHỐI TẤT CẢ WEBSITE
+# ==============================================================================
+if [[ "$NAME" == 'Tất cả website' ]]; then
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
       path_html="/usr/local/lsws/$domain/html"
-      i=1
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ -f "$path" ]]; then
-          . /etc/wptt/vhost/."$domain".conf
-          _runing "Thiết lập kết nối database với WordPress website $domain"
-          (/etc/wptt/db/wptt-ket-noi $domain >/dev/null 2>&1)
-          _rundone "Thiết lập kết nối database với WordPress website $domain"
-        fi
+      if [[ -d "$path_html" ]]; then
+        . "/etc/wptt/vhost/.$domain.conf"
+        _runing "Thiết lập kết nối database website $domain"
+        thiet_lap_ket_noi_db "$path_html" "$DB_Name_web" "$DB_User_web" "$DB_Password_web" "$domain" >/dev/null 2>&1
+        _rundone "Thiết lập kết nối database website $domain"
       fi
-    done
-  fi
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-  exit
-fi
-
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
-
-if [[ ! -f /etc/wptt/vhost/."$NAME".conf ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
-
-. /etc/wptt/vhost/."$NAME".conf
-
-_runing "Thiết lập kết nối database với WordPress"
-if [[ ! -f "/usr/local/lsws/$NAME/html/wp-config.php" ]]; then
-  _runloi "Thiết lập kết nối database với WordPress"
-  echo "Không xác định được file wp-config.php"
-  echo "Vui lòng kiểm tra lại mã nguồn của bạn"
-  exit
-fi
-
-wp_config_php_path="/usr/local/lsws/$NAME/html/wp-config.php"
-
-if [[ $lock_down ]]; then
-  chattr -i $wp_config_php_path
-fi
-
-path_wp_config="/usr/local/lsws/$NAME/html"
-file_wp_config="$path_wp_config/wp-config.php"
-
-# ==============================================================================
-# 1. THỬ DÙNG WP-CLI (PHƯƠNG ÁN CHÍNH)
-# Dùng toán tử && để chạy chuỗi lệnh. Nếu 1 lệnh lỗi, nó sẽ văng ra và chạy phương án 2
-# ==============================================================================
-if ! (
-  /usr/local/bin/wp config set DB_HOST 'localhost' --type=constant --allow-root --path="$path_wp_config" --quiet &&
-    /usr/local/bin/wp config set DB_NAME "$DB_Name_web" --type=constant --allow-root --path="$path_wp_config" --quiet &&
-    /usr/local/bin/wp config set DB_USER "$DB_User_web" --type=constant --allow-root --path="$path_wp_config" --quiet &&
-    /usr/local/bin/wp config set DB_PASSWORD "$DB_Password_web" --type=constant --allow-root --path="$path_wp_config" --quiet
-); then
-
-  # ==============================================================================
-  # 2. PHƯƠNG ÁN DỰ PHÒNG: DÙNG SED REGEX (KHI WP-CLI THẤT BẠI)
-  # ==============================================================================
-  if [[ -f "$file_wp_config" ]]; then
-
-    # Hàm con xử lý "Tráng men" biến số: Tránh gãy cú pháp sed khi Pass/User có chứa dấu / hoặc &
-    escape_sed() {
-      printf '%s\n' "$1" | sed -e 's/[\/&]/\\&/g'
-    }
-
-    SAFE_DB_NAME=$(escape_sed "$DB_Name_web")
-    SAFE_DB_USER=$(escape_sed "$DB_User_web")
-    SAFE_DB_PASS=$(escape_sed "$DB_Password_web")
-
-    # Quét và thay thế toàn bộ dòng (Hỗ trợ cả khoảng trắng thừa, nháy đơn/kép)
-    sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_HOST['\"].*/define( 'DB_HOST', 'localhost' );/" "$file_wp_config"
-    sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_NAME['\"].*/define( 'DB_NAME', '$SAFE_DB_NAME' );/" "$file_wp_config"
-    sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_USER['\"].*/define( 'DB_USER', '$SAFE_DB_USER' );/" "$file_wp_config"
-    sed -i -E "s/^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_PASSWORD['\"].*/define( 'DB_PASSWORD', '$SAFE_DB_PASS' );/" "$file_wp_config"
-
-  fi
-fi
-
-# wp config set DB_HOST 'localhost' --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-
-# # Cấu hình DB Name
-# wp config set DB_NAME "$DB_Name_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-
-# # Cấu hình DB User
-# wp config set DB_USER "$DB_User_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-
-# # Cấu hình DB Password
-# wp config set DB_PASSWORD "$DB_Password_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-
-# sed -i "/DB_NAME/s/\"/'/g" "$wp_config_php_path"
-# sed -i "/DB_HOST/s/\"/'/g" "$wp_config_php_path"
-# sed -i "/DB_USER/s/\"/'/g" "$wp_config_php_path"
-# sed -i "/DB_PASSWORD/s/\"/'/g" "$wp_config_php_path"
-
-# sed -i "/DB_HOST/s/'[^']*'/'localhost'/2" "$wp_config_php_path"
-# sed -i "/DB_NAME/s/'[^']*'/'$DB_Name_web'/2" "$wp_config_php_path"
-# sed -i "/DB_USER/s/'[^']*'/'$DB_User_web'/2" "$wp_config_php_path"
-# sed -i "/DB_PASSWORD/s/'[^']*'/'$DB_Password_web'/2" "$wp_config_php_path"
-
-#kết nối subfolder
-if [[ -d /etc/wptt/$NAME-wptt ]]; then
-  for entry in $(ls -A /etc/wptt/$NAME-wptt); do
-    subfolder=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    . /etc/wptt/$NAME-wptt/.${subfolder}.conf
-    subfolder_path=$(echo $entry | sed 's/^.//' | sed 's/.conf//' | sed 's/__/ /g' | cut -f2 -d ' ')
-    wp_config_php_path="/usr/local/lsws/$NAME/html/$subfolder_path/wp-config.php"
-    if [[ -f $wp_config_php_path ]]; then
-
-      wp config set DB_HOST 'localhost' --type=constant --allow-root --path="/usr/local/lsws/$NAME/html/$subfolder_path" --quiet
-
-      # Cấu hình DB Name
-      wp config set DB_NAME "$DB_Name_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html/$subfolder_path" --quiet
-
-      # Cấu hình DB User
-      wp config set DB_USER "$DB_User_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html/$subfolder_path" --quiet
-
-      # Cấu hình DB Password
-      wp config set DB_PASSWORD "$DB_Password_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html/$subfolder_path" --quiet
-
-      # sed -i "/DB_NAME/s/\"/'/g" "$wp_config_php_path"
-      # sed -i "/DB_HOST/s/\"/'/g" "$wp_config_php_path"
-      # sed -i "/DB_USER/s/\"/'/g" "$wp_config_php_path"
-      # sed -i "/DB_PASSWORD/s/\"/'/g" "$wp_config_php_path"
-
-      # sed -i "/DB_HOST/s/'[^']*'/'localhost'/2" "$wp_config_php_path"
-      # sed -i "/DB_NAME/s/'[^']*'/'$DB_Name_web'/2" "$wp_config_php_path"
-      # sed -i "/DB_USER/s/'[^']*'/'$DB_User_web'/2" "$wp_config_php_path"
-      # sed -i "/DB_PASSWORD/s/'[^']*'/'$DB_Password_web'/2" "$wp_config_php_path"
     fi
   done
 
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit
+fi
+
+# ==============================================================================
+# KHỐI 1 WEBSITE & SUBFOLDER
+# ==============================================================================
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-db-main 1
+
+pathcheck="/etc/wptt/vhost/.$NAME.conf"
+[[ ! -f "$pathcheck" ]] && exec /etc/wptt/wptt-db-main 1
+
+. "$pathcheck"
+
+UI_STRING="Thiết lập kết nối database mã nguồn website $NAME"
+_runing "$UI_STRING"
+echo ""
+
+# 1. Kết nối thư mục gốc (Main Domain)
+path_html="/usr/local/lsws/$NAME/html"
+thiet_lap_ket_noi_db "$path_html" "$DB_Name_web" "$DB_User_web" "$DB_Password_web" "$NAME"
+
+# 2. Kết nối các Subfolder (nếu có)
+if [[ -d "/etc/wptt/$NAME-wptt" ]]; then
+  for entry in /etc/wptt/$NAME-wptt/.*.conf; do
+    [[ ! -f "$entry" ]] && continue
+    subfolder="${entry##*/}"
+    subfolder="${subfolder%.conf}"
+    subfolder="${subfolder#.}"
+
+    . "$entry"
+    subfolder_path=$(echo "$subfolder" | sed 's/__/ /g' | cut -f2 -d ' ')
+    path_sub_html="/usr/local/lsws/$NAME/html/$subfolder_path"
+
+    if [[ -d "$path_sub_html" ]]; then
+      thiet_lap_ket_noi_db "$path_sub_html" "$DB_Name_web" "$DB_User_web" "$DB_Password_web" "$NAME"
+    fi
+  done
   co_ket_noi_subfolder=1
 fi
 
-wp rewrite flush --allow-root --path=/usr/local/lsws/"$NAME"/html >/dev/null 2>&1
+# Dọn dẹp cache nếu có
+[[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]] && . /etc/wptt/cache/wptt-xoacache $NAME >/dev/null 2>&1
+[[ -d "/usr/local/lsws/$NAME/luucache" ]] && rm -rf "/usr/local/lsws/$NAME/luucache"
 
-if [[ $lock_down ]]; then
-  chattr +i $wp_config_php_path
+# Zero Downtime
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+_rundone "$UI_STRING"
+
+echo -e "\n========================================================================="
+echo "Mã nguồn của website    : $NAME"
+if [[ -z "$co_ket_noi_subfolder" ]]; then
+  echo "Database NAME           : $DB_Name_web"
+  echo "USER NAME               : $DB_User_web"
+  echo "DB PASSWORD             : $DB_Password_web"
 fi
-
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-
-_rundone "Thiết lập kết nối database với WordPress"
-
 echo "========================================================================="
-echo "Database của website	: $NAME"
-if [[ $co_ket_noi_subfolder = '' ]]; then
-  echo "Database NAME		: $DB_Name_web"
-  echo "USER NAME			: $DB_User_web"
-  echo "DB PASSWORD 		: $DB_Password_web"
-fi
-echo "========================================================================="
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+# --- FOOTER SIÊU TỐC ---
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-db-main 1

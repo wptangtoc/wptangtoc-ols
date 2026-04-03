@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng Xóa database [hay Xóa cơ sở dữ liệu] là hành động loại bỏ hoàn toàn một cơ sở dữ liệu cụ thể, bao gồm tất cả các bảng [tables], dữ liệu chứa trong đó, các chỉ mục [indexes] và cấu trúc liên quan khỏi máy chủ cơ sở dữ liệu [MariaDB]
@@ -12,33 +15,27 @@ function huong_dan() {
   * Xóa dữ liệu vĩnh viễn: Khi cần loại bỏ hoàn toàn dữ liệu nhạy cảm không còn được phép lưu trữ.
 
   Lưu ý quan trọng: LUÔN LUÔN SAO LƯU [BACKUP] TRƯỚC KHI XÓA: Hãy chắc chắn bạn có một bản sao lưu đầy đủ và còn tốt của database trước khi quyết định xóa.
-
 }
 
-. /etc/wptt/.wptt.conf
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Xóa database                                       |"
-echo "========================================================================="
-echo ""
-echo ""
+echo -e "\n========================================================================="
+echo -e "| Quản lý Database => Xóa database                                      |"
+echo -e "=========================================================================\n"
 
+. /etc/wptt/.wptt.conf
 . /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
+
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép xoá database."
 
 . /etc/wptt/echo-color
 
-echo "Danh sách Database: "
-# mariadb -u "$database_admin_username" -p"$database_admin_password" -e "show databases where \`database\` not in('information_schema', 'test', 'sys', 'mysql', 'performance_schema')"
-
+# --- KHỞI TẠO FILE BẢO MẬT & BẪY TRAP (CHỐNG LỘ PASSWORD) ---
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -52,51 +49,52 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
+# Luật Thép: Phải có trap để hệ thống tự xóa file temp khi kết thúc/thoát script
+trap "rm -f $TEMP_CNF_ROOT" EXIT
 
+# --- QUÉT DANH SÁCH DATABASE ---
 selects=()
 for entry in $(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "show databases where \`database\` not in('information_schema', 'test', 'sys', 'mysql', 'performance_schema')" | grep '_dbname'); do
   selects+=("$entry")
 done
 
-PS3="
--//- Nhập lựa chọn database bạn cần xóa [0=Thoát]: "
-select select in ${selects[@]}; do
-  databaseclear=$select
+if [[ ${#selects[@]} -eq 0 ]]; then
+  echoDo "Không tìm thấy Database nào (thuộc hệ sinh thái WPTangToc) trên hệ thống!"
+  sleep 2
+  exec /etc/wptt/wptt-db-main 1
+fi
+
+echo "Danh sách Database: "
+PS3="$(tput setab 0)-//- Nhập lựa chọn database bạn cần xóa [0=Thoát]: $(tput sgr0)"
+select opt in "${selects[@]}"; do
+  databaseclear=$opt
   break
 done
 
-# xac nhan thoai khoi tien trinh
+# --- CHỐT CHẶN THOÁT HIỂM ---
+[[ "$databaseclear" == "0" || -z "$databaseclear" ]] && exec /etc/wptt/wptt-db-main 1
 
-if [ "$databaseclear" = "0" ]; then
-  clear
-  exec /etc/wptt/wptt-db-main 1
-  exit
-fi
+read -p "CẢNH BÁO: Xác nhận xóa vĩnh viễn database [$databaseclear]? (y/n): " confirm
 
-if [ "$databaseclear" = "" ]; then
-  clear
-  exec /etc/wptt/wptt-db-main 1
-  exit
-fi
+if [[ "$confirm" == "y" ]]; then
+  UI_STRING="Xóa database $databaseclear và dọn dẹp User"
+  _runing "$UI_STRING"
 
-# read -p "Nhập tên database bạn cần xóa: [0=Thoat]:" databaseclear
-read -p "Xác nhận xóa database $databaseclear ? (y/n): " confirm
-
-if [ "$confirm" != "y" ]; then
-  clear
-  exec /etc/wptt/wptt-db-main 1
-  exit
-fi
-
-if [[ "$confirm" = "y" ]]; then
-  _runing "Xóa database $databaseclear"
   echo "Xoá database ${databaseclear}: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE ${databaseclear}"
-  rm -rf $TEMP_CNF_ROOT
-  _rundone "Xóa database $databaseclear"
-fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  # 1. Xóa Database
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${databaseclear}\`;"
+
+  # 2. Xóa User đi kèm (Tách hậu tố _dbname thành _username)
+  base_name="${databaseclear%_dbname}"
+  username_to_delete="${base_name}_username"
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${username_to_delete}'@'localhost';"
+
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES;"
+
+  _rundone "$UI_STRING"
+else
   exec /etc/wptt/wptt-db-main 1
 fi
+
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-db-main 1
