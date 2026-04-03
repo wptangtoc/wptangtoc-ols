@@ -1,58 +1,109 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng bypass domain vượt qua Hotlinking là một công cụ hữu ích để cân bằng giữa việc bảo vệ tài nguyên máy chủ khỏi bị lạm dụng băng thông và việc cho phép các bên được ủy quyền truy cập và sử dụng các tài nguyên đó một cách hợp pháp. Nó tăng cường khả năng kiểm soát của bạn đối với cách nội dung của bạn được chia sẻ và sử dụng trên internet.
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Bao Mat => Them domain duoc phep vuot qua Hotlinking                   |"
-echo "========================================================================="
-echo ""
+. /etc/wptt/.wptt.conf
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echo -e "\n========================================================================="
+echo -e "| Bảo mật => Thêm Domain được phép vượt qua Hotlinking                  |"
+echo -e "=========================================================================\n"
 
 . /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lua chon website ban muon add domain Hotlinking: "
-echo ""
+echo "Lựa chọn website gốc bạn muốn cấu hình thêm Domain Bypass: "
 lua_chon_NAME
+echo ""
 
-giatuandz=$(cat /usr/local/lsws/$NAME/html/.htaccess | grep -c "#hotlinking-bao-mat")
+# --- CHỐT CHẶN THOÁT HIỂM ---
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
 
-if [[ "$giatuandz" = "0" ]]; then
-  echo "Ban chua kich hoat hotlinking"
-  read -p "ban co muon kich hoat hotlinking khong? (y/n): " dongy
-  if [[ "$dongy" = "y" ]]; then
-    . /etc/wptt/bao-mat/hotlinking
+path_htaccess="/usr/local/lsws/$NAME/html/.htaccess"
+
+# Đồng bộ thẻ nhận diện với file wptt-hotlinking chuẩn
+is_hotlink_active=$(grep -c "#begin-hotlink-wptangtoc-ols" "$path_htaccess" 2>/dev/null)
+
+. /etc/wptt/echo-color
+
+if [[ "$is_hotlink_active" -eq 0 ]]; then
+  echo -e "\033[1;33mWebsite $NAME CHƯA KÍCH HOẠT chống Hotlinking!\033[0m"
+  prompt="Bạn có muốn chuyển sang Menu BẬT Hotlinking không? [1-2]: "
+  dongy="n"
+  options=("Chuyển sang Bật Hotlinking" "Không đồng ý (Thoát)")
+  PS3="$prompt"
+  select opt in "${options[@]}"; do
+    case "$REPLY" in
+    1)
+      dongy="y"
+      break
+      ;;
+    2)
+      dongy="n"
+      break
+      ;;
+    *)
+      printf "\nNhập sai, hệ thống tự động HỦY BỎ.\n"
+      break
+      ;;
+    esac
+  done
+
+  if [[ "$dongy" == "y" ]]; then
+    # Gọi đúng tên file bật tắt Hotlink của hệ thống
+    exec /etc/wptt/bao-mat/wptt-hotlinking
   else
-    exit
+    exec /etc/wptt/wptt-bao-mat-main 1
   fi
-fi
-
-read -p "Nhap domain ban muon cho phep vuot qua Hotlinking" NAME2
-
-if [[ "$NAME2" = "0" || "$NAME2" = "" ]]; then
   exit
 fi
 
-if [ "$NAME2" = "${NAME2/./}" ]; then
+echo -e "Nhập Domain bạn muốn CHO PHÉP hiển thị ảnh/tài nguyên từ \033[1;32m$NAME\033[0m"
+echo "(Ví dụ: cdn.domain.com, doitac.vn)"
+read -p "=> Domain Bypass [0=Thoát]: " NAME2
+
+if [[ -z "$NAME2" || "$NAME2" == "0" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+  exit
+fi
+
+# ==============================================================================
+# BỘ LỌC THÔNG MINH (SMART SANITIZE) BẰNG PURE BASH
+# ==============================================================================
+NAME2="${NAME2//[[:space:]]/}" # 1. Xóa toàn bộ khoảng trắng thừa
+NAME2="${NAME2,,}"             # 2. Ép toàn bộ về chữ thường
+NAME2="${NAME2#http://}"       # 3. Gọt bỏ http://
+NAME2="${NAME2#https://}"      # 4. Gọt bỏ https://
+NAME2="${NAME2#www.}"          # 5. Gọt bỏ www.
+NAME2="${NAME2%%/*}"           # 6. Cắt bỏ mọi thứ từ dấu / trở về sau (nếu copy nguyên link)
+
+# Regex kiểm tra định dạng domain (phải có dấu chấm sau khi gọt rửa)
+if [[ "$NAME2" == "${NAME2/./}" ]]; then
   clear
-  echo "Domain nhap khong dung dinh dang. Vi du: wptangtoc.com, abc.wptangtoc.com, wptangtoc.xyz..."
+  echoDo "Domain nhập không đúng định dạng. Ví dụ: wptangtoc.com, cdn.wptangtoc.com..."
+  sleep 3
+  exec /etc/wptt/wptt-bao-mat-main 1
   exit
 fi
 
-path="/usr/local/lsws/$NAME/html/.htaccess"
-if [[ -f "$path" ]]; then
-  sed -i '/)?google.com/a RewriteCond %{HTTP_REFERER} !^http(s)?:\/\/(www\.)?'$NAME2' [NC]' $path
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  echo "them domain $NAME2 vuot qua Hotlinking thanh cong"
+if [[ -f "$path_htaccess" ]]; then
+  UI_STRING="Thêm Domain Bypass $NAME2 cho website $NAME"
+  _runing "$UI_STRING"
+  echo "Thêm domain $NAME2 vượt qua Hotlinking cho $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  # Sát chiêu SED: Chèn điều kiện Bypass vào NGAY PHÍA TRÊN dòng RewriteRule chặn đuôi file
+  sed -i "/RewriteRule \\\.(jpg|jpeg/i RewriteCond %{HTTP_REFERER} \!^http(s)?:\/\/(www\.)?$NAME2 [NC]" "$path_htaccess"
+
+  # Reload Zero-Downtime
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+  _rundone "$UI_STRING"
 else
-  echo "them domain Hotlinking khong thanh cong"
+  _runloi "Lỗi không tìm thấy file .htaccess"
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-bao-mat-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
