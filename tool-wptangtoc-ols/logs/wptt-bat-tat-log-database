@@ -1,0 +1,132 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+function huong_dan() {
+  Tính năng Bật / Tắt ghi log database cho phép người dùng cấu hình hệ quản trị cơ sở dữ liệu MariaDB để bật hoặc ngừng việc ghi lại các hoạt động, truy vấn, hoặc lỗi vào các tệp nhật ký.
+
+  Các loại log database phổ biến bao gồm:
+  * General Query Log: Ghi lại mọi truy vấn được gửi đến database.
+  * Slow Query Log: Ghi lại các truy vấn chạy chậm hơn một ngưỡng thời gian nhất định [giúp tìm ra các plugin hoặc theme làm chậm web].
+  * Error Log: Ghi lại các lỗi khi khởi động, chạy, hoặc dừng database.
+  * Binary Log [Binlog]: Ghi lại mọi thay đổi đối với dữ liệu.
+
+  Mục đích chính của việc TẮT ghi log database là:
+  * Cải thiện hiệu suất [Performance]: 🚀 Việc ghi log tiêu tốn tài nguyên I/O và CPU. Tắt chúng giúp database chạy nhanh hơn.
+  * Tiết kiệm dung lượng ổ cứng: 💾 Các tệp log có thể phình to rất nhanh. Tắt chúng giúp bảo vệ không gian lưu trữ.
+
+  Tóm lại, đây là một công cụ giúp tối ưu hiệu suất và dung lượng. Mặc định nên TẮT để web chạy nhanh nhất, chỉ BẬT khi bạn cần bắt bệnh [debug] lỗi truy vấn chậm của website.
+}
+
+. /etc/wptt/.wptt.conf
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/echo-color
+
+clear
+echo -e "\n========================================================================="
+echo -e "| Quản lý Logs => Bật / Tắt Ghi Logs Database [MariaDB]                 |"
+echo -e "=========================================================================\n"
+
+CONF_DB="/etc/my.cnf.d/server.cnf"
+
+# Kiểm tra file cấu hình tồn tại
+if [[ ! -f "$CONF_DB" ]]; then
+  echoDo "Lỗi: Không tìm thấy file cấu hình Database tại $CONF_DB"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+  exit 1
+fi
+
+# ==============================================================================
+# 1. KIỂM TRA TRẠNG THÁI HIỆN TẠI
+# ==============================================================================
+# Nếu có dòng skip-log-bin thì tức là đang TẮT
+if grep -q "skip-log-bin" "$CONF_DB" 2>/dev/null; then
+  trang_thai="TẮT"
+  mau_trang_thai="\033[1;31m" # Màu đỏ
+  hanh_dong_tiep="BẬT"
+else
+  trang_thai="ĐANG BẬT"
+  mau_trang_thai="\033[1;32m" # Màu xanh
+  hanh_dong_tiep="TẮT"
+fi
+
+echo -e "Trạng thái Ghi Log Database hiện tại: ${mau_trang_thai}${trang_thai}\033[0m\n"
+
+# ==============================================================================
+# 2. HIỂN THỊ MENU LỰA CHỌN
+# ==============================================================================
+echo "Bạn có muốn ${han_dong_tiep} tính năng ghi Log Database không?"
+options=("Đồng ý ${han_dong_tiep}" "$khong_dong_y")
+PS3=$'\n'"Nhập lựa chọn của bạn [1-2]: "
+
+select opt in "${options[@]}"; do
+  case "$REPLY" in
+  1) break ;;
+  2|0) [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1 ; exit ;;
+  *) echo -e "\033[1;31m$ban_nhap_sai_he_thong_se_chon_khong_dong_y\033[0m" ; break ;;
+  esac
+done
+
+# ==============================================================================
+# 3. THỰC THI THAY ĐỔI
+# ==============================================================================
+if [[ "$hanh_dong_tiep" == "TẮT" ]]; then
+  _runing "Đang tắt ghi Log Database"
+  
+  # Dọn dẹp sạch sẽ cấu hình cũ
+  sed -i '/log-bin/d' "$CONF_DB"
+  sed -i '/slow-query-log/d' "$CONF_DB"
+  sed -i '/long_query_time/d' "$CONF_DB"
+  sed -i '/general_log/d' "$CONF_DB"
+  sed -i '/general-log/d' "$CONF_DB"
+  sed -i '/log-error/d' "$CONF_DB"
+  
+  # Thêm cờ bỏ qua ghi log
+  sed -i '/skip-log-bin/d' "$CONF_DB"
+  sed -i '/\[mysqld\]/a skip-log-bin' "$CONF_DB"
+
+  systemctl restart mariadb.service
+  
+  # Giải phóng ổ cứng ngay lập tức
+  rm -rf /var/log/mysql/* >/dev/null 2>&1
+  
+  echo "Tắt ghi Log Database: $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
+  _rundone "Đã tắt ghi Log Database thành công!"
+
+else
+  _runing "Đang bật ghi Log Database"
+
+  # Tạo thư mục và cấp quyền
+  mkdir -p /var/log/mysql
+  chown -R mysql:mysql /var/log/mysql
+
+  # Dọn dẹp cấu hình cũ
+  sed -i '/skip-log-bin/d' "$CONF_DB"
+  sed -i '/log-bin/d' "$CONF_DB"
+  sed -i '/slow-query-log/d' "$CONF_DB"
+  sed -i '/long_query_time/d' "$CONF_DB"
+  sed -i '/general_log/d' "$CONF_DB"
+  sed -i '/general-log/d' "$CONF_DB"
+  sed -i '/log-error/d' "$CONF_DB"
+
+  # Tiêm cấu hình mới
+  sed -i '/\[mysqld\]/a log-bin=/var/log/mysql/mysql-bin.log\ngeneral-log=1\ngeneral_log_file=/var/log/mysql/mysql.log\nlog-error=/var/log/mysql/mysql-error.log\nslow-query-log=1\nslow-query-log-file=/var/log/mysql/mysql-slow.log\nlong_query_time=1' "$CONF_DB"
+
+  systemctl restart mariadb.service
+
+  echo "Bật ghi Log Database: $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
+  _rundone "Đã bật ghi Log Database thành công!"
+  
+  echo -e "\n\033[1;36mDanh sách file log vừa tạo:\033[0m"
+  echo " - General Log: /var/log/mysql/mysql.log"
+  echo " - Binlog: /var/log/mysql/mysql-bin.log"
+  echo " - Error Log: /var/log/mysql/mysql-error.log"
+  echo " - Slow Log: /var/log/mysql/mysql-slow.log"
+fi
+
+if [[ "${1:-}" == "98" ]]; then
+  exec /etc/wptt/wptt-logs-main 1
+fi
