@@ -4,74 +4,140 @@
 # @since: 2025
 
 function huong_dan() {
-  việc xem access log cho một domain cụ thể thông qua wptangtoc ols thường sẽ tận dụng các công cụ sẵn có của hệ điều hành Linux.
+  Việc xem access log cho một domain cụ thể thông qua WPTangToc OLS thường sẽ tận dụng các công cụ sẵn có của hệ điều hành Linux.
 
-  Tính năng xem access log domain trong wptangtoc ols có thể được hiểu ngắn gọn như sau:
+  Tính năng xem access log domain trong WPTangToc OLS có thể được hiểu ngắn gọn như sau:
 
-  Xác định vị trí file log: OpenLiteSpeed thường lưu access log cho mỗi virtual host [tương ứng với mỗi domain] trong một file riêng biệt. Đường dẫn phổ biến có thể là /usr/local/lsws/domain.com/logs/access.log. Script wptangtoc ols có thể cung cấp một lệnh hoặc tùy chọn để nhanh chóng xác định hoặc truy cập vào file log này.
+  Xác định vị trí file log: OpenLiteSpeed thường lưu access log cho mỗi virtual host [tương ứng với mỗi domain] trong một file riêng biệt. Đường dẫn phổ biến có thể là /usr/local/lsws/domain.com/logs/access.log. Script cung cấp một công cụ tìm kiếm siêu tốc [FZF] để truy vấn nhanh vào file log này.
 
-  Tính năng này hỗ trợ người dùng dễ dàng hơn trong việc tìm và sử dụng các công cụ có sẵn của hệ thống để xem access log của OpenLiteSpeed cho từng domain. Điều này giúp quản trị viên website nhanh chóng kiểm tra lưu lượng truy cập, phát hiện lỗi hoặc các hoạt động bất thường liên quan đến một website cụ thể.
+  Tính năng này hỗ trợ người dùng dễ dàng lọc, tìm kiếm IP, mã trạng thái [như 404, 500], hoặc URL truy cập. Điều này giúp quản trị viên website nhanh chóng kiểm tra lưu lượng truy cập, phát hiện lỗi hoặc các hoạt động bất thường [như DDoS, Scan lỗi] liên quan đến một website cụ thể.
 }
 
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh
-
 . /etc/wptt/echo-color
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_logs => Xem access log domain                                  |"
-echo "========================================================================="
-echo ""
-echo ""
-echo "$lua_chon_website_ban_muon xem access logs: "
-echo ""
-function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -A /etc/wptt/vhost /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    selects=()
-    for entry in $(ls -A /etc/wptt/vhost /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [[ -d /usr/local/lsws/$NAME/logs ]]; then
-        selects+=("$NAME")
-      fi
-    done
-    PS3="
--//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]: "
-    select select in ${selects[@]}; do
-      NAME=$select
-      index=$REPLY
-      break
-    done
-  else
-    clear
-    echo "Khong co domain tren he thong cua ban duoc kich hoat ghi logs."
-    exit
-  fi
-}
 
-lua_chon_NAME
+clear
+echo -e "\n========================================================================="
+echo -e "| Quản lý Logs => Truy vấn Access Log Domain [Tìm Kiếm Siêu Tốc]        |"
+echo -e "=========================================================================\n"
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+# Kiểm tra yêu cầu hệ thống
+if ! command -v fzf &>/dev/null; then
+  echoDo "Lỗi: Hệ thống của bạn chưa cài đặt công cụ FZF!"
+  echo "Vui lòng cài đặt FZF để sử dụng tính năng truy vấn siêu tốc này."
+  sleep 3
   exec /etc/wptt/wptt-logs-main 1
 fi
 
-path="/etc/wptt/vhost/.$NAME.conf"
+# ==============================================================================
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME domain selects
+  selects=()
 
-if [[ ! -d /usr/local/lsws/$NAME/logs ]]; then
-  echo "Bạn chưa kích hoạt ghi access log domain cho domain $NAME"
-  echo "Tính năng này mình tắt theo mặc định để bảo đảm hiệu suất tốc độ"
-  echo "Nếu bạn có nhu cầu xem log thì hãy bật tính năng ghi access logs domain"
-  sleep 1
-  echo ''
-  echo -e "Bạn có muốn bắt đầu ghi access log cho domain ${NAME} ?: "
-  prompt="$nhap_lua_chon_cua_ban [1-2]: "
-  dongy="n"
+  local file_list=()
+  [[ -d /etc/wptt/vhost ]] && file_list+=(/etc/wptt/vhost/.*.conf)
+  [[ -d /etc/wptt/chuyen-huong ]] && file_list+=(/etc/wptt/chuyen-huong/*)
+
+  for filepath in "${file_list[@]}"; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
+      local vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+      if [[ -f "$vhost_conf" ]]; then
+        if grep -q 'accesslog ' "$vhost_conf" 2>/dev/null; then
+          selects+=("$domain [Đang BẬT Log]")
+        else
+          selects+=("$domain [Đang TẮT]")
+        fi
+      fi
+    fi
+  done
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n\033[1;33mKhông tìm thấy website nào trên hệ thống để thao tác!\033[0m"
+    sleep 3
+    exec /etc/wptt/wptt-logs-main 1
+  fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Không hỗ trợ mục này)") # Thêm cho chuẩn form, nhưng sẽ chặn nếu user chọn
+  fi
+
+  PS3="$(tput setab 0)-//- Lựa chọn website muốn truy vấn Log [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
+
+  select selected_domain in "${selects[@]}"; do
+    NAME="$selected_domain"
+    break
+  done
+
+  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
+  if [[ "$REPLY" == "00" ]]; then
+    local selected_name
+    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website truy vấn Log [0=Thoát]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    if [[ -z "$selected_name" ]]; then
+      echo "Đã hủy chọn."
+      exec /etc/wptt/wptt-logs-main 1
+    fi
+    NAME="$selected_name"
+  fi
+
+  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
+    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
+    for item in "${selects[@]}"; do
+      local check_dom=$(echo "$item" | cut -f1 -d ' ')
+      if [[ "$check_dom" == "$REPLY" ]]; then
+        NAME="$item"
+        break
+      fi
+    done
+  fi
+}
+
+# Nếu gọi script kèm tên domain từ command line
+if [[ -n "$1" && "$1" != "98" ]]; then
+  NAME="$1"
+else
+  lua_chon_NAME
+fi
+
+# Tách lấy tên chuẩn
+NAME=$(echo "$NAME" | cut -f1 -d ' ')
+
+# Chốt chặn thoát hiểm và lựa chọn sai
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-logs-main 1
+[[ "$NAME" == "TẤT" ]] && {
+  echoDo "Chức năng này chỉ hỗ trợ truy vấn từng website cụ thể!"
+  sleep 2
+  exec /etc/wptt/wptt-logs-main 1
+}
+
+LOG_DIR="/usr/local/lsws/$NAME/logs"
+LOG_FILE="$LOG_DIR/access.log"
+VHOST_CONF="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+
+# ==============================================================================
+# KIỂM TRA VÀ KÍCH HOẠT LOG NẾU CHƯA CÓ
+# ==============================================================================
+if [[ ! -d "$LOG_DIR" || ! -f "$LOG_FILE" ]]; then
+  echo -e "\033[1;33mWebsite $NAME chưa được bật tính năng ghi Access Log!\033[0m"
+  echo "Tính năng này mặc định tắt để bảo vệ hiệu suất CPU/Ổ cứng."
+  echo ""
+
+  prompt="Bạn có muốn BẬT ghi log cho website $NAME ngay bây giờ không? [1-2]: "
   options=("$dong_y" "$khong_dong_y")
+  dongy="n"
   PS3="$prompt"
   select opt in "${options[@]}"; do
     case "$REPLY" in
@@ -79,64 +145,78 @@ if [[ ! -d /usr/local/lsws/$NAME/logs ]]; then
       dongy="y"
       break
       ;;
-
-    2)
-      dongy="n"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
+    2) exec /etc/wptt/wptt-logs-main 1 ;;
     *)
-      printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
+      echo -e "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
       break
       ;;
     esac
   done
 
-  if [[ "$dongy" = 'y' ]]; then
-    _runing "Kích hoạt ghi access log domain $NAME"
-    . /etc/wptt/logs/wptt-bat-logs-domain $NAME >/dev/null 2>&1
-    _rundone "Kích hoạt ghi access log domain $NAME"
+  if [[ "$dongy" == "y" ]]; then
+    _runing "Kích hoạt ghi Access Log cho domain $NAME"
+
+    if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+      tuong_thich_nhom_litespeed="nogroup"
+    else
+      tuong_thich_nhom_litespeed="nobody"
+    fi
+
+    # Ghi cấu hình thẳng vào Vhost an toàn
+    sed -i -e '/^errorlog /,/^}$/d' "$VHOST_CONF" 2>/dev/null
+    sed -i -e '/^accesslog /,/^}$/d' "$VHOST_CONF" 2>/dev/null
+    cat <<EOF >>"$VHOST_CONF"
+
+errorlog \$VH_ROOT/logs/error.log {
+  useServer               1
+  logLevel                ERROR
+  rollingSize             10M
+}
+
+accesslog \$VH_ROOT/logs/access.log {
+  useServer               0
+  rollingSize             10M
+  keepDays                30
+  compressArchive         1
+}
+EOF
+
+    mkdir -p "$LOG_DIR"
+    chown -R nobody:$tuong_thich_nhom_litespeed "$LOG_DIR"
+    chmod 700 "$LOG_DIR"
+
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+    # Ép OLS sinh file log ngay lập tức bằng 1 request
+    curl -s -k "http://127.0.0.1" -H "Host: $NAME" >/dev/null 2>&1
+
+    [[ -f "/etc/wptt/vhost/.$NAME.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost/.$NAME.conf" && echo 'bat_log_domain=1' >>"/etc/wptt/vhost/.$NAME.conf"
+
+    _rundone "Kích hoạt ghi Access Log cho domain $NAME"
+    sleep 1
   fi
+fi
+
+if [[ ! -f "$LOG_FILE" ]]; then
+  echoDo "Lỗi: Không tìm thấy file access.log! Vui lòng kiểm tra lại cấu hình."
+  sleep 3
   exec /etc/wptt/wptt-logs-main 1
-  exit
 fi
 
-if [[ ! -f /usr/local/lsws/"$NAME"/logs/access.log ]]; then
-  echo "file access.log của website $NAME không tồn tại"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-logs-main 1
-  fi
-  exit
-fi
-
-# echo "đường dẫn thư mục lưu trữ logs: /usr/local/lsws/$NAME/logs"
-# echo "đường dẫn file lưu trữ access log: /usr/local/lsws/$NAME/logs/access.log"
-
-if [[ $(which fzf 2>/dev/null) = '' ]]; then
-  echo "Phải yêu cầu hệ thống có sẵn phần mềm fzf thì mới có thể sử dụng tính năng này"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-logs-main 1
-  fi
-  exit
-fi
-
-clear
-cat /usr/local/lsws/$NAME/logs/access.log | tac |
-  fzf --prompt="Tìm kiếm access log domain $NAME > " \
-    --height='~60%' \
+# ==============================================================================
+# GỌI FZF ĐỂ HIỂN THỊ VÀ TÌM KIẾM LOGS
+# ==============================================================================
+# Sử dụng tac để đọc log từ mới nhất đến cũ nhất
+tac "$LOG_FILE" |
+  fzf --prompt=">> Tìm kiếm Access Log [$NAME]: " \
+    --height='~90%' \
     --border=rounded \
     --color=border:red \
     --layout=reverse \
-    --header="Gõ để lọc, Enter để chọn, ESC để hủy" \
-    --preview-window=up:90%:wrap # --with-nth=2 \
+    --info=inline \
+    --header="Gõ từ khóa (IP, URL, 404, 500...) để lọc | Lên/Xuống để xem | ESC để thoát" \
+    --preview="echo {}" \
+    --preview-window=up:30%:wrap
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-logs-main 1
-fi
+# Sau khi tắt FZF (Bấm ESC hoặc Enter), trở về Menu chính
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1

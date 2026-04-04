@@ -20,56 +20,86 @@ function huong_dan() {
 . /etc/wptt/lang/$ngon_ngu.sh
 . /etc/wptt/echo-color
 
+clear
 echo -e "\n========================================================================="
-echo -e "|$bao_mat => Bật / Tắt Tường lửa Chặn BOT AI Crawlers        |"
+echo -e "| $bao_mat => Bật / Tắt Tường lửa Chặn BOT AI Crawlers                   |"
 echo -e "=========================================================================\n"
 
 function lua_chon_NAME() {
-  NAME=""
-  if [[ -n "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]]; then
-    selects=()
+  unset NAME domain selects
+  selects=()
 
-    # Vòng lặp Globbing siêu tốc không qua sub-shell
-    for filepath in /etc/wptt/vhost/.*.conf; do
-      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  # Vòng lặp Globbing siêu tốc không qua sub-shell
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-      local domain="${filepath##*/}"
-      domain="${domain%.conf}"
-      domain="${domain#.}"
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-      if [[ "$domain" == ?*.?* ]]; then
-        local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
-        if [[ -f "$htaccess_path" ]]; then
-          if grep -q '#begin-tuong-lua-block-bot-ai' "$htaccess_path" 2>/dev/null; then
-            selects+=("$domain [Đang BẬT Chặn AI]")
-          else
-            selects+=("$domain [Đang TẮT]")
-          fi
+    if [[ "$domain" == ?*.?* ]]; then
+      local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
+      if [[ -f "$htaccess_path" ]]; then
+        if grep -q '#begin-tuong-lua-block-bot-ai' "$htaccess_path" 2>/dev/null; then
+          selects+=("$domain [Đang BẬT Chặn AI]")
+        else
+          selects+=("$domain [Đang TẮT]")
         fi
       fi
-    done
+    fi
+  done
 
-    # Xử lý trường hợp không có website nào hợp lệ (không có file .htaccess)
-    if [[ ${#selects[@]} -eq 0 ]]; then
-      echo -e "\n\033[1;33mKhông tìm thấy website nào có file .htaccess trên hệ thống để thao tác!\033[0m"
-      sleep 3
+  # Xử lý trường hợp không có website nào hợp lệ (không có file .htaccess)
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n\033[1;33mKhông tìm thấy website nào có file .htaccess trên hệ thống để thao tác!\033[0m"
+    sleep 3
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  # Sắp xếp mảng chuẩn Version (Alphabetical)
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # [NÂNG CẤP UX] Nếu có từ 2 website trở lên mới hiển thị tùy chọn "TẤT CẢ" ở CUỐI MENU
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
+  if command -v fzf &>/dev/null; then
+    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
+  else
+    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [0=Thoát]:$(tput sgr0) "
+  fi
+
+  # Vòng lặp lấy giá trị
+  select selected_domain in "${selects[@]}"; do
+    NAME="$selected_domain"
+    break
+  done
+
+  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
+  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
+    local selected_name
+    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website Chặn BOT AI [0=Thoát]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    if [[ -z "$selected_name" ]]; then
+      echo "Đã hủy chọn."
       exec /etc/wptt/wptt-bao-mat-main 1
     fi
+    NAME="$selected_name"
+  fi
 
-    # [NÂNG CẤP UX] Nếu có từ 2 website trở lên mới hiển thị tùy chọn "TẤT CẢ" ở CUỐI MENU
-    if [[ ${#selects[@]} -ge 2 ]]; then
-      selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
-    fi
-
-    PS3=$'\n'"-//- Lựa chọn website bạn muốn Bật/Tắt Chặn BOT AI [0=Thoát]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      break
+  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
+  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
+    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
+    for item in "${selects[@]}"; do
+      local check_dom=$(echo "$item" | cut -f1 -d ' ')
+      if [[ "$check_dom" == "$REPLY" ]]; then
+        NAME="$item"
+        break
+      fi
     done
-  else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
   fi
 }
 
@@ -89,7 +119,8 @@ NAME=$(echo "$NAME" | cut -f1 -d ' ')
 path_firewall_rules="/etc/wptt/bao-mat/firewall-bot-ai.txt"
 [[ ! -f "$path_firewall_rules" ]] && {
   _runloi "Không tìm thấy bộ quy tắc Chặn BOT AI tại hệ thống (/etc/wptt/bao-mat/firewall-bot-ai.txt)!"
-  exit
+  sleep 3
+  exec /etc/wptt/wptt-bao-mat-main 1
 }
 
 # ==============================================================================
@@ -213,7 +244,11 @@ else
   fi
 fi
 
-UI_RELOAD="Nạp lại quy tắc Tường lửa và OpenLiteSpeed"
+# ==============================================================================
+# KHỞI ĐỘNG LẠI DỊCH VỤ & NEO MÀN HÌNH
+# ==============================================================================
+echo -e "\n\033[1;36mĐang nạp lại quy tắc Tường lửa và OpenLiteSpeed...\033[0m"
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+echo -e "\033[1;32mHoàn tất!\033[0m"
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1

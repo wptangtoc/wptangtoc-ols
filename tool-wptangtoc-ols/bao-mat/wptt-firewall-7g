@@ -24,56 +24,86 @@ function huong_dan() {
 . /etc/wptt/lang/$ngon_ngu.sh
 . /etc/wptt/echo-color
 
+clear
 echo -e "\n========================================================================="
-echo -e "|$bao_mat => Bật / Tắt Tường Lửa 8G                      |"
+echo -e "| $bao_mat => Bật / Tắt Tường Lửa 8G                                     |"
 echo -e "=========================================================================\n"
 
 function lua_chon_NAME() {
-  NAME=""
-  if [[ -n "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]]; then
-    selects=()
+  unset NAME domain selects
+  selects=()
 
-    # Vòng lặp Globbing siêu tốc không qua sub-shell
-    for filepath in /etc/wptt/vhost/.*.conf; do
-      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  # 1. Vòng lặp Globbing siêu tốc quét trạng thái từng website
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-      local domain="${filepath##*/}"
-      domain="${domain%.conf}"
-      domain="${domain#.}"
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-      if [[ "$domain" == ?*.?* ]]; then
-        local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
-        if [[ -f "$htaccess_path" ]]; then
-          if grep -q '#begin-tuong-lua-bao-mat-8g' "$htaccess_path" 2>/dev/null; then
-            selects+=("$domain [Đang BẬT 8G]")
-          else
-            selects+=("$domain [Đang TẮT]")
-          fi
+    if [[ "$domain" == ?*.?* ]]; then
+      local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
+      if [[ -f "$htaccess_path" ]]; then
+        if grep -q '#begin-tuong-lua-bao-mat-8g' "$htaccess_path" 2>/dev/null; then
+          selects+=("$domain [Đang BẬT 8G]")
+        else
+          selects+=("$domain [Đang TẮT]")
         fi
       fi
-    done
+    fi
+  done
 
-    # Xử lý trường hợp không có website nào hợp lệ (không có file .htaccess)
-    if [[ ${#selects[@]} -eq 0 ]]; then
-      echo -e "\n\033[1;33mKhông tìm thấy website nào có file .htaccess trên hệ thống để thao tác!\033[0m"
-      sleep 3
+  # Xử lý trường hợp không có website nào hợp lệ
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n\033[1;33mKhông tìm thấy website nào có file .htaccess trên hệ thống để thao tác!\033[0m"
+    sleep 3
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  # 2. Sắp xếp mảng chuẩn Version (Alphabetical)
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # 3. Thêm tùy chọn "Tất Cả" xuống cuối menu
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # 4. Hiển thị Menu PS3 hỗ trợ 00 (FZF)
+  if command -v fzf &>/dev/null; then
+    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [00=Chọn Nhanh] [0=Thoát]:$(tput sgr0) "
+  else
+    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [0=Thoát]:$(tput sgr0) "
+  fi
+
+  # 5. Vòng lặp lấy giá trị
+  select selected_domain in "${selects[@]}"; do
+    NAME="$selected_domain"
+    break
+  done
+
+  # 6. XỬ LÝ CHỌN NHANH [00] VỚI FZF
+  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
+    local selected_name
+    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website 8G [0=Thoát]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    if [[ -z "$selected_name" ]]; then
+      echo "Đã hủy chọn."
       exec /etc/wptt/wptt-bao-mat-main 1
     fi
+    NAME="$selected_name"
+  fi
 
-    # [NÂNG CẤP UX] Nếu có từ 2 website trở lên mới hiển thị tùy chọn "TẤT CẢ" ở CUỐI MENU
-    if [[ ${#selects[@]} -ge 2 ]]; then
-      selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
-    fi
-
-    PS3=$'\n'"-//- Lựa chọn website bạn muốn Bật/Tắt Tường Lửa 8G [0=Thoát]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      break
+  # 7. Xử lý nhập input thẳng tên domain (nếu không chọn số)
+  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
+    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
+    for item in "${selects[@]}"; do
+      local check_dom=$(echo "$item" | cut -f1 -d ' ')
+      if [[ "$check_dom" == "$REPLY" ]]; then
+        NAME="$item"
+        break
+      fi
     done
-  else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
   fi
 }
 
@@ -84,7 +114,7 @@ else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn (cắt phần đuôi trạng thái)
+# Tách lấy tên chuẩn (cắt phần đuôi "[Đang BẬT]")
 NAME=$(echo "$NAME" | cut -f1 -d ' ')
 
 # --- CHỐT CHẶN THOÁT HIỂM ---
@@ -93,7 +123,8 @@ NAME=$(echo "$NAME" | cut -f1 -d ' ')
 path_firewall_rules="/etc/wptt/bao-mat/firewall.txt"
 [[ ! -f "$path_firewall_rules" ]] && {
   _runloi "Không tìm thấy bộ quy tắc Tường lửa 8G tại hệ thống!"
-  exit
+  sleep 3
+  exec /etc/wptt/wptt-bao-mat-main 1
 }
 
 # ==============================================================================
@@ -124,7 +155,7 @@ function process_firewall_8g() {
     # 2. Tiêm Tường lửa 8G lên đỉnh file (Bảo toàn Quyền sở hữu)
     TMP_FILE=$(mktemp)
     cat "$path_firewall_rules" >"$TMP_FILE"
-    echo "" >>"$TMP_FILE" # Chèn 1 dòng trống cho thoáng code
+    echo "" >>"$TMP_FILE"
     cat "$path_ht" >>"$TMP_FILE"
     cat "$TMP_FILE" >"$path_ht"
     rm -f "$TMP_FILE"
@@ -133,14 +164,10 @@ function process_firewall_8g() {
     sed -i '/tuong_lua_7g/d' "/etc/wptt/vhost/.$target_domain.conf" 2>/dev/null
     echo 'tuong_lua_7g=1' >>"/etc/wptt/vhost/.$target_domain.conf"
 
-    # ==========================================================================
-    # XỬ LÝ TƯƠNG THÍCH PHPMYADMIN (Cho Website Chính) - ĐÃ FIX CHỐNG LẶP
-    # ==========================================================================
+    # 3. Xử lý Bypass phpMyAdmin cho website chính
     . /etc/wptt/.wptt.conf
     if [[ "$Website_chinh" == "$target_domain" && -d "/usr/local/lsws/$target_domain/html/phpmyadmin" ]]; then
-      # Kiểm tra xem Rule Bypass phpMyAdmin đã tồn tại trong file chưa
       if ! grep -q 'phpmyadmin/index\\.php' "$path_ht" 2>/dev/null; then
-        # Chưa có thì mới tiến hành tiêm cấu hình vào
         sed -i '/RewriteCond %{QUERY_STRING} \^(%2d|-)/i \ \ \ \ RewriteCond %{REQUEST_URI} !^\/phpmyadmin\/index\\.php$ [NC]' "$path_ht"
       fi
     fi
@@ -163,7 +190,6 @@ function process_firewall_8g() {
 
     # Dọn dẹp cả 7G và 8G sạch sẽ bằng SED thuần túy
     sed -i '/#begin-tuong-lua-bao-mat-[78]g/,/#end-tuong-lua-bao-mat-[78]g/d' "$path_ht"
-
     sed -i '/tuong_lua_7g/d' "/etc/wptt/vhost/.$target_domain.conf" 2>/dev/null
 
     # Update htaccess cache Vhost
@@ -180,7 +206,6 @@ function process_firewall_8g() {
 # ==============================================================================
 
 if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  # Người dùng chọn TẤT CẢ WEBSITE
   echo -e "\nBạn muốn BẬT hay TẮT Tường lửa 8G cho \033[1;33mTẤT CẢ\033[0m website?"
   prompt="Lựa chọn của bạn [1-2]: "
   mass_action=""
@@ -204,7 +229,7 @@ if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "
     esac
   done
 
-  # Vòng lặp Globbing siêu tốc cho thao tác hàng loạt
+  # Thao tác hàng loạt
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     domain="${filepath##*/}"
@@ -216,7 +241,7 @@ if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "
   done
 
 else
-  # Người dùng chọn 1 WEBSITE cụ thể -> Tự động nhận dạng để Đảo Trạng Thái (Toggle)
+  # Đảo trạng thái (Toggle) cho 1 website cụ thể
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
     echoDo "Tên miền không tồn tại!"
@@ -232,9 +257,11 @@ else
 fi
 
 # ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ (Chạy 1 lần sau khi vòng lặp kết thúc)
+# KHỞI ĐỘNG LẠI DỊCH VỤ & NEO MÀN HÌNH
 # ==============================================================================
 UI_RELOAD="Nạp lại quy tắc Tường lửa 8G và OpenLiteSpeed"
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+echo -e "\n========================================================================="
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
