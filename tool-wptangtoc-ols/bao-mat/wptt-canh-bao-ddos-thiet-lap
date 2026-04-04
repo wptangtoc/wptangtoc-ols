@@ -21,67 +21,102 @@ function huong_dan() {
 . /etc/wptt/lang/$ngon_ngu.sh
 . /etc/wptt/echo-color
 
+clear
 echo -e "\n========================================================================="
 echo -e "| Bảo mật => Bật / Tắt Chống DDoS Website [Fail2ban]                    |"
 echo -e "=========================================================================\n"
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
 # ==============================================================================
 function lua_chon_NAME() {
-  NAME=""
-  if [[ -n "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]]; then
-    selects=()
+  unset NAME domain selects
+  selects=()
 
-    for filepath in /etc/wptt/vhost/.*.conf; do
-      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  # Vòng lặp Globbing siêu tốc không qua sub-shell
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-      local domain="${filepath##*/}"
-      domain="${domain%.conf}"
-      domain="${domain#.}"
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-      if [[ "$domain" == ?*.?* ]]; then
-        local domain_fail2ban="${domain//[-._]/wp}"
-        local filter_path="/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf"
+    if [[ "$domain" == ?*.?* ]]; then
+      local domain_fail2ban="${domain//[-._]/wp}"
+      local filter_path="/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf"
 
-        if [[ -f "$filter_path" ]]; then
-          selects+=("$domain [Đang BẬT]")
-        else
-          selects+=("$domain [Đang TẮT]")
-        fi
+      if [[ -f "$filter_path" ]]; then
+        selects+=("$domain [Đang BẬT]")
+      else
+        selects+=("$domain [Đang TẮT]")
       fi
-    done
+    fi
+  done
 
-    if [[ ${#selects[@]} -eq 0 ]]; then
-      echo -e "\033[1;33mHệ thống chưa có Website nào để cấu hình Chống DDoS!\033[0m"
-      sleep 3
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\033[1;33mHệ thống chưa có Website nào để cấu hình Chống DDoS!\033[0m"
+    sleep 3
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  # Sắp xếp mảng chuẩn Version (Alphabetical)
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
+  if command -v fzf &>/dev/null; then
+    PS3="$(tput setab 0)-//- Lựa chọn website bạn muốn cấu hình [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
+  else
+    PS3="$(tput setab 0)-//- Lựa chọn website bạn muốn cấu hình [0=Thoát]:$(tput sgr0) "
+  fi
+
+  # Vòng lặp lấy giá trị
+  select selected_domain in "${selects[@]}"; do
+    NAME="$selected_domain"
+    break
+  done
+
+  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
+  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
+    local selected_name
+    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website cấu hình DDoS [0=Thoát]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    if [[ -z "$selected_name" ]]; then
+      echo "Đã hủy chọn."
       exec /etc/wptt/wptt-bao-mat-main 1
     fi
+    NAME="$selected_name"
+  fi
 
-    if [[ ${#selects[@]} -ge 2 ]]; then
-      selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
-    fi
-
-    PS3=$'\n'"-//- Lựa chọn website bạn muốn cấu hình [0=Thoát]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      break
+  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
+  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
+    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
+    for item in "${selects[@]}"; do
+      local check_dom=$(echo "$item" | cut -f1 -d ' ')
+      if [[ "$check_dom" == "$REPLY" ]]; then
+        NAME="$item"
+        break
+      fi
     done
-  else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
   fi
 }
 
+# Nếu gọi script kèm tên domain từ command line
 if [[ -n "$1" && "$1" != "98" ]]; then
   NAME="$1"
 else
   lua_chon_NAME
 fi
 
+# Tách lấy tên chuẩn (Cắt bỏ dòng trạng thái)
 NAME=$(echo "$NAME" | cut -f1 -d ' ')
 
+# --- CHỐT CHẶN THOÁT HIỂM ---
 [[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
 
 # ==============================================================================
@@ -125,7 +160,7 @@ function process_ddos() {
     UI_STRING="Kích hoạt Chống DDoS (Fail2ban) cho $target_domain"
     _runing "$UI_STRING"
 
-    # Kiểm tra Cloudflare CDN
+    # Kiểm tra Cloudflare CDN (Chống khóa nhầm IP Cloudflare)
     local TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$target_domain/cdn-cgi/trace" 2>/dev/null)
     if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
       if ! grep -q '103.21.244.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
@@ -289,12 +324,14 @@ else
 fi
 
 # ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ
+# KHỞI ĐỘNG LẠI DỊCH VỤ VÀ NEO MÀN HÌNH
 # ==============================================================================
-UI_RELOAD="Nạp lại quy tắc Fail2ban và OpenLiteSpeed"
-_runing "$UI_RELOAD"
+echo -e "\n\033[1;36mĐang nạp lại quy tắc Fail2ban và OpenLiteSpeed...\033[0m"
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
 fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
-_rundone "$UI_RELOAD"
+echo -e "\033[1;32mHoàn tất!\033[0m"
+
+echo -e "\n========================================================================="
+read -p "Nhấn phím [Enter] để quay lại menu..." dummy
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1

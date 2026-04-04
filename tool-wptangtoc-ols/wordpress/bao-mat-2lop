@@ -21,58 +21,88 @@ function huong_dan() {
 . /etc/wptt/lang/$ngon_ngu.sh
 . /etc/wptt/echo-color
 
+clear
 echo -e "\n========================================================================="
-echo -e "| Bảo mật => Bật / Tắt Bảo mật wp-admin 2 lớp                 |"
+echo -e "| Bảo mật => Bật / Tắt Bảo mật wp-admin 2 lớp                             |"
 echo -e "=========================================================================\n"
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CHỈ HIỂN THỊ DOMAIN WORDPRESS + CÓ TRẠNG THÁI)
+# HÀM MENU LỌC THÔNG MINH (CHỈ HIỂN THỊ DOMAIN WP + CÓ TRẠNG THÁI + FZF)
 # ==============================================================================
 function lua_chon_NAME() {
-  NAME=""
-  if [[ -n "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]]; then
-    selects=()
+  unset NAME domain selects
+  selects=()
 
-    # Vòng lặp Globbing siêu tốc không qua sub-shell
-    for filepath in /etc/wptt/vhost/.*.conf; do
-      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  # 1. Vòng lặp Globbing siêu tốc không qua sub-shell
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-      local domain="${filepath##*/}"
-      domain="${domain%.conf}"
-      domain="${domain#.}"
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-      # Chỉ quét các domain có định dạng chuẩn và có nhân WordPress
-      if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
-        local check_mk="/usr/local/lsws/$domain/passwd/.mk"
+    # Chỉ quét các domain có định dạng chuẩn và có nhân WordPress
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
+      local check_mk="/usr/local/lsws/$domain/passwd/.mk"
 
-        if [[ -f "$check_mk" ]]; then
-          selects+=("$domain [Đang BẬT]")
-        else
-          selects+=("$domain [Đang TẮT]")
-        fi
+      if [[ -f "$check_mk" ]]; then
+        selects+=("$domain [Đang BẬT]")
+      else
+        selects+=("$domain [Đang TẮT]")
       fi
-    done
+    fi
+  done
 
-    if [[ ${#selects[@]} -eq 0 ]]; then
-      echo -e "\033[1;33mHệ thống chưa có Website WordPress nào để cấu hình!\033[0m"
-      sleep 3
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\033[1;33mHệ thống chưa có Website WordPress nào để cấu hình!\033[0m"
+    sleep 3
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  # 2. Sắp xếp mảng chuẩn Version (Alphabetical)
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # 3. Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website WP
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # 4. Hiển thị Menu PS3 hỗ trợ 00 (FZF)
+  if command -v fzf &>/dev/null; then
+    PS3="$(tput setab 0)-//- Lựa chọn website WP bạn muốn cấu hình [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
+  else
+    PS3="$(tput setab 0)-//- Lựa chọn website WP bạn muốn cấu hình [0=Thoát]:$(tput sgr0) "
+  fi
+
+  # 5. Vòng lặp lấy giá trị
+  select selected_domain in "${selects[@]}"; do
+    NAME="$selected_domain"
+    break
+  done
+
+  # 6. XỬ LÝ CHỌN NHANH [00] VỚI FZF
+  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
+    local selected_name
+    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website Bảo mật 2 lớp [0=Thoát]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    if [[ -z "$selected_name" ]]; then
+      echo "Đã hủy chọn."
       exec /etc/wptt/wptt-bao-mat-main 1
     fi
+    NAME="$selected_name"
+  fi
 
-    # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website WP
-    if [[ ${#selects[@]} -ge 2 ]]; then
-      selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
-    fi
-
-    PS3=$'\n'"-//- Lựa chọn website WordPress bạn muốn cấu hình [0=Thoát]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      break
+  # 7. Xử lý nhập input thẳng tên domain (nếu không chọn số)
+  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
+    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
+    for item in "${selects[@]}"; do
+      local check_dom=$(echo "$item" | cut -f1 -d ' ')
+      if [[ "$check_dom" == "$REPLY" ]]; then
+        NAME="$item"
+        break
+      fi
     done
-  else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
   fi
 }
 
@@ -83,7 +113,7 @@ else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn
+# Tách lấy tên chuẩn (Cắt bỏ dòng trạng thái)
 NAME=$(echo "$NAME" | cut -f1 -d ' ')
 
 # --- CHỐT CHẶN THOÁT HIỂM ---
@@ -257,6 +287,9 @@ if [[ -n "$CREDENTIALS_SUMMARY" ]]; then
   echo -e "$CREDENTIALS_SUMMARY"
   echo -e "============================================================================="
   echo "(Có thể xem lại tài khoản tại menu: Bảo mật => Xem thông tin tài khoản 2 lớp)"
+else
+  echo -e "\n\033[1;32mHoàn tất thao tác cấu hình!\033[0m"
+  echo -e "========================================================================="
 fi
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1

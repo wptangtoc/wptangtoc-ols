@@ -1,0 +1,286 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+function huong_dan() {
+  Tính năng Bật / Tắt ghi access.log và error.log cho phép bạn kiểm soát việc ghi lại nhật ký truy cập và lỗi cho một website cụ thể trên OpenLiteSpeed.
+
+  1. Kích hoạt [Bật]:
+  * access.log: Ghi lại mọi yêu cầu truy cập [IP, thời gian, URL, trình duyệt...]. Rất tốt để phân tích lưu lượng.
+  * error.log: Ghi lại các lỗi máy chủ, cấu hình, PHP... Là công cụ bắt buộc phải có khi web bị lỗi 500, trắng trang.
+
+  2. Hủy kích hoạt [Tắt]:
+  * Giúp tiết kiệm dung lượng ổ cứng [đặc biệt với web traffic khủng].
+  * Giảm tải thao tác ghi đĩa [I/O] và tiết kiệm một chút CPU.
+  * KHÔNG KHUYẾN KHÍCH tắt error.log trừ khi bạn thực sự không bao giờ xem log và muốn tối ưu 100% tài nguyên phần cứng.
+
+  Bạn có thể dễ dàng Bật/Tắt bằng 1 cú chạm. Hệ thống sẽ tự động nhận diện trạng thái hiện tại để thao tác đảo ngược [Toggle].
+}
+
+. /etc/wptt/.wptt.conf
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/echo-color
+
+clear
+echo -e "\n========================================================================="
+echo -e "| Quản lý Logs => Bật / Tắt ghi Error & Access Logs Domain                |"
+echo -e "=========================================================================\n"
+
+# ==============================================================================
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME domain selects
+  selects=()
+
+  # Gộp danh sách file từ cả 2 thư mục (vhost thường và chuyển hướng)
+  local file_list=()
+  [[ -d /etc/wptt/vhost ]] && file_list+=(/etc/wptt/vhost/.*.conf)
+  [[ -d /etc/wptt/chuyen-huong ]] && file_list+=(/etc/wptt/chuyen-huong/*)
+
+  # Vòng lặp Globbing siêu tốc không qua sub-shell
+  for filepath in "${file_list[@]}"; do
+    # Bỏ qua nếu đường dẫn không hợp lệ hoặc chứa ký tự * chưa resolve được
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
+      local vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+      
+      if [[ -f "$vhost_conf" ]]; then
+        # Kiểm tra trạng thái xem file cấu hình có đang bật errorlog không
+        if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
+          selects+=("$domain [Đang BẬT]")
+        else
+          selects+=("$domain [Đang TẮT]")
+        fi
+      fi
+    fi
+  done
+
+  # Lọc trùng lặp và sắp xếp mảng
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n\033[1;33mKhông tìm thấy website nào trên hệ thống để thao tác!\033[0m"
+    sleep 3
+    exec /etc/wptt/wptt-logs-main 1
+  fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
+  if command -v fzf &>/dev/null; then
+    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
+  else
+    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [0=Thoát]:$(tput sgr0) "
+  fi
+
+  # Vòng lặp lấy giá trị
+  select selected_domain in "${selects[@]}"; do
+    NAME="$selected_domain"
+    break
+  done
+
+  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
+  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
+    local selected_name
+    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website Bật/Tắt Log [0=Thoát]: ")
+    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+    if [[ -z "$selected_name" ]]; then
+      echo "Đã hủy chọn."
+      exec /etc/wptt/wptt-logs-main 1
+    fi
+    NAME="$selected_name"
+  fi
+
+  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
+  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
+    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
+    for item in "${selects[@]}"; do
+      local check_dom=$(echo "$item" | cut -f1 -d ' ')
+      if [[ "$check_dom" == "$REPLY" ]]; then
+        NAME="$item"
+        break
+      fi
+    done
+  fi
+}
+
+# Nếu gọi script kèm tên domain từ command line
+if [[ -n "$1" && "$1" != "98" ]]; then
+  NAME="$1"
+else
+  lua_chon_NAME
+fi
+
+# Tách lấy tên chuẩn (cắt phần đuôi trạng thái)
+NAME=$(echo "$NAME" | cut -f1 -d ' ')
+
+# --- CHỐT CHẶN THOÁT HIỂM ---
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-logs-main 1
+
+# ==============================================================================
+# HÀM XÁC ĐỊNH USER LITESPEED
+# ==============================================================================
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  tuong_thich_nhom_litespeed="nogroup"
+else
+  tuong_thich_nhom_litespeed="nobody"
+fi
+
+# ==============================================================================
+# HÀM THỰC THI BẬT/TẮT LOGS CHO 1 DOMAIN
+# ==============================================================================
+function process_logs_domain() {
+  local target_domain=$1
+  local action=$2 # "bat" hoac "tat"
+  local vhost_conf="/usr/local/lsws/conf/vhosts/$target_domain/$target_domain.conf"
+
+  if [[ ! -f "$vhost_conf" ]]; then
+    echo "Bỏ qua $target_domain: Không tìm thấy file vhost conf"
+    return
+  fi
+
+  if [[ "$action" == "bat" ]]; then
+    if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
+      echo "Website $target_domain đã bật Log trước đó. Bỏ qua..."
+      return
+    fi
+
+    UI_STRING="Kích hoạt ghi Error & Access Logs cho $target_domain"
+    _runing "$UI_STRING"
+
+    # Xóa cấu hình rác (nếu có) trước khi tiêm
+    sed -i -e '/^errorlog /,/^}$/d' "$vhost_conf"
+    sed -i -e '/^accesslog /,/^}$/d' "$vhost_conf"
+
+    # Tiêm cấu hình log
+    cat <<EOF >>"$vhost_conf"
+
+errorlog \$VH_ROOT/logs/error.log {
+  useServer               1
+  logLevel                ERROR
+  rollingSize             10M
+}
+
+accesslog \$VH_ROOT/logs/access.log {
+  useServer               0
+  rollingSize             10M
+  keepDays                30
+  compressArchive         1
+}
+EOF
+
+    # Tạo thư mục và cấp quyền
+    mkdir -p "/usr/local/lsws/$target_domain/logs"
+    chown -R nobody:$tuong_thich_nhom_litespeed "/usr/local/lsws/$target_domain/logs"
+    chmod 700 "/usr/local/lsws/$target_domain/logs"
+
+    # Update cache biến WPTangToc
+    [[ -f "/etc/wptt/vhost/.$target_domain.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost/.$target_domain.conf" && echo 'bat_log_domain=1' >>"/etc/wptt/vhost/.$target_domain.conf"
+    [[ -f "/etc/wptt/vhost_bk/.$target_domain.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost_bk/.$target_domain.conf" && echo 'bat_log_domain=1' >>"/etc/wptt/vhost_bk/.$target_domain.conf"
+
+    echo "Bật log website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    _rundone "$UI_STRING"
+
+  elif [[ "$action" == "tat" ]]; then
+    if ! grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
+      echo "Website $target_domain chưa bật Log. Bỏ qua..."
+      return
+    fi
+
+    UI_STRING="Tắt (Hủy) ghi Error & Access Logs cho $target_domain"
+    _runing "$UI_STRING"
+
+    # Dọn dẹp block cấu hình bằng SED
+    sed -i -e '/^errorlog /,/^}$/d' "$vhost_conf"
+    sed -i -e '/^accesslog /,/^}$/d' "$vhost_conf"
+
+    # Xóa thư mục logs của domain (Chặn xóa nhầm /)
+    if [[ -n "$target_domain" && "$target_domain" != "/" ]]; then
+      rm -rf "/usr/local/lsws/$target_domain/logs"
+    fi
+
+    # Failsafe: Đề phòng mất thư mục logs tổng của server
+    if [[ ! -d "/usr/local/lsws/logs" ]]; then
+      mkdir -p /usr/local/lsws/logs
+      chown root:$tuong_thich_nhom_litespeed /usr/local/lsws/logs
+    fi
+
+    # Gỡ cache biến WPTangToc
+    [[ -f "/etc/wptt/vhost/.$target_domain.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost/.$target_domain.conf"
+    [[ -f "/etc/wptt/vhost_bk/.$target_domain.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost_bk/.$target_domain.conf"
+
+    echo "Tắt log website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    _rundone "$UI_STRING"
+  fi
+}
+
+# ==============================================================================
+# XỬ LÝ LÔGIC RẼ NHÁNH
+# ==============================================================================
+
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
+  echo -e "\nBạn muốn BẬT hay TẮT ghi Logs cho \033[1;33mTẤT CẢ\033[0m website?"
+  prompt="Lựa chọn của bạn [1-2]: "
+  mass_action=""
+  options=("BẬT đồng loạt" "TẮT đồng loạt" "Hủy bỏ")
+  PS3="$prompt"
+  select opt in "${options[@]}"; do
+    case "$REPLY" in
+    1) mass_action="bat"; break ;;
+    2) mass_action="tat"; break ;;
+    3) exec /etc/wptt/wptt-logs-main 1 ;;
+    *) printf "\nNhập sai, tự động hủy.\n"; exec /etc/wptt/wptt-logs-main 1 ;;
+    esac
+  done
+
+  # Thao tác hàng loạt (Quét cả vhost và chuyen-huong)
+  local file_list=()
+  [[ -d /etc/wptt/vhost ]] && file_list+=(/etc/wptt/vhost/.*.conf)
+  [[ -d /etc/wptt/chuyen-huong ]] && file_list+=(/etc/wptt/chuyen-huong/*)
+
+  for filepath in "${file_list[@]}"; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* ]]; then
+      process_logs_domain "$domain" "$mass_action"
+    fi
+  done
+
+else
+  # Đảo trạng thái (Toggle) cho 1 website cụ thể
+  vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+  [[ ! -f "$vhost_conf" ]] && {
+    echoDo "Tên miền không tồn tại hoặc chưa được khởi tạo cấu hình Vhost!"
+    sleep 2
+    exec /etc/wptt/wptt-logs-main 1
+  }
+
+  if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
+    process_logs_domain "$NAME" "tat"
+  else
+    process_logs_domain "$NAME" "bat"
+  fi
+fi
+
+# ==============================================================================
+# KHỞI ĐỘNG LẠI DỊCH VỤ & NEO MÀN HÌNH
+# ==============================================================================
+# Đổi từ restart sang reload để tránh downtime
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-logs-main 1

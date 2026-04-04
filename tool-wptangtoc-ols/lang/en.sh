@@ -288,6 +288,7 @@ nhap_sai_truong_du_lieu_so_tu_nhien="If you enter the wrong data field, please e
 #quan ly logs menu main
 xem_error_log_server="View error log server"
 bat_tat_access_log_server="On/OFF access log server"
+bat_tat_access_log_domain="On/OFF access && error log domain"
 xem_access_log_server="View access log server"
 bat_ghi_error_access_log_domain="On take note error/access log domain"
 tat_ghi_error_access_log_domain="Off take note error/access log domain"
