@@ -287,6 +287,7 @@ nhap_sai_truong_du_lieu_so_tu_nhien="Nhập sai trường dữ liệu hãy nhậ
 #quan ly logs menu main
 xem_error_log_server="Xem error log server"
 bat_tat_access_log_server="Bật/Tắt access log server"
+bat_tat_access_log_domain="Bật/Tắt access && error log domain"
 xem_access_log_server="Xem access log server"
 bat_ghi_error_access_log_domain="Bật ghi error/access log domain"
 tat_ghi_error_access_log_domain="Tắt ghi error/access log domain"

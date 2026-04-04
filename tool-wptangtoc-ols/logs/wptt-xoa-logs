@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   Tính năng Xóa toàn bộ log là một công cụ bảo trì cho phép người dùng nhanh chóng dọn dẹp và loại bỏ tất cả các tệp tin nhật ký [log files] được tạo ra bởi máy chủ web [như OpenLiteSpeed], Máy chủ database [MariaDB], ứng dụng [như PHP], và cả hệ thống linux.
@@ -14,89 +14,112 @@ function huong_dan() {
   Tuy nhiên, cần lưu ý:
   * Việc xóa toàn bộ log sẽ làm mất vĩnh viễn các dữ liệu lịch sử về truy cập, lỗi, và hoạt động của máy chủ. Điều này có thể gây khó khăn cho việc phân tích hiệu suất, truy tìm nguyên nhân sự cố trong quá khứ, hoặc điều tra các vấn đề bảo mật.
   * Nên cân nhắc sao lưu [backup] log trước khi xóa nếu bạn nghĩ rằng có thể cần đến chúng sau này.
+
   Tóm lại, đây là một tính năng tiện ích để dọn dẹp nhanh chóng, nhưng cần được sử dụng một cách cẩn trọng để tránh mất dữ liệu quan trọng.
 }
 
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh
-
 . /etc/wptt/echo-color
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_logs => $xoa logs ALL	                                      |"
-echo "========================================================================="
-echo ""
-echo ""
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+clear
+echo -e "\n========================================================================="
+echo -e "| $quan_ly_logs => $xoa logs ALL                                         |"
+echo -e "=========================================================================\n"
+
+# Nhận diện OS để cấp quyền chính xác
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   tuong_thich_nhom_litespeed="nogroup"
 else
   tuong_thich_nhom_litespeed="nobody"
 fi
 
-unset path
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-    domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-      path="/usr/local/lsws/$domain/logs"
-      i=1
-      if [[ -d "$path" ]]; then
-        if [[ -f $path/error.log ]]; then
-          truncate -s 0 $path/error.log >/dev/null 2>&1 #làm rỗng file error.log hiện tại
-          chown nobody:$tuong_thich_nhom_litespeed $path/error.log
-        fi
-        if [[ -f $path/access.log ]]; then
-          truncate -s 0 $path/access.log >/dev/null 2>&1 #làm rỗng file access.log hiện tại
-          chown nobody:$tuong_thich_nhom_litespeed $path/access.log
-          rm -f $path/*.gz #xoá toàn bộ file .gz nén
-        fi
-        echo "Hoàn tất xoá logs website $domain"
+# ==============================================================================
+# 1. DỌN DẸP LOG CỦA TỪNG WEBSITE (VHOSTS)
+# ==============================================================================
+echo -e "\033[1;36m[+] Đang tiến hành dọn dẹp Log của các website...\033[0m"
+
+# Sử dụng Bash Globbing an toàn thay vì parse lệnh 'ls'
+for conf_file in /etc/wptt/vhost/.*.conf; do
+  [[ -e "$conf_file" ]] || continue # Bỏ qua nếu không có file nào khớp
+
+  domain=$(basename "$conf_file" .conf | sed 's/^\.//')
+
+  # Chỉ xử lý nếu domain hợp lệ (có chứa dấu chấm)
+  if [[ "$domain" == *.* && "$domain" != ".*" ]]; then
+    path="/usr/local/lsws/$domain/logs"
+
+    if [[ -d "$path" ]]; then
+      # Xóa rỗng error.log
+      if [[ -f "$path/error.log" ]]; then
+        truncate -s 0 "$path/error.log" >/dev/null 2>&1
+        chown nobody:$tuong_thich_nhom_litespeed "$path/error.log"
       fi
+
+      # Xóa rỗng access.log và các file nén .gz
+      if [[ -f "$path/access.log" ]]; then
+        truncate -s 0 "$path/access.log" >/dev/null 2>&1
+        chown nobody:$tuong_thich_nhom_litespeed "$path/access.log"
+        rm -f "$path"/*.gz
+      fi
+
+      echo " -> Hoàn tất xóa logs website: $domain"
     fi
-  done
-fi
+  fi
+done
 
-_runing "xoá log server"
+echo ""
+UI_STRING="Dọn dẹp Log máy chủ OLS và Hệ thống Linux"
+_runing "$UI_STRING"
 
-if [[ -f /usr/local/lsws/logs/error.log ]]; then
-  truncate -s 0 /usr/local/lsws/logs/error.log >/dev/null 2>&1
-  rm -f /usr/local/lsws/logs/error.log.* #error xoá log cũ
-fi
+# ==============================================================================
+# 2. DỌN DẸP LOG CỦA MÁY CHỦ OPENLITESPEED
+# ==============================================================================
+ols_log_dir="/usr/local/lsws/logs"
 
-if [[ -f /usr/local/lsws/logs/access.log ]]; then
-  truncate -s 0 /usr/local/lsws/logs/access.log >/dev/null 2>&1
-  rm -f /usr/local/lsws/logs/access.log.* #access xoá log cũ
-fi
-
-if [[ -f /usr/local/lsws/logs/stderr.log ]]; then
-  truncate -s 0 /usr/local/lsws/logs/stderr.log >/dev/null 2>&1
-  rm -f /usr/local/lsws/logs/stderr.log.* #stderr xoá log cũ
-fi
-
-if [[ -f /usr/local/lsws/logs/error.log ]]; then
-  chown nobody:$tuong_thich_nhom_litespeed /usr/local/lsws/logs/error.log
-fi
-
-# đều phòng nếu mất thư mục logs của server sẽ tự động tái tạo lại
-if [[ ! -d /usr/local/lsws/logs ]]; then
-  mkdir -p /usr/local/lsws/logs
-  chown root:$tuong_thich_nhom_litespeed /usr/local/lsws/logs
+# Đề phòng mất thư mục logs của server -> Tự động tái tạo lại
+if [[ ! -d "$ols_log_dir" ]]; then
+  mkdir -p "$ols_log_dir"
+  chown root:$tuong_thich_nhom_litespeed "$ols_log_dir"
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 fi
 
-truncate -s 0 /var/log/wptangtoc-ols.log
+# Dọn dẹp các file log chính của OLS
+for log_file in error.log access.log stderr.log; do
+  if [[ -f "$ols_log_dir/$log_file" ]]; then
+    truncate -s 0 "$ols_log_dir/$log_file" >/dev/null 2>&1
+    rm -f "$ols_log_dir/$log_file".* # Xóa log cũ đã rotate
+  fi
+done
 
-_rundone "xoá log server"
+[[ -f "$ols_log_dir/error.log" ]] && chown nobody:$tuong_thich_nhom_litespeed "$ols_log_dir/error.log"
 
-echo "Xoá Log ALL: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+# ==============================================================================
+# 3. DỌN DẸP LOG HỆ THỐNG LINUX & WPTANGTOC
+# ==============================================================================
+# Xóa log của WPTangToc
+[[ -f /var/log/wptangtoc-ols.log ]] && truncate -s 0 /var/log/wptangtoc-ols.log
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+# Dọn dẹp Journalctl (Giữ lại log trong vòng 1 ngày)
+journalctl --vacuum-time=1d >/dev/null 2>&1
+
+# Xóa rỗng các file log hệ thống phổ biến
+for syslog in /var/log/syslog /var/log/messages /var/log/auth.log /var/log/secure; do
+  [[ -f "$syslog" ]] && truncate -s 0 "$syslog" >/dev/null 2>&1
+done
+
+_rundone "$UI_STRING"
+
+# Lưu lại hành động xóa log (Bắt đầu ghi log mới)
+echo "Xóa Log ALL (Vhosts, OLS, System): $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+# ==============================================================================
+# NEO MÀN HÌNH UX
+# ==============================================================================
+echo -e "\n\033[1;32m HOÀN TẤT! Hệ thống đã giải phóng toàn bộ dung lượng Log.\033[0m"
+echo -e "========================================================================="
+
+if [[ "${1:-}" == "98" ]]; then
   exec /etc/wptt/wptt-logs-main 1
 fi
