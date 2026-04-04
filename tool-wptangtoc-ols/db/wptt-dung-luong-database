@@ -1,73 +1,123 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
-  Tính năng Kiểm tra dung lượng database cho phép bạn xem được kích thước hiện tại mà cơ sở dữ liệu [database] của bạn đang chiếm dụng trên ổ đĩa của máy chủ.
+  Tính năng Kiểm tra dung lượng database cho phép bạn xem được kích thước hiện tại mà cơ sở dữ liệu của bạn đang chiếm dụng.
 
-  Nói đơn giản, đây là cách để bạn biết database của mình nặng bao nhiêu Gigabytes [GB] hoặc Megabytes [MB].
-
-  Mục Đích Chính
-  * Theo dõi sử dụng tài nguyên: Giúp bạn biết database đang chiếm bao nhiêu không gian lưu trữ, đặc biệt quan trọng nếu gói VPS, Máy chủ của bạn có giới hạn dung lượng.
-  * Lập kế hoạch dung lượng: Dự đoán khi nào bạn có thể cần nâng cấp dung lượng lưu trữ.
-  * Tối ưu hóa database: Khi dung lượng tăng bất thường, việc kiểm tra có thể là bước đầu để tìm ra các bảng lớn cần dọn dẹp hoặc tối ưu.
-  * Xác định các bảng lớn nhất: Một số công cụ còn cho phép xem chi tiết dung lượng của từng bảng riêng lẻ trong database, giúp xác định bảng nào đang chiếm nhiều không gian nhất.
-  * Chuẩn bị cho việc sao lưu [backup]: Ước lượng dung lượng cần thiết để lưu trữ file backup.
-
-  Việc thường xuyên kiểm tra dung lượng database giúp bạn quản lý tài nguyên hiệu quả và chủ động hơn trong việc duy trì website.
+  Hệ thống sẽ tự động trích xuất thông tin Database từ file cấu hình Vhost tĩnh của tên miền, hỗ trợ xem chi tiết dung lượng của từng Bảng [Tables] bên trong để bạn dễ dàng dọn dẹp và tối ưu.
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_database => Xem dung luong database                            |"
-echo "========================================================================="
-
+. /etc/wptt/.wptt.conf
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/echo-color
 . /etc/wptt/core-functions
+
+# Xử lý điều hướng menu con
 if [[ "$1" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
-wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép kiểm tra dung lượng database"
 
-. /etc/wptt/.wptt.conf
+# Chốt chặn an toàn: Kiểm tra MariaDB có đang sống không
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép kiểm tra dung lượng database."
+
+clear
+echo -e "\n========================================================================="
+echo -e "| Quản lý Database => Xem dung lượng Database (System Variables)         |"
+echo -e "=========================================================================\n"
+
+# 1. Gọi thư viện lựa chọn tên miền
 . /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lua chon website muon xem dung luong Database: "
-echo ""
+echo -e "Lựa chọn website bạn muốn kiểm tra Database:\n"
 lua_chon_NAME
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+# Kiểm tra thoát hiểm
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-db-main 1
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echoDo "Tên miền không tồn tại trên hệ thống này!"
   sleep 3
   exec /etc/wptt/wptt-db-main 1
-  exit
 fi
 
-. /etc/wptt/vhost/."$NAME".conf
+# 2. Load file cấu hình Vhost tĩnh để lấy các biến môi trường
+. "$pathcheck"
 
-path="/usr/local/lsws/$NAME/html"
+# Lấy biến DB_Name_web (Hệ thống WPTangToc sinh ra biến này trong file .conf)
+db_chon="$DB_Name_web"
 
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  . /etc/wptt/echo-color
-  echoDo "He thong xac nhan ban chua kich hoat su dung WordPress"
-  echoDo "Tinh nang chi danh cho WordPress"
+TEMP_CNF_ROOT=$(mktemp)
+chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+host=localhost
+max_allowed_packet=1G
+default-character-set=utf8mb4
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet=1G
+EOF
+trap "rm -f $TEMP_CNF_ROOT" EXIT
+
+# 3. Xử lý logic tìm Database
+if [[ -n "$db_chon" ]]; then
+  echo -e "\n\033[1;32m[+] Đã lấy thông tin Database từ hệ thống Vhost của $NAME: \033[1;36m$db_chon\033[0m"
+else
+  # Chế độ dự phòng: Nếu file Vhost cũ không có lưu biến $DB_Name_web
+  echo -e "\n\033[1;33m[!] Không tìm thấy biến thông tin Database trong cấu hình Vhost của $NAME.\033[0m"
+  echo -e "\033[1;36m[+] DANH SÁCH DATABASE HIỆN CÓ TRÊN MÁY CHỦ:\033[0m\n"
+
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "
+    SELECT table_schema AS 'Tên Database', 
+    ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS 'Dung lượng (MB)'
+    FROM information_schema.TABLES 
+    WHERE table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys') 
+    GROUP BY table_schema 
+    ORDER BY SUM(data_length + index_length) DESC;
+  " -t
+
+  echo ""
+  read -p "Nhập Tên Database bạn muốn xem chi tiết (Hoặc 0 để thoát): " db_chon
+  [[ "$db_chon" == "0" || -z "$db_chon" ]] && exec /etc/wptt/wptt-db-main 1
+fi
+
+# 4. Kiểm tra Database có thực sự tồn tại trên MariaDB không
+check_db=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '$db_chon';")
+if [[ -z "$check_db" ]]; then
+  echo -e "\n\033[1;31m Lỗi: Không tìm thấy Database '$db_chon' trong MariaDB!\033[0m"
+  echo " Có thể Database này đã bị xóa hoặc file cấu hình lưu sai tên."
   sleep 3
   exec /etc/wptt/wptt-db-main 1
-  exit
 fi
 
-wp db size --tables --path=$path --allow-root
+# 5. In bảng chi tiết Table-level
+echo -e "\n\033[1;36m[+] CHI TIẾT TỪNG BẢNG TRONG DATABASE: $db_chon\033[0m"
+mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "
+  SELECT table_name AS 'Tên Bảng', 
+  ROUND(((data_length + index_length) / 1024 / 1024), 2) AS 'Dung lượng (MB)',
+  table_rows AS 'Số Dòng (Ước tính)'
+  FROM information_schema.TABLES 
+  WHERE table_schema = '$db_chon' 
+  ORDER BY (data_length + index_length) DESC;
+" -t
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+# In tổng cộng
+mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "
+  SELECT CONCAT('=> TỔNG DUNG LƯỢNG DATABASE [', '$db_chon', '] LÀ: ', ROUND(SUM(data_length + index_length) / 1024 / 1024, 2), ' MB') 
+  FROM information_schema.TABLES 
+  WHERE table_schema = '$db_chon';
+"
+
+rm -f $TEMP_CNF_ROOT
+echo -e "\n========================================================================="
+read -p "Nhấn phím [Enter] để quay lại menu..." dummy
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-db-main 1
