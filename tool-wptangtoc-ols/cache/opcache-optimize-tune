@@ -1,9 +1,19 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 # ==========================================
-# AUTO-TUNE PHP OPCACHE
+# AUTO-TUNE PHP OPCACHE & JIT
 # ==========================================
 
-TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+# 1. Lấy tổng RAM (Tối ưu Zero-forking đọc thẳng từ /proc/meminfo)
+while read -r name value unit; do
+  if [[ "$name" == "MemTotal:" ]]; then
+    TOTAL_RAM_MB=$((value / 1024))
+    break
+  fi
+done </proc/meminfo
+
 if [ "$TOTAL_RAM_MB" -le 1200 ]; then
   OPCACHE_MEM="64"
   JIT_BUFFER="0M"      # Tắt JIT cho máy siêu yếu (1GB) để tiết kiệm RAM
@@ -22,16 +32,31 @@ else
   REALPATH_SIZE="2048K" # VPS to: 2MB (Mức trần thực tế)
 fi
 
-# 2. Lấy danh sách các thư mục lsphp (ví dụ: lsphp74, lsphp81, lsphp82)
-lsphp_list=($(ls /usr/local/lsws | grep -P '^lsphp[0-9]+$'))
+# 2. KIỂM TRA OS MỘT LẦN DUY NHẤT Ở NGOÀI VÒNG LẶP
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  OS_UBUNTU=1
+else
+  OS_UBUNTU=0
+fi
 
-for php_dir in "${lsphp_list[@]}"; do
-  # Tách lấy phần số của phiên bản (ví dụ: "lsphp82" -> "82", "lsphp74" -> "74")
-  version_num=$(echo "$php_dir" | grep -oP '[0-9]+')
+# 3. QUÉT VÀ CẤU HÌNH (Sử dụng Globbing siêu tốc)
+shopt -s nullglob
+for dir in /usr/local/lsws/lsphp*/; do
+  [[ ! -d "$dir" ]] && continue
 
-  # Đường dẫn chuẩn xác tới file php.ini của OpenLiteSpeed
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
-    phien_ban_php_co_cham=$(echo $version_num | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
+  # Cắt tên thư mục thuần Bash (VD: lsphp81)
+  php_dir="${dir%/}"
+  php_dir="${php_dir##*/}"
+
+  # Lấy phần số của phiên bản (VD: 81)
+  version_num="${php_dir#lsphp}"
+
+  # Tạo chuỗi có dấu chấm cho Ubuntu (VD: 8.1)
+  ver_len=${#version_num}
+  phien_ban_php_co_cham="${version_num:0:$ver_len-1}.${version_num: -1}"
+
+  # Đường dẫn chuẩn xác tới file php.ini
+  if [[ "$OS_UBUNTU" == 1 ]]; then
     php_ini_path="/usr/local/lsws/$php_dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
   else
     php_ini_path="/usr/local/lsws/$php_dir/etc/php.ini"
@@ -39,32 +64,24 @@ for php_dir in "${lsphp_list[@]}"; do
 
   if [[ -f "$php_ini_path" ]]; then
 
-    # --- ÁP DỤNG OPCACHE (Cho MỌI phiên bản PHP) ---
-    # Dọn dẹp dòng cũ (Cách dọn bạo lực này bao sạch, không lo lặp dòng)
-    sed -i '/^opcache.memory_consumption/d' "$php_ini_path"
-    sed -i '/^opcache.interned_strings_buffer/d' "$php_ini_path"
-    sed -i '/^opcache.max_accelerated_files/d' "$php_ini_path"
+    # --- ÁP DỤNG OPCACHE & JIT ---
 
-    # Nối thẳng cấu hình OPcache Auto-tune vào cuối file
-    echo "opcache.memory_consumption=$OPCACHE_MEM" >>"$php_ini_path"
-    echo "opcache.interned_strings_buffer=16" >>"$php_ini_path"
-    echo "opcache.max_accelerated_files=16229" >>"$php_ini_path"
+    # Gom 7 lệnh SED cũ thành 1 lệnh duy nhất (Tối ưu I/O ổ cứng cực mạnh)
+    sed -i -E '/^(opcache\.memory_consumption|opcache\.interned_strings_buffer|opcache\.max_accelerated_files|realpath_cache_size|realpath_cache_ttl|opcache\.jit|opcache\.jit_buffer_size)=/d' "$php_ini_path"
 
-    sed -i '/^realpath_cache_size/d' "$php_ini_path"
-    sed -i '/^realpath_cache_ttl/d' "$php_ini_path"
-    echo "realpath_cache_size=${REALPATH_SIZE}" >>"$php_ini_path"
-    echo "realpath_cache_ttl=7200" >>"$php_ini_path" # Nâng lên 2 tiếng cho web bay như gió
+    # Chuẩn bị khối cấu hình chung
+    CONFIG_BLOCK="opcache.memory_consumption=$OPCACHE_MEM
+opcache.interned_strings_buffer=16
+opcache.max_accelerated_files=16229
+realpath_cache_size=${REALPATH_SIZE}
+realpath_cache_ttl=7200"
 
-    # --- ÁP DỤNG JIT (Chỉ cho PHP >= 8.0) ---
+    # Xử lý JIT (Chỉ cho PHP >= 8.0)
     if ((version_num >= 80)); then
-      # Xóa cấu hình JIT cũ
-      sed -i '/^opcache.jit/d' "$php_ini_path"
-      sed -i '/^opcache.jit_buffer_size/d' "$php_ini_path"
-
-      # Chỉ bật JIT nếu JIT_BUFFER > 0M
       if [[ "$JIT_BUFFER" != "0M" ]]; then
-        echo "opcache.jit=tracing" >>"$php_ini_path"
-        echo "opcache.jit_buffer_size=$JIT_BUFFER" >>"$php_ini_path"
+        CONFIG_BLOCK="$CONFIG_BLOCK
+opcache.jit=tracing
+opcache.jit_buffer_size=$JIT_BUFFER"
         echo "Đã Tune OPcache=${OPCACHE_MEM}M & JIT=${JIT_BUFFER} cho $php_dir" >>/var/log/wptangtoc-ols.log
       else
         echo "Đã Tune OPcache=${OPCACHE_MEM}M (Tắt JIT vì RAM thấp) cho $php_dir" >>/var/log/wptangtoc-ols.log
@@ -72,7 +89,11 @@ for php_dir in "${lsphp_list[@]}"; do
     else
       echo "Đã Tune OPcache=${OPCACHE_MEM}M (Bỏ qua JIT vì bản cũ) cho $php_dir" >>/var/log/wptangtoc-ols.log
     fi
+
+    # Nối toàn bộ cấu hình vào file 1 lần duy nhất
+    echo "$CONFIG_BLOCK" >>"$php_ini_path"
   fi
 done
+shopt -u nullglob
 
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1

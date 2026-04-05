@@ -1,1 +1,145 @@
-. /etc/wptt/php/php-cli-domain-config $NAME
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+function huong_dan() {
+  Tính năng Update và Ghi đè [Force Reinstall] Core, Plugin và Theme của WordPress bằng WP-CLI.
+
+  Mục đích chính:
+  * Cứu hộ Website: Rất hữu ích khi website bị nhiễm mã độc [malware] sửa đổi các file lõi, hoặc khi quá trình cập nhật tự động bị ngắt quãng gây lỗi trắng trang.
+  * Cập nhật đồng loạt: Ép buộc tải lại và cập nhật phiên bản mới nhất của toàn bộ mã nguồn từ máy chủ WordPress.org.
+
+  Quy trình hoạt động:
+  1. Tải và ghi đè lại toàn bộ mã nguồn WordPress Core [bỏ qua thư mục wp-content].
+  2. Quét danh sách Plugin hiện có và ép buộc tải lại bản mới nhất từ kho WordPress.org.
+  3. Quét danh sách Theme hiện có và ép buộc tải lại bản mới nhất từ kho WordPress.org.
+  4. Tự động sửa lại quyền sở hữu [Ownership] file về chuẩn của OpenLiteSpeed để tránh lỗi Permission Denied.
+
+  CẢNH BÁO QUAN TRỌNG:
+  * Các Plugin và Theme trả phí [Premium - không có trên kho miễn phí của WP.org] sẽ bị bỏ qua và báo lỗi nhẹ [không ảnh hưởng hệ thống].
+  * Nếu bạn sửa code trực tiếp vào Theme gốc [thay vì dùng Child Theme], việc ghi đè này SẼ LÀM MẤT TOÀN BỘ CODE TÙY CHỈNH CỦA BẠN. Hãy cân nhắc kỹ!
+}
+
+. /etc/wptt/.wptt.conf
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/echo-color
+
+clear
+echo -e "\n========================================================================="
+echo -e "| Quản lý WordPress => Update và Ghi đè (Core, Plugin, Themes)          |"
+echo -e "=========================================================================\n"
+
+. /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
+
+# Nếu gọi script kèm tên domain từ command line
+if [[ -n "$1" && "$1" != "98" ]]; then
+  NAME="$1"
+else
+  lua_chon_NAME
+fi
+
+# --- CHỐT CHẶN THOÁT HIỂM ---
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-wordpress-main 1
+
+# ==============================================================================
+# HÀM THỰC THI ÉP UPDATE VÀ GHI ĐỀ CHO 1 DOMAIN
+# ==============================================================================
+function process_wp_force_update() {
+  local target_domain=$1
+  local doc_root="/usr/local/lsws/$target_domain/html"
+
+  if [[ ! -f "$doc_root/wp-load.php" ]]; then
+    echo "Bỏ qua $target_domain: Không phải mã nguồn WordPress."
+    return
+  fi
+
+  echo -e "\n\033[1;36m[+] Đang xử lý Update & Ghi đè cho website: \033[1;33m$target_domain\033[0m"
+
+  # Tải cấu hình PHP của Vhost để lấy đúng phiên bản PHP đang chạy
+  . /etc/wptt/vhost/.$target_domain.conf
+  phien_ban_php_domain_thuc_thi=""
+  [[ -f "/etc/wptt/php/php-cli-domain-config" ]] && . "/etc/wptt/php/php-cli-domain-config" "$target_domain" >/dev/null 2>&1
+
+  local WP_CMD="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+  # Chuyển vào thư mục gốc của website
+  cd "$doc_root" || return
+
+  # 1. ÉP TẢI LẠI WP CORE
+  echo " - Đang tải và ghi đè WordPress Core..."
+  $WP_CMD core download --skip-content --force --allow-root >/dev/null 2>&1
+
+  # 2. ÉP TẢI LẠI PLUGINS (Chỉ xử lý nếu có plugin)
+  echo " - Đang quét và ghi đè Plugins..."
+  local plugin_list
+  plugin_list=$($WP_CMD plugin list --field=name --allow-root 2>/dev/null)
+
+  if [[ -n "$plugin_list" ]]; then
+    # Ép danh sách thành chuỗi ngang để đưa vào lệnh
+    local plugins_inline=$(echo "$plugin_list" | tr '\n' ' ')
+    # Redirect stderr để ẩn lỗi với các plugin Premium (Elementor Pro, v.v.)
+    $WP_CMD plugin install $plugins_inline --force --allow-root >/dev/null 2>&1
+  fi
+
+  # 3. ÉP TẢI LẠI THEMES (Chỉ xử lý nếu có theme)
+  echo " - Đang quét và ghi đè Themes..."
+  local theme_list
+  theme_list=$($WP_CMD theme list --field=name --allow-root 2>/dev/null)
+
+  if [[ -n "$theme_list" ]]; then
+    local themes_inline=$(echo "$theme_list" | tr '\n' ' ')
+    $WP_CMD theme install $themes_inline --force --allow-root >/dev/null 2>&1
+  fi
+
+  echo -e "\033[1;32m -> Hoàn tất xử lý cho $target_domain!\033[0m"
+  echo "Update Reinstall WordPress Core/Plugin/Theme $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+}
+
+# ==============================================================================
+# XỬ LÝ LÔGIC RẼ NHÁNH
+# ==============================================================================
+
+if [[ "$NAME" == 'Tất cả website' ]]; then
+  echo -e "\nBạn sắp ÉP UPDATE và GHI ĐỀ Core/Plugin/Theme cho \033[1;31mTOÀN BỘ WEBSITE WORDPRESS\033[0m!"
+  echo "Lưu ý: Quá trình này có thể mất nhiều thời gian tùy thuộc vào số lượng website."
+  prompt="Xác nhận thực hiện? [1=Đồng ý, 2=Hủy]: "
+
+  PS3="$prompt"
+  select opt in "Đồng ý" "Hủy bỏ"; do
+    case "$REPLY" in
+    1) break ;;
+    2) exec /etc/wptt/wptt-wordpress-main 1 ;;
+    *)
+      echo -e "\nNhập sai, tự động hủy.\n"
+      exec /etc/wptt/wptt-wordpress-main 1
+      ;;
+    esac
+  done
+
+  # Quét và xử lý đồng loạt
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
+      process_wp_force_update "$domain"
+    fi
+  done
+
+else
+  # Xử lý 1 website cụ thể
+  process_wp_force_update "$NAME"
+fi
+
+# ==============================================================================
+# HOÀN TẤT VÀ NEO MÀN HÌNH
+# ==============================================================================
+echo -e "\n========================================================================="
+echo -e "\033[1;32m QUÁ TRÌNH UPDATE VÀ GHI ĐÈ ĐÃ HOÀN TẤT!\033[0m"
+echo -e "========================================================================="
+
+[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1

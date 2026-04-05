@@ -1,103 +1,98 @@
 #!/bin/bash
-
-#cat <(crontab -l) <(echo '@reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1') | crontab -
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 # @reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
 
-# Tính năng: Tự động đánh hơi và cấu hình lại hệ thống khi VPS được nâng cấp RAM
-PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' #bien moi truong full day du
+# Tính năng: Tự động đánh hơi và cấu hình lại hệ thống khi VPS thay đổi RAM
+PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 
-# 1. Đọc tổng RAM hiện tại của VPS (tính bằng MB)
+# 1. Đọc tổng RAM hiện tại của VPS (MB)
 TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
 FILE_CACHE="/etc/wptt/.ram_hien_tai"
 
 # Nếu chạy lần đầu (mới cài OLS), lưu mốc RAM gốc và thoát
-if [ ! -f "$FILE_CACHE" ]; then
+if [[ ! -f "$FILE_CACHE" ]]; then
   echo "$TOTAL_RAM" >"$FILE_CACHE"
   return 2>/dev/null || exit 0
 fi
 
-# Đọc mốc RAM cũ
 OLD_RAM=$(cat "$FILE_CACHE")
 
-# 2. Tính toán độ chênh lệch phần cứng (Tránh việc RAM trồi sụt vài MB do hệ thống)
+# 2. Tính toán độ chênh lệch (Bash Math siêu tốc)
 DIFF=$((TOTAL_RAM - OLD_RAM))
-# Lấy trị tuyệt đối (Dùng cho cả trường hợp khách hạ cấp VPS)
-if [ $DIFF -lt 0 ]; then DIFF=$((-DIFF)); fi
+[[ "$DIFF" -lt 0 ]] && DIFF=$((-DIFF)) # Lấy trị tuyệt đối
 
-# 3. NẾU NÂNG CẤP HOẶC HẠ CẤP TRÊN 500MB -> KÍCH HOẠT AUTO-TUNING
-if [ $DIFF -gt 500 ]; then
+# 3. NẾU ĐỔI PHẦN CỨNG TRÊN 500MB -> KÍCH HOẠT AUTO-TUNING
+if [[ "$DIFF" -gt 500 ]]; then
   echo "$(date '+%d-%m-%Y %H:%M') - Phát hiện đổi phần cứng: RAM từ ${OLD_RAM}MB sang ${TOTAL_RAM}MB. Đang Auto-Tune..." >>/var/log/wptangtoc-ols.log
 
-  #thực thi auto tune
-
-  #tính toán cấu hình
-  work_cpucore='1024'
-  cpucore=$(grep -c ^processor /proc/cpuinfo)
-  max_client=$(expr $work_cpucore \* $cpucore \* 2)
-  max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
-  max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
-  tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-  rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-  gioi_han_tien_trinh_bao_loi_503=$(expr $max_client \/ 8)
-  core_tien_lsphp_child=$(expr $cpucore \* 2)
-  if [[ "$rong_ram_mb" = "" ]]; then
-    rong_ram_mb="2048"
-  fi
-  tong_ram_mb_db=$(echo "scale=0;${rong_ram_mb}/4" | bc)
-
-  if [[ $tong_ram_mb_db = '' ]]; then
-    tong_ram_mb_db="2048"
-  fi
-
-  tong_ram_gb=$(expr ${rong_ram_mb} / 1024)
-  db_table_size=$(expr $tong_ram_gb \* 64)
-  buffer_db=$(expr $rong_ram_mb / 6)
-  max_conect_db=$(expr $max_client / 8)
-  max_connections=$(expr 64 \* ${tong_ram_gb})
-
-  # set cau hinh maria database
   # ==========================================
-  # CẤU HÌNH MARIADB (Chỉ chạy khi KHÔNG có SQLite)
+  # A. TÍNH TOÁN THÔNG SỐ (Sử dụng Bash Arithmetic, loại bỏ hoàn toàn expr và bc)
+  # ==========================================
+  work_cpucore=1024
+  cpucore=$(nproc) # Lấy số core CPU chuẩn xác và nhanh hơn
+
+  max_client=$((work_cpucore * cpucore * 2))
+  max_client_max=$((work_cpucore * cpucore * 3))
+  max_client_php=$((work_cpucore * cpucore / 8))
+
+  rong_ram_mb=$TOTAL_RAM # Tái sử dụng biến đã có, không cần awk lại
+  [[ -z "$rong_ram_mb" || "$rong_ram_mb" -eq 0 ]] && rong_ram_mb=2048
+
+  gioi_han_tien_trinh_bao_loi_503=$((max_client / 8))
+  core_tien_lsphp_child=$((cpucore * 2))
+
+  tong_ram_mb_db=$((rong_ram_mb / 4))
+  [[ "$tong_ram_mb_db" -eq 0 ]] && tong_ram_mb_db=2048
+
+  tong_ram_gb=$((rong_ram_mb / 1024))
+  [[ "$tong_ram_gb" -eq 0 ]] && tong_ram_gb=1 # Tránh nhân với 0
+
+  db_table_size=$((tong_ram_gb * 64))
+  buffer_db=$((rong_ram_mb / 6))
+  max_conect_db=$((max_client / 8))
+  max_connections=$((64 * tong_ram_gb))
+
+  # ==========================================
+  # B. CẤU HÌNH MARIADB (Tránh SQLite)
   # ==========================================
   HAS_SQLITE=0
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      # Nếu tìm thấy file db.php có chứa chữ sqlite -> Bật cờ và thoát vòng lặp
-      if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -q -i "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then
-        HAS_SQLITE=1
-        break
-      fi
-    done
-  fi
 
-  if [[ $HAS_SQLITE -eq 0 ]]; then
-    if $(cat /etc/*release | grep -q "Ubuntu"); then
+  # Quét Vhost bằng Globbing (Sửa lỗi dùng ls)
+  shopt -s nullglob
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -qi "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then
+      HAS_SQLITE=1
+      break
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ "$HAS_SQLITE" -eq 0 ]]; then
+    if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
       duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
     else
       duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
     fi
 
     TEMP_mariadb_config=$(mktemp)
-
     TEMP_OLS_config_DIR=$(mktemp -d)
 
-    cp -f $duong_dan_cau_hinh_mariadb $TEMP_mariadb_config #backup
-    cp -rf /usr/local/lsws/conf/* $TEMP_OLS_config_DIR     #backup ols
+    cp -f "$duong_dan_cau_hinh_mariadb" "$TEMP_mariadb_config"
+    cp -rf /usr/local/lsws/conf/* "$TEMP_OLS_config_DIR"
 
-    sed -i '/key_buffer_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/innodb_buffer_pool_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/max_connections/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/tmp_table_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/max_heap_table_size/d' $duong_dan_cau_hinh_mariadb
+    # Dọn dẹp config cũ
+    sed -i '/key_buffer_size/d; /innodb_buffer_pool_size/d; /max_connections/d; /tmp_table_size/d; /max_heap_table_size/d; /max_allowed_packet/d; /table_cache/d; /thread_cache_size/d' "$duong_dan_cau_hinh_mariadb"
 
-    #mini mariadb sed remove
-    sed -i '/max_allowed_packet/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/table_cache/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/thread_cache_size/d' $duong_dan_cau_hinh_mariadb
-    #end mini mariadb
-
-    echo "table_cache = 2000
+    # Ghi config mới
+    cat <<EOF >>"$duong_dan_cau_hinh_mariadb"
+table_cache = 2000
 thread_cache_size = 81
 key_buffer_size = ${buffer_db}M
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
@@ -105,178 +100,131 @@ max_connections = $max_connections
 tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 max_allowed_packet = 64M
-" >>$duong_dan_cau_hinh_mariadb
+EOF
   fi
-  #end setup mariadb
 
-  #setup OLS
+  # ==========================================
+  # C. CẤU HÌNH OPENLITESPEED (OLS)
+  # ==========================================
   OLS_CONF='/usr/local/lsws/conf/httpd_config.conf'
 
-  TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-  # Tính toán mức trần theo công thức bậc thang
-  if [ "$TOTAL_RAM_MB" -le 1200 ]; then
+  if [ "$TOTAL_RAM" -le 1200 ]; then
     BUFFER_SIZE="60M"
     MMAP_CACHE_SIZE="20M"
-  elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
+    KA_TIMEOUT="15"
+    KA_REQS="1000"
+  elif [ "$TOTAL_RAM" -le 2500 ]; then
     BUFFER_SIZE="120M"
     MMAP_CACHE_SIZE="40M"
-  elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
+    KA_TIMEOUT="30"
+    KA_REQS="3000"
+  elif [ "$TOTAL_RAM" -le 4500 ]; then
     BUFFER_SIZE="180M"
     MMAP_CACHE_SIZE="80M"
-  elif [ "$TOTAL_RAM_MB" -le 8500 ]; then
-    BUFFER_SIZE="256M"
-    MMAP_CACHE_SIZE="80M"
-  else
-    # Mức trần cho các VPS siêu to (16GB, 32GB...)
-    MMAP_CACHE_SIZE="80M"
-    BUFFER_SIZE="384M"
-  fi
-
-  # ==========================================
-  # AUTO-TUNE KEEP-ALIVE (Quản lý luồng mạng)
-  # ==========================================
-  if [ "$TOTAL_RAM_MB" -le 1200 ]; then
-    KA_TIMEOUT="15" # Ngắt kết nối rảnh rỗi sau 15 giây
-    KA_REQS="1000"  # Tối đa 1000 file/kết nối
-  elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
     KA_TIMEOUT="45"
     KA_REQS="5000"
+  elif [ "$TOTAL_RAM" -le 8500 ]; then
+    BUFFER_SIZE="256M"
+    MMAP_CACHE_SIZE="80M"
+    KA_TIMEOUT="60"
+    KA_REQS="10000"
   else
-    KA_TIMEOUT="60" # Máy to giữ 60 giây cho mượt
+    BUFFER_SIZE="384M"
+    MMAP_CACHE_SIZE="80M"
+    KA_TIMEOUT="60"
     KA_REQS="10000"
   fi
 
   sed -i -E "s/^[[:blank:]]*keepAliveTimeout.*/keepAliveTimeout         $KA_TIMEOUT/g" "$OLS_CONF"
   sed -i -E "s/^[[:blank:]]*maxKeepAliveReq.*/maxKeepAliveReq          $KA_REQS/g" "$OLS_CONF"
-  # ==========================================
-  # END AUTO-TUNE KEEP-ALIVE (Quản lý luồng mạng)
-  # ==========================================
-
-  # Áp dụng vào file cấu hình (Tự động tìm dòng inMemBufSize và thay thế)
   sed -i -E "s/^\s*inMemBufSize\s+.*/inMemBufSize          ${BUFFER_SIZE}/" "$OLS_CONF"
-
-  # ==========================================
-  # AUTO-TUNE totalInMemCacheSize (Mmap Cache File Tĩnh)
-  # ==========================================
   sed -i -E "s/^\s*totalInMemCacheSize\s+.*/totalInMemCacheSize    ${MMAP_CACHE_SIZE}/" "$OLS_CONF"
-  # ==========================================
-  # AUTO-TUNE totalInMemCacheSize (Mmap Cache File Tĩnh)
-  # ==========================================
+  sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers             $cpucore/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity              $cpucore/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections             $max_client_max/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections          $max_client_max/g" "$OLS_CONF"
 
-  sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers           $cpucore/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity           $cpucore/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections           $max_client_max/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections           $max_client_max/g" "$OLS_CONF"
-
-  #lsphp
-  # 1. Cập nhật maxConns (Chỉ trong phạm vi block extprocessor lsphp)
+  # Cập nhật lsphp trong file cấu hình tổng
   sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
-  # 2. Cập nhật PHP_LSAPI_CHILDREN (Chỉ trong phạm vi block extprocessor lsphp)
   sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
 
-  #setup vhost update
-  #setup vhost update
-  # 1. Bật nullglob và quét trực tiếp (Zero-forking, không dùng ls)
+  # ==========================================
+  # D. CẤU HÌNH VHOSTS TỪNG TÊN MIỀN
+  # ==========================================
   shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
-
-    # Bỏ qua nếu là file rác hoặc thư mục trống
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-    # Gọt chuỗi lấy tên miền trực tiếp trên RAM (Nhanh gấp 100 lần sed)
     domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
-
     VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
 
-    # Kiểm tra tên miền hợp lệ và file cấu hình tồn tại
     if [[ "$domain" == ?*.?* ]] && [[ -f "$VHOST_CONF" ]]; then
-
-      # 1. Số lượng worker và kết nối (LSPHP Children)
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
-
-      # 2. Giới hạn dung lượng RAM (Tránh 1 web ăn sập RAM của VPS)
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
-
-      # 3. Giới hạn số lượng tiến trình (Ngăn chặn tấn công DDoS làm cạn kiệt tài nguyên / Lỗi 503)
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
-
     fi
   done
   shopt -u nullglob
-  #end setup vhost update
-  #end setup vhost update
-
-  #kết thúc OLS
-
-  #cải tiến hiệu suất opcache + JIT
-  (/etc/wptt/cache/opcache-optimize-tune)
-
-  #Cải tiến hiệu suất object cache auto tune
-  (/etc/wptt/cache/object-cache-optimize-tune)
-
-  #kết thúc auto tune
 
   # ==========================================
-  # C. CẬP NHẬT TRẠNG THÁI VÀ KHỞI ĐỘNG LẠI
+  # E. CHẠY SCRIPT TỐI ƯU CACHE
   # ==========================================
-  # Lưu lại mốc RAM mới
+  [[ -x "/etc/wptt/cache/opcache-optimize-tune" ]] && /etc/wptt/cache/opcache-optimize-tune
+  [[ -x "/etc/wptt/cache/object-cache-optimize-tune" ]] && /etc/wptt/cache/object-cache-optimize-tune
+
+  # ==========================================
+  # F. LƯU TRẠNG THÁI VÀ KHỞI ĐỘNG LẠI
+  # ==========================================
   echo "$TOTAL_RAM" >"$FILE_CACHE"
 
-  # Khởi động lại dịch vụ với cấu hình phần cứng mới
+  # Restart MariaDB
   if mariadbd --help --verbose >/dev/null 2>&1; then
-    echo "Cập nhật MariaDB thành công! Đang Restart MariaDB..."
     systemctl restart mariadb
-    rm -f $TEMP_mariadb_config #xoá backup
+    rm -f "$TEMP_mariadb_config"
     echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
   else
-    cp -f $TEMP_mariadb_config $duong_dan_cau_hinh_mariadb #restore cấu hình
-    chmod 644 $duong_dan_cau_hinh_mariadb
-    chown root:root $duong_dan_cau_hinh_mariadb
-    echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại!" >>/var/log/wptangtoc-ols.log
+    cp -f "$TEMP_mariadb_config" "$duong_dan_cau_hinh_mariadb"
+    chmod 644 "$duong_dan_cau_hinh_mariadb"
+    chown root:root "$duong_dan_cau_hinh_mariadb"
+    echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại! Đã khôi phục." >>/var/log/wptangtoc-ols.log
   fi
 
+  # Restart OLS
   if /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
-    echo "Cập nhật OLS thành công! Đang Restart OLS..."
     /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-    rm -rf $TEMP_OLS_config_DIR
+    rm -rf "$TEMP_OLS_config_DIR"
     echo "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
   else
-    echo "Lỗi cú pháp OLS! Không thể Restart."
-    echo "Restore về cấu hình cũ"
     rm -rf /usr/local/lsws/conf/*
-    cp -rf $TEMP_OLS_config_DIR/* /usr/local/lsws/conf/
-    if $(cat /etc/*release | grep -q "Ubuntu"); then
+    cp -rf "$TEMP_OLS_config_DIR"/* /usr/local/lsws/conf/
+
+    if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
       tuong_thich_nhom_litespeed="nogroup"
     else
       tuong_thich_nhom_litespeed="nobody"
     fi
-    chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf && chmod -R 750 /usr/local/lsws/conf
-    rm -rf $TEMP_OLS_config_DIR
-    echo "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning nhưng thất bại!" >>/var/log/wptangtoc-ols.log
+
+    chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf
+    chmod -R 750 /usr/local/lsws/conf
+    rm -rf "$TEMP_OLS_config_DIR"
+    echo "$(date '+%d-%m-%Y %H:%M') - Lỗi cú pháp OLS Auto-Tuning! Đã khôi phục." >>/var/log/wptangtoc-ols.log
   fi
 
-  echo "$(date '+%d-%m-%Y %H:%M') - Auto-Tuning hoàn tất!" >>/var/log/wptangtoc-ols.log
-
   # ==========================================
-  # D. THIẾT LẬP ZRAM TỐI ƯU & APPLY NÓNG
+  # G. THIẾT LẬP ZRAM
   # ==========================================
-  tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-  rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-
-  if (($rong_ram_mb <= 8192)); then
-    # Máy <= 8GB: Lấy 50% RAM vật lý
-    ZRAM_SIZE_MB=$((rong_ram_mb / 2))
+  if ((TOTAL_RAM <= 8192)); then
+    ZRAM_SIZE_MB=$((TOTAL_RAM / 2))
   else
-    # Máy > 8GB: Khóa cứng túi khí ZRAM ở mức 4GB (4096MB)
     ZRAM_SIZE_MB=4096
   fi
 
-  if grep -qiE "ubuntu" /etc/os-release; then
+  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
     OS_TYPE="UBUNTU"
     duong_dan_config_zram="/etc/default/zramswap"
   else
@@ -284,48 +232,42 @@ max_allowed_packet = 64M
     duong_dan_config_zram="/etc/systemd/zram-generator.conf"
   fi
 
-  if [[ -f $duong_dan_config_zram ]]; then #xác định đang dùng zram swap
-    if [[ "$OS_TYPE" == "RHEL" ]]; then    #thiết lập zram config REDHAT
+  if [[ -f "$duong_dan_config_zram" ]]; then
+    if [[ "$OS_TYPE" == "RHEL" ]]; then
       SUPPORTED_ALGOS=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null)
       if [[ "$SUPPORTED_ALGOS" == *"zstd"* ]]; then
         BEST_ALGO="zstd"
       elif [[ "$SUPPORTED_ALGOS" == *"lz4"* ]]; then
         BEST_ALGO="lz4"
       else
-        BEST_ALGO="lzo" # Đường cùng mới xài đồ cổ
+        BEST_ALGO="lzo"
       fi
 
-      # [VÁ LỖI] Đòn "kẹp chả" để tương thích mọi phiên bản zram-generator
-      echo "[zram0]
+      cat <<EOF >"$duong_dan_config_zram"
+[zram0]
 zram-fraction = 1.0
 max-zram-size = $ZRAM_SIZE_MB
 zram-size = $ZRAM_SIZE_MB
 compression-algorithm = $BEST_ALGO
 swap-priority = 100
-fs-type = swap" >$duong_dan_config_zram
+fs-type = swap
+EOF
 
-      # [VÁ LỖI] Combo Reset nóng ZRAM trên RHEL
       systemctl stop dev-zram0.swap >/dev/null 2>&1
       zramctl --reset /dev/zram0 >/dev/null 2>&1
       systemctl daemon-reload >/dev/null 2>&1
       systemctl start dev-zram0.swap >/dev/null 2>&1
-
-      echo "$(date '+%d-%m-%Y %H:%M') - ZRAM (RHEL) Auto-Tuned: ${ZRAM_SIZE_MB}MB với thuật toán ${BEST_ALGO}" >>/var/log/wptangtoc-ols.log
-    fi
-
-    if [[ "$OS_TYPE" == "UBUNTU" ]]; then #thiết lập zram ubuntu
+    elif [[ "$OS_TYPE" == "UBUNTU" ]]; then
       BEST_ALGO="zstd"
-      cat <<EOF >$duong_dan_config_zram
+      cat <<EOF >"$duong_dan_config_zram"
 ALGO=$BEST_ALGO
 SIZE=$ZRAM_SIZE_MB
 PRIORITY=100
 EOF
-
-      # Restart chuẩn của Ubuntu
       systemctl restart zramswap >/dev/null 2>&1
-
-      echo "$(date '+%d-%m-%Y %H:%M') - ZRAM (Ubuntu) Auto-Tuned: ${ZRAM_SIZE_MB}MB với thuật toán ${BEST_ALGO}" >>/var/log/wptangtoc-ols.log
-
     fi
+    echo "$(date '+%d-%m-%Y %H:%M') - ZRAM Auto-Tuned: ${ZRAM_SIZE_MB}MB với ${BEST_ALGO}" >>/var/log/wptangtoc-ols.log
   fi
+
+  echo "$(date '+%d-%m-%Y %H:%M') - Auto-Tuning hoàn tất toàn diện!" >>/var/log/wptangtoc-ols.log
 fi
