@@ -1,26 +1,62 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
-NAME=$1
-if [[ $1 = '' ]]; then
-  echo "Lỗi, không xác định được domain"
-  exit
+NAME="$1"
+
+# Bắt buộc dùng return thay vì exit để không làm sập Menu chính
+if [[ -z "$NAME" ]]; then
+  echo "Lỗi: Không xác định được tên miền [domain] để lấy cấu hình PHP!"
+  return 1 2>/dev/null || exit 1
 fi
+
 unset phien_ban_php_domain_thuc_thi phien_ban_php_domain
-. /etc/wptt/vhost/.$NAME.conf
-if [[ $phien_ban_php_domain = '' ]]; then
-  phien_ban_php_domain=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
+
+# Nạp file cấu hình của Vhost (ẩn lỗi nếu file không tồn tại)
+[[ -f "/etc/wptt/vhost/.$NAME.conf" ]] && . "/etc/wptt/vhost/.$NAME.conf"
+
+# Nếu Vhost không lưu bản PHP, lấy phiên bản mặc định của hệ thống
+if [[ -z "$phien_ban_php_domain" ]]; then
+  # Tối ưu lệnh lấy PHP version bằng chính PHP CLI cho chuẩn xác 100%
+  phien_ban_php_domain=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null)
+
+  # Fallback nếu lệnh trên lỗi
+  if [[ -z "$phien_ban_php_domain" ]]; then
+    phien_ban_php_domain=$(php -v 2>/dev/null | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+' | head -n 1)
+  fi
 fi
 
-phien_ban_php_domain_thuc_thi=${phien_ban_php_domain//[-._]/}
+# Xóa các ký tự đặc biệt (dấu chấm, gạch ngang...) để chuyển "8.1" thành "81"
+phien_ban_php_domain_thuc_thi="${phien_ban_php_domain//[-._]/}"
 
-if [[ $(echo $phien_ban_php_domain_thuc_thi | grep 'lsphp') ]]; then #tương thích ngươcj với thời xưa đặt phiên bản php là lsphp
-  phien_ban_php_domain_thuc_thi=$(echo $phien_ban_php_domain_thuc_thi | sed 's/lsphp//g')
-fi
+# Tương thích ngược: Xóa chữ "lsphp" nếu có (Dùng bash string replacement siêu tốc)
+phien_ban_php_domain_thuc_thi="${phien_ban_php_domain_thuc_thi//lsphp/}"
 
-if [[ ! -f /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php ]]; then #kiểm tra trường hợp nếu file đó không tồn tại thì phải làm sao
-  echo "Lỗi, PHP CLI không thể xác định"
-  phien_ban_php_domain_thuc_thi=$(echo $phien_ban_php_domain_thuc_thi | sed 's/\(.\)$/.\1/') #chuyển đổi 81 thành 8.1
-  echo "PHP ${phien_ban_php_domain_thuc_thi} không tồn tại, không có sẵn trong hệ thống"
-  phien_ban_php_domain_thuc_thi=''
-  exit
+# ==============================================================================
+# KIỂM TRA & AUTO-FALLBACK NẾU THIẾU FILE THỰC THI LSPHP
+# ==============================================================================
+PHP_BINARY="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+
+if [[ -z "$phien_ban_php_domain_thuc_thi" || ! -f "$PHP_BINARY" ]]; then
+
+  # CƠ CHẾ AUTO-FALLBACK: Tìm phiên bản lsphp khả dụng (cao nhất) trên hệ thống
+  fallback_php_bin=$(ls /usr/local/lsws/lsphp*/bin/php 2>/dev/null | sort -V | tail -n 1)
+
+  if [[ -n "$fallback_php_bin" && -f "$fallback_php_bin" ]]; then
+    # Bóc tách lấy phiên bản số từ đường dẫn (VD: /usr/local/lsws/lsphp83/bin/php -> 83)
+    phien_ban_php_domain_thuc_thi=$(echo "$fallback_php_bin" | grep -oE 'lsphp[0-9]+' | sed 's/lsphp//')
+    PHP_BINARY="$fallback_php_bin"
+
+    # Format lại để hiển thị cảnh báo đẹp mắt (VD: 83 -> 8.3)
+    version_len=${#phien_ban_php_domain_thuc_thi}
+    phien_ban_format="${phien_ban_php_domain_thuc_thi:0:$version_len-1}.${phien_ban_php_domain_thuc_thi: -1}"
+
+    echo -e "\033[1;33m[!] Không tìm thấy PHP cấu hình ban đầu. Hệ thống tự động Fallback sang PHP mặc định khả dụng (PHP $phien_ban_format)...\033[0m"
+  else
+    # Thất bại hoàn toàn (Server chưa cài bất kỳ bản lsphp nào)
+    echo -e "\033[1;31mLỗi Chí Mạng: Không tìm thấy bất kỳ phiên bản PHP (lsphp) nào được cài đặt trong OpenLiteSpeed!\033[0m"
+    phien_ban_php_domain_thuc_thi=""
+    return 1 2>/dev/null || exit 1
+  fi
 fi

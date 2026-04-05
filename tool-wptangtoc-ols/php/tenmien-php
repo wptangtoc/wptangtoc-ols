@@ -1,42 +1,90 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]];then
-	ngon_ngu='vi'
-fi
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh
 
 function lua_chon_tenmien_php() {
-	LSPHP=""
-	if [ "$(ls /usr/local/lsws)" ]; then
-		selects=()
-		for entry in $(ls /usr/local/lsws | grep -P '^lsphp[0-9]+$'); do
-			LSPHP=$(echo $entry | grep 'lsphp')
-			if [[ ! -f /usr/local/lsws/lsphp74/lib64/php/modules/json.so ]];then
-				if [[ $LSPHP = 'lsphp74' ]];then
-				continue;
-				fi
-			fi
+  LSPHP=""
+  local selects=()
 
-#chuyen đổi từ lsphp74 thành PHP 7.4
-			LSPHP=$(echo $LSPHP| grep -Eo '[0-9]{1,2}' | head -1 | sed 's/\(.\)$/.\1/'| sed 's/^/PHP /g')
+  # 1. QUÉT PHIÊN BẢN BẰNG GLOBBING
+  for dir in /usr/local/lsws/lsphp*/; do
+    [[ ! -d "$dir" ]] && continue
 
-			selects+=("$LSPHP")
-		done
-		PS3="
-$(tput setab 0)-//- $nhap_lua_chon_cua_ban $phien_ban PHP $ban_muon [0=$exit_thoat]:$(tput sgr0) "
-		select select in "${selects[@]}"; do
-			LSPHP=$select
-			index=$REPLY
-			break
-		done
-#chuyen đổi ngược lại: PHP 7.4 thành lsphp74
-		LSPHP=${LSPHP//[-._]/}
-		LSPHP=$(echo $LSPHP| grep -Eo '[0-9]{1,2}'| sed 's/^/lsphp/g')
-	else
-		clear
-		echo "webserver khong bat ky phien ban php nao ton tai tren he thong cua ban."
-		exit
-	fi
+    local php_name=$(basename "$dir") # VD: lsphp74
+
+    # Loại bỏ bản 7.4 lỗi (Tương thích ngược với centos 7)
+    if [[ "$php_name" == "lsphp74" && ! -f "$dir/lib64/php/modules/json.so" ]]; then
+      continue
+    fi
+
+    # 2. CHUYỂN ĐỔI: lsphp74 -> PHP 7.4 BẰNG BASH BUILT-IN
+    local num_ver=${php_name#lsphp} # Lấy phần số: 74
+    local ver_len=${#num_ver}
+    local phien_ban_format="${num_ver:0:$ver_len-1}.${num_ver: -1}" # Chèn dấu chấm: 7.4
+
+    selects+=("PHP $phien_ban_format")
+  done
+
+  # 3. KIỂM TRA MẢNG TRỐNG
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    clear
+    echo -e "\033[1;31mWebserver không có bất kỳ phiên bản PHP (lsphp) nào tồn tại trên hệ thống!\033[0m"
+    LSPHP="0"
+    return 1 2>/dev/null || exit 1
+  fi
+
+  # 4. SẮP XẾP LẠI DANH SÁCH (Version Sort chuẩn mực)
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -V)
+
+  # 5. HIỂN THỊ MENU CHỌN (Tích hợp FZF)
+  if command -v fzf &>/dev/null; then
+    PS3="$(tput setab 0)-//- $nhap_lua_chon_cua_ban $phien_ban PHP $ban_muon [00=Tìm nhanh] [0=$exit_thoat]:$(tput sgr0) "
+  else
+    PS3="$(tput setab 0)-//- $nhap_lua_chon_cua_ban $phien_ban PHP $ban_muon [0=$exit_thoat]:$(tput sgr0) "
+  fi
+
+  select selected_php in "${selects[@]}"; do
+    if [[ "$REPLY" == "0" ]]; then
+      LSPHP="0"
+      break
+
+    elif [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
+      # --- XỬ LÝ FZF TÌM KIẾM NHANH ---
+      local fzf_result
+      fzf_result=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm nhanh phiên bản PHP [0=Thoát]: ")
+
+      # Nếu người dùng bấm Esc hoặc chọn 0 để thoát fzf
+      if [[ -z "$fzf_result" ]]; then
+        echo -e "\033[1;33mĐã hủy chọn nhanh.\033[0m"
+        continue # Hiển thị lại menu select
+      fi
+
+      # Bóc tách lấy tên PHP thực sự (Bỏ số thứ tự của nl)
+      selected_php=$(echo "$fzf_result" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+      # CHUYỂN ĐỔI NGƯỢC
+      local num_ver_rev="${selected_php#PHP }"
+      num_ver_rev="${num_ver_rev//./}"
+      LSPHP="lsphp$num_ver_rev"
+      break
+
+    elif [[ -n "$selected_php" ]]; then
+      # --- XỬ LÝ KHI NGƯỜI DÙNG CHỌN SỐ (1, 2, 3...) ---
+      local num_ver_rev="${selected_php#PHP }" # Cắt bỏ chữ 'PHP ': 7.4
+      num_ver_rev="${num_ver_rev//./}"         # Xóa dấu chấm: 74
+      LSPHP="lsphp$num_ver_rev"                # Ghép lại: lsphp74
+      break
+
+    else
+      echo -e "\033[1;31mLựa chọn không hợp lệ! Vui lòng chọn lại.\033[0m"
+    fi
+  done
 }
-lua_chon_tenmien_php
 
+# Thực thi hàm để xuất biến $LSPHP ra môi trường
+lua_chon_tenmien_php
