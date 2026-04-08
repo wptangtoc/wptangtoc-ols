@@ -12,7 +12,7 @@ AlmaLinux 9
 </li>
 
 <li>
-AlmaLinux 10
+AlmaLinux 10 (Đang thử nghiệm)
 </li>
 
 
@@ -24,7 +24,7 @@ Rocky linux 9
 </li>
 
 <li>
-Rocky linux 10
+Rocky linux 10 (Đang thử nghiệm)
 </li>
 
 <li>
@@ -37,7 +37,7 @@ Red Hat Enterprise Linux 9
 
 
 <li>
-Red Hat Enterprise Linux 10
+Red Hat Enterprise Linux 10 (Đang thử nghiệm)
 </li>
 
 <li>
