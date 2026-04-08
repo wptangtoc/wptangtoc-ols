@@ -1,0 +1,125 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+
+function get_mariadb_version() {
+  local version=""
+  
+  # Lớp 1: Lấy từ system (Chính xác nhất)
+  if command -v mysqld &>/dev/null; then
+    version=$(mysqld -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  elif command -v mysql &>/dev/null; then
+    version=$(mysql -V 2>/dev/null | grep -oE 'Distrib [0-9]+\.[0-9]+' | awk '{print $2}')
+  fi
+
+  # Lớp 2: Lấy từ Repo cũ
+  if [[ -z "$version" && -f /etc/yum.repos.d/MariaDB.repo ]]; then
+    version=$(grep -i 'baseurl' /etc/yum.repos.d/MariaDB.repo | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  fi
+
+  # Lớp 3: Lấy từ WPTangToc Config
+  if [[ -z "$version" && -f /etc/wptt/.wptt.conf ]]; then
+    version=$(bash -c '. /etc/wptt/.wptt.conf; echo "$mariadb_version"')
+  fi
+
+  # Trả về kết quả
+  if [[ -n "$version" ]]; then
+    echo "$version"
+  else
+    echo "10.11" # Fallback mặc định
+  fi
+}
+
+# ==============================================================================
+# HÀM 2: LOGIC CHÍNH (XỬ LÝ REPO)
+# ==============================================================================
+function main_fix_mariadb_repo() {
+  echo -e "\n\033[1;36m========================================================\033[0m"
+  echo -e "\033[1;36m  WPTANGTOC - AUTO FIX MARIADB REPOSITORY (404 ERROR)\033[0m"
+  echo -e "\033[1;36m========================================================\033[0m"
+
+  local version=$(get_mariadb_version)
+  echo "-> Đã nhận diện MariaDB phiên bản : $version"
+
+  local repo_file="/etc/yum.repos.d/MariaDB.repo"
+
+  # 1. CHỐT CHẶN TRÙNG LẶP (Idempotent)
+  # Nếu file repo đã tồn tại và chứa đúng link archive của phiên bản này thì dừng lại
+  if [[ -f "$repo_file" ]] && grep -q "archive.mariadb.org/yum/$version" "$repo_file"; then
+    echo -e "\033[1;32m-> [BỎ QUA] Kho lưu trữ MariaDB $version đã được chuyển sang Archive từ trước. Không cần làm lại!\033[0m"
+    return 0
+  fi
+
+  # 2. NHẬN DIỆN OS VÀ CPU
+  if [[ ! -f /etc/os-release ]]; then 
+    echo -e "\033[1;31mLỗi: Không đọc được hệ điều hành.\033[0m"; exit 1; 
+  fi
+  
+  . /etc/os-release
+  local os_id="${ID}"
+  local os_version=$(echo "${VERSION_ID}" | grep -oE '^[0-9]+' | head -1)
+  local cpu_arch=$(uname -m)
+  local db_arch="amd64"
+  [[ "$cpu_arch" == "aarch64" ]] && db_arch="arm64"
+
+  local repo_name=""
+  case "$os_id" in
+    almalinux|rocky|rhel|ol|centos)
+      if [[ "$os_id" == "centos" && "$os_version" == "7" ]]; then
+        repo_name="centos7-${db_arch}"
+      else
+        repo_name="rhel${os_version}-${db_arch}"
+      fi
+      ;;
+    *)
+      echo -e "\033[1;31mLỗi: Không hỗ trợ OS $os_id.\033[0m"; exit 1; 
+      ;;
+  esac
+
+  echo "-> Hệ điều hành / Kiến trúc     : $PRETTY_NAME ($cpu_arch)"
+
+  # 3. KIỂM TRA MẠNG (LIVE HAY ARCHIVE)
+  echo "-> Đang kiểm tra trạng thái vòng đời của MariaDB $version..."
+  local repo_baseurl=""
+  local repo_gpgkey=""
+  local check_url="http://yum.mariadb.org/$version/"
+  local http_code=$(curl -sL -m 3 -o /dev/null -w "%{http_code}" "$check_url")
+
+  if [[ "$http_code" == "404" ]]; then
+    echo -e "-> \033[1;33mPhát hiện EOL (404) -> Chuyển hướng sang kho Archive.\033[0m"
+    repo_baseurl="http://archive.mariadb.org/yum/$version/$repo_name"
+    repo_gpgkey="https://archive.mariadb.org/RPM-GPG-KEY-MariaDB"
+  else
+    echo -e "-> \033[1;32mPhát hiện Live ($http_code) -> Sử dụng kho Mirror tốc độ cao.\033[0m"
+    repo_baseurl="http://yum.mariadb.org/$version/$repo_name"
+    repo_gpgkey="https://yum.mariadb.org/RPM-GPG-KEY-MariaDB"
+  fi
+
+  # 4. GHI ĐÈ FILE REPO AN TOÀN
+  rm -f /etc/yum.repos.d/mariadb.repo 2>/dev/null
+  cat > "$repo_file" <<EOF
+[mariadb]
+name = MariaDB
+baseurl = $repo_baseurl
+gpgkey=$repo_gpgkey
+gpgcheck=1
+module_hotfixes=1
+EOF
+
+  # 5. DỌN DẸP CACHE (Siêu nhẹ, không makecache)
+  echo "-> Đang dọn dẹp cache metadata cũ..."
+  if command -v dnf &>/dev/null; then
+    dnf clean metadata >/dev/null 2>&1
+  else
+    yum clean metadata >/dev/null 2>&1
+  fi
+
+  echo -e "\033[1;32m========================================================\033[0m"
+  echo -e "\033[1;32m  HOÀN TẤT! ĐÃ SẴN SÀNG ĐỂ CÀI ĐẶT PHẦN MỀM.\033[0m"
+  echo -e "\033[1;32m========================================================\033[0m\n"
+}
+
+# Thực thi kịch bản
+main_fix_mariadb_repo
