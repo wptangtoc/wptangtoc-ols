@@ -109,23 +109,98 @@ fi
 
 _rundone "$dang_tien_hanh $quet extension $(echo $LSPHP | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g')"
 
+echo "Extension $(echo $LSPHP | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g') $ban_co_the $xoá: "
+
 selects=()
-for entry in $(uniq /tmp/php_extension.txt | sort); do
-  selects+=("$entry")
+mapfile -t selects < <(sort -u /tmp/php_extension.txt) #truyền mảng array dùng mapfile nhanh hơn
+# for entry in $(uniq /tmp/php_extension.txt | sort); do
+#   selects+=("$entry")
+# done
+
+# Thêm gợi ý 00 vào dòng nhắc PS3
+if command -v fzf &>/dev/null; then #điều kiện nếu không có fzf thư viện thì không có cái chọn nhanh
+  PS3="
+$(tput setab 0)-//- $nhap_lua_chon_cua_ban [00=Tìm nhanh, 0=$exit_thoat]:$(tput sgr0) "
+else
+  PS3="
+$(tput setab 0)-//- $nhap_lua_chon_cua_ban [0=$exit_thoat]:$(tput sgr0) "
+fi
+
+select select in "${selects[@]}"; do
+  # 1. Bắt sóng phím thoát
+  if [[ "$REPLY" == "0" ]]; then
+    php_extension_chon="0"
+    break
+
+  # 2. Bắt sóng phím 00 để gọi FZF
+  elif [[ "$REPLY" == "00" ]]; then
+
+    # Kiểm tra và cài đặt ngầm fzf nếu VPS chưa có
+    if ! command -v fzf &>/dev/null; then
+      _runing "Đang cài đặt công cụ tìm kiếm siêu tốc (fzf)..."
+      if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+        DEBIAN_FRONTEND=noninteractive apt-get install fzf -y >/dev/null 2>&1
+      else
+        yum install fzf -y >/dev/null 2>&1
+      fi
+      _rundone "Đã tích hợp FZF"
+    fi
+
+    if ! command -v fzf &>/dev/null; then #xác định fzf không tồn tại để sử dụng
+      echo "Thiếu phần mềm fzf vì vậy không thể sử dụng tính năng chọn nhanh"
+      php_extension_chon="0"
+      break
+    fi
+
+    # Gọi UI FZF
+    fzf_result=$(printf "%s\n" "${selects[@]}" | fzf \
+      --prompt="Nhập extension cần tìm > " \
+      --height='~60%' \
+      --border=rounded \
+      --color=border:red \
+      --layout=reverse \
+      --header="Tìm thấy ${#selects[@]} extension. [↑/↓] Di chuyển, [ESC] Hủy, [Enter] Chọn." \
+      --preview='echo -e "Bạn đang thao tác với extension: \033[1;32m{}\033[0m"' \
+      --preview-window=up:1:wrap)
+
+    # Xử lý kết quả từ FZF
+    if [[ -n "$fzf_result" ]]; then
+      php_extension_chon="$fzf_result"
+      break
+    else
+      # Nếu khách bấm ESC thoát FZF, gán REPLY rỗng để ép Bash in lại cái Menu số ra màn hình
+      echo "Đã hủy FZF. Vui lòng chọn lại."
+      REPLY=
+    fi
+
+  # 3. Luồng chuẩn: Bắt sóng phím số hợp lệ (1, 2, 3...)
+  elif [[ -n "$select" ]]; then
+    php_extension_chon="$select"
+    break
+
+  # 4. Gõ sai số / Nhập linh tinh
+  else
+    echo "Lựa chọn không hợp lệ. Vui lòng nhập số tương ứng hoặc gõ 00."
+  fi
 done
 
-PS3="
-$(tput setab 0)-//- $nhap_lua_chon_cua_ban [0=$exit_thoat]:$(tput sgr0) "
-select select in ${selects[@]}; do
-  php_extension_chon=$select
-  break
-done
+# selects=()
+# for entry in $(uniq /tmp/php_extension.txt | sort); do
+#   selects+=("$entry")
+# done
+
+# PS3="
+# $(tput setab 0)-//- $nhap_lua_chon_cua_ban [0=$exit_thoat]:$(tput sgr0) "
+# select select in ${selects[@]}; do
+#   php_extension_chon=$select
+#   break
+# done
 
 if [[ $php_extension_chon = "0" ]]; then
   exec /etc/wptt/wptt-php-ini-main 1
 fi
 
-if [[ $php_extension_chon = "" ]]; then
+if [[ -z $php_extension_chon ]]; then
   exec /etc/wptt/wptt-php-ini-main 1
   exit
 fi
