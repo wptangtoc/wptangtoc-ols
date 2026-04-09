@@ -1,23 +1,40 @@
 #!/bin/bash
+
+function huong_dan {
+  Tính năng kiểm tra Autoload trong WordPress là một công cụ chẩn đoán hiệu suất chuyên sâu, giúp đo lường dung lượng dữ liệu tự động tải từ bảng wp_options mỗi khi có người truy cập vào website.
+
+  Giải thích ngắn gọn:
+
+  Trong WordPress, các plugin và theme thường lưu cài đặt với chế độ autoload=yes. Nghĩa là dù khách truy cập bất kỳ trang nào, toàn bộ lượng dữ liệu này cũng bị ép tải vào RAM. Theo thời gian, rác từ các plugin cũ bị xóa bỏ vẫn nằm lại đây và làm phình to Autoload.
+
+  Tác hại khi Autoload quá lớn [vượt mốc 900 KB]:
+
+  Làm tăng vọt thời gian chờ phản hồi máy chủ [TTFB].
+
+  Vắt kiệt tài nguyên RAM và làm chậm toàn bộ website.
+
+  Tính năng này là công cụ thiết yếu giúp bạn phát hiện sớm nút thắt cổ chai Database, từ đó có phương án dọn dẹp để website WordPress luôn giữ được tốc độ phản hồi chớp nhoáng.
+}
+
+. /etc/wptt/.wptt.conf
+[[ $ngon_ngu == '' ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh
+
+echo -e "\n========================================================================="
+echo -e "|$quan_ly_wordpress => Kiểm tra Autoload WP_OPTION                        |"
+echo -e "=========================================================================\n"
+
 echo ""
 echo ""
-echo ""
-echo "========================================================================="
-echo "|Quan ly WordPress => Kiem tra autoload wp-option                       |"
-echo "========================================================================="
+
 . /etc/wptt/tenmien-only-website-by-wordpress
 echo ""
 echo ""
-echo "Lua chon website wordpress kiem tra autoload wp-option database: "
+echo "$nhap_lua_chon_website_cua_ban kiem tra autoload wp-option database: "
 echo ""
 lua_chon_NAME
 
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" || "$NAME" = "0" ]]; then
-  clear
-  exec /etc/wptt/wptt-wordpress-main 1
-  exit
-fi
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-wordpress-main 1
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
@@ -28,14 +45,87 @@ if [[ ! -f "$pathcheckwp" ]]; then
   exit
 fi
 
-if [[ ! -d /root/.wp-cli/packages/vendor/wp-cli/doctor-command ]]; then
-  wp package install git@github.com:wp-cli/doctor-command.git --allow-root
-fi
-
 path="/usr/local/lsws/$NAME/html"
 
-wp doctor check autoload-options-size --allow-root --path="$path"
+# ==============================================================================
+# KIỂM TRA VÀ CÀI ĐẶT GÓI WP DOCTOR (Bảo vệ HTTPS & Có Phương Án Dự Phòng)
+# ==============================================================================
+doctor_installed="yes"
+if [[ ! -d /root/.wp-cli/packages/vendor/wp-cli/doctor-command ]]; then
+  echo "Đang cài đặt công cụ chuẩn đoán WP Doctor (Vui lòng chờ)..."
+  # Dùng HTTPS để chống kẹt SSH Key trên VPS trắng
+  wp package install https://github.com/wp-cli/doctor-command.git --allow-root >/dev/null 2>&1
+
+  # Xác minh lại xem lệnh cài đặt có thực sự thành công hay bị lỗi mạng/hệ thống chặn
+  if [[ ! -d /root/.wp-cli/packages/vendor/wp-cli/doctor-command ]]; then
+    doctor_installed="no"
+  fi
+fi
+
+echo "-------------------------------------------------------------------------"
+echo "Đang quét kích thước Autoload Options của website: $NAME"
+echo "Lưu ý: Kích thước Autoload lý tưởng nên dưới 900KB."
+echo "-------------------------------------------------------------------------"
+
+. /etc/wptt/vhost/.$NAME.conf
+. /etc/wptt/php/php-cli-domain-config $NAME
+
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+if [[ "$doctor_installed" == "yes" ]]; then
+  # -----------------------------------------------------
+  # KỊCH BẢN A: WP Doctor cài đặt thành công
+  # -----------------------------------------------------
+  /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp doctor check autoload-options-size --allow-root --path="$path"
+else
+  # -----------------------------------------------------
+  # KỊCH BẢN B (DỰ PHÒNG): Dùng RAW SQL Query (Tiền Tố Động)
+  # -----------------------------------------------------
+  echo "⚠️ Cài đặt WP Doctor thất bại (Do mạng hoặc PHP limits)."
+  echo "👉 Đang kích hoạt phương án dự phòng (Direct DB Query)..."
+
+  # Lấy tiền tố bảng động từ wp-config.php để chống lỗi khi user đổi tiền tố bảo mật
+  db_prefix=$($WP_EXEC db prefix --allow-root --path="$path" 2>/dev/null)
+
+  if [[ -z "$db_prefix" ]]; then
+    echo "❌ Lỗi: Không thể lấy được tiền tố Database. Vui lòng kiểm tra lại file wp-config.php"
+  else
+    # Ghép nối tiền tố để ra tên bảng chuẩn xác (vd: wp_options, wptt_options)
+    table_options="${db_prefix}options"
+
+    # Truy vấn tính tổng Bytes bằng tên bảng động
+    autoload_bytes=$($WP_EXEC db query "SELECT SUM(LENGTH(option_value)) FROM ${table_options} WHERE autoload = 'yes' OR autoload = 'on';" --skip-column-names --allow-root --path="$path" 2>/dev/null)
+
+    # Xử lý trường hợp DB rỗng hoặc trả về NULL (Tránh lỗi phép tính bc)
+    if [[ -z "$autoload_bytes" || "$autoload_bytes" == "NULL" ]]; then
+      autoload_bytes=0
+    fi
+
+    # Kiểm tra kết quả trả về có phải là số hợp lệ không
+    if [[ "$autoload_bytes" =~ ^[0-9]+$ ]]; then
+      # Ép kiểu tính toán sang Kilobytes (KB) với 2 số thập phân
+      autoload_kb=$(echo "scale=2; $autoload_bytes / 1024" | bc)
+
+      echo ""
+      echo "Kích thước Autoload hiện tại: ${autoload_kb} KB"
+
+      # Mốc 900KB là tiêu chuẩn cảnh báo gốc của wp-cli/doctor-command
+      if (($(echo "$autoload_kb > 900" | bc -l))); then
+        echo "❌ Cảnh báo [autoload-options-size]: Kích thước Autoload vượt ngưỡng an toàn (900 KB)."
+        echo "💡 Lời khuyên: Hãy vào Database dọn dẹp các table rác của Plugin cũ để tăng tốc TTFB."
+      else
+        echo "✅ Thành công [autoload-options-size]: Kích thước Autoload nằm trong mức lý tưởng."
+      fi
+    else
+      echo "❌ Lỗi: Không thể truy vấn bảng ${table_options}. Vui lòng kiểm tra lại Database."
+    fi
+  fi
+fi
+
+echo "-------------------------------------------------------------------------"
+read -p "Bấm phím bất kỳ để quay trở lại menu quản lý WordPress: " enter
+
 check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ $check_menu_wptangtoc_active == "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
