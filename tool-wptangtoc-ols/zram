@@ -146,16 +146,47 @@ EOF
   else
     yum install zram-generator -y >/dev/null 2>&1
 
+    # 2. Đánh thức module zram
     modprobe zram 2>/dev/null
 
-    SUPPORTED_ALGOS=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null | tr -d '[]')
-    # 2. Bọc chuỗi trong khoảng trắng để check từ khóa nguyên vẹn
-    if [[ " $SUPPORTED_ALGOS " == *" zstd "* ]]; then
-      BEST_ALGO="zstd"
-    elif [[ " $SUPPORTED_ALGOS " == *" lz4 "* ]]; then
-      BEST_ALGO="lz4"
+    # 3. Mồi ổ 10MB để Kernel sinh ra file config để có file /sys/block/zram0/comp_algorithm
+    tao_dummy="0"
+    if [[ ! -d /sys/block/zram0 ]]; then
+      zramctl --find --size 10M >/dev/null 2>&1
+      tao_dummy="1"
+    fi
+
+    # =========================================================
+    # 4. TRÍCH XUẤT THÔNG TIN TỪ Ổ DUMMY (TRƯỚC KHI XÓA)
+    # =========================================================
+    if [[ -f /sys/block/zram0/comp_algorithm ]]; then
+      SUPPORTED_ALGOS=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null | tr -d '[]')
+      if [[ " $SUPPORTED_ALGOS " == *" zstd "* ]]; then
+        BEST_ALGO="zstd"
+      elif [[ " $SUPPORTED_ALGOS " == *" lz4 "* ]]; then
+        BEST_ALGO="lz4"
+      else
+        BEST_ALGO="lzo"
+      fi
     else
+      # Biện pháp dự phòng cuối cùng nếu vẫn không có file
       BEST_ALGO="lzo"
+    fi
+
+    # =========================================================
+    # 5. DỌN SẠCH HIỆN TRƯỜNG (SAU KHI ĐÃ LẤY XONG THÔNG TIN)
+    # =========================================================
+    if [[ "$tao_dummy" == "1" ]]; then
+      # Gỡ Swap nếu nó đang vô tình bám vào
+      swapoff /dev/zram0 >/dev/null 2>&1
+
+      # Reset và Xóa ổ
+      zramctl --reset /dev/zram0 >/dev/null 2>&1
+      if [[ -f /sys/class/zram-control/hot_remove ]]; then
+        echo 0 >/sys/class/zram-control/hot_remove 2>/dev/null
+      else
+        rmmod zram >/dev/null 2>&1
+      fi
     fi
 
     # [VÁ LỖI]: Áp dụng đòn "kẹp chả" cho RHEL
