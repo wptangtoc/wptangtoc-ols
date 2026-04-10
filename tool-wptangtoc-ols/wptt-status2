@@ -1,45 +1,86 @@
 #!/bin/bash
 
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then ngon_ngu='vi'; fi
+if [[ -z "$ngon_ngu" ]]; then ngon_ngu='vi'; fi
 . /etc/wptt/lang/$ngon_ngu.sh
 clear
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 
-RED='\033[0;31m'
-NC='\033[0m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
+# Bảng màu chuẩn WPTangToc OLS
+C_RED='\033[1;31m'
+C_GREEN='\033[1;32m'
+C_YELLOW='\033[1;33m'
+C_CYAN='\033[1;36m'
+C_RESET='\033[0m'
 box_inner_width=71
+
+# ==============================================================================
+# BẪY TÍN HIỆU (TRAP) - CHỐNG VĂNG SSH KHI BẤM CTRL+C (THOÁT RA SHELL)
+# ==============================================================================
+
+C_GREEN='\033[1;32m'
+C_RESET='\033[0m'
+trap '
+  stty sane  # KHÔI PHỤC HIỂN THỊ CHỮ: Sửa lỗi gõ phím bị tàng hình
+  tput cnorm # Hiện lại con trỏ chuột nhấp nháy
+  echo -e "\n\nĐã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu."
+  echo -e "${C_GREEN}Chào mừng bạn quay lại màn hình Shell!${C_RESET}"
+  export WPTT_BYPASS=1 # Cấp lệnh bài miễn tử
+  exec bash
+' SIGINT SIGTERM SIGQUIT
 
 # --- LOGIC KIỂM TRA CẬP NHẬT ---
 SHOW_UPDATE=0
 NEW_VERSION=""
 if [[ -f /tmp/wptangtoc-ols-version ]]; then wptangtocols_version=$(cat /tmp/wptangtoc-ols-version); fi
-if [[ $wptangtocols_version = "" ]]; then
+if [[ -z "$wptangtocols_version" ]]; then
   wptangtocols_version=$(curl -sf --connect-timeout 2 --max-time 5 https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' || curl -sf --connect-timeout 2 --max-time 5 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
 fi
-if [[ "$wptangtocols_version" != "" && "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
+if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
   SHOW_UPDATE=1
   NEW_VERSION="$wptangtocols_version"
 fi
 
-# --- CÁC HÀM HỖ TRỢ ---
+# --- CÁC HÀM HỖ TRỢ GIAO DIỆN NÂNG CAO ---
 draw_bar() {
   local percent=$1
   local length=15
   local fill=$(((percent * length) / 100))
+  [[ $fill -lt 0 ]] && fill=0
+  [[ $fill -gt $length ]] && fill=$length
   local empty=$((length - fill))
-  local color=$GREEN
-  if [ "$percent" -ge 80 ]; then color=$RED; elif [ "$percent" -ge 60 ]; then color=$YELLOW; fi
-  printf "${NC}[${color}"
-  printf "%0.s|" $(seq 1 $fill)
-  printf "${NC}"
-  printf "%0.s." $(seq 1 $empty)
-  printf "${NC}]"
+
+  local color=$C_GREEN
+  if [ "$percent" -ge 80 ]; then color=$C_RED; elif [ "$percent" -ge 60 ]; then color=$C_YELLOW; fi
+
+  local fill_str=""
+  [[ $fill -gt 0 ]] && printf -v fill_str "%${fill}s" "" && fill_str=${fill_str// /|}
+  local empty_str=""
+  [[ $empty -gt 0 ]] && printf -v empty_str "%${empty}s" "" && empty_str=${empty_str// /.}
+
+  printf "${C_CYAN}[${color}%s${C_RESET}%s${C_CYAN}]${C_RESET}" "$fill_str" "$empty_str"
+}
+
+print_line() {
+  local text="$1"
+  local clean_text=$(echo -e "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local text_len=${#clean_text}
+  local pad=$((box_inner_width - text_len - 1))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_CYAN}│${C_RESET} ${text}$(printf '%*s' "$pad" "")\e[K${C_CYAN}│${C_RESET}"
+}
+
+print_2col() {
+  local col1="$1"
+  local col2="$2"
+  local clean1=$(echo -e "$col1" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len1=${#clean1}
+  local col1_width=35
+  local pad1=$((col1_width - len1))
+  [[ $pad1 -lt 0 ]] && pad1=0
+  print_line "${col1}$(printf '%*s' "$pad1" "")${C_CYAN}│${C_RESET} ${col2}"
 }
 
 center_text() {
@@ -47,33 +88,50 @@ center_text() {
   local clean_text=$(echo -e "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
   local text_len=${#clean_text}
   if ((text_len >= box_inner_width)); then
-    printf "${RED}|${NC} %s ${RED}|${NC}\n" "$text"
+    printf "${C_CYAN}│${C_RESET} %b ${C_CYAN}│${C_RESET}\n" "$text"
     return
   fi
-  local total_padding=$((box_inner_width - text_len))
-  local pad_left=$((total_padding / 2))
-  local pad_right=$((total_padding - pad_left))
-  printf "${RED}|${NC}%*s%s%*s${RED}|${NC}\n" $pad_left "" "$text" $pad_right ""
+  local pad_left=$(((box_inner_width - text_len) / 2))
+  local pad_right=$((box_inner_width - text_len - pad_left))
+  printf "${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$pad_left" "" "$text" "$pad_right" ""
 }
 
-# --- HEADER ---
-echo -e "${RED}+-----------------------------------------------------------------------+${NC}"
+# --- HEADER TĨNH ---
+
+#Tắt bộ gõ tiếng việt
+#Nhấn tổ hợp Ctrl + Shift + U (Lúc này sẽ hiện chữ u nhỏ có gạch chân).
+#Gõ mã: 256d (đừng lo nếu nó hiện số tạm thời).
+#256d → ╭
+#256e → ╮
+
+#256f → ╰
+#2570 → ╯
+#2500 → ─
+#Quan trọng nhất: Nhấn phím Space (Dấu cách) hoặc phím Enter.
+
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text ""
 center_text "WPTANGTOC OLS $phien_ban: $version_wptangtoc_ols"
 center_text "$phat_trien_boi_gia_tuan"
-if [[ $wptangtoc_ols_giatuan = "1" && $key_activate ]]; then center_text "WPTangToc OLS enterprise + premium"; else
-  if [[ $wptangtoc_ols_giatuan = "1" ]]; then center_text "WPTangToc OLS enterprise"; fi
-  if [[ $key_activate ]]; then center_text "WPTangToc OLS premium"; fi
+if [[ "$wptangtoc_ols_giatuan" == "1" && -n "$key_activate" ]]; then
+  center_text "WPTangToc OLS Enterprise + Premium"
+else
+  if [[ "$wptangtoc_ols_giatuan" == "1" ]]; then center_text "WPTangToc OLS Enterprise"; fi
+  if [[ -n "$key_activate" ]]; then center_text "WPTangToc OLS Premium"; fi
 fi
-if [[ $beta_wptangtoc_ols = "1" ]]; then center_text "WPTangToc OLS beta"; fi
+if [[ "$beta_wptangtoc_ols" == "1" ]]; then center_text "WPTangToc OLS Beta"; fi
 center_text ""
-echo -e "${RED}+-----------------------------------------------------------------------+${NC}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 thoi_gian=$(date +'%H' | sed 's/^0//g')
 if (($thoi_gian < 10)); then thoi_diem='Chúc bạn có buổi sáng tuyệt vời'; elif (($thoi_gian < 14)); then thoi_diem='Chúc bạn có buổi trưa tuyệt vời'; elif (($thoi_gian < 18)); then thoi_diem='Chúc bạn có buổi chiều tuyệt vời'; else thoi_diem='Chúc bạn có buổi tối tuyệt vời'; fi
-if [[ $wptangtoc_ols_giatuan = "1" ]]; then echo "$thoi_diem - WPTangToc OLS Premium $san_sang_phuc_vu              "; else echo "$thoi_diem - $chao_mung_ban_den_voi_wptangtoc_ols              "; fi
+if [[ "$wptangtoc_ols_giatuan" == "1" ]]; then
+  echo -e "${C_YELLOW}${thoi_diem} - WPTangToc OLS Premium ${san_sang_phuc_vu}${C_RESET}\n"
+else
+  echo -e "  ${C_YELLOW}${thoi_diem} - ${chao_mung_ban_den_voi_wptangtoc_ols}${C_RESET}\n"
+fi
 
-# --- INIT VARS ---
+# --- INIT VARS CHUẨN BỊ VÒNG LẶP ---
 OS_NAME_STATIC=$(hostnamectl | grep System | cut -f2 -d':' | sed 's/^ //g' | cut -f1 -d '(' | head -1)
 read -r cpu a b c idle rest </proc/stat
 prev_total=$((a + b + c + idle))
@@ -81,7 +139,7 @@ prev_idle=$idle
 cpu_display_val=0
 read rx_prev tx_prev <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
 
-# --- DISPLAY FUNCTION (ĐÃ SỬA LỖI GIAO DIỆN & BIẾN) ---
+# --- DISPLAY FUNCTION ---
 print_dashboard() {
   local rx_rate_in=$1
   local tx_rate_in=$2
@@ -95,59 +153,55 @@ print_dashboard() {
   disk_stats=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | sed 's/G//g' | sed 's/%//g')
   read -r disk_used disk_total disk_percent <<<"$disk_stats"
 
-  # Network Color
   net_in_display="${rx_rate_in} KB/s"
   net_out_display="${tx_rate_in} KB/s"
-  if [ "$rx_rate_in" -gt 5120 ]; then net_in_display="${RED}${rx_rate_in} KB/s${NC}"; fi
-  if [ "$tx_rate_in" -gt 5120 ]; then net_out_display="${RED}${tx_rate_in} KB/s${NC}"; fi
+  if [ "$rx_rate_in" -gt 5120 ]; then net_in_display="${C_RED}${rx_rate_in} KB/s${C_RESET}"; fi
+  if [ "$tx_rate_in" -gt 5120 ]; then net_out_display="${C_RED}${tx_rate_in} KB/s${C_RESET}"; fi
 
-  # Uptime
   load_avg=$(cat /proc/loadavg | awk '{print $1", " $2", " $3}')
-  up_seconds=$(cat /proc/uptime | awk '{print $1}' | cut -d. -f1)
+  up_seconds=$(cat /proc/uptime | cut -d. -f1)
   d=$((up_seconds / 86400))
   h=$(((up_seconds % 86400) / 3600))
   m=$(((up_seconds % 3600) / 60))
   s=$((up_seconds % 60))
   uptime_display="${d}d ${h}h ${m}m ${s}s"
 
-  echo "-------------------------------------------------------------------------"
-  printf "CPU : %3s%% %s  Load: %s\n" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "$load_avg"
-  printf "RAM : %3s%% %s  Used: %s/%s MB\n" "$ram_percent" "$(draw_bar $ram_percent)" "$ram_used" "$ram_total"
-  printf "Disk: %3s%% %s  Used: %s/%s GB\n" "$disk_percent" "$(draw_bar $disk_percent)" "$disk_used" "$disk_total"
-  echo "-------------------------------------------------------------------------"
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  print_line "$(printf "CPU : %3s%% %s  Load: %s" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "$load_avg")"
+  print_line "$(printf "RAM : %3s%% %s  Used: %s/%s MB" "$ram_percent" "$(draw_bar $ram_percent)" "$ram_used" "$ram_total")"
+  print_line "$(printf "Disk: %3s%% %s  Used: %s/%s GB" "$disk_percent" "$(draw_bar $disk_percent)" "$disk_used" "$disk_total")"
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  # [SỬA LỖI 1] Tăng %-15b lên %-17b để thẳng hàng với dòng Uptime dài
-  # [SỬA LỖI 2] Dùng đúng biến $ols_status_in thay vì $ols_status
-  # [SỬA LỖI 3] Căn chỉnh lại khoảng trắng sau dấu | cho thẳng hàng
-  printf "Net In : %-17b |  OpenLiteSpeed : %b\n" "$net_in_display" "$ols_status_in"
-  printf "Net Out: %-17b |  MariaDB       : %b\n" "$net_out_display" "$db_status_in"
+  print_2col "Net In : $net_in_display" "OpenLiteSpeed : $ols_status_in"
+  print_2col "Net Out: $net_out_display" "MariaDB       : $db_status_in"
+  print_2col "Uptime : $uptime_display" "OS            : $OS_NAME_STATIC"
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  # [SỬA LỖI 4] Tăng %-15s lên %-17s để chứa được chuỗi > 100 ngày (VD: 100d 01h 01m 01s là 16 ký tự)
-  printf "Uptime : %-17s |  OS            : %s\n" "$uptime_display" "$OS_NAME_STATIC"
+  menu_str="${C_GREEN}[ENTER]${C_RESET} Menu  |  ${C_GREEN}[2]${C_RESET} Menu nhanh"
+  if [[ "$SHOW_UPDATE" == "1" ]]; then menu_str="${menu_str}  |  ${C_YELLOW}[9] Cập nhật ($NEW_VERSION)${C_RESET}"; fi
+  menu_str="${menu_str}  |  ${C_RED}[0]${C_RESET} Thoát"
+  center_text "$menu_str"
 
-  echo '-------------------------------------------------------------------------'
-  menu_str="[ENTER] Menu  |  [2] Menu nhanh"
-  if [[ "$SHOW_UPDATE" == "1" ]]; then menu_str="${menu_str}  |  ${YELLOW}[9] Cập nhật ($NEW_VERSION)${GREEN}"; fi
-  menu_str="${menu_str}  |  [0] Thoát"
-  clean_menu=$(echo -e "$menu_str" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-  width=73
-  pad=$(((width - ${#clean_menu}) / 2))
-  if [ $pad -lt 0 ]; then pad=0; fi
-  printf "%${pad}s" ""
-  echo -e "${GREEN}${menu_str}${NC}"
-  echo '-------------------------------------------------------------------------'
-  if [ "$ram_percent" -gt 85 ]; then echo -e "${RED}Cảnh báo: RAM đang quá tải!${NC}"; fi
-  if [ "$disk_percent" -gt 90 ]; then echo -e "${RED}Cảnh báo: Ổ cứng sắp đầy!${NC}"; fi
+  if [ "$ram_percent" -gt 85 ] || [ "$disk_percent" -gt 90 ]; then
+    echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    if [ "$ram_percent" -gt 85 ]; then print_line "${C_RED} ⚠️ Cảnh báo: RAM đang quá tải!${C_RESET}"; fi
+    if [ "$disk_percent" -gt 90 ]; then print_line "${C_RED} ⚠️ Cảnh báo: Ổ cứng sắp đầy!${C_RESET}"; fi
+  fi
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 }
 
-# --- VÒNG LẶP CHÍNH ---
+# ==============================================================================
+# --- VÒNG LẶP CHÍNH (ZERO-FLICKER ENGINE) ---
+# ==============================================================================
 tput civis
 ACTION="menu"
 counter=0
-cached_ols_status="${YELLOW}Đang kiểm tra...${NC}"
-cached_db_status="${YELLOW}Đang kiểm tra...${NC}"
+cached_ols_status="${C_YELLOW}Đang kiểm tra...${C_RESET}"
+cached_db_status="${C_YELLOW}Đang kiểm tra...${C_RESET}"
+prev_lines=0 # Biến ghi nhớ độ dài của bảng ở giây trước
 
 while true; do
+  # 1. Tính toán mọi thứ (Chưa in gì ra màn hình nên không bị nháy)
   read rx_now tx_now <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
   if ((rx_now < rx_prev)); then rx_rate=0; else rx_rate=$(((rx_now - rx_prev) / 1024)); fi
   if ((tx_now < tx_prev)); then tx_rate=0; else tx_rate=$(((tx_now - tx_prev) / 1024)); fi
@@ -164,15 +218,31 @@ while true; do
   cpu_display_val=$(((cpu_display_val + cpu_now) / 2))
 
   if ((counter % 5 == 0)); then
-    if /usr/local/lsws/bin/lswsctrl status | grep -q 'litespeed is running'; then cached_ols_status="${GREEN}Hoạt động${NC}"; else cached_ols_status="${RED}Tạm dừng${NC}"; fi
-    if systemctl is-active mariadb.service >/dev/null 2>&1; then cached_db_status="${GREEN}Hoạt động${NC}"; else cached_db_status="${RED}Tạm dừng${NC}"; fi
+    if /usr/local/lsws/bin/lswsctrl status | grep -q 'litespeed is running'; then cached_ols_status="${C_GREEN}Hoạt động${C_RESET}"; else cached_ols_status="${C_RED}Tạm dừng${C_RESET}"; fi
+    if systemctl is-active mariadb.service >/dev/null 2>&1; then cached_db_status="${C_GREEN}Hoạt động${C_RESET}"; else cached_db_status="${C_RED}Tạm dừng${C_RESET}"; fi
   fi
   ((counter++))
 
+  # 2. Tạo bản in mới vào bộ nhớ đệm (Buffer)
   buffer=$(print_dashboard "$rx_rate" "$tx_rate" "$cpu_display_val" "$cached_ols_status" "$cached_db_status")
-  echo -e "$buffer"
-  lines=$(echo "$buffer" | wc -l)
+  current_lines=$(echo -e "$buffer" | wc -l)
 
+  # 3. Đẩy con trỏ lên đúng bằng số dòng của bảng cũ
+  if [[ $prev_lines -gt 0 ]]; then
+    tput cuu "$prev_lines"
+  fi
+
+  # 4. In bảng mới đè lên bảng cũ (Tốc độ ánh sáng, không nháy)
+  echo -e "$buffer"
+
+  # 5. Nếu bảng mới ngắn hơn bảng cũ (Do mất hộp cảnh báo RAM), xóa phần rác ở dưới
+  if [[ $prev_lines -gt $current_lines ]]; then
+    echo -en "\e[J"
+  fi
+
+  prev_lines=$current_lines
+
+  # 6. Chờ nhập phím 1 giây
   read -t 1 -n 1 -s key_input
   if [ $? -eq 0 ]; then
     if [[ "$key_input" == "0" ]]; then
@@ -184,18 +254,17 @@ while true; do
     else ACTION="menu"; fi
     break
   fi
-  tput cuu "$lines"
 done
 
 trap - SIGINT
 tput cnorm
 echo ""
 case $ACTION in
-"exit") echo -e "Đã thoát ra WPTangToc OLS. Nhập lệnh ${GREEN}1${NC} hoặc ${GREEN}wptangtoc${NC} để quay lại menu." ;;
-"search") if [ -f "/etc/wptt/search-wptangtoc" ]; then /etc/wptt/search-wptangtoc; else echo "Lỗi file search"; fi ;;
+"exit") echo -e "Đã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu." ;;
+"search") if [ -f "/etc/wptt/search-wptangtoc" ]; then exec /etc/wptt/search-wptangtoc; else echo "Lỗi file search"; fi ;;
 "update") if [ -f "/etc/wptt/wptt-update" ]; then
-  echo -e "${YELLOW}Đang tiến hành cập nhật hệ thống...${NC}"
-  /etc/wptt/wptt-update
+  echo -e "${C_YELLOW}Đang tiến hành cập nhật hệ thống...${C_RESET}"
+  exec /etc/wptt/wptt-update
 else echo "Lỗi: Không tìm thấy file cập nhật"; fi ;;
 *) if [ -f "/usr/bin/wptangtoc" ]; then exec /usr/bin/wptangtoc; else echo "Lỗi file wptangtoc"; fi ;;
 esac

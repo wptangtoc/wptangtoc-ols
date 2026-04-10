@@ -4,22 +4,11 @@
 # @since: 2026
 
 function huong_dan() {
-  Tính năng Thông tin Webserver trong WPTangToc OLS là một công cụ tiện ích cung cấp cho người quản trị cái nhìn tổng quan và nhanh chóng về các thông số kỹ thuật cũng như trạng thái hiện tại của máy chủ web mà WPTangToc OLS đang quản lý.
-
-  Mục đích chính:
-  * Nắm bắt thông tin nhanh: Giúp người dùng dễ dàng xem các thông tin quan trọng của máy chủ mà không cần phải dùng nhiều lệnh Linux phức tạp hoặc truy cập vào các giao diện quản lý khác nhau.
-  * Hỗ trợ chẩn đoán cơ bản: Cung cấp dữ liệu nền tảng có thể hữu ích khi cần kiểm tra hoặc chẩn đoán các vấn đề về hiệu suất hoặc cấu hình.
-  * Kiểm tra cấu hình: Xác nhận nhanh các phiên bản phần mềm đang chạy và các thiết lập cơ bản.
-
-  Lợi ích:
-  * Tiện lợi: Tất cả thông tin quan trọng được tập trung ở một nơi.
-  * Tiết kiệm thời gian: Không cần phải nhớ và gõ nhiều lệnh khác nhau.
-  * Dễ sử dụng: Phù hợp cả với những người dùng không có nhiều kinh nghiệm quản trị máy chủ chuyên sâu.
-
-  Tóm lại, tính năng Thông tin Webserver trong WPTangToc OLS là một bảng điều khiển thông tin nhỏ gọn, giúp người dùng nhanh chóng nắm được các chi tiết cốt lõi về máy chủ và các dịch vụ web đang chạy trên đó.
+  Tính năng Thông tin Webserver trong WPTangToc OLS là một công cụ tiện ích cung cấp cho người quản trị cái nhìn tổng quan và nhanh chóng về các thông số kỹ thuật cũng như trạng thái hiện tại của máy chủ.
 }
+
 . /etc/wptt/echo-color
-_runing "Đang quét sâu hệ thống..."
+_runing "Đang quét sâu hệ thống (thể mất 10-20 giây)..."
 echo "Kiểm tra hệ thống: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 # Định nghĩa màu sắc nội bộ cho UI
@@ -36,12 +25,22 @@ kiemtra() {
   if [[ -n ${virtua} ]]; then
     virt=$(echo "$virtua" | tr '\n' ' ')
   else
-    virt="Dedicated / No Virt"
+    virt="Dedicated (Máy chủ vật lý)"
   fi
 
-  toc_do_o_cung() {
-    (LANG=C dd if=/dev/zero of=test_$$ bs=64k count=16k conv=fdatasync && rm -f test_$$) 2>&1 | awk -F, '{io=$NF} END { print io}' | sed 's/^[ \t]*//;s/[ \t]*$//'
+  # Hàm đo I/O linh hoạt theo Block Size
+  do_io() {
+    local bs=$1
+    local count=$2
+    (
+      LANG=C dd if=/dev/zero of=test_$$ bs=$bs count=$count conv=fdatasync 2>&1
+      rm -f test_$$
+    ) | awk -F, '/copied/ {print $NF}' | sed 's/^[ \t]*//;s/[ \t]*$//'
   }
+
+  io_4k=$(do_io 4k 25600)    # Test 100MB cho Database
+  io_128k=$(do_io 128k 2048) # Test 256MB cho File Web
+  io_1m=$(do_io 1M 1024)     # Test 512MB cho Backup
 
   # Thông tin Network & IP
   ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com || echo "Không xác định được IP")
@@ -49,29 +48,49 @@ kiemtra() {
   city="$(wget -q -T5 -O- ipinfo.io/city)"
   country="$(wget -q -T5 -O- ipinfo.io/country)"
 
-  disk_speed=$(toc_do_o_cung)
-
   # Thông tin Stack WPTangToc
   phpcheck=$(php -v 2>/dev/null | head -n 1 | awk '{print $2}' | cut -d'-' -f1)
   mariacheck=$(mariadbd --version 2>/dev/null | awk '{print $3}' | cut -d'-' -f1)
   olscheck=$(/usr/local/lsws/bin/lshttpd -v 2>/dev/null | grep -o 'LiteSpeed/[0-9.]*' | cut -d'/' -f2)
 
+  sys_vendor=$(dmidecode -s system-manufacturer 2>/dev/null | head -n 1 | sed 's/^[ \t]*//')
+  sys_product=$(dmidecode -s system-product-name 2>/dev/null | head -n 1 | sed 's/^[ \t]*//')
+  [[ -z "$sys_vendor" ]] && sys_vendor="N/A"
+
+  nic_card=$(lspci 2>/dev/null | grep -i 'ethernet' | awk -F': ' '{print $2}' | head -1)
+  [[ -z "$nic_card" ]] && nic_card="Virtual NIC (KVM/VMware)"
+
+  # CPU Info & Features
   hedieuhanh=$(hostnamectl | grep 'Operating System' | cut -f2 -d':' | sed 's/^ //g')
   cname=$(lscpu | grep 'Model name:' | awk -F: '{print $2}' | sed 's/^[ \t]*//' | head -1)
   cores=$(awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo)
-
-  if [[ -z $cores ]]; then
-    cores=$(awk '/^processor/ {core++} END {print core}' /proc/cpuinfo)
-  fi
+  [[ -z $cores ]] && cores=$(awk '/^processor/ {core++} END {print core}' /proc/cpuinfo)
 
   freq=$(awk -F: '/cpu MHz/ {freq=$2} END {print freq}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' | head -n 1)
-
   if [[ -z $freq || $freq == "0.000" ]]; then
     freq=$(awk '{print $1 / 1000}' /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null)
     [[ -z $freq ]] && freq="N/A"
   fi
 
-  # Thông số RAM & Cảnh báo
+  cpu_cache=$(lscpu 2>/dev/null | grep -i "L3 cache" | awk -F: '{print $2}' | xargs)
+  [[ -z "$cpu_cache" ]] && cpu_cache=$(awk -F: '/cache size/ {print $2}' /proc/cpuinfo | head -1 | xargs)
+  [[ -z "$cpu_cache" ]] && cpu_cache="N/A"
+
+  # Nâng cấp hiển thị màu sắc cho tính năng AVX
+  cpu_aes=$(grep -m1 -q aes /proc/cpuinfo && echo "${C_GREEN}Có${C_RESET}" || echo "${C_RED}Không (CPU Đời cũ)${C_RESET}")
+  cpu_avx=$(grep -m1 -q avx2 /proc/cpuinfo && echo "${C_GREEN}Có (AVX2)${C_RESET}" || (grep -m1 -q avx /proc/cpuinfo && echo "${C_GREEN}Có (AVX)${C_RESET}" || echo "${C_RED}Không${C_RESET}"))
+
+  # RAM Info
+  check_ddr_ram=$(dmidecode -t memory 2>/dev/null | awk '/Type: DDR/ {print $2}' | head -n 1)
+  check_ram_bus=$(dmidecode -t memory 2>/dev/null | awk '/Speed:/ && $2 != "Unknown" {print $2" "$3}' | head -n 1)
+  if [[ -n "$check_ddr_ram" && -n "$check_ram_bus" ]]; then
+    ram_type_bus="$check_ddr_ram / $check_ram_bus"
+  elif [[ -n "$check_ddr_ram" ]]; then
+    ram_type_bus="$check_ddr_ram"
+  else
+    ram_type_bus="N/A (Virtual RAM)"
+  fi
+
   tram=$(free -m | awk '/Mem/ {print $2}')
   uram=$(free -m | awk '/Mem/ {print $3}')
   ram_percent=$(echo "scale=0; $uram * 100 / $tram" | bc 2>/dev/null)
@@ -83,15 +102,18 @@ kiemtra() {
   swap=$(free -m | awk '/Swap/ {print $2}')
   uswap=$(free -m | awk '/Swap/ {print $3}')
 
+  if command -v zramctl &>/dev/null && grep -q "^/dev/zram" /proc/swaps 2>/dev/null; then
+    z_disk=$(zramctl --bytes -n -o DISKSIZE 2>/dev/null | awk '{sum+=$1} END {print int(sum/1024/1024)}')
+    zram_info="${z_disk} MB (Active)"
+  fi
+
   up=$(awk '{a=$1/86400;b=($1%86400)/3600;c=($1%3600)/60} {printf("%d ngày, %d giờ %d phút\n",a,b,c)}' /proc/uptime)
   load=$(w | head -1 | awk -F'load average:' '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//')
 
   arch=$(uname -m)
   lbit=$(getconf LONG_BIT)
-  kern=$(uname -r)
   date_now=$(date '+%d-%m-%Y %H:%M:%S %Z')
 
-  # Cảnh báo ổ cứng
   disk_total=$(df -BG / | tail -n 1 | awk '{print $2}' | tr -d 'G')
   disk_used=$(df -BG / | tail -n 1 | awk '{print $3}' | tr -d 'G')
   disk_percent=$(df -h / | tail -n 1 | awk '{print $5}' | tr -d '%')
@@ -100,7 +122,7 @@ kiemtra() {
   [[ $disk_percent -gt 80 ]] && disk_color=$C_YELLOW
   [[ $disk_percent -gt 90 ]] && disk_color=$C_RED
 
-  _rundone "Đang quét sâu hệ thống..."
+  _rundone "Đang quét sâu hệ thống (thể mất 10-20 giây)..."
   clear
   echo -e "${C_CYAN}╭────────────────────────────────────────────────────────╮${C_RESET}"
   echo -e "${C_CYAN}│${C_RESET}             ${C_YELLOW}THÔNG TIN MÁY CHỦ - WPTANGTOC OLS${C_RESET}          ${C_CYAN}│${C_RESET}"
@@ -108,23 +130,32 @@ kiemtra() {
   echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}PHẦN MỀM LÕI (STACK)${C_RESET}                                   ${C_CYAN}│${C_RESET}"
   echo -e "${C_CYAN}│${C_RESET} WPTangToc OLS    : $version_wptangtoc_ols"
   echo -e "${C_CYAN}│${C_RESET} OpenLiteSpeed    : ${olscheck:-N/A}"
-  echo -e "${C_CYAN}│${C_RESET} PHP 		   : ${phpcheck:-N/A}"
-  echo -e "${C_CYAN}│${C_RESET} MariaDB 	   : ${mariacheck:-N/A}"
+  echo -e "${C_CYAN}│${C_RESET} PHP              : ${phpcheck:-N/A}"
+  echo -e "${C_CYAN}│${C_RESET} MariaDB          : ${mariacheck:-N/A}"
   echo -e "${C_CYAN}├────────────────────────────────────────────────────────┤${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}TÀI NGUYÊN PHẦN CỨNG${C_RESET}                                   ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}TÀI NGUYÊN PHẦN CỨNG CHI TIẾT${C_RESET}                          ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET} Mainboard/Vendor : $sys_vendor $sys_product"
   echo -e "${C_CYAN}│${C_RESET} CPU Model        : $cname"
   echo -e "${C_CYAN}│${C_RESET} CPU Cores / Freq : $cores Cores / $freq MHz"
+  echo -e "${C_CYAN}│${C_RESET} CPU Cache (L3)   : $cpu_cache"
+  echo -e "${C_CYAN}│${C_RESET} CPU Hỗ trợ AES   : $cpu_aes"
+  echo -e "${C_CYAN}│${C_RESET} CPU Hỗ trợ AVX   : $cpu_avx"
+  echo -e "${C_CYAN}│${C_RESET} RAM Type / Bus   : $ram_type_bus"
   echo -e "${C_CYAN}│${C_RESET} RAM Usage        : ${ram_color}${uram} MB / ${tram} MB (${ram_percent}%)${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET} Swap Usage       : $uswap MB / $swap MB"
+  if [[ -n $zram_info ]]; then
+    echo -e "${C_CYAN}│${C_RESET} ZRAM Swap        : $zram_info"
+  fi
   echo -e "${C_CYAN}│${C_RESET} Disk Usage       : ${disk_color}${disk_used}GB / ${disk_total}GB (${disk_percent}%)${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET} Disk Speed (I/O) : $disk_speed"
+  echo -e "${C_CYAN}│${C_RESET} Disk Speed (4K)  : $io_4k"
+  echo -e "${C_CYAN}│${C_RESET} Disk Speed (128K): $io_128k"
+  echo -e "${C_CYAN}│${C_RESET} Disk Speed (1M)  : $io_1m"
+  echo -e "${C_CYAN}│${C_RESET} Network Card     : $nic_card"
   echo -e "${C_CYAN}├────────────────────────────────────────────────────────┤${C_RESET}"
   echo -e "${C_CYAN}│${C_RESET} ${C_GREEN}HỆ ĐIỀU HÀNH & MẠNG${C_RESET}                                    ${C_CYAN}│${C_RESET}"
   echo -e "${C_CYAN}│${C_RESET} OS / Arch        : $hedieuhanh ($arch / $lbit-bit)"
   echo -e "${C_CYAN}│${C_RESET} Virtualization   : $virt"
   echo -e "${C_CYAN}│${C_RESET} Uptime           : $up"
   echo -e "${C_CYAN}│${C_RESET} Load Average     : $load"
-  echo -e "${C_CYAN}│${C_RESET} Server Time      : $date_now"
   echo -e "${C_CYAN}│${C_RESET} IP Address       : $ip"
   [[ -n "$org" ]] && echo -e "${C_CYAN}│${C_RESET} Datacenter       : $org"
   [[ -n "$city" ]] && echo -e "${C_CYAN}│${C_RESET} Location         : $city, $country"
