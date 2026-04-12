@@ -14,97 +14,181 @@ function huong_dan() {
   Sau khi tùy chỉnh, WordPress sẽ có thêm [hoặc bớt] bộ nhớ để hoạt động, giúp giải quyết các lỗi thiếu bộ nhớ và đảm bảo các tác vụ phức tạp có thể hoàn thành.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 if [[ $ngon_ngu = '' ]]; then
   ngon_ngu='vi'
 fi
-. /etc/wptt/lang/$ngon_ngu.sh
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_wordpress => $tang_gioi_han_ram WordPress                       |"
-echo "========================================================================="
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
-. /etc/wptt/echo-color
+tinh_nang_ten="${tang_gioi_han_ram:-Tăng giới hạn RAM} WordPress"
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-unset ram_wordpress_giatri selects
-echo "$lua_chon_website_ban_muon $tang_gioi_han_ram WordPress: "
 function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
+  unset NAME
+  local selects=()
+  local i=1
+  local box_inner_width=${box_inner_width:-71}
 
-    selects=()
-    for filepath in /etc/wptt/vhost/.*.conf; do #kiểm for này hiệu suất nó rất tốt
-      # Bỏ qua nếu không phải file hoặc là file rác "..conf"
+  # 1. Quét file siêu tốc trên RAM và lấy thông tin RAM hiện tại
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
       [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-      # Kỹ thuật Parameter Expansion (Xử lý cắt chuỗi trực tiếp trên RAM, không dùng sed)
-      domain="${filepath##*/}" # Lấy tên file (.wptangtoc.com.conf)
-      domain="${domain%.conf}" # Cắt đuôi .conf (.wptangtoc.com)
-      domain="${domain#.}"     # Cắt dấu chấm ở đầu (wptangtoc.com)
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
 
-      if [[ "$domain" == ?*.?* ]]; then #điều kiện yêu cầu có ký tự. ký tự đại diện cho domain
-        if [[ -f /usr/local/lsws/$domain/html/wp-config.php ]]; then
-          unset ram_wordpress_giatri
-          ram_wordpress_giatri=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]WP_MEMORY_LIMIT['\"]" /usr/local/lsws/"$domain"/html/wp-config.php 2>/dev/null | awk -F"['\"]" '{print $4}' | head -n 1)
-          if [[ -n $ram_wordpress_giatri ]]; then
-            NAME="$domain đang được cấu hình là ${ram_wordpress_giatri}B"
+      if [[ "$domain" == ?*.?* ]]; then
+        local wp_config="/usr/local/lsws/$domain/html/wp-config.php"
+        if [[ -f "$wp_config" ]]; then
+          local ram_giatri=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]WP_MEMORY_LIMIT['\"]" "$wp_config" 2>/dev/null | awk -F"['\"]" '{print $4}' | head -n 1)
+
+          local ram_text=""
+          if [[ -n $ram_giatri ]]; then
+            ram_text="${ram_giatri}B"
           else
-            NAME="$domain đang được cấu hình là 40MB"
+            ram_text="40MB (Mặc định)"
           fi
-          selects+=("$NAME")
+
+          # Lưu mảng gộp "Domain|RAM" để dễ sort và xử lý
+          selects+=("$domain|$ram_text")
         fi
       fi
     done
+  fi
 
-    if [[ -z $selects ]]; then
-      echo "Tất cả domain trên hệ thống chưa có domain đang sử dụng WordPress"
-      exec /etc/wptt/wptt-wordpress-main 1
-    fi
-
-    PS3="
--//- $lua_chon_website_ban_muon [0=$exit_thoat]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      index=$REPLY
-      break
-    done
-  else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
+  # 2. Kiểm tra nếu VPS chưa có website nào
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
     exit
   fi
+
+  # 3. Sắp xếp mảng
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # ============================================================================
+  # 4. RENDER KHỐI BO CONG (TAB GẠCH CHÂN CĂN LỀ TRÁI + CHIA CỘT)
+  # ============================================================================
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+
+  local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website muốn} ${tang_gioi_han_ram:-tăng RAM}:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  # In ra Tiêu đề
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  # Vẽ đường gạch chân, sử dụng sed thay cho tr để chống lỗi UTF-8
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  # Vòng lặp in danh sách tên miền (Chia 2 cột: Domain và RAM)
+  for val in "${selects[@]}"; do
+    local d="${val%|*}"
+    local r="${val#*|}"
+
+    # %-32s giúp ép độ rộng của Domain luôn là 32 ký tự, đẩy phần RAM thẳng hàng với nhau
+    local clean_text=$(printf "  %3d) %-32s [Hiện tại: %s]" "$i" "$d" "$r")
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-32s${C_RESET} ${C_YELLOW}[Hiện tại: %s]${C_RESET}" "$i" "$d" "$r")
+
+    local len_text=${#clean_text}
+    local pad=$((box_inner_width - len_text))
+    [[ $pad -lt 0 ]] && pad=0
+
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  # 5. Dòng nhắc lệnh FZF
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="${lua_chon_website_ban_muon:-Nhập lựa chọn của bạn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
+  else
+    PROMPT_TEXT="${lua_chon_website_ban_muon:-Nhập lựa chọn của bạn} (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
+  fi
+
+  # 6. NHẬN PHÍM
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-wordpress-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          fzf_list+=("${val%|*} (Đang dùng: ${val#*|})")
+        done
+        local selected_name=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --color=border:red --reverse)
+        selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+
+        if [[ -n "$selected_name" ]]; then
+          NAME="$selected_name"
+          return 0
+        else
+          echo -e "\n${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+          continue
+        fi
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        NAME="${val%|*}"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]] && [[ "$REPLY" != "." ]]; then
+        local found=false
+        for val in "${selects[@]}"; do
+          local d="${val%|*}"
+          if [[ "$d" == "$REPLY" ]]; then
+            NAME="$d"
+            found=true
+            break
+          fi
+        done
+        if $found; then return 0; else continue; fi
+      else
+        continue
+      fi
+      ;;
+    esac
+  done
 }
 
 lua_chon_NAME
 
-NAME=$(echo $NAME | cut -f1 -d ' ')
-
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-wordpress-main 1
-fi
-
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  echo -e "\n${C_RED}❌ Hệ thống xác nhận bạn không sử dụng WordPress${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
-read -p "Nhập số dung lượng MB ram bạn muốn cấu hình (ví dụ: 256) [0=$exit_thoat]: " ram_number
+echo ""
+# Tút lại giao diện nhập RAM bằng màu sắc đồng bộ
+echo -en "${C_CYAN}Nhập dung lượng RAM (MB) bạn muốn cấp cho ${C_BOLD_WHITE}$NAME${C_CYAN} (VD: 256, 512, 1024) [0=$exit_thoat]: ${C_RESET}"
+read -r ram_number
+
 if [[ $ram_number = '0' || $ram_number = '' ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
@@ -112,15 +196,15 @@ fi
 ram_number=$(echo "$ram_number" | sed -E 's/[mM][bB]?|[[:space:]]//g')
 
 if [[ ! "$ram_number" =~ ^[0-9]+$ ]]; then
-  echoDo "Bạn nhập sai kiểu dữ liệu vui lòng nhập số nguyên"
-  check_menu_wptangtoc_active=${1:-}
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    read -p "Bấm phím bất kỳ để quay trở lại menu quản lý WordPress: " enter
+  echo -e "\n${C_RED}❌ Nhập sai định dạng. Vui lòng nhập số nguyên (VD: 512).${C_RESET}"
+  if [[ ${1:-} = "98" ]]; then
+    read -p "Bấm phím Enter để quay lại Menu..." enter
     exec /etc/wptt/wptt-wordpress-main 1
   fi
   exit
 fi
 
+echo ""
 _runing "Tăng giới hạn Ram WordPress website $NAME thành ${ram_number}MB"
 
 . /etc/wptt/vhost/.$NAME.conf
@@ -128,18 +212,12 @@ _runing "Tăng giới hạn Ram WordPress website $NAME thành ${ram_number}MB"
 
 WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
-# 1. Cấu hình RAM cho Frontend
 $WP_EXEC config set WP_MEMORY_LIMIT "${ram_number}M" --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
-
-# 2. Cấu hình RAM cho Backend (Khu vực Admin) để tránh xung đột nút thắt cổ chai
 $WP_EXEC config set WP_MAX_MEMORY_LIMIT "${ram_number}M" --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
-
-# 3. Xóa bộ nhớ đệm OPcache
 $WP_EXEC eval 'opcache_reset();' --path=/usr/local/lsws/$NAME/html --allow-root >/dev/null 2>&1
 
 _rundone "Tăng giới hạn Ram WordPress website $NAME thành ${ram_number}MB"
 
-check_menu_wptangtoc_active=${1:-}
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ ${1:-} = "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
