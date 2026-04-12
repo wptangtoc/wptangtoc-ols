@@ -1,52 +1,26 @@
 #!/bin/bash
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+if [[ -z "$ngon_ngu" ]]; then ngon_ngu='vi'; fi
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
 function lua_chon_NAME() {
-  # Khai báo biến cục bộ để lưu trữ tên được chọn
-  # unset NAME
-  # if [ "$(ls -At /etc/wptt/vhost)" ]; then
-  #   selects=()
-  #   for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-  #     NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-  #     if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-  #       selects+=("$NAME")
-  #     fi
-  #   done
-  #   if command -v fzf &>/dev/null; then
-  #     PS3="
-  # $(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [00=$chon_nhanh] [0=$exit_thoat]:$(tput sgr0) "
-  #   else
-  #     PS3="
-  # $(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) "
-  #   fi
-  #   select select in ${selects[@]}; do
-  #     NAME=$select
-  #     index=$REPLY
-  #     break
-  #   done
-  # else
-  #   clear
-  #   echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-  #   exit
-  # fi
+  local action_desc="$1" # Nhận thông điệp từ file gọi (nếu có)
+  unset NAME
+  local selects=()
+  local i=1
+  local box_inner_width=${box_inner_width:-71}
 
-  unset NAME domain
-  selects=()
-  # 1. Quét file siêu tốc trên RAM (Tuyệt đối không dùng ls và sed) để cải thiện hiệu suất, bỏ đi cách cũ
-  for filepath in /etc/wptt/vhost/.*.conf; do #kiểm for này hiệu suất nó rất tốt
-    # Bỏ qua nếu không phải file hoặc là file rác "..conf"
+  # 1. Quét file siêu tốc trên RAM (Lọc các domain có cài WordPress)
+  for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-    # Kỹ thuật Parameter Expansion (Xử lý cắt chuỗi trực tiếp trên RAM, không dùng sed)
-    domain="${filepath##*/}" # Lấy tên file (.wptangtoc.com.conf)
-    domain="${domain%.conf}" # Cắt đuôi .conf (.wptangtoc.com)
-    domain="${domain#.}"     # Cắt dấu chấm ở đầu (wptangtoc.com)
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-    if [[ "$domain" == ?*.?* ]]; then #điều kiện yêu cầu có ký tự. ký tự đại diện cho domain
+    if [[ "$domain" == ?*.?* ]]; then
       selects+=("$domain")
     fi
   done
@@ -54,117 +28,135 @@ function lua_chon_NAME() {
   # 2. Kiểm tra nếu VPS chưa có website nào
   if [[ ${#selects[@]} -eq 0 ]]; then
     clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
+    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
     exit
   fi
 
-  # 3. Sắp xếp mảng chuẩn Version
+  # 3. Sắp xếp mảng chuẩn Version (Tự nhiên)
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # 4. Hiển thị Menu PS3
-  if command -v fzf &>/dev/null; then
-    PS3="$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [00=$chon_nhanh] [0=$exit_thoat]:$(tput sgr0) "
-  else
-    PS3="$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) "
+  # ============================================================================
+  # 4. RENDER KHỐI BO CONG (ĐƯỜNG KẺ GẠCH CHÂN BÁM LỀ TRÁI)
+  # ============================================================================
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+
+  # Tiêu đề hành động (Lệch trái)
+  if [[ -n "$action_desc" ]]; then
+    local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website của bạn muốn} $action_desc:"
+    local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+    local len=${#clean_title}
+
+    # Căn lề trái (cách 2 khoảng trắng), tính khoảng trắng bù bên phải
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+
+    # In ra Tiêu đề
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    # TUYỆT KỸ: Vẽ đường gạch chân, sử dụng sed thay cho tr để không bị lỗi UTF-8
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+
+    # In đường phân cách (bám từ lề trái, tàng hình phần bên phải)
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
   fi
 
-  # 5. Vòng lặp lấy giá trị để nhường quyền cho các khối IF bên dưới của bạn
-  # Đổi 'select select' thành 'select selected_domain' để không dính từ khóa hệ thống
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    index="$REPLY"
-    break
+  # Vòng lặp in danh sách tên miền vào trong khung
+  for domain in "${selects[@]}"; do
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+
+    # Tính toán khoảng trắng bù trừ
+    local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+    local len=${#clean_text}
+    local pad=$((box_inner_width - len))
+    [[ $pad -lt 0 ]] && pad=0
+
+    # In dòng dữ liệu phẳng lì
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
   done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-  if [[ -z $NAME ]]; then                                                                    #tính năng nhập input thẳng domain
-    REPLY=$(echo $REPLY | tr '[:upper:]' '[:lower:]')                                        #chuyển viết hoa thành viết thường, tránh người dùng gõ viết hoa sẽ tự động sử lý vấn đề đó
-    if [[ $(ls -A /etc/wptt/vhost | sed 's/^.//' | sed 's/.conf//' | grep "$REPLY") ]]; then #kiểm tra điều kiện domain này đã thêm trước đó chưa
-      if [ "$REPLY" != "${REPLY/./}" ] && [ "$REPLY" != '.' ]; then                          #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ -f /etc/wptt/vhost/.$REPLY.conf ]]; then                                       #kiểm tra điều kiện xác thực domain này đã đúng đã thêm trước đó chưa lần 2 tuyệt đối
-          NAME=$REPLY
+  # 5. Chuẩn bị Dòng nhắc lệnh (Prompt)
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
+  else
+    PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
+  fi
+
+  # ============================================================================
+  # 6. ĐỘNG CƠ NHẬN PHÍM AN TOÀN
+  # ==============================================================================
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+
+    if ! read -r REPLY; then
+      echo -e "\n${C_RED}⚠️ Đã mất kết nối Terminal (EOF). Tự động thoát Menu để bảo vệ hệ thống...${C_RESET}"
+      exit 1
+    fi
+
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+
+    00)
+      if $fzf_installed; then
+        local fzf_height=$((${#selects[@]} + 4))
+        local fzf_prompt="${nhap_lua_chon_website_cua_ban:-Tìm kiếm website} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
+
+        local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border=rounded --color=border:red --cycle --reverse)
+        local fzf_exit_status=$?
+
+        selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+        if [[ $fzf_exit_status -eq 0 ]] && [[ -n "$selected_name" ]]; then
+          NAME="$selected_name"
+          return 0
+        else
+          echo -e "\n${C_YELLOW}Đã hủy chọn. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
+          continue
         fi
-      fi
-    fi
-  fi
-
-  if [[ $REPLY == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    # Mảng để lưu trữ các tên miền hợp lệ
-    local options=()
-    local vhost_dir="/etc/wptt/vhost"
-
-    # Kiểm tra xem thư mục tồn tại và có phải là thư mục không
-    if [[ ! -d "$vhost_dir" ]]; then
-      clear
-      echo "Lỗi: Thư mục '$vhost_dir' không tồn tại."
-      return 1 # Trả về mã lỗi
-    fi
-
-    # Sử dụng find để lấy danh sách file .conf một cách an toàn hơn ls
-    # và đọc từng dòng bằng while read
-    mapfile -t options < <(
-      # Tìm tất cả các file (-type f) trong thư mục vhost_dir (không vào sâu hơn -maxdepth 1)
-      # có tên kết thúc bằng .conf.
-      # -print0 dùng ký tự NULL để phân tách các đường dẫn, an toàn hơn với các tên file đặc biệt.
-      find "$vhost_dir" -maxdepth 1 -type f -name '*.conf' -print0 |
-
-        # Đọc từng đường dẫn được phân tách bằng NULL vào biến entry_path.
-        while IFS= read -r -d '' entry_path; do
-          # Lấy tên file từ đường dẫn đầy đủ (sử dụng parameter expansion, nhanh hơn `basename`).
-          local entry
-          entry=${entry_path##*/}
-
-          # Xử lý tên file bằng Shell Parameter Expansion để tăng hiệu suất:
-          # 1. Bỏ đuôi .conf
-          local name
-          name=${entry%.conf}
-          # 2. Bỏ ký tự đầu tiên
-          name=${name#?}
-
-          # Kiểm tra xem tên có chứa dấu chấm không (để lọc domain).
-          if [[ "$name" == *.* ]] && [ "$name" != '.' ]; then
-            # In tên hợp lệ ra standard output
-            echo "$name"
-          fi
-        done |
-
-        # Sắp xếp danh sách domain từ output của vòng lặp while.
-        # -u: Lọc các dòng trùng lặp (unique).
-        # -V: Sắp xếp theo kiểu "version number", giúp sắp xếp tự nhiên (ví dụ: site2.com đứng trước site10.com).
-        sort -uV
-    )
-
-    # Kiểm tra xem có tìm thấy tên miền hợp lệ nào không
-    if [ ${#options[@]} -eq 0 ]; then
-      clear
-      # Kiểm tra xem thư mục có trống không hay chỉ không có file .conf hợp lệ
-      if [ -z "$(find "$vhost_dir" -maxdepth 1 -type f -name '*.conf')" ]; then
-        echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
       else
-        echo "$khong_tim_thay_domain_hop_le"
+        echo -e "\n${C_RED}Lỗi: ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ} '00'. FZF chưa được cài đặt.${C_RESET}"
+        continue
       fi
-      return 1 # Trả về mã lỗi
-    fi
+      ;;
 
-    # Sử dụng printf để đưa danh sách vào fzf một cách an toàn (mỗi tên miền một dòng)
-    # fzf sẽ hiển thị danh sách và cho phép người dùng lọc/chọn
-    # --prompt đặt thông điệp hiển thị phía trước ô nhập liệu của fzf
-    # Kết quả (dòng được chọn) sẽ được gán vào biến selected_name
-    selected_name=$(printf "%s\n" "${options[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> $nhap_lua_chon_website_cua_ban [0=$exit_thoat]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME="${selects[$action_index]}"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]] && [[ "$REPLY" != "." ]]; then
+        local found=false
+        for valid_domain in "${selects[@]}"; do
+          if [[ "$valid_domain" == "$REPLY" ]]; then
+            NAME="$valid_domain"
+            found=true
+            break
+          fi
+        done
 
-    # Kiểm tra xem người dùng có hủy chọn không (ví dụ: nhấn Ctrl+C hoặc Esc)
-    # fzf sẽ trả về chuỗi rỗng và mã thoát khác 0 (thường là 130 cho Ctrl+C)
-    local exit_status=$?
-    if [ $exit_status -ne 0 ] || [ -z "$selected_name" ]; then
-      echo "$da_huy_chon"
-      NAME=""  # Đặt lại biến NAME nếu cần
-      return 1 # Trả về mã lỗi
-    fi
-
-    # Gán tên miền đã chọn vào biến NAME (có thể là biến toàn cục nếu cần)
-    NAME="$selected_name"
-    # echo "Đã chọn: $NAME" # Có thể bỏ dòng này nếu không cần thông báo
-    return 0 # Trả về mã thành công
-  fi
+        if $found; then
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lỗi: Tên miền '$REPLY' không tồn tại hoặc không phải là WordPress.${C_RESET}"
+          continue
+        fi
+      else
+        echo -e "\n${C_RED}❌ ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
+        continue
+      fi
+      ;;
+    esac
+  done
 }

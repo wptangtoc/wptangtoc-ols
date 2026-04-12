@@ -23,181 +23,180 @@ function huong_dan() {
   Kết quả: Trang thông báo bảo trì sẽ biến mất, và website của bạn sẽ hoạt động trở lại bình thường, chào đón tất cả khách truy cập.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
-echo "========================================================================="
-echo "|$quan_ly_wordpress => $bat / $tat $che_do_bao_tri    |"
-echo "========================================================================="
+. /etc/wptt/.wptt.conf 2>/dev/null
+if [[ -z "$ngon_ngu" ]]; then ngon_ngu='vi'; fi
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}$quan_ly_wordpress ➜ ${bat} / ${tat} ${che_do_bao_tri}${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+# ==============================================================================
+# HÀM CHỌN WEBSITE HIỂN THỊ TRẠNG THÁI (UX TAB GẠCH CHÂN)
+# ==============================================================================
 function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
-    selects=()
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then
-          #tuỳ biến thêm thông báo
-          if [[ -f "/usr/local/lsws/$NAME/html/.maintenance" ]]; then #nếu file này nó có thì đang bật chế độ bảo trì rồi, thực thi kiểu này nó ktra nhanh
-            NAME="$NAME đang bật tính năng bảo trì"
+  unset NAME
+  local selects=()
+  local i=1
+  local box_inner_width=${box_inner_width:-71}
+
+  # Quét file siêu tốc trên RAM (Check trực tiếp file .maintenance thay vì gọi wp-cli cho nhanh)
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        local path_html="/usr/local/lsws/$domain/html"
+        if [[ -f "$path_html/wp-load.php" ]]; then
+          local status_text=""
+          local status_color=""
+
+          if [[ -f "$path_html/.maintenance" ]]; then
+            status_text="[Đang BẢO TRÌ]"
+            status_color=$C_RED
           else
-            NAME="$NAME đang tắt tính năng bảo trì"
+            status_text="[BÌNH THƯỜNG - Online]"
+            status_color=$C_GREEN
           fi
-          selects+=("$NAME")
+
+          selects+=("$domain|$status_text|$status_color")
         fi
       fi
     done
-
-    if [[ $selects = '' ]]; then
-      echo "Tất cả domain trên hệ thống chưa có domain đang sử dụng WordPress"
-      sleep 4
-      exec /usr/bin/wptangtoc 1
-    fi
-
-    PS3="
--//- $lua_chon_website_ban_muon [0=$exit_thoat]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      index=$REPLY
-      break
-    done
-  else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
   fi
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # RENDER BOX CHỌN DOMAIN
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website của bạn}:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  # Đường gạch chân bằng sed chống lỗi UTF-8
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  for val in "${selects[@]}"; do
+    IFS='|' read -r d s c <<<"$val"
+    local clean_row=$(printf "  %3d) %-32s %s" "$i" "$d" "$s")
+    local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-32s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+    local pad=$((box_inner_width - ${#clean_row}))
+    [[ $pad -lt 0 ]] && pad=0
+
+    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local prompt_msg="${lua_chon_website_ban_muon:-Nhập lựa chọn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-wordpress-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          IFS='|' read -r d s c <<<"$val"
+          fzf_list+=("$d $s")
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        NAME="${val%|*|*}"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
 }
 
 lua_chon_NAME
 
-NAME=$(echo $NAME | cut -f1 -d ' ')
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-wordpress-main 1
-fi
-
+# ==============================================================================
+# KIỂM TRA TÊN MIỀN & WP
+# ==============================================================================
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+path_html="/usr/local/lsws/$NAME/html"
+if [[ ! -f "$path_html/wp-load.php" ]]; then
+  echo -e "\n${C_RED}❌ Hệ thống xác nhận website không sử dụng WordPress.${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
+# ==============================================================================
+# XỬ LÝ LOGIC BẬT / TẮT BẢO TRÌ
+# ==============================================================================
 . /etc/wptt/php/php-cli-domain-config $NAME
 . /etc/wptt/vhost/.$NAME.conf
-unset da_setup_mods
-if [[ $(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp maintenance-mode status --allow-root --path=/usr/local/lsws/$NAME/html 2>/dev/null | grep 'not') ]]; then
-  da_setup_mods='0'
+
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+# Check trạng thái qua file để ra quyết định ngược lại
+if [[ -f "$path_html/.maintenance" ]]; then
+  action_text="${tat:-TẮT} ${che_do_bao_tri:-chế độ bảo trì} (Online)"
+  wp_cmd="deactivate"
 else
-  da_setup_mods='1'
+  action_text="${bat:-BẬT} ${che_do_bao_tri:-chế độ bảo trì} (Offline)"
+  wp_cmd="activate"
 fi
 
-if [[ $da_setup_mods = '0' ]]; then
-  echo "$xac_nhan $bat $che_do_bao_tri website $NAME?"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  dongy="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+echo -en "\n${C_YELLOW}${xac_nhan:-Xác nhận} $action_text cho website ${C_BOLD_WHITE}$NAME${C_YELLOW}? [y/n]: ${C_RESET}"
+read -r confirm
+[[ ! "$confirm" =~ ^[yY]$ ]] && echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1 && exec /etc/wptt/wptt-wordpress-main 1
 
-    2)
-      dongy="n"
-      break
-      ;;
+echo ""
+_runing "$action_text cho $NAME"
 
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
+# Thực thi bật/tắt bằng WP-CLI chuẩn xác
+$WP_EXEC maintenance-mode $wp_cmd --allow-root --path="$path_html" >/dev/null 2>&1
 
-  if [[ "$dongy" = "y" ]]; then
-    . /etc/wptt/echo-color
-    wp_config="/usr/local/lsws/$NAME/html/wp-config.php"
-    if [[ ! -f $wp_config ]]; then
-      echoDo "không xác định được file wp-config của website $NAME"
-      exec /etc/wptt/wptt-wordpress-main 1
-    fi
+# Xóa cache
+(/etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1)
 
-    _runing "$bat $che_do_bao_tri"
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp maintenance-mode activate --allow-root --path=/usr/local/lsws/$NAME/html >/dev/null 2>&1
-    (/etc/wptt/cache/wptt-xoacache $NAME >/dev/null 2>&1) #shell bash con tiến trình
-    echo "$bat $che_do_bao_tri website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "$bat $che_do_bao_tri"
-  fi
-fi
+echo "$action_text website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+_rundone "$action_text cho $NAME"
 
-if [[ $da_setup_mods = '1' ]]; then
-  echo "$xac_nhan $tat $che_do_bao_tri website ${NAME} ?"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  dongy="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
-
-    2)
-      dongy="n"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
-
-  if [[ "$dongy" = "y" ]]; then
-    . /etc/wptt/echo-color
-    wp_config="/usr/local/lsws/$NAME/html/wp-config.php"
-    if [[ ! -f $wp_config ]]; then
-      echoDo "không xác định được file wp-config của website $NAME"
-      exec /etc/wptt/wptt-wordpress-main 1
-    fi
-
-    _runing "$tat $che_do_bao_tri"
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp maintenance-mode deactivate --allow-root --path=/usr/local/lsws/$NAME/html >/dev/null 2>&1
-    (/etc/wptt/cache/wptt-xoacache $NAME >/dev/null 2>&1)
-    echo "$tat $che_do_bao_tri website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "$tat $che_do_bao_tri"
-  fi
-fi
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ ${1:-} == "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
