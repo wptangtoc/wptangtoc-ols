@@ -17,75 +17,95 @@ function huong_dan() {
   Sau khi xóa kích hoạt, người dùng sẽ cần các phương thức khác [nếu được phép] như công cụ dòng lệnh hoặc các ứng dụng quản lý database trên máy tính để làm việc với cơ sở dữ liệu của họ.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-echo -e "\n\n\n========================================================================="
-echo -e "| $quan_ly_phpmyadmin => $xoa PhpMyAdmin                                    |"
-echo -e "=========================================================================\n"
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ PHPMYADMIN ➜ $xoa PhpMyAdmin${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-[[ -z $Website_chinh ]] && {
-  echoDo "Huỷ tác vụ xoá PhpMyadmin"
-  echoDo "Vì Không xác được website chính của hệ thống này"
-  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
+if [[ -z "$Website_chinh" ]]; then
+  echo -e "${C_RED}❌ Lỗi: Không xác định được website chính của hệ thống này!${C_RESET}"
+  echo -e "Hủy tác vụ xóa PhpMyAdmin."
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
   return 2>/dev/null || exit 1
-}
+fi
 
 # Kiểm tra xem phpMyAdmin có đang tồn tại hay không
 if [[ -z "$id_dang_nhap_phpmyadmin" && ! -d "/usr/local/lsws/$Website_chinh/html/phpmyadmin" ]]; then
-  echoDo "$ban_chua_kich_hoat PhpMyAdmin"
-  sleep 3
-  exec /etc/wptt/wptt-phpmyadmin-main 1
-  exit
+  echo -e "${C_YELLOW}⚠️ Hệ thống chưa kích hoạt PhpMyAdmin hoặc đã được xóa trước đó!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
+  return 2>/dev/null || exit
 fi
 
-UI_STRING="$xoa PhpMyAdmin"
-_runing "$UI_STRING"
+# ==============================================================================
+# XÁC NHẬN VÀ THỰC THI HỦY
+# ==============================================================================
+if wptt_xac_nhan "Bạn có chắc chắn muốn XÓA PhpMyAdmin khỏi hệ thống?" "${C_BOLD_WHITE}Website chính:${C_RESET} ${C_YELLOW}$Website_chinh${C_RESET}" "" "Đồng ý XÓA (An toàn)" "Hủy bỏ"; then
+  echo ""
+  _runing "Đang tiến hành gỡ bỏ PhpMyAdmin và dọn dẹp cấu hình..."
 
-# ==============================================================================
-# 1. XÓA FILE NGUỒN VÀ THƯ MỤC TẠM
-# ==============================================================================
-[[ -z $Website_chinh ]] && {
-  _runloi "$UI_STRING"
-  echoDo "Không xác được website chính của hệ thống này"
-  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
-  return 2>/dev/null || exit 1
-}
+  # 1. XÓA FILE NGUỒN VÀ THƯ MỤC TẠM
+  rm -rf "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
+  rm -rf "/usr/local/lsws/phpmyadmin"
 
-rm -rf "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
-rm -rf "/usr/local/lsws/phpmyadmin"
+  # 2. XÓA TÀI KHOẢN BẢO MẬT 2 LỚP (HTTP BASIC AUTH)
+  rm -f "/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
 
-# ==============================================================================
-# 2. XÓA TÀI KHOẢN BẢO MẬT 2 LỚP (HTTP BASIC AUTH)
-# ==============================================================================
-rm -f "/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
+  sed -i "/id_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
+  sed -i "/password_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
 
-sed -i "/id_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
-sed -i "/password_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
+  # 3. DỌN DẸP CẤU HÌNH TRONG VHOST BẰNG SED
+  vhost_conf="/usr/local/lsws/conf/vhosts/$Website_chinh/$Website_chinh.conf"
+  sed -i -e "/^realm ${Website_chinh}phpmyadmin/,/^}/d" "$vhost_conf" 2>/dev/null
+  sed -i -e "/^context \/phpmyadmin\//,/^}/d" "$vhost_conf" 2>/dev/null
 
-# ==============================================================================
-# 3. DỌN DẸP CẤU HÌNH TRONG VHOST BẰNG SED (ĐÃ FIX TÊN REALM)
-# ==============================================================================
-vhost_conf="/usr/local/lsws/conf/vhosts/$Website_chinh/$Website_chinh.conf"
-sed -i -e "/^realm ${Website_chinh}phpmyadmin/,/^}/d" "$vhost_conf" 2>/dev/null
-sed -i -e "/^context \/phpmyadmin\//,/^}/d" "$vhost_conf" 2>/dev/null
+  # Tương thích ngược phiên bản cũ
+  sed -i -e '/^realm '${Website_chinh}phpphpmyadmin'/,/^}$/d' "$vhost_conf" 2>/dev/null
 
-#Tương thích ngược này xưa ngày xưa đặt tên là phpphpmyadmin để nó clean
-sed -i -e '/^realm '${Website_chinh}phpphpmyadmin'/,/^}$/d' "$vhost_conf" 2>/dev/null
+  # 4. RÚT CỜ BYPASS TƯỜNG LỬA 8G (NẾU CÓ)
+  htaccess_path="/usr/local/lsws/$Website_chinh/html/.htaccess"
+  if [[ -f "$htaccess_path" ]]; then
+    sed -i '/phpmyadmin\/index/d' "$htaccess_path" 2>/dev/null
+  fi
 
-# ==============================================================================
-# 4. RÚT CỜ BYPASS TƯỜNG LỬA 8G (NẾU CÓ) ĐỂ BẢO TOÀN AN NINH
-# ==============================================================================
-htaccess_path="/usr/local/lsws/$Website_chinh/html/.htaccess"
-if [[ -f "$htaccess_path" ]]; then
-  sed -i '/phpmyadmin\/index/d' "$htaccess_path" 2>/dev/null
+  # 5. KHỞI ĐỘNG LẠI DỊCH VỤ
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+  echo "Xóa PhpMyAdmin: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  _rundone "Dọn dẹp hoàn tất cấu hình PhpMyAdmin"
+
+  box_inner_width=${box_inner_width:-71}
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}ĐÃ XÓA PHPMYADMIN THÀNH CÔNG${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  function in_dong() {
+    local raw_text="$1"
+    local colored_text="$2"
+    local len=$(echo -n "$raw_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_GREEN}│${C_RESET}${colored_text}$(printf '%*s' "$pad" "")${C_GREEN}│${C_RESET}"
+  }
+
+  in_dong "  Máy chủ        : $Website_chinh" "  ${C_BOLD_WHITE}Máy chủ        :${C_RESET} ${C_YELLOW}$Website_chinh${C_RESET}"
+
+  msg_safe="Hệ thống đã đóng cổng Database và dọn sạch rác."
+  in_dong "  Trạng thái     : $msg_safe" "  ${C_BOLD_WHITE}Trạng thái     :${C_RESET} $msg_safe"
+
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác xóa PhpMyAdmin.${C_RESET}"
+  sleep 1
 fi
 
-/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-_rundone "$UI_STRING"
-
-echo "Xóa PhpMyAdmin: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1

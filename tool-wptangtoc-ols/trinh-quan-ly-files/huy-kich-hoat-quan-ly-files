@@ -14,117 +14,180 @@ function huong_dan() {
   Sau khi xóa kích hoạt, người dùng sẽ cần sử dụng các phương thức khác [nếu được phép và đã cấu hình] như SFTP để quản lý tệp tin website của họ.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 NAME=$1
-if [[ $NAME = "98" ]]; then
-  NAME=""
-fi
+[[ "$NAME" == "98" ]] && NAME=""
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_file_manager => $tat File Manager                 |"
-echo "========================================================================="
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ FILE MANAGER ➜ $tat File Manager${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-. /etc/wptt/echo-color
-if [[ $NAME = "" ]]; then
+if [[ -z "$NAME" ]]; then
   function lua_chon_NAME() {
-    NAME=""
-    if [ "$(ls -At /etc/wptt/vhost)" ]; then
-      selects=()
-      for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
-        NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-        if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-          if [[ -d /usr/local/lsws/"$NAME"/html/quan-ly-files ]]; then
-            selects+=("$NAME")
-          fi
+    unset NAME selects
+    selects=()
+    local box_inner_width=${box_inner_width:-71}
+
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        # CHỈ HIỂN THỊ DOMAIN ĐÃ CÓ FILE MANAGER
+        if [[ -d "/usr/local/lsws/$domain/html/quan-ly-files" ]]; then
+          selects+=("$domain")
         fi
-      done
-
-      if [[ $selects = '' ]]; then
-        echo "Tất cả domain trên hệ thống chưa có domain nào được kích hoạt sử dụng File Manager"
-        exec /etc/wptt/wptt-quan-ly-files-main 1
       fi
+    done
 
-      PS3="
--//- Nhập lựa chọn website của bạn [0=Thoát]: "
-      select select in ${selects[@]}; do
-        NAME=$select
-        index=$REPLY
-        break
-      done
-    else
-      clear
-      echo "Tất cả domain trên hệ thống đều chưa được kích hoạt sử dụng File Manager"
-      exit
-      exit
+    if [[ ${#selects[@]} -eq 0 ]]; then
+      echo -e "${C_YELLOW}⚠️ Chưa có website nào trên hệ thống được kích hoạt File Manager!${C_RESET}"
+      sleep 3
+      exec /etc/wptt/wptt-quan-ly-files-main 1
     fi
+
+    mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+    # RENDER KHUNG MENU BO CONG
+    echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    local title_text="Nhập lựa chọn website của bạn muốn HỦY File Manager:"
+    local len=$(echo -n "$title_text" | awk '{print length($0)}')
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+    local i=1
+    for domain in "${selects[@]}"; do
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+      local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+      ((i++))
+    done
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+    local fzf_installed=false
+    if command -v fzf &>/dev/null; then
+      fzf_installed=true
+      PROMPT_TEXT="Nhập lựa chọn website (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    else
+      PROMPT_TEXT="Nhập lựa chọn website (1-${#selects[@]}) [0=Thoát]: "
+    fi
+
+    while true; do
+      echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+      if ! read -r REPLY; then exit 1; fi
+      REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+      case "$REPLY" in
+      0)
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        NAME="0"
+        return 0
+        ;;
+      00)
+        if $fzf_installed; then
+          local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website hủy FileManager >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+          selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+          if [[ -n "$selected_name" ]]; then
+            NAME="$selected_name"
+            return 0
+          else
+            echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+          fi
+        else
+          echo -e "${C_RED}Lỗi: FZF chưa được cài đặt.${C_RESET}"
+        fi
+        ;;
+      *)
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+          local action_index=$((REPLY - 1))
+          NAME="${selects[$action_index]}"
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+        fi
+        ;;
+      esac
+    done
   }
 
-  echo ""
-  echo ""
-  echo "Lựa chọn website muốn hủy kích hoạt trình quản lý files: "
-  echo ""
   lua_chon_NAME
 fi
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-quan-ly-files-main 1
-  fi
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-quan-ly-files-main 1
-  fi
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
-if [[ ! -d /usr/local/lsws/$NAME/html/quan-ly-files ]]; then
-  echo "Bạn chưa kích hoạt trình quản lý files"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-quan-ly-files-main 1
-  fi
+if [[ ! -d "/usr/local/lsws/$NAME/html/quan-ly-files" ]]; then
+  echo -e "\n${C_YELLOW}⚠️ Website này chưa kích hoạt trình quản lý files!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
-_runing "Hủy kích hoạt FileManager cho website $NAME"
+if wptt_xac_nhan "Bạn có chắc chắn muốn XÓA File Manager cho website này?" "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$NAME${C_RESET}" "" "Đồng ý XÓA (An toàn)" "Hủy bỏ"; then
+  echo ""
+  _runing "Đang hủy kích hoạt và dọn dẹp cấu hình cho website $NAME..."
 
-sed -i -e '/^realm '${NAME}files'/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-sed -i -e '/^context \/quan-ly-files\//,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+  sed -i -e '/^realm '${NAME}files'/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+  sed -i -e '/^context \/quan-ly-files\//,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
 
-rm -rf /usr/local/lsws/$NAME/html/quan-ly-files
-rm -f /usr/local/lsws/$NAME/passwd/.files
+  rm -rf /usr/local/lsws/$NAME/html/quan-ly-files
+  rm -f /usr/local/lsws/$NAME/passwd/.files
+  rm -f /usr/local/lsws/"$NAME"/passwd/.password-giatuan.json
+  rm -f /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json
 
-rm -f /usr/local/lsws/"$NAME"/passwd/.password-giatuan.json
-rm -f /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json
+  sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
+  sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
+  sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
+  sed -i '/password_quan_ly_file/d' /etc/wptt/vhost/.$NAME.conf
 
-sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
-sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
-sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
-sed -i '/password_quan_ly_file/d' /etc/wptt/vhost/.$NAME.conf
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  echo "Huỷ Kích hoạt filemanager website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "Dọn dẹp hoàn tất cấu hình FileManager"
 
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-_rundone "Hủy kích hoạt FileManager cho website $NAME"
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}ĐÃ TẮT FILE MANAGER THÀNH CÔNG${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  box_inner_width=${box_inner_width:-71}
+  pad_d=$((box_inner_width - 15 - ${#NAME} - 2))
+  [[ $pad_d -lt 0 ]] && pad_d=0
+  echo -e "${C_GREEN}│${C_RESET}  ${C_BOLD_WHITE}Website        :${C_RESET} ${C_YELLOW}$NAME${C_RESET}$(printf '%*s' "$pad_d" "")${C_GREEN}│${C_RESET}"
 
-echo "Huỷ Kích hoạt filemanager website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-quan-ly-files-main 1
+  msg_safe="Hệ thống đã dọn sạch rác và đóng cổng truy cập."
+  pad_safe=$((box_inner_width - 15 - ${#msg_safe} - 2))
+  [[ $pad_safe -lt 0 ]] && pad_safe=0
+  echo -e "${C_GREEN}│${C_RESET}  ${C_BOLD_WHITE}Trạng thái     :${C_RESET} $msg_safe$(printf '%*s' "$pad_safe" "")${C_GREEN}│${C_RESET}"
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác xóa.${C_RESET}"
+  sleep 1
 fi
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
