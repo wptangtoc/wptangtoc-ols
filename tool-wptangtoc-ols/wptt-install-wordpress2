@@ -20,14 +20,13 @@ function huong_dan() {
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
-stty iutf8 #từ latin1 sang utf8, nhiều khi anh em dùng bộ gõ tiếng việt: dùng à â nó thêm \xc3 hay \xa9 ... tương thích với bộ gõ tiếng việt telex khi nhập domain
+stty iutf8
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/core-functions
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
 if [[ "$1" == '99' ]]; then
   WPTT_IN_MENU="yes"
@@ -39,26 +38,30 @@ if [[ "$1" == '98' ]]; then
   WPTT_MENU_BACK="/etc/wptt/wptt-wordpress-main 1"
 fi
 
-. /etc/wptt/echo-color
+# ==============================================================================
+# 1. KIỂM TRA PHỤ THUỘC VÀ CHỌN DOMAIN
+# ==============================================================================
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}WORDPRESS ➜ Cài đặt mới Mã nguồn WordPress${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+# Check service chính
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cài đặt WordPress cho website $NAME"
+
 . /etc/wptt/tenmien
 lua_chon_NAME "$thiet_lap WordPress"
 domain="$NAME"
 
-#check service chính xem có hoạt động hay không
-wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cài đặt WordPress cho website $NAME"
-
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
   [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
-
   [[ ${1:-} == "99" ]] && exec /usr/bin/wptangtoc 1
-
   return 2>/dev/null || exit
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "$ten_mien_nay_khong_ton_tai_tren_he_thong"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
   exec /usr/bin/wptangtoc 1
   exit
@@ -66,155 +69,128 @@ fi
 
 . /etc/wptt/vhost/."$NAME".conf
 . /etc/wptt/.wptt.conf
-
 . /etc/wptt/echo-color
 
+# ==============================================================================
+# 2. XÁC NHẬN CÀI ĐẶT
+# ==============================================================================
+msg_title="Xác nhận thiết lập WordPress mới cho domain: $domain"
+msg_info1=""
 if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then
-  echo "$dieu_nay_se_xoa_toan_bo_wordpress_hien_tai_hoan_toan"
+  msg_info1="${C_RED}CẢNH BÁO: Thao tác này sẽ xóa sạch toàn bộ mã nguồn WP hiện tại!${C_RESET}"
+else
+  msg_info1="${C_BOLD_WHITE}Lưu ý:${C_RESET} Mọi dữ liệu cũ trong thư mục html sẽ bị xóa sạch."
 fi
 
-echo "$xac_nhan $thiet_lap Wordpress $phien_ban $moi_nhat cho domain $domain"
-prompt="$nhap_lua_chon_cua_ban [1-2]: "
-dongy_1="n"
-options=("$dong_y" "$khong_dong_y")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-  case "$REPLY" in
-  1)
-    dongy_1="y"
-    break
-    ;;
+if ! wptt_xac_nhan "$msg_title" "$msg_info1" "" "Đồng ý (Bắt đầu cài đặt)" "Không đồng ý (Hủy thao tác)"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác cài đặt.${C_RESET}"
+  sleep 1.5
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  [[ ${1:-} == "99" ]] && exec /usr/bin/wptangtoc 1
+  exit
+fi
 
-  2)
-    dongy_1="n"
-    break
-    ;;
+echo "Install mã nguồn Wordpress website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-  $((${#options[@]} + 1)))
-    printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-    break
-    ;;
-  *)
-    printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-    break
-    ;;
-  esac
-done
+# ==============================================================================
+# 3. LÀM SẠCH VÀ CHUẨN BỊ
+# ==============================================================================
+echo ""
+if [[ -n "$lock_down" ]]; then
+  _runing "$tat lock down website $NAME"
+  . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME off
+  sed -i '/lock_down/d' /etc/wptt/vhost/.$NAME.conf
+  _rundone "$tat lock down website $NAME"
+fi
 
-if [[ "$dongy_1" = "y" ]]; then
-  echo "Install mã nguồn Wordpress website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-  if [[ $lock_down ]]; then
-    _runing "$tat lock down website $NAME"
-    . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME off
-    sed -i '/lock_down/d' /etc/wptt/vhost/.$NAME.conf
-    _rundone "$tat lock down website $NAME"
-  fi
+_runing "$lam_sach_toan_bo_du_lieu_ma_nguon_cua $NAME"
+if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
+  echo -e "\n${C_RED}Lỗi: Domain rỗng. Hủy bỏ lệnh xóa an toàn!${C_RESET}"
+  [[ ${1:-} == "98" ]] && exec /usr/bin/wptangtoc 1
+  return 2>/dev/null || exit 1
+fi
 
-  _runing "$lam_sach_toan_bo_du_lieu_ma_nguon_cua $NAME"
-  if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then #phòng chống xoá mã nguồn nhầm
-    echo "Lỗi: Domain rỗng. Hủy bỏ lệnh xóa!"
-    check_menu_wptangtoc_active=$1
-    if [[ $check_menu_wptangtoc_active = "98" ]]; then
-      exec /usr/bin/wptangtoc 1
-    fi
-    return 2>/dev/null || exit 1
-  fi
+cd /usr/local/lsws/"$NAME"/html/ || exit 1
+rm -rf /usr/local/lsws/"$NAME"/html/*
+[[ -d /usr/local/lsws/"$NAME"/luucache ]] && rm -rf /usr/local/lsws/"$NAME"/luucache
 
-  cd /usr/local/lsws/"$NAME"/html/ || exit 1
+vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+if [[ "$Website_chinh" == "$NAME" && -f "$vhost_conf" && -n $id_dang_nhap_phpmyadmin ]] && grep -qiE "realm.*phpmyadmin|context /phpmyadmin" "$vhost_conf"; then
+  rm -f "/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
+  sed -i "/id_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
+  sed -i "/password_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
+  sed -i -e "/^realm ${Website_chinh}phpmyadmin/,/^}/d" "$vhost_conf" 2>/dev/null
+  sed -i -e "/^context \/phpmyadmin\//,/^}/d" "$vhost_conf" 2>/dev/null
+  sed -i -e '/^realm '${Website_chinh}phpphpmyadmin'/,/^}$/d' "$vhost_conf" 2>/dev/null
+fi
 
-  rm -rf /usr/local/lsws/"$NAME"/html/*
+if [[ -f "$vhost_conf" && -n $id_dang_nhap_quan_ly_file_cap_2 ]] && grep -qiE "realm.*files|context /quan-ly-files" "$vhost_conf"; then
+  sed -i -e '/^realm '${NAME}files'/,/^}$/d' "$vhost_conf"
+  sed -i -e '/^context \/quan-ly-files\//,/^}$/d' "$vhost_conf"
+  sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
+  sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
+  sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
+  sed -i '/password_quan_ly_file/d' /etc/wptt/vhost/.$NAME.conf
+  rm -f /usr/local/lsws/$NAME/passwd/.files
+  rm -f /usr/local/lsws/"$NAME"/passwd/.password-giatuan.json
+  rm -f /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json
+fi
+_rundone "$lam_sach_toan_bo_du_lieu_ma_nguon_cua $NAME"
 
-  if [[ -d /usr/local/lsws/"$NAME"/luucache ]]; then
-    rm -rf /usr/local/lsws/"$NAME"/luucache
-  fi
+# ==============================================================================
+# 4. TẢI VÀ GIẢI NÉN MÃ NGUỒN
+# ==============================================================================
+_runing "$tai $ma_nguon WordPress mới nhất"
 
-  vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
-  if [[ "$Website_chinh" == "$NAME" && -f "$vhost_conf" && -n $id_dang_nhap_phpmyadmin ]] && grep -qiE "realm.*phpmyadmin|context /phpmyadmin" "$vhost_conf"; then #xoá phpmyadmin nếu có
-    rm -f "/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
-    sed -i "/id_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
-    sed -i "/password_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
-    sed -i -e "/^realm ${Website_chinh}phpmyadmin/,/^}/d" "$vhost_conf" 2>/dev/null
-    sed -i -e "/^context \/phpmyadmin\//,/^}/d" "$vhost_conf" 2>/dev/null
+OLD_PWD=$(pwd)
+TMP_DIR=$(mktemp -d)
+cd "$TMP_DIR" || exit
 
-    #Tương thích ngược này xưa ngày xưa đặt tên là phpphpmyadmin để nó clean
-    sed -i -e '/^realm '${Website_chinh}phpphpmyadmin'/,/^}$/d' "$vhost_conf" 2>/dev/null
-  fi
+wget -q --timeout=15 --tries=3 https://wordpress.org/latest.tar.gz
+id_checksum_wordpress=$(curl -s https://wordpress.org/latest.tar.gz.md5 | head -1)
+[[ "$id_checksum_wordpress" != $(md5sum latest.tar.gz 2>/dev/null | awk '{print $1}') ]] && rm -f latest.tar.gz
 
-  if [[ -f "$vhost_conf" && -n $id_dang_nhap_quan_ly_file_cap_2 ]] && grep -qiE "realm.*files|context /quan-ly-files" "$vhost_conf"; then #filemanager, xoá nếu nó có tồn tại
-    sed -i -e '/^realm '${NAME}files'/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-    sed -i -e '/^context \/quan-ly-files\//,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-    sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
-    sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
-    sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
-    sed -i '/password_quan_ly_file/d' /etc/wptt/vhost/.$NAME.conf
-    rm -f /usr/local/lsws/$NAME/passwd/.files
-    rm -f /usr/local/lsws/"$NAME"/passwd/.password-giatuan.json
-    rm -f /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json
-  fi
-
-  _rundone "$lam_sach_toan_bo_du_lieu_ma_nguon_cua $NAME"
-
-  _runing "$tai $ma_nguon WordPress"
-
-  # rm -f latest.tar.gz
-
-  #cd vào thư mục tmp tạm thời để download dữ liệu
-  OLD_PWD=$(pwd)
-  TMP_DIR=$(mktemp -d)
-  cd "$TMP_DIR" || exit
-
-  wget -q --timeout=15 --tries=3 https://wordpress.org/latest.tar.gz #download bằng https
-  unset id_checksum_wordpress
+if [[ ! -f latest.tar.gz ]]; then
+  wget -q --timeout=15 --tries=3 https://wordpress.org/latest.tar.gz
   id_checksum_wordpress=$(curl -s https://wordpress.org/latest.tar.gz.md5 | head -1)
-  if [[ $id_checksum_wordpress != $(/usr/bin/md5sum latest.tar.gz | cut -f1 -d ' ' | head -1) ]]; then #xác thực nếu khác checksum sẽ báo lỗi
-    rm -f latest.tar.gz
-  fi
+  [[ "$id_checksum_wordpress" != $(md5sum latest.tar.gz 2>/dev/null | awk '{print $1}') ]] && rm -f latest.tar.gz
+fi
 
-  if [[ ! -f latest.tar.gz ]]; then                                    #dự phòng download lại lần thứ 2
-    wget -q --timeout=15 --tries=3 https://wordpress.org/latest.tar.gz #download bằng https
-    id_checksum_wordpress=$(curl -s https://wordpress.org/latest.tar.gz.md5 | head -1)
-    if [[ $id_checksum_wordpress != $(/usr/bin/md5sum latest.tar.gz | cut -f1 -d ' ' | head -1) ]]; then #xác thực nếu khác checksum sẽ báo lỗi
-      rm -f latest.tar.gz
-    fi
-  fi
-
-  if [[ ! -f latest.tar.gz ]]; then
-    _runloi "$tai $ma_nguon WordPress"
-    echoDo "Chưa thể download mã nguồn WordPress vui lòng thử lại sau"
-    cd "$OLD_PWD" || cd /root
-    rm -rf "$TMP_DIR"
-    check_menu_wptangtoc_active=$1
-    if [[ $check_menu_wptangtoc_active = "99" ]]; then
-      exec /usr/bin/wptangtoc 1
-    fi
-    return 2>/dev/null
-    exit
-  fi
-
-  _rundone "$tai $ma_nguon WordPress"
-  _runing "$giai_nen $ma_nguon WordPress"
-  tar -zxf latest.tar.gz
-  mv wordpress/* /usr/local/lsws/"$NAME"/html && rm -rf wordpress && rm -f latest.tar.gz
-
+if [[ ! -f latest.tar.gz ]]; then
+  _runloi "$tai $ma_nguon WordPress"
+  echo -e "${C_RED}Lỗi: Chưa thể download mã nguồn WordPress, vui lòng thử lại sau!${C_RESET}"
   cd "$OLD_PWD" || cd /root
   rm -rf "$TMP_DIR"
+  [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
+  return 2>/dev/null
+  exit
+fi
+_rundone "$tai $ma_nguon WordPress mới nhất"
 
-  _rundone "$giai_nen $ma_nguon WordPress"
+_runing "$giai_nen $ma_nguon WordPress"
+tar -zxf latest.tar.gz
+mv wordpress/* /usr/local/lsws/"$NAME"/html && rm -rf wordpress latest.tar.gz
+cd "$OLD_PWD" || cd /root
+rm -rf "$TMP_DIR"
+_rundone "$giai_nen $ma_nguon WordPress"
 
-  . /etc/wptt/ssl/check-ssl-cert-con-kha-dung $NAME #check ssl khả dụng
-  if [[ $ssl_xac_thuc_kha_dung = 'true' ]]; then
-    ssl_check="https://"
-  else
-    ssl_check="http://"
-  fi
+. /etc/wptt/ssl/check-ssl-cert-con-kha-dung $NAME
+if [[ "$ssl_xac_thuc_kha_dung" == 'true' ]]; then
+  ssl_check="https://"
+else
+  ssl_check="http://"
+fi
 
-  if [[ "$DB_Name_web" != "" ]]; then
-    _runing "$lam_sach_toan_bo_du_lieu_database $NAME"
-    database1="$DB_Name_web"
+# ==============================================================================
+# 5. XỬ LÝ DATABASE
+# ==============================================================================
+if [[ -n "$DB_Name_web" ]]; then
+  _runing "$lam_sach_toan_bo_du_lieu_database $NAME"
+  database1="$DB_Name_web"
 
-    TEMP_CNF_ROOT=$(mktemp)
-    chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
-    cat >"$TEMP_CNF_ROOT" <<EOF
+  TEMP_CNF_ROOT=$(mktemp)
+  chmod 600 "$TEMP_CNF_ROOT"
+  cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
 password=${database_admin_password}
@@ -228,174 +204,135 @@ quote-names
 max_allowed_packet=1G
 EOF
 
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE $DB_Name_web"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS $DB_Name_web"
-    rm -rf $TEMP_CNF_ROOT
-    _rundone "$lam_sach_toan_bo_du_lieu_database $NAME"
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`$DB_Name_web\`;"
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS \`$DB_Name_web\`;"
+  rm -rf "$TEMP_CNF_ROOT"
+  _rundone "$lam_sach_toan_bo_du_lieu_database $NAME"
 
-    echo "$xac_nhan $ban_co_muon $thiet_lap $cai_dat WordPress $ngay_tai_day_khong: "
-    prompt="$nhap_lua_chon_cua_ban [1-2]: "
-    bien=$1
-    dongyconfig="n"
-    options=("$dong_y" "$khong_dong_y")
-    PS3="$prompt"
-    select opt in "${options[@]}"; do
-      case "$REPLY" in
-      1)
-        dongyconfig="y"
-        break
-        ;;
+  # ==============================================================================
+  # 6. HỎI CẤU HÌNH WP-ADMIN
+  # ==============================================================================
+  dongyconfig="n"
+  if wptt_xac_nhan "Bạn có muốn thiết lập thông tin Quản trị viên (Admin) ngay không?" "" "" "Có (Thiết lập ngay)" "Không (Để sau)"; then
+    dongyconfig="y"
+  fi
 
-      2)
-        dongyconfig="n"
-        break
-        ;;
+  if [[ ! -f /usr/local/bin/wp ]]; then
+    _runing "Đang cài đặt WP-CLI..."
+    curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    chmod +x wp-cli.phar
+    mv wp-cli.phar /usr/local/bin/wp
+    _rundone "Cài đặt WP-CLI"
+  fi
 
-      $((${#options[@]} + 1)))
-        printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-        break
-        ;;
-      *)
-        printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-        break
-        ;;
-      esac
-
-    done
-
-    if [[ ! -f /usr/local/bin/wp ]]; then
-      curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-      chmod +x wp-cli.phar
-      mv wp-cli.phar /usr/local/bin/wp
-    fi
-
-    tien_to_db=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 6)
-    /usr/local/bin/wp core config --dbname="$DB_Name_web" --dbuser="$DB_User_web" --dbpass="$DB_Password_web" --dbhost=localhost --dbprefix="${tien_to_db}"_ --dbcharset='utf8mb4' --dbcollate='utf8mb4_unicode_ci' --allow-root --extra-php >/dev/null 2>&1 <<PHP
+  _runing "Cấu hình wp-config.php..."
+  tien_to_db=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 6)
+  /usr/local/bin/wp core config --dbname="$DB_Name_web" --dbuser="$DB_User_web" --dbpass="$DB_Password_web" --dbhost=localhost --dbprefix="${tien_to_db}_" --dbcharset='utf8mb4' --dbcollate='utf8mb4_unicode_ci' --allow-root --extra-php >/dev/null 2>&1 <<PHP
 define( 'WP_DEBUG_LOG', false );
 define( 'WP_DEBUG_DISPLAY', false );
 PHP
+  _rundone "Cấu hình wp-config.php"
 
-    mkdir -p /usr/local/lsws/"$NAME"/passwd
-    Post_Install_Regenerate_Webadmin_Console_Passwd() {
-      if [[ "$Server_Edition" = "OLS" ]]; then
-        PHP_Command="admin_php"
-      else
-        PHP_Command="admin_php5"
-      fi
+  # NẾU KHÔNG CẤU HÌNH NGAY -> TẠO BẢO MẬT 2 LỚP TẠM THỜI
+  mkdir -p /usr/local/lsws/"$NAME"/passwd
+  Post_Install_Regenerate_Webadmin_Console_Passwd() {
+    PHP_Command="admin_php"
+    Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 12)
+    id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 12)
+    Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/$PHP_Command -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
+    echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/"$NAME"/passwd/.mk-setup
+  }
+  Post_Install_Regenerate_Webadmin_Console_Passwd
 
-      Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 12)
+  sed -i -e '/^realm '${NAME}wordpress-setup'/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
 
-      id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 12)
-
-      Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
-      echo "" >/usr/local/lsws/"$NAME"/passwd/.mk-setup
-      echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/"$NAME"/passwd/.mk-setup
-    }
-    Post_Install_Regenerate_Webadmin_Console_Passwd
-
-    sed -i -e '/^realm '${NAME}wordpress-setup'/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-    sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
-    echo 'realm '${NAME}wordpress-setup' {
-
+  cat <<EOF >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+realm ${NAME}wordpress-setup {
   userDB  {
-    location              /usr/local/lsws/'$NAME'/passwd/.mk-setup
+    location              /usr/local/lsws/$NAME/passwd/.mk-setup
   }
 }
-
 context exp:wp-admin/install.php {
-  location                $DOC_ROOT/$0
+  location                \$DOC_ROOT/\$0
   allowBrowse             1
-  realm                   '${NAME}wordpress-setup'
-
+  realm                   ${NAME}wordpress-setup
   accessControl  {
     allow                 ALL
   }
+  addDefaultCharset       off
+}
+EOF
 
-  rewrite  {
+  # NẾU NGƯỜI DÙNG ĐỒNG Ý CẤU HÌNH NGAY -> HIỂN THỊ KHUNG NHẬP
+  if [[ "$dongyconfig" == "y" ]]; then
+    echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THIẾT LẬP THÔNG TIN QUẢN TRỊ VIÊN WORDPRESS${C_RESET}"
+    echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  }
-  addDefaultCharset	  off
+    echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}1. Tên Website (Site Title):${C_RESET} "
+    read -r SiteTitle
 
-  phpIniOverride  {
+    echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}2. User đăng nhập Admin:${C_RESET} "
+    read -r idusername
 
-  }
-}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+    # Ẩn Password khi gõ
+    mypassword=""
+    echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}3. Mật khẩu (Ít nhất 12 ký tự):${C_RESET} "
+    while IFS= read -r -s -N 1 char; do
+      if [[ -z "$char" ]] || [[ "$char" == $'\n' ]] || [[ "$char" == $'\r' ]]; then
+        echo
+        break
+      elif [[ "$char" == $'\x7f' ]]; then
+        if [[ -n "$mypassword" ]]; then
+          mypassword="${mypassword%?}"
+          echo -ne '\b \b'
+        fi
+      else
+        mypassword+="$char"
+        echo -n '*'
+      fi
+    done
 
-    if [[ "$dongyconfig" = "y" ]]; then
-      read -p "1. $ten_tieu_de_website_wordpress_cua_ban_muon: " SiteTitle
-      read -p "2. $nhap_id_dang_nhap_wordpress: " idusername
-      # read -sp "3. $nhap_password_wordpress:
-      # $luu_y_nhap_wordpress_it_nhat_12_ky_tu: " mypassword
-
-      mypassword=""
-      print_nhap_password="3. $nhap_password_wordpress:
-$luu_y_nhap_wordpress_it_nhat_12_ky_tu: "
-      echo -n "$print_nhap_password"
-
+    # Bắt buộc nhập pass
+    while [[ -z "$mypassword" ]]; do
+      echo -e "${C_CYAN}│${C_RESET} ${C_RED}❌ Bạn chưa nhập mật khẩu!${C_RESET}"
+      echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}3. Nhập lại Mật khẩu:${C_RESET} "
       while IFS= read -r -s -N 1 char; do
-
-        # Kiểm tra Enter (ký tự rỗng HOẶC ký tự xuống dòng '\n' HOẶC ký tự về đầu dòng '\r')
         if [[ -z "$char" ]] || [[ "$char" == $'\n' ]] || [[ "$char" == $'\r' ]]; then
-          echo                              # Xuống dòng sau khi nhập xong
-          break                             # Thoát vòng lặp
-        elif [[ "$char" == $'\x7f' ]]; then # Kiểm tra Backspace
+          echo
+          break
+        elif [[ "$char" == $'\x7f' ]]; then
           if [[ -n "$mypassword" ]]; then
             mypassword="${mypassword%?}"
             echo -ne '\b \b'
           fi
-        else # Ký tự bình thường
+        else
           mypassword+="$char"
           echo -n '*'
         fi
-
       done
+    done
 
-      if [[ $mypassword = "" ]]; then
-        echo "$nhap_password_wordpress - $ban_chua_nhap_password"
-        print_nhap_password="3. $nhap_password_wordpress:
-$luu_y_nhap_wordpress_it_nhat_12_ky_tu: "
-        echo -n "$print_nhap_password"
+    echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}4. Email quản trị viên:${C_RESET} "
+    read -r emailwp
+    while [[ "$emailwp" == "${emailwp/@/}" ]]; do
+      echo -e "${C_CYAN}│${C_RESET} ${C_RED}❌ Email không đúng định dạng (VD: admin@gmail.com)!${C_RESET}"
+      echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}4. Nhập lại Email:${C_RESET} "
+      read -r emailwp
+    done
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-        while IFS= read -r -s -N 1 char; do
-
-          # Kiểm tra Enter (ký tự rỗng HOẶC ký tự xuống dòng '\n' HOẶC ký tự về đầu dòng '\r')
-          if [[ -z "$char" ]] || [[ "$char" == $'\n' ]] || [[ "$char" == $'\r' ]]; then
-            echo                              # Xuống dòng sau khi nhập xong
-            break                             # Thoát vòng lặp
-          elif [[ "$char" == $'\x7f' ]]; then # Kiểm tra Backspace
-            if [[ -n "$mypassword" ]]; then
-              mypassword="${mypassword%?}"
-              echo -ne '\b \b'
-            fi
-          else # Ký tự bình thường
-            mypassword+="$char"
-            echo -n '*'
-          fi
-
-        done
-
-      fi
-
-      echo ""
-      read -p "4. $nhap Email website $domain
-ví dụ abc@gmail.com, giatuan@wptangtoc.com: " emailwp
-      while [ "$emailwp" = "${emailwp/@/}" ]; do
-        clear
-        . /etc/wptt/echo-color
-        echoDo "$email_khong_dung_dinh_dang"
-        echo "Vui lòng nhập lại địa chỉ email"
-        read -p "4. $nhap Email website $domain
-ví dụ abc@gmail.com, giatuan@wptangtoc.com: " emailwp
-      done
-
-      _runing "$thiet_lap WordPress"
-      wp core install --url="${ssl_check}""${domain}" --title="$SiteTitle" --admin_user="$idusername" --admin_password="$mypassword" --admin_email="$emailwp" --allow-root >/dev/null 2>&1
-      unset mypassword
-    fi
+    _runing "$thiet_lap WordPress (Cài đặt Core)"
+    wp core install --url="${ssl_check}${domain}" --title="$SiteTitle" --admin_user="$idusername" --admin_password="$mypassword" --admin_email="$emailwp" --allow-root >/dev/null 2>&1
+    unset mypassword
   fi
+fi
 
-  echo '
+# ==============================================================================
+# 7. HOÀN THIỆN CẤU HÌNH (HTACCESS, PERMISSION)
+# ==============================================================================
+echo '
 # BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
@@ -408,96 +345,101 @@ RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress' >/usr/local/lsws/"$domain"/html/.htaccess
 
-  if [[ "$dongyconfig" = "y" ]]; then
-    wp language core install vi --path=/usr/local/lsws/"$NAME"/html --activate --allow-root >/dev/null 2>&1
-    wp option update timezone_string "Asia/Ho_Chi_Minh" --path=/usr/local/lsws/"$NAME"/html --allow-root >/dev/null 2>&1
-    wp rewrite structure '/%postname%/' --path=/usr/local/lsws/"$NAME"/html --allow-root >/dev/null 2>&1
+if [[ "$dongyconfig" == "y" ]]; then
+  wp language core install vi --path=/usr/local/lsws/"$NAME"/html --activate --allow-root >/dev/null 2>&1
+  wp option update timezone_string "Asia/Ho_Chi_Minh" --path=/usr/local/lsws/"$NAME"/html --allow-root >/dev/null 2>&1
+  wp rewrite structure '/%postname%/' --path=/usr/local/lsws/"$NAME"/html --allow-root >/dev/null 2>&1
 
-    #delete bảo mật login thiết lập wp-admin/install.php
-    sed -i -e '/^realm '${NAME}wordpress-setup'/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-    sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-    rm -f /usr/local/lsws/"$NAME"/passwd/.mk-setup
+  # Xóa bảo mật HTTP Auth setup
+  sed -i -e '/^realm '${NAME}wordpress-setup'/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  rm -f /usr/local/lsws/"$NAME"/passwd/.mk-setup
 
-    _rundone "$thiet_lap WordPress"
-  fi
+  _rundone "$thiet_lap WordPress (Cài đặt Core)"
+fi
 
-  #tao file robots
-  cat >"/usr/local/lsws/$NAME/html/robots.txt" <<END
+# Tạo file robots
+cat >"/usr/local/lsws/$NAME/html/robots.txt" <<END
 User-agent: *
 Disallow: /wp-admin/
 Allow: /wp-admin/admin-ajax.php
 END
 
-  _runing "$phan_quyen website $NAME"
+_runing "$phan_quyen website $NAME"
+chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html
+chown root:root /usr/local/lsws/"$NAME"
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+_rundone "$phan_quyen website $NAME"
 
-  chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html
-  chown root:root /usr/local/lsws/"$NAME"
+# ==============================================================================
+# 8. BẢNG TÓM TẮT CUỐI CÙNG (UX TÍNH TOÁN PAD TỰ ĐỘNG CHUẨN XÁC)
+# ==============================================================================
+box_inner_width=${box_inner_width:-71}
 
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  _rundone "$phan_quyen website $NAME"
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
 
-  clear
-  blue='\033[1;34m'
-  NC='\033[0m'
-  echo -e "${blue}               ...:..........:...              
-           .:..      ....      ..:.           
-        .:.   .::------------::.   .:.        
-      ::.  .:---------------------:  .::      
-    .:.  :------------------------.    .:.    
-   ::  :-------------------------        ::   
-  ::       . .--:.        . :----         ::  
- ::        :-------:      -------:      .  :: 
- -  -:      --------:      --------     :-  - 
-:. .--.     .--------.     .-------:    --. .:
--  :---      :--------      --------.  .--:  -
--  :----      --------       -------   ---:  -
--  :----:     .------. .     .------  ----:  -
-:. .-----.     :----- .-      -----. :----. .:
- -  :-----      ----  ---      ---: .----:  - 
- ::  -----:     .--. ----:     .--  -----  :: 
-  ::  -----:     :- .-----.     -. :----  ::  
-   ::  :----.       -------       .---:  ::   
-    .:.  :---      --------:      --:  .:.    
-      ::.  .-:    :---------:    :.  .::      
-        .:.       -----------      .:.        
-           .:...     ....     ...:.           
-              ...:..........:...     ${NC}"
-  echo "-------------------------------------------------------------------------"
-  echo "$cai_dat_thanh_cong."
-  echo "-------------------------------------------------------------------------"
-  echo -e "Domain \t\t\t: ${ssl_check}${domain}"
-  echo -e "$duong_dan_thu_muc\t: /usr/local/lsws/$domain/html/"
-  echo "-------------------------------------------------------------------------"
-  if [[ "$dongyconfig" = "y" ]]; then
-    echo "$thong_tin WordPress domain $domain"
-    echo "$ten_tieu_de_website_wordpress_cua_ban		: $SiteTitle "
-    echo "URL WordPress Admin	: ${ssl_check}${domain}/wp-admin/"
-    echo "$id_dang_nhap_wp			: $idusername "
-    echo "Password Wordpress			: ****************** "
-    echo "Email website			: $emailwp "
-    echo "-------------------------------------------------------------------------"
-  else
-    echo -e "Username đăng nhập WordPress thiết lập \t: $id_ols_admin"
-    echo -e "PassWord đăng nhập WordPress thiết lập \t: $Webadmin_Pass"
+# Tiêu đề căn giữa (Không dùng icon để tránh lỗi font Terminal đẩy viền)
+title_text="[ THÀNH CÔNG ] CÀI ĐẶT MÃ NGUỒN WORDPRESS"
+pad_left=$(((box_inner_width - ${#title_text}) / 2))
+pad_right=$((box_inner_width - pad_left - ${#title_text}))
+echo -e "${C_GREEN}│${C_RESET}$(printf '%*s' "$pad_left" "")${C_BOLD_WHITE}${title_text}${C_RESET}$(printf '%*s' "$pad_right" "")${C_GREEN}│${C_RESET}"
 
-    phut='3'
-    cat >"/etc/cron.d/wp-delete-setup-bao-mat-$NAME.cron" <<END
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+# Hàm in dòng tự động bù khoảng trắng cho khớp viền phải
+# Cách dùng: in_dong "Nội dung Text Thuần (Không màu)" "Mã in màu"
+function in_dong() {
+  local raw_text="$1"
+  local colored_text="$2"
+  local pad=$((box_inner_width - ${#raw_text}))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_GREEN}│${C_RESET}${colored_text}$(printf '%*s' "$pad" "")${C_GREEN}│${C_RESET}"
+}
+
+in_dong "  Domain         : ${ssl_check}${domain}" "  ${C_BOLD_WHITE}Domain         :${C_RESET} ${C_YELLOW}${ssl_check}${domain}${C_RESET}"
+
+path_str="/usr/local/lsws/$domain/html/"
+in_dong "  Đường dẫn HTML : $path_str" "  ${C_BOLD_WHITE}Đường dẫn HTML :${C_RESET} ${C_WHITE}$path_str${C_RESET}"
+
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+if [[ "$dongyconfig" == "y" ]]; then
+  in_dong "  Tên Website    : $SiteTitle" "  ${C_BOLD_WHITE}Tên Website    :${C_RESET} $SiteTitle"
+
+  admin_url="${ssl_check}${domain}/wp-admin/"
+  in_dong "  URL Đăng nhập  : $admin_url" "  ${C_BOLD_WHITE}URL Đăng nhập  :${C_RESET} ${C_YELLOW}$admin_url${C_RESET}"
+
+  in_dong "  Tài khoản      : $idusername" "  ${C_BOLD_WHITE}Tài khoản      :${C_RESET} $idusername"
+
+  in_dong "  Mật khẩu       : ******************" "  ${C_BOLD_WHITE}Mật khẩu       :${C_RESET} ******************"
+
+  in_dong "  Email quản trị : $emailwp" "  ${C_BOLD_WHITE}Email quản trị :${C_RESET} $emailwp"
+else
+  # Sinh Pass bảo vệ Setup tạm thời
+  msg1="Truy cập ${ssl_check}${domain} để tiếp tục cài đặt."
+  in_dong "  $msg1" "  ${msg1}"
+
+  msg2="Thông tin bảo vệ tạm thời (Tự xóa khi bạn thiết lập xong sau 3 phút):"
+  in_dong "  $msg2" "  ${C_YELLOW}${msg2}${C_RESET}"
+
+  in_dong "  Username Setup : $id_ols_admin" "  ${C_BOLD_WHITE}Username Setup :${C_RESET} ${C_YELLOW}$id_ols_admin${C_RESET}"
+
+  in_dong "  Password Setup : $Webadmin_Pass" "  ${C_BOLD_WHITE}Password Setup :${C_RESET} ${C_YELLOW}$Webadmin_Pass${C_RESET}"
+
+  phut='3'
+  cat >"/etc/cron.d/wp-delete-setup-bao-mat-$NAME.cron" <<END
 */$phut * * * * root /bin/bash /etc/wptt/wordpress/delete-auth-setup-wordpress-config $NAME >/dev/null 2>&1
 END
-
-    if $(cat /etc/*release | grep -q "Ubuntu"); then
-      NAME_CRON_ubuntu=${NAME//[.]/_}
-      ln -sf /etc/cron.d/wp-delete-setup-bao-mat-$NAME.cron /etc/cron.d/wp-delete-setup-bao-mat-${NAME_CRON_ubuntu}_cron
-      systemctl restart cron.service
-    else
-      systemctl restart crond.service
-    fi
-
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    NAME_CRON_ubuntu=${NAME//[.]/_}
+    ln -sf /etc/cron.d/wp-delete-setup-bao-mat-$NAME.cron /etc/cron.d/wp-delete-setup-bao-mat-${NAME_CRON_ubuntu}_cron
+    systemctl restart cron.service
+  else
+    systemctl restart crond.service
   fi
-  echo
-
 fi
 
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-[[ ${1:-} == "99" ]] && exec /usr/bin/wptangtoc 1
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+[[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1

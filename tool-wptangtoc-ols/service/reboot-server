@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+
 function huong_dan() {
   Tính năng này sẽ thực hiện khởi động lại [Reboot] toàn bộ VPS/Server.
   💡 Khi nào nên sử dụng?
@@ -14,86 +17,66 @@ function huong_dan() {
 
 check_tu_menu_tuong_tac=$1
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-. /etc/wptt/echo-color
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DỊCH VỤ ➜ Khởi động lại Máy chủ (Reboot)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-NC='\033[0m'
 function khoi_dong_lai() {
-  echo -e "${RED}CẢNH BÁO: Máy chủ sẽ khởi động lại ngay lập tức!${NC}"
-  echo -e "Toàn bộ website sẽ không thể truy cập trong vài phút."
-  echo ""
+  local xac_nhan="y"
 
-  # Hỏi xác nhận người dùng
-  if [[ $check_tu_menu_tuong_tac = '98' ]]; then #nếu gõ thẳng: /etc/wptt/service/reboot-server thì không cần phải xác nhận lại
-    echo -e "$xac_nhan reboot server?: "
-    prompt="$nhap_lua_chon_cua_ban [1-2]: "
-    dongy="n"
-    options=("$dong_y" "$khong_dong_y")
-    PS3="$prompt"
-    select opt in "${options[@]}"; do
-      case "$REPLY" in
-      1)
-        xac_nhan="y"
-        break
-        ;;
+  # Nếu gọi từ Menu (98), hiển thị Popup xác nhận an toàn
+  if [[ "$check_tu_menu_tuong_tac" == '98' ]]; then
+    msg_title="CẢNH BÁO: Máy chủ sẽ khởi động lại ngay lập tức!  "
+    msg_info1="${C_BOLD_WHITE}Hậu quả:${C_RESET} Toàn bộ website sẽ bị gián đoạn truy cập trong vài phút."
+    msg_info2="${C_BOLD_WHITE}Lưu ý:${C_RESET} Hãy đảm bảo không có tiến trình Backup nào đang chạy."
 
-      2)
-        xac_nhan="n"
-        break
-        ;;
-
-      $((${#options[@]} + 1)))
-        printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-        break
-        ;;
-      *)
-        printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-        break
-        ;;
-      esac
-    done
-  else
-    xac_nhan='y'
+    if wptt_xac_nhan "$msg_title" "$msg_info1" "$msg_info2" "Đồng ý (Khởi động lại ngay)" "Không đồng ý (Hủy thao tác)"; then
+      xac_nhan="y"
+    else
+      xac_nhan="n"
+    fi
   fi
 
+  # Xử lý Logic sau khi xác nhận
   if [[ "$xac_nhan" == "y" || "$xac_nhan" == "Y" ]]; then
-    echo -e "${YELLOW}Đang tiến hành lưu dữ liệu đệm (sync)...${NC}"
+    echo ""
+    _runing "Đang tiến hành lưu dữ liệu đệm và tắt dịch vụ an toàn..."
 
-    # Tắt an toàn Database trước. Điều này ép MariaDB tự động flush logs
+    # Tắt an toàn Database trước. Ép MariaDB tự động flush logs
     # và commit mọi giao dịch đang dang dở, chống Corrupt 100%.
     systemctl stop monit 2>/dev/null
     systemctl stop mariadb 2>/dev/null
 
-    # Lệnh sync rất quan trọng: Giúp ghi toàn bộ dữ liệu đang nằm trên RAM xuống ổ cứng
-    # để tránh lỗi hỏng Database (MariaDB/MySQL) khi sập nguồn đột ngột.
-    #những dữ liệu đang "lơ lửng" trên RAM chưa kịp ghi xuống ổ cứng sẽ bị mất vĩnh viễn,Hậu quả: Gây ra lỗi corrupt (hỏng) file. Đặc biệt với MariaDB/MySQL, việc tắt ngang khi dữ liệu chưa ghi xong là nguyên nhân số 1 gây ra lỗi Database Corruption (hỏng bảng dữ liệu, không thể khởi động lại DB).
-
+    # Lệnh sync rất quan trọng: Ghi toàn bộ dữ liệu từ RAM xuống ổ cứng
     /usr/bin/sync
     # Dân Sysadmin thường gõ sync 2 lần để đảm bảo I/O queue trống rỗng
     /usr/bin/sync
     sleep 1
-    echo -e "${GREEN}Máy chủ đang khởi động lại. Vui lòng kết nối lại sau ít phút!${NC}"
+
+    _rundone "Dữ liệu đã an toàn. Lệnh Reboot đang được thực thi!"
+
+    echo -e "\n${C_GREEN}=======================================================================${C_RESET}"
+    echo -e "${C_BOLD_WHITE}Máy chủ đang khởi động lại. SSH sẽ bị ngắt kết nối ngay bây giờ.${C_RESET}"
+    echo -e "${C_GREEN}Vui lòng kết nối lại sau 1-5 phút tùy tốc độ của nhà cung cấp VPS.${C_RESET}"
+    echo -e "${C_GREEN}=======================================================================${C_RESET}\n"
+    sleep 2
 
     # Lệnh khởi động lại
     /sbin/reboot
   else
-    echo -e "${GREEN}Đã hủy thao tác khởi động lại.${NC}"
-    echo -e "Đang quay lại menu ..."
-    sleep 1
+    echo -e "\n${C_YELLOW}Đã hủy thao tác khởi động lại máy chủ.${C_RESET}"
+    sleep 1.5
 
-    # Dùng bài học exec để quay lại menu chính mượt mà, không văng SSH
+    # Dùng exec để quay lại menu chính mượt mà, không văng SSH
     if [ -f "/etc/wptt/wptt-service-main" ]; then
       exec /etc/wptt/wptt-service-main 98
-    else
-      exit 0
     fi
   fi
 }
