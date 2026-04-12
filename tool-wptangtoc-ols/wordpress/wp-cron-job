@@ -1,4 +1,5 @@
 #!/bin/bash
+
 function huong_dan() {
   Kể từ WordPress 3.3 trở đi WordPress đã tính hợp một tính năng cực kì mạnh mẽ, WP-Cron là hệ thống tích hợp sẵn của WordPress để thực hiện các công việc tự động theo lịch như đăng bài đã hẹn giờ, kiểm tra cập nhật, gửi email thông báo, hoặc các tác vụ do plugin lên lịch [ví dụ: sao lưu, quét bảo mật].
 
@@ -15,187 +16,218 @@ function huong_dan() {
   Tối ưu hóa WP-Cron là một bước quan trọng để website WordPress của bạn hoạt động mượt mà và ổn định hơn.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+if [[ -z "$ngon_ngu" ]]; then ngon_ngu='vi'; fi
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý WordPress => Tối ưu wp-cron                                    |"
-echo "========================================================================="
-echo ""
-echo ""
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  echo "========================================================================="
-  echo "Danh sách Domain đã kích hoạt tối ưu hóa wp cron:"
-  echo "========================================================================="
-  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-    domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    path="/etc/cron.d/wp-cron-job-$domain.cron"
-    i=1
-    if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-      if [[ -f "$path" ]]; then
-        checkauto="Đã kích hoạt giá trị thiết lập là "
-        checktuan=$(grep -oE '^\*/[0-9]+' /etc/cron.d/wp-cron-job-$domain.cron | cut -d'/' -f2)
-        themphut=" phút thực thi cron một lần"
-      else
-        checkauto="Chưa kích hoạt"
-        checktuan=""
-        themphut=" tối ưu hóa WP Crond"
-      fi
-      echo "Website $domain $checkauto$checktuan$themphut"
-    fi
-  done
-  echo "========================================================================="
-  echo
-fi
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}$quan_ly_wordpress ➜ Tối ưu hệ thống WP-Cron (Hẹn giờ)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
+# ==============================================================================
+# HÀM CHỌN WEBSITE KÈM TRẠNG THÁI CRON (TAB GẠCH CHÂN)
+# ==============================================================================
 function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
-    selects=()
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ ! -f /etc/cron.d/wp-cron-job-"$NAME".cron ]]; then
-          if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then
-            selects+=("$NAME")
+  unset NAME
+  local selects=()
+  local i=1
+  local box_inner_width=${box_inner_width:-71}
+
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        local wp_load="/usr/local/lsws/$domain/html/wp-load.php"
+        if [[ -f "$wp_load" ]]; then
+          local status_text=""
+          local status_color=""
+          local cron_file="/etc/cron.d/wp-cron-job-$domain.cron"
+
+          # Kiểm tra xem có file cron của domain không
+          if [[ -f "$cron_file" ]]; then
+            local checktuan=$(grep -oE '^\*/[0-9]+' "$cron_file" 2>/dev/null | cut -d'/' -f2 | head -n 1)
+            status_text="[Đã TỐI ƯU - ${checktuan:-?} phút/lần]"
+            status_color=$C_GREEN
+          else
+            status_text="[Chưa Tối Ưu - Mặc định]"
+            status_color=$C_YELLOW
           fi
+
+          selects+=("$domain|$status_text|$status_color")
         fi
       fi
     done
+  fi
 
-    if [[ $selects = '' ]]; then
-      echo "Tất cả domain trên hệ thống đã được kích hoạt tối ưu wp cron hết rồi"
-      exec /etc/wptt/wptt-wordpress-main 1
-    fi
-
-    PS3="
-$(tput setab 0)-//- Nhập lựa chọn website của bạn muốn tối ưu wp-crond [0=Thoát]:$(tput sgr0) "
-    select select in ${selects[@]}; do
-      NAME=$select
-      index=$REPLY
-      break
-    done
-  else
-    clear
-    echo "Tất cả domain WordPress trên hệ thống đã được thiết lập tối ưu wp cron."
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
     exit
   fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # RENDER BOX CHỌN DOMAIN
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Nhập lựa chọn website muốn tối ưu WP-Cron:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  for val in "${selects[@]}"; do
+    IFS='|' read -r d s c <<<"$val"
+    local clean_row=$(printf "  %3d) %-32s %s" "$i" "$d" "$s")
+    local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-32s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+    local pad=$((box_inner_width - ${#clean_row}))
+    [[ $pad -lt 0 ]] && pad=0
+
+    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local prompt_msg="${lua_chon_website_ban_muon:-Nhập lựa chọn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-wordpress-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          IFS='|' read -r d s c <<<"$val"
+          fzf_list+=("$d $s")
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        NAME="${val%|*|*}"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
 }
 
-echo ""
-echo ""
-echo "Lựa chọn website bạn muốn tối ưu WP-Cron:"
-echo ""
 lua_chon_NAME
 
-. /etc/wptt/echo-color
-
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-wordpress-main 1
-fi
-
+# ==============================================================================
+# XỬ LÝ KIỂM TRA ĐIỀU KIỆN
+# ==============================================================================
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "hệ thống xác nhận domain này không tồn tại trên VPS."
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress"
-  echoDO "Tính năng này chỉ dành cho mã nguồn WordPress"
+  echo -e "\n${C_RED}❌ Tính năng này chỉ dành cho mã nguồn WordPress.${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
-echo "Tối ưu hoá cron WordPress website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-if [ -f /etc/cron.d/wp-cron-job-$NAME.cron ]; then
-  echo "website $NAME đã được tối ưu hóa wp crond trước đó rồi"
-  exec /etc/wptt/wptt-wordpress-main 1
-fi
-
-read -p "Bạn muốn trong bao nhiêu phút thực thi cron 1 lần?[0-59] [Enter để tự động]: " phut
-
-if [[ ! $phut =~ ^-?[0-9]+$ ]]; then
-  clear
-  echo "Bạn nhập sai dữ liệu, hệ thống sẽ tự động chọn giá trị là 10 phút thực thi cron 1 lần"
-  phut="10"
-fi
-
-if (("$phut" > "59")); then
-  echo "Bạn nhập sai dữ liệu, hệ thống sẽ tự động chọn giá trị là 10 phút thực thi cron 1 lần"
-  phut="10"
-fi
-
-if [[ "$phut" = "" || "$phut" = "0" ]]; then
-  phut="10"
-  echo "Bạn nhập sai dữ liệu, hệ thống sẽ tự động chọn giá trị là 10 phút thực thi cron 1 lần"
-fi
-
-_runing "Tối ưu hóa wp-cron website $NAME"
-wp_config="/usr/local/lsws/$NAME/html/wp-config.php"
-
-# sed -i "/DISABLE_WP_CRON/d" "$wp_config"
-# sed -i "/<?php/a define( 'DISABLE_WP_CRON', true );" "$wp_config"
-
-# cat >"/etc/cron.d/wp-cron-job-$NAME.cron" <<END
-# */$phut * * * * root wget -q -O - https://$NAME/wp-cron.php?doing_wp_cron >/dev/null 2>&1
-# END
-
-#tuong thich voi www
+# ==============================================================================
+# LÔGIC THỰC THI (BẬT / TẮT)
+# ==============================================================================
+echo ""
 . /etc/wptt/php/php-cli-domain-config $NAME
-
 . /etc/wptt/vhost/.$NAME.conf
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp config set DISABLE_WP_CRON true --raw --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1 #thực thi khai báo hằng số trong wp-config.php
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
-giatuanwww=$(/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option get home --path=/usr/local/lsws/$NAME/html --allow-root 2>/dev/null | grep 'www.')
-if [[ $giatuanwww ]]; then
-  domain=$(echo www.$NAME)
+cron_file="/etc/cron.d/wp-cron-job-$NAME.cron"
+ubuntu_cron_file="/etc/cron.d/wp-cron-job-${NAME//[.]/_}_cron"
+
+if [ -f "$cron_file" ]; then
+  # Đã tối ưu -> Hỏi TẮT
+  echo -en "${C_YELLOW}👉 Website ${C_BOLD_WHITE}$NAME${C_YELLOW} đã được tối ưu. Bạn có muốn HUỶ tối ưu (quay về mặc định)? [y/n]: ${C_RESET}"
+  read -r confirm
+  [[ ! "$confirm" =~ ^[yY]$ ]] && echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1 && exec /etc/wptt/wptt-wordpress-main 1
+
+  _runing "Hủy tối ưu WP-Cron cho $NAME"
+  rm -f "$cron_file"
+  [[ -f "$ubuntu_cron_file" ]] && rm -f "$ubuntu_cron_file"
+
+  $WP_EXEC config delete DISABLE_WP_CRON --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+
+  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then systemctl restart cron.service; else systemctl restart crond.service; fi
+
+  echo "Hủy tối ưu wp-cron website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "Hủy tối ưu WP-Cron cho $NAME"
+
 else
-  domain=$(echo $NAME)
-fi
+  # Chưa tối ưu -> Hỏi số phút để BẬT
+  echo -en "${C_CYAN}👉 Nhập khoảng thời gian thực thi Cron (từ 1-59 phút) [Enter = Mặc định 10 phút]: ${C_RESET}"
+  read -r phut
 
-#bắt đầu check wget đã cài đặt vào hệ thống hay chưa
-missing_tools='wget'
-if ! command -v "$missing_tools" &>/dev/null; then
-  if [ -f /etc/redhat-release ]; then #REDHAT
-    dnf install -y epel-release
-    dnf install -y "${missing_tools}"
-  elif [ -f /etc/debian_version ]; then #Ubuntu
-    apt-get update
-    apt-get install -y "${missing_tools}"
+  if [[ ! $phut =~ ^[0-9]+$ ]] || (("$phut" > 59)) || [[ "$phut" == "0" || -z "$phut" ]]; then
+    echo -e "${C_YELLOW}⚠️ Nhập sai hoặc để trống, hệ thống sẽ lấy giá trị là 10 phút.${C_RESET}"
+    phut="10"
   fi
-fi
-#end check wget đã cài đặt vào hệ thống hay chưa
 
-cat >"/etc/cron.d/wp-cron-job-$NAME.cron" <<END
+  _runing "Tối ưu hóa wp-cron website $NAME ($phut phút/lần)"
+
+  $WP_EXEC config set DISABLE_WP_CRON true --raw --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+
+  giatuanwww=$($WP_EXEC option get home --path="/usr/local/lsws/$NAME/html" --allow-root 2>/dev/null | grep 'www.')
+  if [[ -n "$giatuanwww" ]]; then domain="www.$NAME"; else domain="$NAME"; fi
+
+  # Check & Install wget
+  if ! command -v wget &>/dev/null; then
+    if [ -f /etc/redhat-release ]; then
+      dnf install -y epel-release >/dev/null 2>&1
+      dnf install -y wget >/dev/null 2>&1
+    elif [ -f /etc/debian_version ]; then
+      apt-get update >/dev/null 2>&1
+      apt-get install -y wget >/dev/null 2>&1
+    fi
+  fi
+
+  cat >"$cron_file" <<END
 */$phut * * * * root /usr/bin/flock -n /tmp/wptt_cron_${NAME}.lock wget -q -O - https://127.0.0.1/wp-cron.php?doing_wp_cron --header="Host: $domain" -U "WP Cron Optimize by WPTangToc OLS" --no-check-certificate >/dev/null 2>&1
 END
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  NAME_CRON_ubuntu=${NAME//[.]/_}
-  ln -sf /etc/cron.d/wp-cron-job-$NAME.cron /etc/cron.d/wp-cron-job-${NAME_CRON_ubuntu}_cron
-  systemctl restart cron.service
-else
-  systemctl restart crond.service
+  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+    ln -sf "$cron_file" "$ubuntu_cron_file"
+    systemctl restart cron.service
+  else
+    systemctl restart crond.service
+  fi
+
+  echo "Tối ưu hoá cron WordPress website $NAME ($phut phut): $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "Tối ưu hóa wp-cron website $NAME ($phut phút/lần)"
 fi
 
-. /etc/wptt/echo-color
-_rundone "Tối ưu hóa wp-cron website $NAME"
-
-check_menu_wptangtoc_active=${1:-}
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ ${1:-} == "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi

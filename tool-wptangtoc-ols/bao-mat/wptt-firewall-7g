@@ -19,92 +19,148 @@ function huong_dan() {
   Ghi chú: Khi kích hoạt tường lửa 8G sẽ làm giảm một phần nhỏ hiệu suất tốc độ của website do máy chủ phải quét qua các quy tắc này.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
 clear
-echo -e "\n========================================================================="
-echo -e "| $bao_mat => Bật / Tắt Tường Lửa 8G                                     |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}$bao_mat ➜ Bật / Tắt Tường Lửa 8G${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
 function lua_chon_NAME() {
-  unset NAME domain selects
-  selects=()
+  unset NAME
+  local selects=()
+  local i=1
+  local box_inner_width=${box_inner_width:-71}
 
-  # 1. Vòng lặp Globbing siêu tốc quét trạng thái từng website
-  for filepath in /etc/wptt/vhost/.*.conf; do
-    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  # 1. Quét file siêu tốc trên RAM để lấy trạng thái 8G
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-    local domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
 
-    if [[ "$domain" == ?*.?* ]]; then
-      local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
-      if [[ -f "$htaccess_path" ]]; then
-        if grep -q '#begin-tuong-lua-bao-mat-8g' "$htaccess_path" 2>/dev/null; then
-          selects+=("$domain [Đang BẬT 8G]")
-        else
-          selects+=("$domain [Đang TẮT]")
+      if [[ "$domain" == ?*.?* ]]; then
+        local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
+        if [[ -f "$htaccess_path" ]]; then
+          local status_text=""
+          local status_color=""
+
+          if grep -q '#begin-tuong-lua-bao-mat-8g' "$htaccess_path" 2>/dev/null; then
+            status_text="[Đang BẬT 8G]"
+            status_color=$C_GREEN
+          else
+            status_text="[Đang TẮT]"
+            status_color=$C_RED
+          fi
+
+          selects+=("$domain|$status_text|$status_color")
         fi
       fi
-    fi
-  done
+    done
+  fi
 
-  # Xử lý trường hợp không có website nào hợp lệ
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\n\033[1;33mKhông tìm thấy website nào có file .htaccess trên hệ thống để thao tác!\033[0m"
+    echo -e "\n${C_RED}❌ Không tìm thấy website nào có file .htaccess trên hệ thống!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
 
-  # 2. Sắp xếp mảng chuẩn Version (Alphabetical)
+  # 2. Sắp xếp mảng
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # 3. Thêm tùy chọn "Tất Cả" xuống cuối menu
+  # 3. Thêm tùy chọn "Tất cả website" nếu có từ 2 web trở lên
   if [[ ${#selects[@]} -ge 2 ]]; then
     selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
   fi
 
-  # 4. Hiển thị Menu PS3 hỗ trợ 00 (FZF)
-  if command -v fzf &>/dev/null; then
-    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [00=Chọn Nhanh] [0=Thoát]:$(tput sgr0) "
-  else
-    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [0=Thoát]:$(tput sgr0) "
-  fi
+  # ============================================================================
+  # 4. RENDER KHỐI BO CONG (TAB GẠCH CHÂN + CHIA CỘT)
+  # ============================================================================
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Nhập lựa chọn website muốn thao tác Tường lửa 8G:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
 
-  # 5. Vòng lặp lấy giá trị
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    break
-  done
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  # 6. XỬ LÝ CHỌN NHANH [00] VỚI FZF
-  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website 8G [0=Thoát]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-    if [[ -z "$selected_name" ]]; then
-      echo "Đã hủy chọn."
-      exec /etc/wptt/wptt-bao-mat-main 1
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      # Highlight đặc biệt cho dòng "Tất cả website"
+      local item_row=$(printf "  ${C_YELLOW}%3d) %s${C_RESET}" "$i" "$val")
+      local clean_row=$(printf "  %3d) %s" "$i" "$val")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      # Dòng website bình thường với cột trạng thái thẳng hàng
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-32s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-32s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     fi
-    NAME="$selected_name"
-  fi
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-  # 7. Xử lý nhập input thẳng tên domain (nếu không chọn số)
-  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
-    for item in "${selects[@]}"; do
-      local check_dom=$(echo "$item" | cut -f1 -d ' ')
-      if [[ "$check_dom" == "$REPLY" ]]; then
-        NAME="$item"
-        break
+  # 5. Dòng nhắc lệnh (Prompt)
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local prompt_msg="Lựa chọn của bạn (1-${#selects[@]}) [00=Chọn Nhanh] [0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-bao-mat-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            fzf_list+=("$val")
+          else
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
       fi
-    done
-  fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="$val"
+        else
+          NAME="${val%|*|*}"
+        fi
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
 }
 
 # Nếu gọi script kèm tên domain từ command line
@@ -114,45 +170,37 @@ else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn (cắt phần đuôi "[Đang BẬT]")
-NAME=$(echo "$NAME" | cut -f1 -d ' ')
-
-# --- CHỐT CHẶN THOÁT HIỂM ---
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-
+# ==============================================================================
+# HÀM THỰC THI BẬT/TẮT TƯỜNG LỬA 8G CHO 1 DOMAIN
+# ==============================================================================
 path_firewall_rules="/etc/wptt/bao-mat/firewall.txt"
 [[ ! -f "$path_firewall_rules" ]] && {
-  _runloi "Không tìm thấy bộ quy tắc Tường lửa 8G tại hệ thống!"
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy bộ quy tắc Tường lửa 8G tại hệ thống!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-bao-mat-main 1
 }
 
-# ==============================================================================
-# HÀM THỰC THI BẬT/TẮT TƯỜNG LỬA 8G CHO 1 DOMAIN
-# ==============================================================================
 function process_firewall_8g() {
   local target_domain=$1
   local action=$2 # "bat" hoac "tat"
   local path_ht="/usr/local/lsws/$target_domain/html/.htaccess"
 
   if [[ ! -f "$path_ht" ]]; then
-    echo "Bỏ qua $target_domain: Không tìm thấy file .htaccess"
     return
   fi
 
   if [[ "$action" == "bat" ]]; then
     if grep -q '#begin-tuong-lua-bao-mat-8g' "$path_ht" 2>/dev/null; then
-      echo "Website $target_domain đã bật 8G trước đó. Bỏ qua..."
       return
     fi
 
     UI_STRING="Kích hoạt Tường lửa 8G cho $target_domain"
     _runing "$UI_STRING"
 
-    # 1. Dọn dẹp bản 7G hoặc 8G cũ bằng SED thuần túy
+    # 1. Dọn dẹp bản 7G hoặc 8G cũ
     sed -i '/#begin-tuong-lua-bao-mat-[78]g/,/#end-tuong-lua-bao-mat-[78]g/d' "$path_ht"
 
-    # 2. Tiêm Tường lửa 8G lên đỉnh file (Bảo toàn Quyền sở hữu)
+    # 2. Tiêm Tường lửa 8G lên đỉnh file
     TMP_FILE=$(mktemp)
     cat "$path_firewall_rules" >"$TMP_FILE"
     echo "" >>"$TMP_FILE"
@@ -160,7 +208,6 @@ function process_firewall_8g() {
     cat "$TMP_FILE" >"$path_ht"
     rm -f "$TMP_FILE"
 
-    # Cập nhật Config Panel
     sed -i '/tuong_lua_7g/d' "/etc/wptt/vhost/.$target_domain.conf" 2>/dev/null
     echo 'tuong_lua_7g=1' >>"/etc/wptt/vhost/.$target_domain.conf"
 
@@ -181,18 +228,15 @@ function process_firewall_8g() {
 
   elif [[ "$action" == "tat" ]]; then
     if ! grep -q '#begin-tuong-lua-bao-mat-8g' "$path_ht" 2>/dev/null; then
-      echo "Website $target_domain chưa bật 8G. Bỏ qua..."
       return
     fi
 
-    UI_STRING="Tắt (Hủy) Tường lửa 8G cho $target_domain"
+    UI_STRING="Tắt Tường lửa 8G cho $target_domain"
     _runing "$UI_STRING"
 
-    # Dọn dẹp cả 7G và 8G sạch sẽ bằng SED thuần túy
     sed -i '/#begin-tuong-lua-bao-mat-[78]g/,/#end-tuong-lua-bao-mat-[78]g/d' "$path_ht"
     sed -i '/tuong_lua_7g/d' "/etc/wptt/vhost/.$target_domain.conf" 2>/dev/null
 
-    # Update htaccess cache Vhost
     . /etc/wptt/vhost/.$target_domain.conf
     [[ -n "$vhost_chuyen_htaccess" ]] && /etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost "$target_domain" >/dev/null 2>&1
 
@@ -202,34 +246,24 @@ function process_firewall_8g() {
 }
 
 # ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH
+# XỬ LÝ LOGIC RẼ NHÁNH
 # ==============================================================================
-
+echo ""
 if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  echo -e "\nBạn muốn BẬT hay TẮT Tường lửa 8G cho \033[1;33mTẤT CẢ\033[0m website?"
-  prompt="Lựa chọn của bạn [1-2]: "
-  mass_action=""
-  options=("BẬT đồng loạt" "TẮT đồng loạt" "Hủy bỏ")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      mass_action="bat"
-      break
-      ;;
-    2)
-      mass_action="tat"
-      break
-      ;;
-    3) exec /etc/wptt/wptt-bao-mat-main 1 ;;
-    *)
-      printf "\nNhập sai, tự động hủy.\n"
-      exec /etc/wptt/wptt-bao-mat-main 1
-      ;;
-    esac
-  done
+  echo -en "${C_YELLOW}👉 Bạn muốn BẬT hay TẮT Tường lửa 8G cho TẤT CẢ website? [b=BẬT / t=TẮT / 0=Thoát]: ${C_RESET}"
+  read -r mass_opt
+  mass_opt=$(echo "$mass_opt" | tr '[:upper:]' '[:lower:]')
 
-  # Thao tác hàng loạt
+  if [[ "$mass_opt" == "b" || "$mass_opt" == "bat" ]]; then
+    mass_action="bat"
+  elif [[ "$mass_opt" == "t" || "$mass_opt" == "tat" ]]; then
+    mass_action="tat"
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    sleep 1
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     domain="${filepath##*/}"
@@ -244,24 +278,24 @@ else
   # Đảo trạng thái (Toggle) cho 1 website cụ thể
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
-    echoDo "Tên miền không tồn tại!"
+    echo -e "\n${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
     sleep 2
     exec /etc/wptt/wptt-bao-mat-main 1
   }
 
   if grep -q '#begin-tuong-lua-bao-mat-8g' "/usr/local/lsws/$NAME/html/.htaccess" 2>/dev/null; then
-    process_firewall_8g "$NAME" "tat"
+    echo -en "${C_YELLOW}Website ${C_BOLD_WHITE}$NAME${C_YELLOW} đang BẬT 8G. Bạn có muốn TẮT nó không? [y/n]: ${C_RESET}"
+    read -r confirm
+    [[ "$confirm" =~ ^[yY]$ ]] && process_firewall_8g "$NAME" "tat" || echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
   else
-    process_firewall_8g "$NAME" "bat"
+    echo -en "${C_YELLOW}Website ${C_BOLD_WHITE}$NAME${C_YELLOW} đang TẮT 8G. Bạn có muốn BẬT nó không? [y/n]: ${C_RESET}"
+    read -r confirm
+    [[ "$confirm" =~ ^[yY]$ ]] && process_firewall_8g "$NAME" "bat" || echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
   fi
 fi
 
-# ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ & NEO MÀN HÌNH
-# ==============================================================================
-UI_RELOAD="Nạp lại quy tắc Tường lửa 8G và OpenLiteSpeed"
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
 
-echo -e "\n========================================================================="
-
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+if [[ ${1:-} == "98" ]]; then
+  exec /etc/wptt/wptt-bao-mat-main 1
+fi
