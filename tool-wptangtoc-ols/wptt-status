@@ -66,7 +66,7 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "$version_wptangt
   NEW_VERSION="$wptangtocols_version"
 fi
 
-# --- CÁC HÀM HỖ TRỢ GIAO DIỆN NÂNG CAO ---
+# --- CÁC HÀM HỖ TRỢ GIAO DIỆN NÂNG CAO (ĐÃ FIX LỆCH KHUNG) ---
 draw_bar() {
   local percent=$1
   local length=15
@@ -101,7 +101,7 @@ print_2col() {
   local clean1=$(echo -e "$col1" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
   local len1=${#clean1}
 
-  # FIX LỆCH: Ép cứng độ rộng cột 1 là 34 ký tự để cột giữa luôn thẳng tắp
+  # FIX LỆCH: Ép cứng độ rộng cột 1 là 34 ký tự để cột giữa luôn cố định
   local col1_width=34
   local pad1=$((col1_width - len1))
   [[ $pad1 -lt 0 ]] && pad1=0
@@ -147,11 +147,24 @@ fi
 
 # --- INIT VARS CHUẨN BỊ VÒNG LẶP ---
 OS_NAME_STATIC=$(hostnamectl | grep System | cut -f2 -d':' | sed 's/^ //g' | cut -f1 -d '(' | head -1)
+
+# TỐI ƯU 1: Khởi tạo Disk Cache lần đầu tiên trước khi vào vòng lặp
+disk_raw=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | tr -d 'G%')
+read -r cached_disk_used cached_disk_total cached_disk_percent <<<"$disk_raw"
+
 read -r cpu a b c idle rest </proc/stat
 prev_total=$((a + b + c + idle))
 prev_idle=$idle
 cpu_display_val=0
-read rx_prev tx_prev <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
+
+# TỐI ƯU 2: Đọc Network lần đầu bằng Pure Bash (Bỏ awk)
+rx_prev=0
+tx_prev=0
+while read -r iface rx _ _ _ _ _ _ _ tx _; do
+  [[ "$iface" == *"Inter-"* || "$iface" == *"face"* || "$iface" == *"lo:"* ]] && continue
+  rx_prev=$((rx_prev + rx))
+  tx_prev=$((tx_prev + tx))
+done </proc/net/dev
 
 # --- DISPLAY FUNCTION ---
 print_dashboard() {
@@ -161,28 +174,42 @@ print_dashboard() {
   local ols_status_in=$4
   local db_status_in=$5
 
-  ram_stats=$(free -m | awk 'NR==2{printf "%s %s %.0f", $3, $2, $3*100/$2 }')
-  read -r ram_used ram_total ram_percent <<<"$ram_stats"
+  # TỐI ƯU 3: Lấy RAM bằng Pure Bash trực tiếp từ Kernel (Không dùng lệnh free/awk)
+  while read -r name value _; do
+    case $name in
+    MemTotal:) mem_total=$value ;;
+    MemAvailable:) mem_avail=$value ;;
+    esac
+  done </proc/meminfo
+  local ram_total=$((mem_total / 1024))
+  local ram_used=$(((mem_total - mem_avail) / 1024))
+  local ram_percent=$((ram_used * 100 / ram_total))
 
-  disk_stats=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | sed 's/G//g' | sed 's/%//g')
-  read -r disk_used disk_total disk_percent <<<"$disk_stats"
+  # Lấy Disk từ bộ nhớ đệm Cache
+  local disk_used=$cached_disk_used
+  local disk_total=$cached_disk_total
+  local disk_percent=$cached_disk_percent
 
-  net_in_display="${rx_rate_in} KB/s"
-  net_out_display="${tx_rate_in} KB/s"
+  local net_in_display="${rx_rate_in} KB/s"
+  local net_out_display="${tx_rate_in} KB/s"
   if [ "$rx_rate_in" -gt 5120 ]; then net_in_display="${C_RED}${rx_rate_in} KB/s${C_RESET}"; fi
   if [ "$tx_rate_in" -gt 5120 ]; then net_out_display="${C_RED}${tx_rate_in} KB/s${C_RESET}"; fi
 
-  load_avg=$(cat /proc/loadavg | awk '{print $1", " $2", " $3}')
-  up_seconds=$(cat /proc/uptime | cut -d. -f1)
-  d=$((up_seconds / 86400))
-  h=$(((up_seconds % 86400) / 3600))
-  m=$(((up_seconds % 3600) / 60))
-  s=$((up_seconds % 60))
-  uptime_display="${d}d ${h}h ${m}m ${s}s"
+  # TỐI ƯU 4: Lấy Load Avg bằng Pure Bash (Không dùng cat/awk)
+  read -r l1 l2 l3 _ </proc/loadavg
+  local load_avg="$l1, $l2, $l3"
+
+  # TỐI ƯU 5: Lấy Uptime bằng Pure Bash (Không dùng cat/cut)
+  read -r uptime_full _ </proc/uptime
+  local up_seconds=${uptime_full%%.*}
+  local d=$((up_seconds / 86400))
+  local h=$(((up_seconds % 86400) / 3600))
+  local m=$(((up_seconds % 3600) / 60))
+  local s=$((up_seconds % 60))
+  local uptime_display="${d}d ${h}h ${m}m ${s}s"
 
   echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
 
-  # FIX LỆCH: Dùng %-5s để căn trái chữ Load/Used
   print_line "$(printf "CPU : %3s%% %s  %-5s %s" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "Load:" "$load_avg")"
   print_line "$(printf "RAM : %3s%% %s  %-5s %s/%s MB" "$ram_percent" "$(draw_bar $ram_percent)" "Used:" "$ram_used" "$ram_total")"
   print_line "$(printf "Disk: %3s%% %s  %-5s %s/%s GB" "$disk_percent" "$(draw_bar $disk_percent)" "Used:" "$disk_used" "$disk_total")"
@@ -194,9 +221,11 @@ print_dashboard() {
   print_2col "Uptime : $uptime_display" "OS            : $OS_NAME_STATIC"
   echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  # FIX LỆCH KHUNG: Rút gọn khoảng trắng giữa các dấu '|' để tổng chiều dài < 71
+  # FIX LỆCH KHUNG: Rút gọn khoảng trắng
   menu_str="${C_GREEN}[ENTER]${C_RESET} Menu | ${C_GREEN}[2]${C_RESET} Menu nhanh"
-  if [[ "$SHOW_UPDATE" == "1" ]]; then menu_str="${menu_str} | ${C_YELLOW}[9] Cập nhật ($NEW_VERSION)${C_RESET}"; fi
+  if [[ "$SHOW_UPDATE" == "1" ]]; then
+    menu_str="${menu_str} | ${C_YELLOW}[9] Cập nhật ($NEW_VERSION)${C_RESET}"
+  fi
   menu_str="${menu_str} | ${C_RED}[0]${C_RESET} Thoát"
   center_text "$menu_str"
 
@@ -219,8 +248,16 @@ cached_db_status="${C_YELLOW}Đang kiểm tra...${C_RESET}"
 prev_lines=0 # Biến ghi nhớ độ dài của bảng ở giây trước
 
 while true; do
-  # 1. Tính toán mọi thứ (Chưa in gì ra màn hình nên không bị nháy)
-  read rx_now tx_now <<<$(awk 'NR>2 && $1 != "lo:" {rx+=$2; tx+=$10} END {print rx, tx}' /proc/net/dev)
+
+  # Lấy Network bằng Pure Bash siêu tốc
+  rx_now=0
+  tx_now=0
+  while read -r iface rx _ _ _ _ _ _ _ tx _; do
+    [[ "$iface" == *"Inter-"* || "$iface" == *"face"* || "$iface" == *"lo:"* ]] && continue
+    rx_now=$((rx_now + rx))
+    tx_now=$((tx_now + tx))
+  done </proc/net/dev
+
   if ((rx_now < rx_prev)); then rx_rate=0; else rx_rate=$(((rx_now - rx_prev) / 1024)); fi
   if ((tx_now < tx_prev)); then tx_rate=0; else tx_rate=$(((tx_now - tx_prev) / 1024)); fi
   rx_prev=$rx_now
@@ -235,9 +272,13 @@ while true; do
   if [ $diff_total -eq 0 ]; then cpu_now=0; else cpu_now=$((100 * (diff_total - diff_idle) / diff_total)); fi
   cpu_display_val=$(((cpu_display_val + cpu_now) / 2))
 
-  if ((counter % 5 == 0)); then
+  if ((counter % 10 == 0)); then
     if /usr/local/lsws/bin/lswsctrl status | grep -q 'litespeed is running'; then cached_ols_status="${C_GREEN}Hoạt động${C_RESET}"; else cached_ols_status="${C_RED}Tạm dừng${C_RESET}"; fi
     if systemctl is-active mariadb.service >/dev/null 2>&1; then cached_db_status="${C_GREEN}Hoạt động${C_RESET}"; else cached_db_status="${C_RED}Tạm dừng${C_RESET}"; fi
+
+    # TỐI ƯU 6: Lấy Disk I/O 10 giây một lần để chống nghẽn ổ cứng
+    disk_raw=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | tr -d 'G%')
+    read -r cached_disk_used cached_disk_total cached_disk_percent <<<"$disk_raw"
   fi
   ((counter++))
 
@@ -261,10 +302,10 @@ while true; do
   prev_lines=$current_lines
 
   # ============================================================================
-  # 6. FIX LỖI KẸT 100% CPU KHI ĐỌC PHÍM
+  # 6. FIX LỖI KẸT CPU 100% (XỬ LÝ MẤT KẾT NỐI EOF CỦA LỆNH READ)
   # ============================================================================
   read -t 1 -n 1 -s key_input
-  READ_STATUS=$? # Ghi nhận lại mã thoát của lệnh read
+  READ_STATUS=$? # Bắt mã phản hồi của lệnh read
 
   # TH1: Khách ấn phím bình thường (Mã 0)
   if [[ $READ_STATUS -eq 0 ]]; then
@@ -278,9 +319,8 @@ while true; do
     break
 
   # TH2: Mất kết nối mạng (EOF) - Thường trả về mã 1 hoặc 255.
-  # (Timeout 1 giây mà không bấm thì mã > 128, ta cho vòng lặp chạy tiếp).
-  elif [[ $READ_STATUS -ne 0 && $READ_STATUS -le 128 ]] || [[ $READ_STATUS -eq 255 ]]; then
-    echo -e "\n${C_RED}⚠️ Đã mất kết nối Terminal (EOF). Tự động thoát trạng thái để bảo vệ CPU...${C_RESET}"
+  elif [[ $READ_STATUS -eq 1 || $READ_STATUS -eq 255 ]]; then
+    echo -e "\n${C_RED}⚠️ Mất kết nối Terminal (EOF). Đang thoát để bảo vệ CPU...${C_RESET}"
     exit 1
   fi
 
