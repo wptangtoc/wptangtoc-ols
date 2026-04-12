@@ -14,66 +14,148 @@ function huong_dan() {
   Việc thay đổi mật khẩu là một phần thiết yếu của việc duy trì an ninh cho bất kỳ hệ thống Linux nào.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-echo "========================================================================="
-echo "|$quan_ly_ssh => $thay_doi_password_ssh" |
-  echo "========================================================================="
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ SSH ➜ $thay_doi_password_ssh${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-# check_root=$(who | awk -F ' ' '{print $1}')
-# if [[ "$check_root" != "root" ]]; then
-#   if [[ -f /home/$check_root/.bashrc ]]; then
-# 	  echo "Hiện tại bạn không sử dụng tài khoản root"
-# 	  echo "Vì vậy không thể thay đổi mật khẩu tài khoản root"
-# exec /etc/wptt/wptt-ssh-main 1
-#   fi
-# fi
+# Check trạng thái file shadow để so sánh sau khi đổi
 
-. /etc/wptt/echo-color
+TMP_PASS_MD5=$(mktemp)
+md5sum /etc/shadow | awk '{print $1}' >$TMP_PASS_MD5
 
-check_thay_doi=$(md5sum /etc/shadow | cut -f1 -d ' ' >/tmp/passwd_root_thay_doi)
-
+# ==============================================================================
+# HÀM MENU LỌC THÔNG MINH (CHỈ HIỂN THỊ USER CÓ QUYỀN BASH)
+# ==============================================================================
 function lua_chon_user() {
-  NAME=""
+  unset NAME selects
   selects=()
-  for entry in $(cat /etc/passwd | grep 'bash' | cut -f1 -d ':'); do
-    NAME=$(echo $entry | cut -f5 -d '/' | cut -f1 -d ':')
-    selects+=("$NAME")
+
+  # Lọc danh sách User có quyền bash
+  for entry in $(grep 'bash$' /etc/passwd | cut -f1 -d ':'); do
+    selects+=("$entry")
   done
-  PS3="
-$(tput setab 0)-//- $nhap_nhap_lua_chon_user_ban_muon [0=$exit_thoat]:$(tput sgr0) "
-  select select in "${selects[@]}"; do
-    NAME=$select
-    index=$REPLY
-    break
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "${C_YELLOW}⚠️ Không tìm thấy User nào có quyền đăng nhập SSH (bash) trên hệ thống!${C_RESET}"
+    sleep 3
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
+    return 2>/dev/null || exit 1
+  fi
+
+  # Render Menu Bo Cong
+  box_inner_width=${box_inner_width:-71}
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+
+  local title_text="Chọn tài khoản SSH bạn muốn đổi Mật khẩu:"
+  local pad_title=$((box_inner_width - ${#title_text} - 2))
+  [[ $pad_title -lt 0 ]] && pad_title=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_title" "")${C_CYAN}│${C_RESET}"
+
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  local i=1
+  for u in "${selects[@]}"; do
+    # Nếu là Root thì Highlight màu Đỏ Cảnh báo, User thường thì Trắng
+    if [[ "$u" == "root" ]]; then
+      item_row=$(printf "  ${C_CYAN}%2d)${C_RESET} ${C_RED}%-20s${C_RESET} [Quyền tối cao]" "$i" "$u")
+      clean_row=$(printf "  %2d) %-20s [Quyền tối cao]" "$i" "$u")
+    else
+      item_row=$(printf "  ${C_CYAN}%2d)${C_RESET} ${C_BOLD_WHITE}%-20s${C_RESET}" "$i" "$u")
+      clean_row=$(printf "  %2d) %-20s" "$i" "$u")
+    fi
+
+    pad=$((box_inner_width - ${#clean_row}))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  # Lấy Input
+  while true; do
+    echo -en "${C_CYAN}👉 ${nhap_nhap_lua_chon_user_ban_muon:-Nhập số thứ tự User} [0=${exit_thoat:-Thoát}]: ${C_RESET}"
+    read -r REPLY
+
+    if [[ "$REPLY" == "0" ]]; then
+      NAME="0"
+      break
+    elif [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+      idx=$((REPLY - 1))
+      NAME="${selects[$idx]}"
+      break
+    else
+      echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
+    fi
   done
 }
 
 lua_chon_user
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-ssh-main 1
+# --- CHỐT CHẶN THOÁT HIỂM ---
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
+  return 2>/dev/null || exit
+fi
+
+# ==============================================================================
+# HỎI XÁC NHẬN VÀ THỰC THI LỆNH PASSWD
+# ==============================================================================
+if wptt_xac_nhan "Bạn có chắc chắn muốn đổi mật khẩu SSH cho tài khoản này?" "${C_BOLD_WHITE}Tài khoản:${C_RESET} ${C_YELLOW}$NAME${C_RESET}" "" "Đồng ý Đổi Pass" "Hủy bỏ"; then
+  echo ""
+  # _runing "Đang tiến hành đổi mật khẩu cho $NAME"
+  # echo ''
+  echo -e "${C_YELLOW}$luu_y_nhap_wordpress_it_nhat_12_ky_tu${C_RESET}"
+
+  # Chạy lệnh passwd thật của Linux
+  passwd "$NAME"
+
+  # So sánh Hash file shadow để xem pass đã thực sự được đổi thành công chưa
+  current_shadow_hash=$(md5sum /etc/shadow | awk '{print $1}')
+  old_shadow_hash=$(cat $TMP_PASS_MD5)
+
+  if [[ "$current_shadow_hash" != "$old_shadow_hash" ]]; then
+    echo "Thiết lập thay đổi password user $NAME (SSH) : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    _rundone "Cập nhật Mật khẩu thành công cho User: $NAME"
+
+    # Bảng báo cáo xanh đẹp
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}THAY ĐỔI MẬT KHẨU THÀNH CÔNG${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    pad_u=$((box_inner_width - 15 - ${#NAME} - 4))
+    [[ $pad_u -lt 0 ]] && pad_u=0
+    echo -e "${C_GREEN}│${C_RESET}  ${C_BOLD_WHITE}Tài khoản SSH  :${C_RESET} ${C_YELLOW}$NAME${C_RESET}$(printf '%*s' "$pad_u" "")${C_GREEN}│${C_RESET}"
+
+    pad_s=$((box_inner_width - 15 - 18 - 10))
+    [[ $pad_s -lt 0 ]] && pad_s=0
+    echo -e "${C_GREEN}│${C_RESET}  ${C_BOLD_WHITE}Trạng thái     :${C_RESET} Mật khẩu mới đã được lưu$(printf '%*s' "$pad_s" "")${C_GREEN}│${C_RESET}"
+
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  else
+    # Nếu Passwd bị lỗi (VD: pass quá ngắn, nhập sai 2 lần giống nhau, hoặc bị huỷ Ctrl+C)
+    _runloi "Đổi Mật khẩu Thất bại (Lỗi hoặc Bị Hủy) cho User: $NAME"
+
+    echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAY ĐỔI MẬT KHẨU THẤT BẠI${C_RESET}"
+    echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    msg="Mật khẩu của User ${C_BOLD_WHITE}$NAME${C_RESET} vẫn được giữ nguyên như cũ."
+    pad_msg=$((box_inner_width - 43 - ${#NAME})) # Trừ đi độ dài chữ thuần
+    [[ $pad_msg -lt 0 ]] && pad_msg=0
+    echo -e "${C_RED}│${C_RESET}  Mật khẩu của User ${C_BOLD_WHITE}$NAME${C_RESET} vẫn được giữ nguyên như cũ.$(printf '%*s' "$pad_msg" "")${C_RED}│${C_RESET}"
+
+    echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
   fi
-  return 2>/dev/null
-  exit
-fi
-
-echo "$luu_y_nhap_wordpress_it_nhat_12_ky_tu"
-echo "Thiết lập thay đổi password user $NAME (SSH) : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-passwd $NAME
-if [[ $(cat /tmp/passwd_root_thay_doi) != $(md5sum /etc/shadow | cut -f1 -d ' ') ]]; then
-  _rundone "$thay_doi PassWord $NAME"
 else
-  _runloi "$thay_doi PassWord $NAME"
+  echo -e "${C_YELLOW}Đã hủy thao tác đổi mật khẩu.${C_RESET}"
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-ssh-main 1
-fi
+rm -f $TMP_PASS_MD5
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
