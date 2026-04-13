@@ -13,173 +13,216 @@ function huong_dan() {
   * Không còn nhu cầu: Khi việc chuyển hướng không còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/core-functions
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_domain => $xoa_chuyen_huong_domain                      |"
-echo "========================================================================="
-echo ""
-echo ""
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_domain} ➜ ${xoa_chuyen_huong_domain}${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 if [[ ! -d /etc/wptt/chuyen-huong ]]; then
-  echo "Bạn chưa có từng kích hoạt chuyển hướng domain nào hết"
+  echo -e "${C_YELLOW}Bạn chưa từng thiết lập chuyển hướng domain nào trên hệ thống!${C_RESET}"
+  sleep 3
   exec /etc/wptt/wptt-domain-main 1
   exit
 fi
 
 function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/chuyen-huong)" ]; then
-    selects=()
+  unset NAME selects
+  selects=()
+  local box_inner_width=${box_inner_width:-71}
+
+  if [ "$(ls -At /etc/wptt/chuyen-huong 2>/dev/null)" ]; then
     for entry in $(ls -A /etc/wptt/chuyen-huong); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [ "$NAME" != "${NAME/./}" ]; then
-        #tuỳ biến thêm thông báo chuyển hướng tới đâu
-        NAME_chuyen_huong_den=$(sed '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/!d' /usr/local/lsws/$NAME/html/.htaccess | grep '301' | grep -o -E '([a-zA-Z0-9-]+\.)+[a-zA-Z0-9-]{2,}' | tail -n 1)
-        NAME="$NAME $chuyen_huong_sang $NAME_chuyen_huong_den"
-        selects+=("$NAME")
+      local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+      if [[ "$dom" != "${dom/./}" ]]; then
+        # Bóc tách tên miền đích từ file .htaccess
+        local target=$(sed '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/!d' "/usr/local/lsws/$dom/html/.htaccess" 2>/dev/null | grep '301' | grep -o -E '([a-zA-Z0-9-]+\.)+[a-zA-Z0-9-]{2,}' | tail -n 1)
+        [[ -z "$target" ]] && target="Không xác định"
+        selects+=("$dom|$target")
       fi
     done
 
-    if [[ $selects = '' ]]; then
-      echo "Tất cả domain trên hệ thống chưa có domain nào được kích hoạt sử dụng chuyển hướng"
+    if [[ ${#selects[@]} -eq 0 ]]; then
+      echo -e "${C_YELLOW}Hệ thống chưa có domain nào được kích hoạt sử dụng chuyển hướng!${C_RESET}"
+      sleep 3
       exec /etc/wptt/wptt-domain-main 1
     fi
 
-    PS3="
--//- $lua_chon_website_ban_muon [0=$exit_thoat]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      index=$REPLY
-      break
+    # Render Menu Bo Cong
+    echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    local title_text="Lựa chọn website đang chuyển hướng bạn muốn gỡ bỏ:"
+    local len=$(echo -n "$title_text" | awk '{print length($0)}')
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+    local i=1
+    for item in "${selects[@]}"; do
+      local source_dom=$(echo "$item" | cut -d'|' -f1)
+      local target_dom=$(echo "$item" | cut -d'|' -f2)
+
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-25s${C_RESET} ➜  ${C_GREEN}%s${C_RESET}" "$i" "$source_dom" "$target_dom")
+      local clean_text=$(printf "  %3d) %-25s ➜  %s" "$i" "$source_dom" "$target_dom")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+      ((i++))
+    done
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+    local fzf_installed=false
+    if command -v fzf &>/dev/null; then
+      fzf_installed=true
+      PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    else
+      PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+    fi
+
+    while true; do
+      echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+      if ! read -r REPLY; then exit 1; fi
+      REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+      case "$REPLY" in
+      0)
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        NAME="0"
+        return 0
+        ;;
+      00)
+        if $fzf_installed; then
+          local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+          local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+          if [[ -n "$dom" ]]; then
+            NAME="$dom"
+            return 0
+          else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+        else
+          echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+        fi
+        ;;
+      *)
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+          local action_index=$((REPLY - 1))
+          NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+        fi
+        ;;
+      esac
     done
   else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
+    echo -e "${C_YELLOW}⚠️ Không có domain nào tồn tại trên hệ thống!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-domain-main 1
   fi
 }
 
 lua_chon_NAME
 
-NAME=$(echo $NAME | cut -f1 -d ' ')
-if [[ $NAME = '' || $NAME = '0' ]]; then
-  exec /etc/wptt/wptt-domain-main 1
-fi
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  return 2>/dev/null || exit
+}
 
 path="/etc/wptt/chuyen-huong/.$NAME.conf"
 if [[ ! -f "$path" ]]; then
-  clear
-  echo "Domain chuyển hướng không tồn tại trên VPS"
-  echo
+  echo -e "\n${C_RED}❌ Domain chuyển hướng không tồn tại trên VPS!${C_RESET}"
+  sleep 3
   exec /etc/wptt/wptt-domain-main 1
-  exit
 fi
 
-#kiểm tra xem mã nguồn có tồn tại trước đó không, có file nào là php không
-if [[ $(find /usr/local/lsws/$NAME/html -type f -name "*.php") ]]; then
-  echo "Xác nhận bạn muốn xóa mã nguồn website ${NAME}"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  xoa_ma_nguon="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      xoa_ma_nguon="y"
-      break
-      ;;
+# ==============================================================================
+# HỎI XÓA MÃ NGUỒN (NẾU CÓ TỒN TẠI)
+# ==============================================================================
+xoa_ma_nguon="y" # Mặc định là xóa sạch (Trường hợp tạo Vhost mới để hứng redirect)
 
-    2)
-      xoa_ma_nguon="n"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
+# Chỉ hỏi nếu thực sự tìm thấy file mã nguồn (.php)
+if [[ -n $(find "/usr/local/lsws/$NAME/html" -maxdepth 2 -type f -name "*.php" 2>/dev/null | head -n 1) ]]; then
+  echo ""
+  echo -e "${C_YELLOW}Hệ thống phát hiện Website này đang chứa mã nguồn (.php).${C_RESET}"
+  if wptt_xac_nhan "Bạn có muốn XÓA SẠCH toàn bộ Mã nguồn & Database không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Có (Xóa sạch)" "Không (Chỉ gỡ luật chuyển hướng)"; then
+    xoa_ma_nguon="y"
+  else
+    xoa_ma_nguon="n"
+  fi
 fi
 
-echo "Xoá chuyển hướng website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+echo "Xóa chuyển hướng website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+echo ""
 
-if [[ $xoa_ma_nguon = 'y' || $xoa_ma_nguon = '' ]]; then
-  #xoá chuyển hướng toàn bộ mã nguồn
-  # 1. Đọc chính xác User_name_vhost từ file config (vhost_bk hoặc vhost)
+# ==============================================================================
+# THỰC THI GỠ BỎ
+# ==============================================================================
+if [[ "$xoa_ma_nguon" == 'y' ]]; then
+  _runing "Đang xóa bỏ Vhost và User hệ thống..."
+
   if [[ -f "/etc/wptt/vhost_bk/.$NAME.conf" ]]; then
     . "/etc/wptt/vhost_bk/.$NAME.conf"
   elif [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
     . "/etc/wptt/vhost/.$NAME.conf"
   fi
 
-  rm -rf /usr/local/lsws/conf/vhosts/"$NAME"
-  # User_name_vhost=${NAME//[-._]/wp}
+  rm -rf "/usr/local/lsws/conf/vhosts/$NAME"
   if [[ -n "$User_name_vhost" ]]; then
     usermod -R wptangtoc-ols "$User_name_vhost" >/dev/null 2>&1
     userdel -f "$User_name_vhost" >/dev/null 2>&1
   fi
 
-  #dự phòng người dùng thiết lập login riêng xong rồi thiết lập chuyển hướng xong rồi chuyển hướng, fix tương thích
+  # Tháo ống nối (Umount) bảo vệ tiến trình
   JAIL_PATH="/usr/local/lsws/$NAME"
   if [[ -d "$JAIL_PATH/etc/wptt" ]]; then
-    # Rút toàn bộ ống nối WPTangToc
     umount -fl "$JAIL_PATH/etc/wptt" 2>/dev/null || true
     umount -fl "$JAIL_PATH/etc/wptt-user" 2>/dev/null || true
     umount -fl "$JAIL_PATH/usr/bin/wptangtoc-user" 2>/dev/null || true
     umount -fl "$JAIL_PATH/.cron_spool" 2>/dev/null || true
-
-    # Rút ống nối Database
     REAL_SOCK=$(mariadb -N -e "select @@socket;" 2>/dev/null || echo "/var/lib/mysql/mysql.sock")
     umount -fl "$JAIL_PATH$REAL_SOCK" 2>/dev/null || true
   fi
-  # =================================================================
 
-  # 2. Xé toạc Namespace (nsfs) của OpenLiteSpeed (Sát thủ 503 - khi xoá xong rồi add lại)
+  # Xé toạc Namespace OpenLiteSpeed
   OLS_NS_PATH="/var/lsns/*/$NAME"
   if ls $OLS_NS_PATH 1>/dev/null 2>&1; then
-    # Bắn bỏ tiến trình đang kẹt trong namespace
     fuser -k -9 $OLS_NS_PATH/* $OLS_NS_PATH/*/mnt 2>/dev/null || true
-    # Tháo ống từ trong ra ngoài
     umount -fl $OLS_NS_PATH/*/mnt 2>/dev/null || true
     umount -fl $OLS_NS_PATH/* 2>/dev/null || true
     rm -rf /var/lsns/*/$NAME 2>/dev/null || true
   fi
-  #end dự phòng người dùng thiết lập login riêng xong rồi thiết lập chuyển hướng xong rồi chuyển hướng, fix tương thích
 
-  if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then #phòng chống xoá mã nguồn nhầm
-    echo "Lỗi: Domain rỗng. Hủy bỏ lệnh xóa!"
-    check_menu_wptangtoc_active=$1
-    if [[ $check_menu_wptangtoc_active = "98" ]]; then
-      exec /etc/wptt/wptt-domain-main 1
-    fi
+  # Check An Toàn Root
+  if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
+    _runloi "Gỡ bỏ hệ thống"
+    echo -e "${C_RED}❌ Lỗi: Check rỗng. Hủy bỏ lệnh xóa bảo vệ VPS!${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
     return 2>/dev/null || exit 1
   fi
 
-  rm -rf /home/$NAME
-  rm -rf /wptangtoc-ols/"$NAME"
-  rm -rf /usr/local/lsws/"$NAME"
+  rm -rf "/home/$NAME"
+  rm -rf "/wptangtoc-ols/$NAME"
+  rm -rf "/usr/local/lsws/$NAME"
 
   sed -i "/${NAME} ${NAME}/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i -e '/^virtualhost '$NAME'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+  _rundone "Gỡ bỏ Vhost và User thành công"
 
-  #xoá database của website chuyển hướng
-  if [[ -n $DB_User_web ]] && [[ -n $DB_Name_web ]]; then #yêu cầu DB_Name_web và DB_User_web phải có giá trị
+  # Xóa Database
+  if [[ -n "$DB_User_web" ]] && [[ -n "$DB_Name_web" ]]; then
+    _runing "Đang dọn dẹp cơ sở dữ liệu (Database)..."
     TEMP_CNF_ROOT=$(mktemp)
-    chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+    chmod 600 "$TEMP_CNF_ROOT"
     cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -194,28 +237,22 @@ quote-names
 max_allowed_packet=1G
 EOF
 
-    #kill user, để trong một số trường hợp bị kẹt sql, sẽ kill database rồi xoá website
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "KILL USER ${DB_User_web}"
-
-    #xoá database
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE ${DB_Name_web}"
-
-    #xoá user database
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER '${DB_User_web}'@'localhost'"
-    rm -f $TEMP_CNF_ROOT
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "KILL USER ${DB_User_web}" >/dev/null 2>&1 || true
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_Name_web}\`" >/dev/null 2>&1
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'" >/dev/null 2>&1
+    rm -f "$TEMP_CNF_ROOT"
+    _rundone "Xóa Database thành công"
   fi
-  #kết thúc xoá db chuyển hướng
+  msg_action="Xóa hoàn toàn Mã nguồn, DB và gỡ Chuyển hướng."
 
 else
-  #xoá chuyển hướng htaccess only
-  sed -i -e '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/d' /usr/local/lsws/$NAME/html/.htaccess
+  _runing "Đang gỡ bỏ luật chuyển hướng trong file .htaccess..."
+  sed -i -e '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/d' "/usr/local/lsws/$NAME/html/.htaccess"
 
-  #chuyen về từ chuyển hướng sang chuyển về sử dụng bình thường
-  if [[ -f /etc/wptt/vhost_bk/.$NAME.conf ]]; then
-    mv /etc/wptt/vhost_bk/.$NAME.conf /etc/wptt/vhost
+  if [[ -f "/etc/wptt/vhost_bk/.$NAME.conf" ]]; then
+    mv "/etc/wptt/vhost_bk/.$NAME.conf" "/etc/wptt/vhost/"
   fi
 
-  #trả htaccess reset về wordpress
   echo '# BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
@@ -226,15 +263,23 @@ RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.php [L]
 </IfModule>
-# END WordPress' >/usr/local/lsws/"$NAME"/html/.htaccess
+# END WordPress' >"/usr/local/lsws/$NAME/html/.htaccess"
 
+  _rundone "Phục hồi cấu hình .htaccess nguyên bản"
+  msg_action="Giữ lại dữ liệu. Chỉ gỡ bỏ luật Chuyển hướng."
 fi
 
-rm -f /etc/wptt/chuyen-huong/.$NAME.conf
+# ==============================================================================
+# KẾT THÚC DỌN DẸP & BÁO CÁO
+# ==============================================================================
+rm -f "/etc/wptt/chuyen-huong/.$NAME.conf"
 
+# _runing "Đang khởi động lại OpenLiteSpeed..."
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+# _rundone "Đang khởi động lại OpenLiteSpeed..."
 
-. /etc/wptt/.wptt.conf
+# Kịch bản check downtime hệ thống
+. /etc/wptt/.wptt.conf 2>/dev/null
 if [[ $download_api ]]; then
   if [[ -f /etc/wptt/add-one/check.sh ]]; then
     if [[ $email_check_downtime && $telegram_id ]]; then
@@ -249,9 +294,11 @@ if [[ $download_api ]]; then
   fi
 fi
 
-echo "$hoan_tat $xoa $chuyen_huong_domain domain $NAME"
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ CHUYỂN HƯỚNG${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tên miền xử lý : ${C_YELLOW}$NAME${C_RESET}" 2
+left_text "Hành động      : ${C_GREEN}$msg_action${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-domain-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
