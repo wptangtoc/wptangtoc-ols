@@ -19,26 +19,26 @@ function huong_dan() {
   Sau khi xóa, website sẽ không còn phục vụ qua HTTPS bằng chứng chỉ Lets Encrypt đó nữa. Nếu không có chứng chỉ nào khác được cấu hình, truy cập HTTPS sẽ thất bại, và website có thể chỉ truy cập được qua HTTP [không mã hóa].
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-. /etc/wptt/echo-color
-echo -e "\n\n\n========================================================================="
-echo -e "|$quan_ly_ssl => $xoa_chung_chi_ssl_letencrypt                      |"
-echo -e "=========================================================================\n\n"
-
-echo "$lua_chon_website_ban_muon $xoa_chung_chi_ssl_letencrypt: "
-echo ""
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_ssl} ➜ ${xoa_chung_chi_ssl_letencrypt}${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 function lua_chon_NAME() {
-  NAME=""
+  unset NAME selects
   selects=()
+  local box_inner_width=${box_inner_width:-71}
 
-  # Quét Vhost
+  # Quét Vhost Thường
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-    domain="${filepath##*/}"
+    local domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
     if [[ "$domain" == ?*.?* ]]; then
@@ -48,11 +48,11 @@ function lua_chon_NAME() {
     fi
   done
 
-  # Quét Domain chuyển hướng
+  # Quét Domain Chuyển hướng
   if [[ -d "/etc/wptt/chuyen-huong" ]]; then
     for filepath in /etc/wptt/chuyen-huong/.*.conf; do
       [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-      domain="${filepath##*/}"
+      local domain="${filepath##*/}"
       domain="${domain%.conf}"
       domain="${domain#.}"
       if [[ "$domain" == ?*.?* ]]; then
@@ -63,19 +63,83 @@ function lua_chon_NAME() {
     done
   fi
 
-  # Hiển thị Menu nếu có data
+  # Lọc trùng lặp
   if [[ ${#selects[@]} -gt 0 ]]; then
-    PS3="$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) "
-    select opt in "${selects[@]}"; do
-      NAME=$opt
-      break
-    done
+    mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
   else
-    clear
-    echoDo "Không có domain nào trước đó được cài SSL Let's Encrypt."
-    echoDo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit 1
+    echo -e "${C_YELLOW}⚠️ Không có website nào trên hệ thống đang cài đặt SSL Let's Encrypt!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-ssl-main 1
   fi
+
+  # Render Menu Bo Cong
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="${lua_chon_website_ban_muon:-Lựa chọn Website} bạn muốn gỡ bỏ SSL:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  local i=1
+  for dom in "${selects[@]}"; do
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} ${C_GREEN}[Có SSL]${C_RESET}" "$i" "$dom")
+    local clean_text=$(printf "  %3d) %-30s [Có SSL]" "$i" "$dom")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+  fi
+
+  while true; do
+    echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website xóa SSL >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ -n "$dom" ]]; then
+          NAME="$dom"
+          return 0
+        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
 lua_chon_NAME
@@ -84,47 +148,33 @@ lua_chon_NAME
 [[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-ssl-main 1
 
 CLEAN="$NAME"
-. /etc/wptt/echo-color
 
+# ==============================================================================
+# KIỂM TRA MÔI TRƯỜNG VÀ XÁC NHẬN
+# ==============================================================================
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 [[ ! -f "$pathcheck" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]] && {
-  clear
-  echoDo "$ten_mien_nay_khong_ton_tai_tren_he_thong"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 2
   exec /etc/wptt/wptt-ssl-main 1
 }
 
 check_ssl="/etc/letsencrypt/live/$NAME/cert.pem"
 if [[ ! -f "$check_ssl" && ! -f "/etc/letsencrypt/live/www.${NAME}/cert.pem" ]]; then
-  echoDo "Website $NAME bạn chưa cài đặt chứng chỉ SSL Let's Encrypt."
+  echo -e "\n${C_RED}❌ Website $NAME hiện không có chứng chỉ SSL Let's Encrypt nào để xóa.${C_RESET}"
+  sleep 3
   exec /etc/wptt/wptt-ssl-main 1
 fi
 
-echo "$xac_nhan $xoa_chung_chi_ssl_letencrypt website $NAME?: "
-prompt="$nhap_lua_chon_cua_ban [1-2]: "
-dongy="n"
-options=("$dong_y" "$khong_dong_y")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-  case "$REPLY" in
-  1)
-    dongy="y"
-    break
-    ;;
-  2)
-    dongy="n"
-    break
-    ;;
-  *)
-    printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-    break
-    ;;
-  esac
-done
+echo ""
+extra_msg=""
+if [[ "$NAME" == "$Website_chinh" ]]; then
+  extra_msg="${C_YELLOW}(Lưu ý: Đây là Website Chính, hệ thống sẽ cấp lại chứng chỉ Tự ký để OLS không bị lỗi)${C_RESET}"
+fi
 
-if [[ "$dongy" == "y" ]]; then
-  UI_STRING="$xoa_chung_chi_ssl_letencrypt website $NAME"
-  _runing "$UI_STRING"
+if wptt_xac_nhan "Bạn có chắc chắn muốn XÓA chứng chỉ SSL của website này?" "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$NAME${C_RESET}\n$extra_msg" "" "Đồng ý Xóa" "Hủy bỏ"; then
+  echo ""
+  _runing "Thu hồi chứng chỉ (Revoke) và xóa file ssl..."
 
   # Fix sập OLS nếu xoá SSL của Website Chính
   if [[ "$NAME" == "$Website_chinh" ]]; then
@@ -140,10 +190,7 @@ if [[ "$dongy" == "y" ]]; then
       sed -i "/https/a    keyFile                \/etc\/wptt-ssl-tu-ky\/$NAME\/$NAME.key" /usr/local/lsws/conf/httpd_config.conf
       sed -i "/https/a    certFile               \/etc\/wptt-ssl-tu-ky\/$NAME\/cert.crt" /usr/local/lsws/conf/httpd_config.conf
     fi
-    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
   fi
-
-  . /etc/wptt/core-functions
 
   # Revoke & Delete non-www
   if [[ -f "$check_ssl" ]]; then
@@ -164,28 +211,33 @@ if [[ "$dongy" == "y" ]]; then
       rm -rf "/etc/letsencrypt/archive/www.${CLEAN}"
     fi
   fi
+  _rundone "Thu hồi chứng chỉ (Revoke) và xóa file ssl..."
 
-  _rundone "$UI_STRING"
+  # Xóa luật Htaccess
+  _runing "Đang gỡ bỏ luật chuyển hướng HTTPS trong file .htaccess..."
+  path2="/usr/local/lsws/$CLEAN/html/.htaccess"
+  if [[ -f "$path2" ]]; then
+    sed -i -e '/^#begin-chuyen-huong-http-to-https-wptangtoc-ols/,/^#end-chuyen-huong-http-to-https-wptangtoc-ols$/d' "$path2"
+    sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' "$path2"
+    sed -i -e '/^#begin-chuyen-huong-non-www-to-www-wptangtoc-ols/,/^#end-chuyen-huong-non-www-to-www-wptangtoc-ols$/d' "$path2"
+  fi
+  _rundone "Đang gỡ bỏ luật chuyển hướng HTTPS trong file .htaccess..."
+
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  echo "Xóa SSL free letsencrypt website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  # ==============================================================================
+  # BẢNG BÁO CÁO THÀNH CÔNG (UX BO CONG)
+  # ==============================================================================
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ CHỨNG CHỈ SSL${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website        : ${C_YELLOW}$NAME${C_RESET}"
+  left_text "Trạng thái mới : Đã thu hồi chứng chỉ và xóa cấu hình HTTPs."
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác xóa SSL.${C_RESET}"
 fi
 
-# --- Xóa .htaccess ---
-UI_STRING_HT="Xóa chuyển hướng HTTP sang HTTPS website $NAME"
-_runing "$UI_STRING_HT"
-path2="/usr/local/lsws/$CLEAN/html/.htaccess"
-
-if [[ -f "$path2" ]]; then
-  sed -i -e '/^#begin-chuyen-huong-http-to-https-wptangtoc-ols/,/^#end-chuyen-huong-http-to-https-wptangtoc-ols$/d' "$path2"
-  sed -i -e '/^#begin-chuyen-huong-www-to-non-www-wptangtoc-ols/,/^#end-chuyen-huong-www-to-non-www-wptangtoc-ols$/d' "$path2"
-  sed -i -e '/^#begin-chuyen-huong-non-www-to-www-wptangtoc-ols/,/^#end-chuyen-huong-non-www-to-www-wptangtoc-ols$/d' "$path2"
-fi
-
-/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-_rundone "$UI_STRING_HT"
-
-echo "Xoá SSL free letsencrypt website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-echo -e "\n==================================================================="
-echoDone "$xoa_chung_chi_ssl_letencrypt website $CLEAN $hoan_tat             "
-echo "==================================================================="
-
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
