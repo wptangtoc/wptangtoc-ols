@@ -4,206 +4,162 @@ function huong_dan() {
   MySQL CLI [còn gọi là MySQL Monitor] là một công cụ giao diện dòng lệnh cho phép bạn tương tác trực tiếp với máy chủ MySQL. Bạn có thể thực hiện mọi tác vụ từ tạo cơ sở dữ liệu, quản lý bảng, đến truy vấn dữ liệu phức tạp.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-. /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
-wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối không cho phép CLI mysql."
 
-echo ""
-echo ""
-echo "$nhap_lua_chon_website_cua_ban thực thi mysql cli: "
-echo ""
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_database} ➜ Thực thi MySQL CLI (Command Line)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối mở kết nối MySQL CLI."
+
 function lua_chon_NAME() {
-  unset NAME
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
-    selects=()
-    for filepath in /etc/wptt/vhost/.*.conf; do
-      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  unset NAME selects
+  selects=("root|[Tài khoản quản trị Tối cao]")
+  local box_inner_width=${box_inner_width:-71}
 
-      domain="${filepath##*/}"
-      domain="${domain%.conf}"
-      domain="${domain#.}"
-
-      if [[ "$domain" == ?*.?* ]]; then
-        selects+=("$NAME")
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+      if [[ "$dom" == ?*.?* && -f "/etc/wptt/vhost/.$dom.conf" ]]; then
+        selects+=("$dom")
       fi
     done
+  fi
 
-    selects+=("root")
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="${nhap_lua_chon_website_cua_ban:-Lựa chọn tài khoản} bạn muốn kết nối MySQL CLI:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-    if command -v fzf &>/dev/null; then
-      PS3="
-$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [00=$chon_nhanh] [0=$exit_thoat]:$(tput sgr0) "
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local desc=$(echo "$item" | cut -d'|' -f2)
+
+    if [[ "$dom" == "root" ]]; then
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_RED}%-25s${C_RESET} ${C_YELLOW}%s${C_RESET}" "$i" "root" "$desc")
+      local clean_text=$(printf "  %3d) %-25s %s" "$i" "root" "$desc")
     else
-      PS3="
-$(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) "
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$dom")
+      local clean_text=$(printf "  %3d) %s" "$i" "$dom")
     fi
 
-    #phải thêm  "" bên trong ${selects[@]} để phân biệt nút cách để tránh phân biệt mảng array
-    select select in "${selects[@]}"; do
-      NAME=$select
-      index=$REPLY
-      break
-    done
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=${chon_nhanh:-Tìm nhanh}] [0=${exit_thoat:-Thoát}]: "
   else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
   fi
 
-  if [[ -z $NAME ]]; then                             #tính năng nhập input thẳng domain
-    REPLY=$(echo $REPLY | tr '[:upper:]' '[:lower:]') #chuyển viết hoa thành viết thường, tránh người dùng gõ viết hoa sẽ tự động sử lý vấn đề đó
-    if [[ $(ls -A /etc/wptt/vhost | sed 's/^.//' | sed 's/.conf//' | grep "$REPLY") ]]; then
-      if [ "$REPLY" != "${REPLY/./}" ] && [ "$REPLY" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ -f /etc/wptt/vhost/.$REPLY.conf ]]; then              #kiểm tra điều kiện xác thực domain này đã đúng đã thêm trước đó chưa lần 2 tuyệt đối
-          NAME=$REPLY
-        fi
-      fi
-    fi
-  fi
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
-  if [[ $REPLY == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    # Mảng để lưu trữ các tên miền hợp lệ
-    local options=()
-    local vhost_dir="/etc/wptt/vhost"
-
-    # Kiểm tra xem thư mục tồn tại và có phải là thư mục không
-    if [[ ! -d "$vhost_dir" ]]; then
-      clear
-      echo "Lỗi: Thư mục '$vhost_dir' không tồn tại."
-      return 1 # Trả về mã lỗi
-    fi
-
-    # Sử dụng find để lấy danh sách file .conf một cách an toàn hơn ls
-    # và đọc từng dòng bằng while read
-    mapfile -t options < <(
-      # Tìm tất cả các file (-type f) trong thư mục vhost_dir (không vào sâu hơn -maxdepth 1)
-      # có tên kết thúc bằng .conf.
-      # -print0 dùng ký tự NULL để phân tách các đường dẫn, an toàn hơn với các tên file đặc biệt.
-      find "$vhost_dir" -maxdepth 1 -type f -name '*.conf' -print0 |
-
-        # Đọc từng đường dẫn được phân tách bằng NULL vào biến entry_path.
-        while IFS= read -r -d '' entry_path; do
-          # Lấy tên file từ đường dẫn đầy đủ (sử dụng parameter expansion, nhanh hơn `basename`).
-          local entry
-          entry=${entry_path##*/}
-
-          # Xử lý tên file bằng Shell Parameter Expansion để tăng hiệu suất:
-          # 1. Bỏ đuôi .conf
-          local name
-          name=${entry%.conf}
-          # 2. Bỏ ký tự đầu tiên
-          name=${name#?}
-
-          # Kiểm tra xem tên có chứa dấu chấm không (để lọc domain).
-          if [[ "$name" == *.* ]] && [ "$name" != '.' ]; then
-            # In tên hợp lệ ra standard output
-            echo "$name"
-          fi
-        done |
-
-        # Sắp xếp danh sách domain từ output của vòng lặp while.
-        # -u: Lọc các dòng trùng lặp (unique).
-        # -V: Sắp xếp theo kiểu "version number", giúp sắp xếp tự nhiên (ví dụ: site2.com đứng trước site10.com).
-        sort -uV
-    )
-
-    # Kiểm tra xem có tìm thấy tên miền hợp lệ nào không
-    if [ ${#options[@]} -eq 0 ]; then
-      clear
-      # Kiểm tra xem thư mục có trống không hay chỉ không có file .conf hợp lệ
-      if [ -z "$(find "$vhost_dir" -maxdepth 1 -type f -name '*.conf')" ]; then
-        echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ -n "$dom" ]]; then
+          NAME="$dom"
+          return 0
+        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
       else
-        echo "$khong_tim_thay_domain_hop_le"
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
       fi
-      return 1 # Trả về mã lỗi
-    fi
-
-    # Sử dụng printf để đưa danh sách vào fzf một cách an toàn (mỗi tên miền một dòng)
-    # fzf sẽ hiển thị danh sách và cho phép người dùng lọc/chọn
-    # --prompt đặt thông điệp hiển thị phía trước ô nhập liệu của fzf
-    # Kết quả (dòng được chọn) sẽ được gán vào biến selected_name
-    selected_name=$(printf "%s\n" "${options[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> $nhap_lua_chon_website_cua_ban [0=$exit_thoat]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-
-    # Kiểm tra xem người dùng có hủy chọn không (ví dụ: nhấn Ctrl+C hoặc Esc)
-    # fzf sẽ trả về chuỗi rỗng và mã thoát khác 0 (thường là 130 cho Ctrl+C)
-    local exit_status=$?
-    if [ $exit_status -ne 0 ] || [ -z "$selected_name" ]; then
-      echo "$da_huy_chon"
-      NAME=""  # Đặt lại biến NAME nếu cần
-      return 1 # Trả về mã lỗi
-    fi
-
-    # Gán tên miền đã chọn vào biến NAME (có thể là biến toàn cục nếu cần)
-    NAME="$selected_name"
-    # echo "Đã chọn: $NAME" # Có thể bỏ dòng này nếu không cần thông báo
-    return 0 # Trả về mã thành công
-  fi
-
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
 lua_chon_NAME
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
-echo "========================================================================="
-echo 'Đây là một tính năng khá nâng cao '
-echo 'Sau đây những hướng dẫn cơ bản: '
-echo 'SHOW DATABASES; - Liệt kê tất cả các cơ sở dữ liệu.
-USE [tên_db]; - Chọn một cơ sở dữ liệu để bắt đầu làm việc.
-CREATE DATABASE [tên_db]; - Tạo một cơ sở dữ liệu mới.
-DROP DATABASE [tên_db]; - Xóa vĩnh viễn một cơ sở dữ liệu. (Cẩn thận!)
-SHOW TABLES; - Liệt kê tất cả các bảng trong cơ sở dữ liệu hiện tại.
-CREATE TABLE [tên_bảng] (...); - Tạo một bảng mới.
-ALTER TABLE [tên_bảng] ...; - Sửa đổi cấu trúc của bảng (thêm/xóa/sửa cột).
-DROP TABLE [tên_bảng]; - Xóa vĩnh viễn một bảng. (Cẩn thận!)
-INSERT INTO [tên_bảng] (cột1, cột2) VALUES (giá_trị1, giá_trị2); - Chèn một hàng dữ liệu mới vào bảng.
-SELECT * FROM [tên_bảng]; - Lấy tất cả dữ liệu từ một bảng.
-SELECT cột1, cột2 FROM [tên_bảng]; - Lấy dữ liệu từ các cột được chỉ định.
-SELECT * FROM [tên_bảng] WHERE [điều_kiện]; - Lấy dữ liệu được lọc theo một điều kiện.
-UPDATE [tên_bảng] SET cột1 = giá_trị_mới WHERE [điều_kiện]; - Cập nhật dữ liệu trong bảng. (Luôn dùng WHERE!)
-DELETE FROM [tên_bảng] WHERE [điều_kiện]; - Xóa dữ liệu khỏi bảng. (Luôn dùng WHERE!)
-SHOW PROCESSLIST; - Xem tiến tình database đang thực thi tại thời điểm hiện tại
-exit; - Để thoát Mysql CLI
-'
-echo "========================================================================="
-if [[ $NAME = 'root' ]]; then
-  TEMP_CNF_ROOT=$(mktemp)
-  chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
-  cat >"$TEMP_CNF_ROOT" <<EOF
+
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  return 2>/dev/null || exit
+}
+
+# ==============================================================================
+# KHUNG HƯỚNG DẪN MYSQL CLI (CHEAT SHEET)
+# ==============================================================================
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}BẢNG HƯỚNG DẪN CÁC LỆNH MYSQL CƠ BẢN${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text " ${C_YELLOW}SHOW DATABASES;${C_RESET}    - Liệt kê tất cả cơ sở dữ liệu." 2
+left_text " ${C_YELLOW}USE [tên_db];${C_RESET}      - Chọn một cơ sở dữ liệu để làm việc." 2
+left_text " ${C_YELLOW}SHOW TABLES;${C_RESET}       - Liệt kê tất cả bảng trong DB đang chọn." 2
+left_text " ${C_YELLOW}SHOW PROCESSLIST;${C_RESET}  - Xem các tiến trình DB đang thực thi." 2
+left_text " ${C_YELLOW}exit;${C_RESET}              - Thoát khỏi giao diện MySQL CLI." 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# TẠO FILE TEMP BẢO MẬT & KẾT NỐI
+# ==============================================================================
+TEMP_CNF=$(mktemp)
+chmod 600 "$TEMP_CNF"       # Chỉ Root mới có quyền đọc
+trap "rm -f $TEMP_CNF" EXIT # Bẫy an toàn: Tự hủy file kể cả khi ấn Ctrl+C
+
+if [[ "$NAME" == 'root' ]]; then
+  cat >"$TEMP_CNF" <<EOF
 [client]
 user=${database_admin_username}
 password=${database_admin_password}
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
-
-[mysqldump]
-quick
-quote-names
-max_allowed_packet=1G
 EOF
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT"
-  rm -rf $TEMP_CNF_ROOT
-else
-  unset DB_Password_web DB_User_web
-  if [[ -f /etc/wptt/vhost/.$NAME.conf ]]; then
-    . /etc/wptt/vhost/.$NAME.conf
-    if [[ $DB_User_web && $DB_Password_web ]]; then
 
-      TEMP_CNF=$(mktemp)
-      chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+  echo -e "${C_CYAN}Đang mở kết nối bằng tài khoản ROOT Tối cao...${C_RESET}"
+  mariadb --defaults-extra-file="$TEMP_CNF"
+
+else
+  unset DB_Password_web DB_User_web DB_Name_web
+  if [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
+    . "/etc/wptt/vhost/.$NAME.conf"
+
+    if [[ -n "$DB_User_web" && -n "$DB_Password_web" ]]; then
       cat >"$TEMP_CNF" <<EOF
 [client]
 user=${DB_User_web}
@@ -211,22 +167,22 @@ password=${DB_Password_web}
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
-
-[mysqldump]
-quick
-quote-names
-max_allowed_packet=1G
 EOF
+
+      echo -e "${C_CYAN}Đang mở kết nối cho website: ${C_BOLD_WHITE}$NAME${C_RESET}"
+      echo -e "${C_GREEN}Gợi ý:${C_RESET} Gõ lệnh ${C_YELLOW}USE \`$DB_Name_web\`;${C_RESET} để bắt đầu truy vấn ngay."
+      echo ""
       mariadb --defaults-extra-file="$TEMP_CNF"
-      rm -rf $TEMP_CNF
     else
-      echo "Không xác định được databse của website $NAME"
+      echo -e "${C_RED}❌ Lỗi: Không xác định được thông tin Database của website $NAME!${C_RESET}"
+      sleep 3
     fi
   fi
 fi
 
-echo "========================================================================="
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+# Xóa chủ động lần cuối (dù đã có trap)
+rm -f "$TEMP_CNF"
+
+echo -e "\n${C_GREEN}Đã thoát phiên MySQL CLI thành công!${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
