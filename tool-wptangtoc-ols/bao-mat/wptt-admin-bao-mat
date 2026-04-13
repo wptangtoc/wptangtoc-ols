@@ -17,24 +17,23 @@ function huong_dan() {
   * Hủy kích hoạt [Tắt]: Dành cho các trường hợp bạn hoặc đối tác bị khóa IP nhầm và cần vào quản trị gấp, hoặc khi bạn dùng giải pháp Firewall khác.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
 clear
-echo -e "\n========================================================================="
-echo -e "| Bảo mật => Bật / Tắt chống Brute Force wp-admin [Fail2ban]             |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT ➜ Bật / Tắt chống Brute Force wp-admin (Fail2ban)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CHỈ HIỂN THỊ DOMAIN WORDPRESS + CÓ TRẠNG THÁI + FZF)
-# ==============================================================================
 function lua_chon_NAME() {
-  unset NAME domain selects
+  unset NAME selects
   selects=()
+  local box_inner_width=${box_inner_width:-71}
 
-  # Vòng lặp Globbing siêu tốc không qua sub-shell
+  # Quét domain
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
@@ -42,89 +41,133 @@ function lua_chon_NAME() {
     domain="${domain%.conf}"
     domain="${domain#.}"
 
-    # Chỉ quét các domain có định dạng chuẩn và có nhân WordPress
     if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
       local domain_fail2ban="${domain//[-._]/wp}"
       local filter_path="/etc/fail2ban/filter.d/wordpress-dangnhap-$domain_fail2ban.conf"
 
       if [[ -f "$filter_path" ]]; then
-        selects+=("$domain [Đang BẬT]")
+        selects+=("$domain|[Đang BẬT]")
       else
-        selects+=("$domain [Đang TẮT]")
+        selects+=("$domain|[Đang TẮT]")
       fi
     fi
   done
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\033[1;33mHệ thống chưa có Website WordPress nào để cấu hình Brute Force!\033[0m"
+    echo -e "${C_YELLOW}⚠️ Hệ thống chưa có Website WordPress nào để cấu hình Brute Force!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
 
-  # Sắp xếp mảng chuẩn Version (Alphabetical)
+  # Sắp xếp chuẩn Version
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website WP
   if [[ ${#selects[@]} -ge 2 ]]; then
-    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)|[Hàng Loạt]")
   fi
 
-  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
-  if command -v fzf &>/dev/null; then
-    PS3="$(tput setab 0)-//- Lựa chọn website WP bạn muốn cấu hình [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
-  else
-    PS3="$(tput setab 0)-//- Lựa chọn website WP bạn muốn cấu hình [0=Thoát]:$(tput sgr0) "
-  fi
+  # RENDER KHUNG MENU BO CONG (TÁCH STATUS RA ĐỂ TÔ MÀU ĐẸP MẮT)
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Lựa chọn website bạn muốn cấu hình bảo vệ Brute Force:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  # Vòng lặp lấy giá trị
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    break
-  done
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
-  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website WP Brute Force [0=Thoát]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local stt=$(echo "$item" | cut -d'|' -f2)
 
-    if [[ -z "$selected_name" ]]; then
-      echo "Đã hủy chọn."
-      exec /etc/wptt/wptt-bao-mat-main 1
+    local color_dom="${C_BOLD_WHITE}"
+    local color_stt="${C_YELLOW}"
+
+    if [[ "$stt" == "[Đang BẬT]" ]]; then color_stt="${C_GREEN}"; fi
+    if [[ "$stt" == "[Đang TẮT]" ]]; then color_stt="${C_RED}"; fi
+    if [[ "$dom" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      color_dom="${C_YELLOW}"
+      color_stt="${C_CYAN}"
     fi
-    NAME="$selected_name"
+
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${color_dom}%-40s${C_RESET} %s" "$i" "$dom" "${color_stt}${stt}${C_RESET}")
+    local clean_text=$(printf "  %3d) %-40s %s" "$i" "$dom" "$stt")
+
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
   fi
 
-  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
-  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
-    for item in "${selects[@]}"; do
-      local check_dom=$(echo "$item" | cut -f1 -d ' ')
-      if [[ "$check_dom" == "$REPLY" ]]; then
-        NAME="$item"
-        break
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ -n "$dom" ]]; then
+          NAME="$dom"
+          return 0
+        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
       fi
-    done
-  fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
-# Nếu gọi script kèm tên domain từ command line
+# Lấy biến truyền vào hoặc gọi hàm
 if [[ -n "$1" && "$1" != "98" ]]; then
   NAME="$1"
 else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn (Cắt bỏ dòng trạng thái)
-NAME=$(echo "$NAME" | cut -f1 -d ' ')
+# Cắt râu ria nếu có user gõ tay vào
+NAME=$(echo "$NAME" | cut -d'|' -f1 | xargs)
 
 # --- CHỐT CHẶN THOÁT HIỂM ---
 [[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
 
 # ==============================================================================
-# HÀM CÀI ĐẶT GÓI PHỤ THUỘC (Chạy 1 lần duy nhất cho toàn hệ thống)
+# HÀM CÀI ĐẶT GÓI PHỤ THUỘC (Chạy 1 lần duy nhất)
 # ==============================================================================
 function install_dependencies() {
+  _runing "Kiểm tra và cài đặt gói phụ thuộc Fail2ban..."
   if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
     if ! dpkg -s python3-pyinotify ipset >/dev/null 2>&1; then
       export DEBIAN_FRONTEND=noninteractive
@@ -138,9 +181,9 @@ function install_dependencies() {
     fi
     tuong_thich_nhom_litespeed="nobody"
   fi
+  _rundone "Kiểm tra gói phụ thuộc Fail2ban"
 }
 
-# Lấy chuẩn nhóm Litespeed
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   tuong_thich_nhom_litespeed="nogroup"
 else
@@ -158,7 +201,7 @@ function process_bruteforce() {
   local vhost_conf="/usr/local/lsws/conf/vhosts/$target_domain/$target_domain.conf"
 
   if [[ "$action" == "bat" ]]; then
-    [[ -f "$filter_path" ]] && return # Đã bật rồi thì bỏ qua
+    [[ -f "$filter_path" ]] && return
 
     UI_STRING="Kích hoạt chống Brute Force cho $target_domain"
     _runing "$UI_STRING"
@@ -188,13 +231,13 @@ EOF
     chown -R nobody:$tuong_thich_nhom_litespeed "/usr/local/lsws/$target_domain/logs"
     chmod 700 "/usr/local/lsws/$target_domain/logs"
 
-    # 2. Xử lý logic tên Rule (Cắt ngắn tối đa 20 ký tự)
+    # 2. Xử lý logic tên Rule
     local rule_fail2ban_name="wp-admin-$domain_fail2ban"
     if ((${#rule_fail2ban_name} > 20)); then
       rule_fail2ban_name=$(echo "$rule_fail2ban_name" | cut -c 1-20)
     fi
 
-    # 3. Phân luồng Action theo Tường lửa của máy chủ
+    # 3. Phân luồng Action Tường lửa
     local action_thuc_thi_block=""
     if [[ -f /etc/csf/csf.conf ]]; then
       action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
@@ -229,12 +272,12 @@ failregex = ^<HOST> .* "POST \/+wp-login\.php HTTP\/.*" 200' >"$filter_path"
     _rundone "$UI_STRING"
 
   elif [[ "$action" == "tat" ]]; then
-    [[ ! -f "$filter_path" ]] && return # Chưa bật thì bỏ qua
+    [[ ! -f "$filter_path" ]] && return
 
     UI_STRING="Tắt (Hủy) chống Brute Force cho $target_domain"
     _runing "$UI_STRING"
 
-    # 1. Kiểm tra Vhost Config để gỡ Log (Chỉ gỡ nếu người dùng không chủ động giữ log)
+    # 1. Gỡ Log (Chỉ gỡ nếu người dùng không chủ động giữ log)
     bat_log_domain=""
     [[ -f "/etc/wptt/vhost/.$target_domain.conf" ]] && . "/etc/wptt/vhost/.$target_domain.conf"
 
@@ -244,13 +287,12 @@ failregex = ^<HOST> .* "POST \/+wp-login\.php HTTP\/.*" 200' >"$filter_path"
       rm -rf "/usr/local/lsws/$target_domain/logs"
     fi
 
-    # Dự phòng bảo vệ thư mục log tổng của server
     if [[ ! -d "/usr/local/lsws/logs" ]]; then
       mkdir -p /usr/local/lsws/logs
       chown root:nobody /usr/local/lsws/logs
     fi
 
-    # 2. Xóa cấu hình Fail2ban bằng SED (Xóa theo vùng siêu an toàn)
+    # 2. Xóa cấu hình Fail2ban
     rm -f "$filter_path"
     sed -i "/^#begin-wordpress-dangnhap-$domain_fail2ban/,/^#end-wordpress-dangnhap-$domain_fail2ban$/d" /etc/fail2ban/jail.local
 
@@ -260,34 +302,47 @@ failregex = ^<HOST> .* "POST \/+wp-login\.php HTTP\/.*" 200' >"$filter_path"
 }
 
 # ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH BẬT / TẮT
+# XỬ LÝ LÔGIC RẼ NHÁNH BẬT / TẮT (CÓ UX XÁC NHẬN)
 # ==============================================================================
+echo ""
+thao_tac_thanh_cong=false
+msg_action=""
 
-if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  echo -e "\nBạn muốn BẬT hay TẮT chống Brute Force cho \033[1;33mTẤT CẢ\033[0m website WordPress?"
-  prompt="Lựa chọn của bạn [1-2]: "
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT CẢ WEBSITE" ]]; then
+  # Box xác nhận cấu hình Hàng Loạt
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}Cấu hình HÀNG LOẠT chống Brute Force cho toàn bộ hệ thống${C_RESET}"
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}1)${C_RESET} BẬT đồng loạt cho tất cả                                         ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}2)${C_RESET} TẮT đồng loạt cho tất cả                                         ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}3)${C_RESET} Hủy bỏ thao tác                                                  ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
   mass_action=""
-  options=("BẬT đồng loạt" "TẮT đồng loạt" "Hủy bỏ")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
+  while true; do
+    echo -en "${C_CYAN}👉 Nhập lựa chọn của bạn [1-3]: ${C_RESET}"
+    read -r REPLY
     case "$REPLY" in
     1)
       mass_action="bat"
+      msg_action="BẬT đồng loạt"
       break
       ;;
     2)
       mass_action="tat"
+      msg_action="TẮT đồng loạt"
       break
       ;;
-    3) exec /etc/wptt/wptt-bao-mat-main 1 ;;
-    *)
-      printf "\nNhập sai, tự động hủy.\n"
+    3)
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+      sleep 1
       exec /etc/wptt/wptt-bao-mat-main 1
       ;;
+    *) echo -e "${C_RED}❌ Nhập sai, vui lòng nhập từ 1 đến 3.${C_RESET}" ;;
     esac
   done
 
-  # Chỉ chạy check Dependencies 1 lần nếu là lệnh BẬT
+  echo ""
   [[ "$mass_action" == "bat" ]] && install_dependencies
 
   for filepath in /etc/wptt/vhost/.*.conf; do
@@ -299,11 +354,12 @@ if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "
       process_bruteforce "$domain" "$mass_action"
     fi
   done
+  thao_tac_thanh_cong=true
 
 else
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
-    echoDo "Tên miền không tồn tại!"
+    echo -e "${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
     sleep 2
     exec /etc/wptt/wptt-bao-mat-main 1
   }
@@ -311,19 +367,42 @@ else
   domain_fail2ban="${NAME//[-._]/wp}"
   if [[ -f "/etc/fail2ban/filter.d/wordpress-dangnhap-$domain_fail2ban.conf" ]]; then
     # Đang Bật -> Tự động Tắt
-    process_bruteforce "$NAME" "tat"
+    if wptt_xac_nhan "Tính năng này đang BẬT. Bạn có muốn TẮT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý TẮT" "Hủy bỏ"; then
+      echo ""
+      msg_action="TẮT chống Brute Force"
+      process_bruteforce "$NAME" "tat"
+      thao_tac_thanh_cong=true
+    fi
   else
     # Đang Tắt -> Tự động Bật
-    install_dependencies
-    process_bruteforce "$NAME" "bat"
+    if wptt_xac_nhan "Tính năng này đang TẮT. Bạn có muốn BẬT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý BẬT" "Hủy bỏ"; then
+      echo ""
+      msg_action="BẬT chống Brute Force"
+      install_dependencies
+      process_bruteforce "$NAME" "bat"
+      thao_tac_thanh_cong=true
+    fi
   fi
 fi
 
 # ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ (Chạy 1 lần sau khi vòng lặp kết thúc)
+# KHỞI ĐỘNG LẠI DỊCH VỤ VÀ IN BÁO CÁO
 # ==============================================================================
-/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
-echo -e "\033[1;32mHoàn tất!\033[0m"
+if $thao_tac_thanh_cong; then
+  _runing "Đang nạp lại cấu hình OpenLiteSpeed và Fail2ban..."
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+  _rundone "Cập nhật dịch vụ hệ thống"
+
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT CẤU HÌNH BẢO MẬT${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}"
+  left_text "Hành động        : ${C_GREEN}$msg_action${C_RESET}"
+  left_text "Trạng thái       : OpenLiteSpeed và Fail2ban đã được đồng bộ."
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác cấu hình bảo mật.${C_RESET}"
+fi
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
