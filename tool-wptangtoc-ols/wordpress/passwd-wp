@@ -18,216 +18,202 @@ function huong_dan() {
   Việc thay đổi mật khẩu admin là một thao tác đơn giản nhưng thiết yếu để duy trì bảo đảm bảo mật cho website WordPress của bạn. Nên sử dụng mật khẩu mạnh và thay đổi định kỳ hoặc khi cần thiết.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-echo ""
-echo ""
-echo ""
-. /etc/wptt/echo-color
+clear
 echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_wordpress ➜ $thay_doi PassWord wp-admin WordPress${C_RESET}"
-echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+center_text "${C_YELLOW}${quan_ly_wordpress} ➜ Đổi Mật khẩu wp-admin (Administrator)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 . /etc/wptt/tenmien-only-website-by-wordpress
-lua_chon_NAME "$thay_doi password admin WordPress"
+lua_chon_NAME "Đổi password admin WordPress"
 
-. /etc/wptt/echo-color
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-wordpress-main 1
 
-[[ "$NAME" = "0" || "$NAME" = "" ]] && exec /etc/wptt/wptt-wordpress-main 1
-
-[[ ! -f "/etc/wptt/vhost/.$NAME.conf" ]] && echoDo "Domain không tồn tại trên hệ thống." && exec /etc/wptt/wptt-wordpress-main 1
+if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
+  sleep 3
+  exec /etc/wptt/wptt-wordpress-main 1
+fi
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  echo -e "\n${C_RED}❌ Hệ thống xác nhận website này không sử dụng WordPress!${C_RESET}"
+  echo -e "${C_YELLOW}Tính năng này chỉ hoạt động trên mã nguồn WordPress.${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
-  exit
 fi
 
-echo "$thay_doi $tai_khoan WordPress Admin website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
+# Nạp cấu hình PHP và Vhost
 path="/usr/local/lsws/$NAME/html"
+. "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null
+. /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
 
-. /etc/wptt/vhost/.$NAME.conf
+echo "Đổi tài khoản WordPress Admin website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-. /etc/wptt/php/php-cli-domain-config $NAME
-
-unset selects admin_id mypassword
-
-#mapfile Nó an toàn tuyệt đối ngay cả khi user chứa các ký tự lạ hoặc khoảng trắng.
+# ==============================================================================
+# HÀM MENU LỌC VÀ CHỌN TÀI KHOẢN ADMIN (UX BO CONG)
+# ==============================================================================
 function lua_chon_user() {
   admin_id=""
   local selects=()
+  local box_inner_width=${box_inner_width:-71}
 
-  # 1. Tối ưu WP-CLI: Dùng --field (số ít) để bỏ qua Header, không cần sed nữa.
-  # 2. Dùng mapfile (readarray) để đọc dữ liệu vào mảng cực kỳ an toàn, chống lỗi khoảng trắng.
-  mapfile -t selects < <(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp user list --role=administrator --field=user_login --path="$path" 2>/dev/null | sort -u)
+  _runing "Đang quét danh sách tài khoản Administrator..."
+  mapfile -t selects < <(sudo -u "$User_name_vhost" "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" /usr/local/bin/wp user list --role=administrator --field=user_login --path="$path" 2>/dev/null | sort -u)
+  _rundone "Quét dữ liệu hoàn tất"
 
-  # 3. Kiểm tra mảng rỗng chuẩn Bash (Kiểm tra số lượng phần tử của mảng)
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo "Không xác định được user administrator nào"
+    echo -e "\n${C_RED}❌ Lỗi: Không xác định được user administrator nào trên website này!${C_RESET}"
+    sleep 3
     exec /etc/wptt/wptt-wordpress-main 1
   fi
 
-  PS3="$(tput setab 0)-//- $nhap_nhap_lua_chon_user_ban_muon [0=$exit_thoat]:$(tput sgr0) "
+  echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Lựa chọn tài khoản bạn muốn đổi Mật khẩu:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  # 4. Đổi tên biến để không trùng từ khóa hệ thống
-  select selected_user in "${selects[@]}"; do
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-    # 5. Bắt chính xác sự kiện người dùng nhập số 0 để thoát
-    if [[ "$REPLY" == "0" ]]; then
-      clear
-      exec /etc/wptt/wptt-wordpress-main 1 # Hoặc lệnh exit tùy bạn
+  local i=1
+  for usr in "${selects[@]}"; do
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$usr")
+    local clean_text=$(printf "  %3d) %s" "$i" "$usr")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-    # Bắt sự kiện chọn đúng (biến selected_user không bị rỗng)
-    elif [[ -n "$selected_user" ]]; then
-      admin_id="$selected_user"
-      break
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+  fi
 
-    # Bắt sự kiện người dùng nhập số linh tinh (ví dụ mảng có 3 user mà nhập số 5)
-    else
-      echo "Lựa chọn không hợp lệ, vui lòng chọn lại!"
-    fi
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      admin_id="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm tài khoản >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+        if [[ -n "$selected_name" ]]; then
+          admin_id="$selected_name"
+          return 0
+        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        admin_id="${selects[$action_index]}"
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
   done
 }
 
 lua_chon_user
 
-# function lua_chon_user() {
-#   admin_id=""
-#   selects=()
-#   for entry in $(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp user list --role=administrator --fields=user_login --allow-root --path="$path" 2>/dev/null | sed '1d' | sort -uV); do
-#     admin_id=$(echo $entry)
-#     selects+=("$admin_id")
-#   done
+[[ "$admin_id" == "0" || -z "$admin_id" ]] && exec /etc/wptt/wptt-wordpress-main 1
 
-#   if [[ -z $selects ]]; then
-#     echo "Không xác định được user administrator nào"
-#     exec /etc/wptt/wptt-wordpress-main 1
-#   fi
-
-#   PS3="
-# $(tput setab 0)-//- $nhap_nhap_lua_chon_user_ban_muon [0=$exit_thoat]:$(tput sgr0) "
-#   select select in "${selects[@]}"; do
-#     admin_id=$select
-#     index=$REPLY
-#     break
-#   done
-# }
-
-# lua_chon_user
-
-if [[ $admin_id = '0' || $admin_id = '' ]]; then
-  exec /etc/wptt/wptt-wordpress-main 1
-fi
-
-# read -p "Nhập tên user admin bạn muốn đổi password: " admin_id
-# echo ""
-# read -sp "Nhập password
-# Lưu ý: hãy nhập WordPress ít nhất 26 ký tự để nâng cao bảo mật (sẽ tự động ẩn trong khi gõ phím): " mypassword
-
-mypassword=""
-print_nhap_password="$nhap_password_wordpress:
-$luu_y_nhap_wordpress_it_nhat_12_ky_tu: "
-echo -n "$print_nhap_password"
-
-while IFS= read -r -s -N 1 char; do
-
-  # Kiểm tra Enter (ký tự rỗng HOẶC ký tự xuống dòng '\n' HOẶC ký tự về đầu dòng '\r')
-  if [[ -z "$char" ]] || [[ "$char" == $'\n' ]] || [[ "$char" == $'\r' ]]; then
-    echo                              # Xuống dòng sau khi nhập xong
-    break                             # Thoát vòng lặp
-  elif [[ "$char" == $'\x7f' ]]; then # Kiểm tra Backspace
-    if [[ -n "$mypassword" ]]; then
-      mypassword="${mypassword%?}"
-      echo -ne '\b \b'
+# ==============================================================================
+# HÀM NHẬP MẬT KHẨU ẨN KÝ TỰ (MASKING)
+# ==============================================================================
+function nhap_mat_khau_an() {
+  local prompt_text="$1"
+  local pass_var=""
+  echo -en "${C_CYAN}${prompt_text} ${C_RESET}"
+  while IFS= read -r -s -N 1 char; do
+    # Enter
+    if [[ -z "$char" ]] || [[ "$char" == $'\n' ]] || [[ "$char" == $'\r' ]]; then
+      echo
+      break
+    # Backspace
+    elif [[ "$char" == $'\x7f' ]]; then
+      if [[ -n "$pass_var" ]]; then
+        pass_var="${pass_var%?}"
+        echo -ne '\b \b'
+      fi
+    # Ký tự thường
+    else
+      pass_var+="$char"
+      echo -n '*'
     fi
-  else # Ký tự bình thường
-    mypassword+="$char"
-    echo -n '*'
-  fi
-
-done
-
-echo ""
-# read -sp "Xác thực lại password: " passwordwp2
-
-passwordwp2=""
-print_nhap_password="$xac_thuc_lai_password:
-$luu_y_nhap_wordpress_it_nhat_12_ky_tu: "
-echo -n "$print_nhap_password"
-
-while IFS= read -r -s -N 1 char; do
-
-  # Kiểm tra Enter (ký tự rỗng HOẶC ký tự xuống dòng '\n' HOẶC ký tự về đầu dòng '\r')
-  if [[ -z "$char" ]] || [[ "$char" == $'\n' ]] || [[ "$char" == $'\r' ]]; then
-    echo                              # Xuống dòng sau khi nhập xong
-    break                             # Thoát vòng lặp
-  elif [[ "$char" == $'\x7f' ]]; then # Kiểm tra Backspace
-    if [[ -n "$passwordwp2" ]]; then
-      passwordwp2="${passwordwp2%?}"
-      echo -ne '\b \b'
-    fi
-  else # Ký tự bình thường
-    passwordwp2+="$char"
-    echo -n '*'
-  fi
-
-done
-
-echo ""
-if [[ "$passwordwp2" != "$mypassword" ]]; then
-  echoDo "Tài khoản không hợp lệ"
-  echoDo "Nhập sai Password 2 cái khác nhau"
-  exec /etc/wptt/wptt-wordpress-main 1
-  exit
-fi
-
-if [[ "$passwordwp2" = "$mypassword" ]]; then
-  echo "Xác nhận đổi password user admin WordPress $admin_id của website $NAME"
-  prompt="$nhap_lua_chon_cua_ban [1-2]: "
-  dongy="n"
-  options=("$dong_y" "$khong_dong_y")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
-
-    2)
-      dongy="n"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    *)
-      printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    esac
   done
+  eval "$2=\"\$pass_var\""
+}
 
-  if [[ "$dongy" = "y" ]]; then
-    _runing "Đổi password tài khoản khoản WordPress $admin_id"
-    sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp user update "${admin_id}" --user_pass="${mypassword}" --path="$path" --allow-root >/dev/null 2>&1
-    unset mypassword
-    unset passwordwp2
+echo ""
+echo -e "${C_YELLOW}Lưu ý: Hãy nhập mật khẩu mạnh (chữ hoa, chữ thường, số, ký tự đặc biệt) để đảm bảo an toàn.${C_RESET}"
+nhap_mat_khau_an "Nhập mật khẩu mới cho [$admin_id]:" mypassword
+nhap_mat_khau_an "Xác nhận lại mật khẩu mới      :" passwordwp2
 
-    _rundone "Đổi password tài khoản khoản WordPress $admin_id"
-  fi
+if [[ "$passwordwp2" != "$mypassword" || -z "$mypassword" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Hai mật khẩu không khớp nhau hoặc bị bỏ trống!${C_RESET}"
+  sleep 3
+  exec /etc/wptt/wptt-wordpress-main 1
 fi
 
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1 #để trở về menu
+# ==============================================================================
+# XÁC NHẬN VÀ THỰC THI ĐỔI MẬT KHẨU
+# ==============================================================================
+echo ""
+if wptt_xac_nhan "Bạn có chắc chắn muốn thay đổi mật khẩu cho tài khoản này?" "${C_BOLD_WHITE}Tài khoản:${C_RESET} ${C_YELLOW}$admin_id${C_RESET}" "" "Đồng ý Đổi" "Hủy bỏ"; then
+  echo ""
+  _runing "Đang tiến hành đổi mật khẩu cho tài khoản $admin_id..."
+
+  # Thực thi WP-CLI qua Sudo user Vhost
+  sudo -u "$User_name_vhost" "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" /usr/local/bin/wp user update "${admin_id}" --user_pass="${mypassword}" --path="$path" --allow-root >/dev/null 2>&1
+
+  # Xóa biến mật khẩu khỏi bộ nhớ ngay lập tức
+  unset mypassword
+  unset passwordwp2
+
+  _rundone "Cập nhật dữ liệu vào Database hoàn tất"
+
+  # ==============================================================================
+  # BẢNG BÁO CÁO TỔNG HỢP (UX BO CONG)
+  # ==============================================================================
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT ĐỔI MẬT KHẨU${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}"
+  left_text "Tài khoản Admin  : ${C_GREEN}$admin_id${C_RESET}"
+  left_text "Trạng thái       : Mật khẩu mới đã được cập nhật thành công."
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác đổi mật khẩu.${C_RESET}"
+fi
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
