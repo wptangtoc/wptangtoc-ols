@@ -22,104 +22,215 @@ function huong_dan {
   * Gỡ lỗi [Troubleshooting]: Giúp loại trừ các sự cố do cache gây ra.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
 clear
-echo -e "\n========================================================================="
-echo -e "| $quan_ly_cache => $bat_tat_opcache_php"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_cache} ➜ Bật / Tắt OPcache PHP${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# Kiểm tra OS một lần duy nhất để dùng chung
+# Kiểm tra OS một lần duy nhất để xác định đường dẫn php.ini
+OS_UBUNTU=0
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   OS_UBUNTU=1
-else
-  OS_UBUNTU=0
 fi
 
 # ==============================================================================
-# QUÉT VÀ HIỂN THỊ TRẠNG THÁI OPCACHE CÁC BẢN PHP
+# HÀM MENU QUÉT PHP VÀ TRẠNG THÁI OPCACHE (UX BO CONG)
 # ==============================================================================
-# Sử dụng Globbing cực nhanh thay cho ls | grep
-for dir in /usr/local/lsws/lsphp*/; do
-  [[ ! -d "$dir" ]] && continue
+function lua_chon_PHP() {
+  unset LSPHP selects
+  selects=()
+  local box_inner_width=${box_inner_width:-71}
 
-  php_name=$(basename "$dir") # Kết quả: lsphp81
+  # Sử dụng Globbing cực nhanh thay cho ls | grep
+  for dir in /usr/local/lsws/lsphp*/; do
+    [[ ! -d "$dir" ]] && continue
 
-  # Tương thích ngược bản 74
-  if [[ "$php_name" == "lsphp74" && ! -f "$dir/lib64/php/modules/json.so" ]]; then
-    continue
-  fi
+    local php_name=$(basename "$dir") # Kết quả: lsphp81
 
-  # Cắt chuỗi nội bộ Bash siêu tốc (Không dùng Perl)
-  num_ver=${php_name#lsphp} # 81
-  ver_len=${#num_ver}
-  phien_ban_php_co_cham="${num_ver:0:$ver_len-1}.${num_ver: -1}" # 8.1
-  LSPHP2="PHP $phien_ban_php_co_cham"
-
-  # Xác định đường dẫn php.ini
-  if [[ "$OS_UBUNTU" == 1 ]]; then
-    duong_dan_php_ini="$dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
-  else
-    duong_dan_php_ini="$dir/etc/php.ini"
-  fi
-
-  if [[ -f "$duong_dan_php_ini" ]]; then
-    if grep -q 'opcache.revalidate_freq=0' "$duong_dan_php_ini" 2>/dev/null; then
-      echo -e "$he_thong $kiem_tra OPcache $LSPHP2 :\033[1;31m $dang_duoc_tat \033[0m"
-    else
-      echo -e "$he_thong $kiem_tra OPcache $LSPHP2 :\033[1;32m $dang_duoc_bat \033[0m"
+    # Tương thích ngược bản 74
+    if [[ "$php_name" == "lsphp74" && ! -f "$dir/lib64/php/modules/json.so" ]]; then
+      continue
     fi
+
+    # Cắt chuỗi lấy phiên bản (81 -> 8.1)
+    local num_ver=${php_name#lsphp}
+    local ver_len=${#num_ver}
+    local phien_ban_php_co_cham="${num_ver:0:$ver_len-1}.${num_ver: -1}"
+
+    # Xác định đường dẫn php.ini
+    local duong_dan_php_ini=""
+    if [[ "$OS_UBUNTU" == 1 ]]; then
+      duong_dan_php_ini="$dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
+    else
+      duong_dan_php_ini="$dir/etc/php.ini"
+    fi
+
+    if [[ -f "$duong_dan_php_ini" ]]; then
+      # Kiểm tra trạng thái hiện tại (revalidate_freq=0 là chế độ Dev/Tắt Cache)
+      if grep -q 'opcache.revalidate_freq=0' "$duong_dan_php_ini" 2>/dev/null; then
+        selects+=("$php_name|PHP $phien_ban_php_co_cham|0|$duong_dan_php_ini") # 0 = Tắt
+      else
+        selects+=("$php_name|PHP $phien_ban_php_co_cham|1|$duong_dan_php_ini") # 1 = Bật
+      fi
+    fi
+  done
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "${C_YELLOW}⚠️ Không tìm thấy phiên bản PHP nào được cài đặt hợp lệ trên hệ thống!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-cache-main 1
   fi
-done
 
-echo -e "=========================================================================\n"
-echo "$nhap $phien_ban PHP $ban_muon $bat/$tat opcache"
+  # Render Menu Bo Cong
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Trạng thái hiện tại & Chọn phiên bản PHP muốn thao tác:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-# Nạp module chọn tên miền/PHP của bạn
-. /etc/wptt/php/tenmien-php
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-# Chốt chặn nếu không chọn
-if [[ "$LSPHP" == "0" || -z "$LSPHP" ]]; then
-  exec /etc/wptt/wptt-cache-main 1
-fi
+  local i=1
+  for item in "${selects[@]}"; do
+    local p_name=$(echo "$item" | cut -d'|' -f1)
+    local p_ver=$(echo "$item" | cut -d'|' -f2)
+    local p_stt=$(echo "$item" | cut -d'|' -f3)
 
-# ==============================================================================
-# THỰC THI BẬT/TẮT OPCACHE CHO PHIÊN BẢN ĐÃ CHỌN
-# ==============================================================================
-num_ver=${LSPHP#lsphp}
-ver_len=${#num_ver}
-phien_ban_php_co_cham="${num_ver:0:$ver_len-1}.${num_ver: -1}"
-LSPHP2="PHP $phien_ban_php_co_cham"
+    local color_stt="${C_GREEN}[Đang BẬT]"
+    local clean_stt="[Đang BẬT]"
+    if [[ "$p_stt" == "0" ]]; then
+      color_stt="${C_RED}[Đang TẮT (Dev Mode)]"
+      clean_stt="[Đang TẮT (Dev Mode)]"
+    fi
 
-if [[ "$OS_UBUNTU" == 1 ]]; then
-  duong_dan_php_ini="/usr/local/lsws/$LSPHP/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
-else
-  duong_dan_php_ini="/usr/local/lsws/$LSPHP/etc/php.ini"
-fi
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-25s${C_RESET} %s" "$i" "$p_ver" "${color_stt}${C_RESET}")
+    local clean_text=$(printf "  %3d) %-25s %s" "$i" "$p_ver" "$clean_stt")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-if [[ -f "$duong_dan_php_ini" ]]; then
-  # Kiểm tra trạng thái hiện tại bằng lệnh grep siêu tốc
-  if grep -q 'opcache.revalidate_freq=0' "$duong_dan_php_ini" 2>/dev/null; then
-    _runing "$bat OPcache $LSPHP2"
-    sed -i '/opcache.revalidate_freq/d' "$duong_dan_php_ini"
-    echo 'opcache.revalidate_freq=100' >>"$duong_dan_php_ini"
-    _rundone "$bat OPcache $LSPHP2"
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
   else
-    _runing "$tat OPcache $LSPHP2"
-    sed -i '/opcache.revalidate_freq/d' "$duong_dan_php_ini"
-    echo 'opcache.revalidate_freq=0' >>"$duong_dan_php_ini"
-    _rundone "$tat OPcache $LSPHP2"
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
   fi
 
-  # Touch file để OLS tự khởi động lại các tiến trình lsphp của riêng phiên bản này mà không làm gián đoạn web khác
-  touch "/usr/local/lsws/admin/tmp/.lsphp_restart.txt" 2>/dev/null
-  # Reload OLS (Không dùng restart để đạt Zero-Downtime)
-  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+  while true; do
+    echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      LSPHP="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm PHP >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local extracted_data=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+        if [[ -n "$extracted_data" ]]; then
+          LSPHP=$(echo "$extracted_data" | cut -d'|' -f1)
+          PHP_VER_DISPLAY=$(echo "$extracted_data" | cut -d'|' -f2)
+          PHP_CURRENT_STT=$(echo "$extracted_data" | cut -d'|' -f3)
+          PHP_INI_PATH=$(echo "$extracted_data" | cut -d'|' -f4)
+          return 0
+        else
+          echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+        fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        local extracted_data="${selects[$action_index]}"
+        LSPHP=$(echo "$extracted_data" | cut -d'|' -f1)
+        PHP_VER_DISPLAY=$(echo "$extracted_data" | cut -d'|' -f2)
+        PHP_CURRENT_STT=$(echo "$extracted_data" | cut -d'|' -f3)
+        PHP_INI_PATH=$(echo "$extracted_data" | cut -d'|' -f4)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
+}
+
+lua_chon_PHP
+
+# Chốt chặn thoát
+if [[ "$LSPHP" == "0" || -z "$LSPHP" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+  exit 0
 fi
 
-if [[ "${1:-}" == "98" ]]; then
-  exec /etc/wptt/wptt-cache-main 1
+# ==============================================================================
+# XỬ LÝ LOGIC ĐẢO TRẠNG THÁI (TOGGLE)
+# ==============================================================================
+echo ""
+action_msg=""
+
+# ĐANG BẬT (1) -> HỎI TẮT
+if [[ "$PHP_CURRENT_STT" == "1" ]]; then
+  if wptt_xac_nhan "OPcache của phiên bản này đang BẬT. Bạn có muốn TẮT (Bật chế độ Dev Mode) không?" "${C_BOLD_WHITE}Phiên bản:${C_RESET} $PHP_VER_DISPLAY" "" "Đồng ý TẮT" "Hủy bỏ"; then
+    _runing "Đang tắt OPcache (revalidate_freq=0) cho $PHP_VER_DISPLAY..."
+    sed -i '/opcache.revalidate_freq/d' "$PHP_INI_PATH"
+    echo 'opcache.revalidate_freq=0' >>"$PHP_INI_PATH"
+
+    action_msg="Đã TẮT OPcache. Mã PHP sẽ được biên dịch lại mỗi khi tải trang."
+    action_color="${C_YELLOW}"
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+    _rundone "Đang tắt OPcache (revalidate_freq=0) cho $PHP_VER_DISPLAY..."
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+    exit 0
+  fi
+# ĐANG TẮT (0) -> HỎI BẬT
+else
+  if wptt_xac_nhan "OPcache của phiên bản này đang TẮT. Bạn có muốn BẬT (Kích hoạt Cache) không?" "${C_BOLD_WHITE}Phiên bản:${C_RESET} $PHP_VER_DISPLAY" "" "Đồng ý BẬT" "Hủy bỏ"; then
+    _runing "Đang bật OPcache (revalidate_freq=100) cho $PHP_VER_DISPLAY..."
+
+    sed -i '/opcache.revalidate_freq/d' "$PHP_INI_PATH"
+    echo 'opcache.revalidate_freq=100' >>"$PHP_INI_PATH"
+
+    action_msg="Đã BẬT OPcache. Website sẽ hoạt động ở tốc độ tối đa."
+    action_color="${C_GREEN}"
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+    _rundone "Đang bật OPcache (revalidate_freq=100) cho $PHP_VER_DISPLAY..."
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+    exit 0
+  fi
 fi
+
+echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI CẤU HÌNH OPCACHE${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Phiên bản      : ${C_YELLOW}$PHP_VER_DISPLAY${C_RESET}" 2
+left_text "Trạng thái mới : ${action_color}${action_msg}${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
