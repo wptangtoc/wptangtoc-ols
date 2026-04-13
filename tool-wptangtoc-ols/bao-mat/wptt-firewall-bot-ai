@@ -15,21 +15,34 @@ function huong_dan() {
   Bạn có thể dễ dàng Bật/Tắt bằng 1 cú chạm.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
 clear
-echo -e "\n========================================================================="
-echo -e "| $bao_mat => Bật / Tắt Tường lửa Chặn BOT AI Crawlers                   |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT ➜ Bật / Tắt Tường lửa Chặn BOT AI Crawlers${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
+# Kiểm tra file quy tắc Firewall lõi
+path_firewall_rules="/etc/wptt/bao-mat/firewall-bot-ai.txt"
+if [[ ! -f "$path_firewall_rules" ]]; then
+  echo -e "${C_RED}❌ Không tìm thấy bộ quy tắc Chặn BOT AI tại hệ thống (/etc/wptt/bao-mat/firewall-bot-ai.txt)!${C_RESET}"
+  sleep 3
+  exec /etc/wptt/wptt-bao-mat-main 1
+  exit 1
+fi
+
+# ==============================================================================
+# HÀM MENU LỌC THÔNG MINH (KÈM TRẠNG THÁI BẬT/TẮT)
+# ==============================================================================
 function lua_chon_NAME() {
-  unset NAME domain selects
+  unset NAME selects
   selects=()
+  local box_inner_width=${box_inner_width:-71}
 
-  # Vòng lặp Globbing siêu tốc không qua sub-shell
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
@@ -41,87 +54,123 @@ function lua_chon_NAME() {
       local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
       if [[ -f "$htaccess_path" ]]; then
         if grep -q '#begin-tuong-lua-block-bot-ai' "$htaccess_path" 2>/dev/null; then
-          selects+=("$domain [Đang BẬT Chặn AI]")
+          selects+=("$domain|[Đang BẬT Chặn AI]")
         else
-          selects+=("$domain [Đang TẮT]")
+          selects+=("$domain|[Đang TẮT]")
         fi
       fi
     fi
   done
 
-  # Xử lý trường hợp không có website nào hợp lệ (không có file .htaccess)
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\n\033[1;33mKhông tìm thấy website nào có file .htaccess trên hệ thống để thao tác!\033[0m"
+    echo -e "${C_YELLOW}⚠️ Không tìm thấy website nào có file .htaccess trên hệ thống để thao tác!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
 
-  # Sắp xếp mảng chuẩn Version (Alphabetical)
+  # Sắp xếp danh sách
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # [NÂNG CẤP UX] Nếu có từ 2 website trở lên mới hiển thị tùy chọn "TẤT CẢ" ở CUỐI MENU
+  # Thêm Tùy chọn Hàng loạt nếu có >= 2 web
   if [[ ${#selects[@]} -ge 2 ]]; then
-    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)|[Hàng Loạt]")
   fi
 
-  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
-  if command -v fzf &>/dev/null; then
-    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
-  else
-    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [0=Thoát]:$(tput sgr0) "
-  fi
+  # RENDER KHUNG MENU BO CONG
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Lựa chọn website bạn muốn cấu hình Chặn BOT AI:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  # Vòng lặp lấy giá trị
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    break
-  done
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
-  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website Chặn BOT AI [0=Thoát]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local stt=$(echo "$item" | cut -d'|' -f2)
 
-    if [[ -z "$selected_name" ]]; then
-      echo "Đã hủy chọn."
-      exec /etc/wptt/wptt-bao-mat-main 1
+    local color_dom="${C_BOLD_WHITE}"
+    local color_stt="${C_YELLOW}"
+
+    if [[ "$stt" == "[Đang BẬT Chặn AI]" ]]; then color_stt="${C_GREEN}"; fi
+    if [[ "$stt" == "[Đang TẮT]" ]]; then color_stt="${C_RED}"; fi
+    if [[ "$dom" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      color_dom="${C_YELLOW}"
+      color_stt="${C_CYAN}"
     fi
-    NAME="$selected_name"
+
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${color_dom}%-35s${C_RESET} %s" "$i" "$dom" "${color_stt}${stt}${C_RESET}")
+    local clean_text=$(printf "  %3d) %-35s %s" "$i" "$dom" "$stt")
+
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
   fi
 
-  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
-  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
-    for item in "${selects[@]}"; do
-      local check_dom=$(echo "$item" | cut -f1 -d ' ')
-      if [[ "$check_dom" == "$REPLY" ]]; then
-        NAME="$item"
-        break
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website chặn AI >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ -n "$dom" ]]; then
+          NAME="$dom"
+          return 0
+        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
       fi
-    done
-  fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
-# Nếu gọi script kèm tên domain từ command line
 if [[ -n "$1" && "$1" != "98" ]]; then
   NAME="$1"
 else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn (cắt phần đuôi trạng thái)
-NAME=$(echo "$NAME" | cut -f1 -d ' ')
+# Cắt râu ria
+NAME=$(echo "$NAME" | cut -d'|' -f1 | xargs)
 
 # --- CHỐT CHẶN THOÁT HIỂM ---
 [[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-
-path_firewall_rules="/etc/wptt/bao-mat/firewall-bot-ai.txt"
-[[ ! -f "$path_firewall_rules" ]] && {
-  _runloi "Không tìm thấy bộ quy tắc Chặn BOT AI tại hệ thống (/etc/wptt/bao-mat/firewall-bot-ai.txt)!"
-  sleep 3
-  exec /etc/wptt/wptt-bao-mat-main 1
-}
 
 # ==============================================================================
 # HÀM THỰC THI BẬT/TẮT TƯỜNG LỬA CHẶN AI CHO 1 DOMAIN
@@ -132,33 +181,31 @@ function process_firewall_bot_ai() {
   local path_ht="/usr/local/lsws/$target_domain/html/.htaccess"
 
   if [[ ! -f "$path_ht" ]]; then
-    echo "Bỏ qua $target_domain: Không tìm thấy file .htaccess"
     return
   fi
 
   if [[ "$action" == "bat" ]]; then
     if grep -q '#begin-tuong-lua-block-bot-ai' "$path_ht" 2>/dev/null; then
-      echo "Website $target_domain đã bật Chặn AI trước đó. Bỏ qua..."
       return
     fi
 
     UI_STRING="Kích hoạt Tường lửa Chặn BOT AI cho $target_domain"
     _runing "$UI_STRING"
 
-    # 1. Dọn dẹp bản cũ (nếu có lỗi sót lại) bằng SED thuần túy
+    # 1. Dọn dẹp bản cũ (nếu có lỗi sót lại)
     sed -i '/^#begin-tuong-lua-block-bot-ai/,/^#end-tuong-lua-block-bot-ai$/d' "$path_ht"
 
-    # 2. Tiêm Quy tắc lên đỉnh file (Bảo toàn Quyền sở hữu) bằng mktemp an toàn
+    # 2. Tiêm Quy tắc lên đỉnh file
     TMP_FILE=$(mktemp)
     cat "$path_firewall_rules" >"$TMP_FILE"
-    echo "" >>"$TMP_FILE" # Chèn 1 dòng trống cho thoáng code
+    echo "" >>"$TMP_FILE"
     cat "$path_ht" >>"$TMP_FILE"
     cat "$TMP_FILE" >"$path_ht"
     rm -f "$TMP_FILE"
 
-    # 3. Update htaccess cache Vhost nếu bật chế độ htaccess tĩnh
+    # 3. Update htaccess cache Vhost
     vhost_chuyen_htaccess=""
-    . /etc/wptt/vhost/.$target_domain.conf
+    . /etc/wptt/vhost/.$target_domain.conf 2>/dev/null
     [[ -n "$vhost_chuyen_htaccess" ]] && /etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost "$target_domain" >/dev/null 2>&1
 
     echo "Bật Chặn BOT AI website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
@@ -166,19 +213,18 @@ function process_firewall_bot_ai() {
 
   elif [[ "$action" == "tat" ]]; then
     if ! grep -q '#begin-tuong-lua-block-bot-ai' "$path_ht" 2>/dev/null; then
-      echo "Website $target_domain chưa bật Chặn AI. Bỏ qua..."
       return
     fi
 
     UI_STRING="Tắt (Hủy) Tường lửa Chặn BOT AI cho $target_domain"
     _runing "$UI_STRING"
 
-    # Dọn dẹp sạch sẽ block cấu hình bằng SED thuần túy
+    # Dọn dẹp sạch sẽ block cấu hình
     sed -i -e '/^#begin-tuong-lua-block-bot-ai/,/^#end-tuong-lua-block-bot-ai$/d' "$path_ht"
 
     # Update htaccess cache Vhost
     vhost_chuyen_htaccess=""
-    . /etc/wptt/vhost/.$target_domain.conf
+    . /etc/wptt/vhost/.$target_domain.conf 2>/dev/null
     [[ -n "$vhost_chuyen_htaccess" ]] && /etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost "$target_domain" >/dev/null 2>&1
 
     echo "Tắt Chặn BOT AI website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
@@ -187,35 +233,46 @@ function process_firewall_bot_ai() {
 }
 
 # ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH
+# XỬ LÝ LÔGIC RẼ NHÁNH (CÓ UX XÁC NHẬN)
 # ==============================================================================
+echo ""
+thao_tac_thanh_cong=false
+msg_action=""
 
 if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  # Người dùng chọn TẤT CẢ WEBSITE
-  echo -e "\nBạn muốn BẬT hay TẮT Tường lửa Chặn BOT AI cho \033[1;33mTẤT CẢ\033[0m website?"
-  prompt="Lựa chọn của bạn [1-2]: "
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}Cấu hình HÀNG LOẠT Chặn BOT AI cho toàn bộ hệ thống${C_RESET}"
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}1)${C_RESET} BẬT đồng loạt cho tất cả (Chặn Bot AI)                           ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}2)${C_RESET} TẮT đồng loạt cho tất cả (Cho phép Bot AI)                       ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}3)${C_RESET} Hủy bỏ thao tác                                                  ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
   mass_action=""
-  options=("BẬT đồng loạt" "TẮT đồng loạt" "Hủy bỏ")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
+  while true; do
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-3]: ${C_RESET}"
+    read -r REPLY
     case "$REPLY" in
     1)
       mass_action="bat"
+      msg_action="BẬT Hàng Loạt (Đã chặn BOT AI)"
       break
       ;;
     2)
       mass_action="tat"
+      msg_action="TẮT Hàng Loạt (Cho phép BOT AI)"
       break
       ;;
-    3) exec /etc/wptt/wptt-bao-mat-main 1 ;;
-    *)
-      printf "\nNhập sai, tự động hủy.\n"
+    3)
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+      sleep 1
       exec /etc/wptt/wptt-bao-mat-main 1
       ;;
+    *) echo -e "${C_RED}❌ Nhập sai, vui lòng nhập từ 1 đến 3.${C_RESET}" ;;
     esac
   done
 
-  # Vòng lặp Globbing siêu tốc cho thao tác hàng loạt
+  echo ""
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     domain="${filepath##*/}"
@@ -225,30 +282,54 @@ if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "
       process_firewall_bot_ai "$domain" "$mass_action"
     fi
   done
+  thao_tac_thanh_cong=true
 
 else
-  # Người dùng chọn 1 WEBSITE cụ thể -> Tự động nhận dạng để Đảo Trạng Thái (Toggle)
+  # Người dùng chọn 1 WEBSITE cụ thể
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
-    echoDo "Tên miền không tồn tại!"
+    echo -e "${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
     sleep 2
     exec /etc/wptt/wptt-bao-mat-main 1
   }
 
-  if grep -q '#begin-tuong-lua-block-bot-ai' "/usr/local/lsws/$NAME/html/.htaccess" 2>/dev/null; then
-    # Nếu Đang Bật -> Tự động Tắt
-    process_firewall_bot_ai "$NAME" "tat"
+  path_ht="/usr/local/lsws/$NAME/html/.htaccess"
+
+  if grep -q '#begin-tuong-lua-block-bot-ai' "$path_ht" 2>/dev/null; then
+    # ĐANG BẬT -> HỎI TẮT
+    if wptt_xac_nhan "Tính năng này đang BẬT. Bạn có muốn TẮT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý TẮT" "Hủy bỏ"; then
+      echo ""
+      msg_action="TẮT Chặn BOT AI (Cho phép AI Crawlers truy cập)"
+      process_firewall_bot_ai "$NAME" "tat"
+      thao_tac_thanh_cong=true
+    fi
   else
-    # Nếu Đang Tắt -> Tự động Bật
-    process_firewall_bot_ai "$NAME" "bat"
+    # ĐANG TẮT -> HỎI BẬT
+    if wptt_xac_nhan "Tính năng này đang TẮT. Bạn có muốn BẬT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý BẬT" "Hủy bỏ"; then
+      echo ""
+      msg_action="BẬT Chặn BOT AI (Đá văng OpenAI, Claude, CCBot...)"
+      process_firewall_bot_ai "$NAME" "bat"
+      thao_tac_thanh_cong=true
+    fi
   fi
 fi
 
 # ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ & NEO MÀN HÌNH
+# KHỞI ĐỘNG LẠI DỊCH VỤ VÀ IN BÁO CÁO (UX BO CONG)
 # ==============================================================================
-echo -e "\n\033[1;36mĐang nạp lại quy tắc Tường lửa và OpenLiteSpeed...\033[0m"
-/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-echo -e "\033[1;32mHoàn tất!\033[0m"
+if $thao_tac_thanh_cong; then
+  # _runing "Đang nạp lại quy tắc Tường lửa và OpenLiteSpeed..."
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+  # _rundone "Cập nhật dịch vụ hệ thống hoàn tất"
+
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT CẤU HÌNH TƯỜNG LỬA CHẶN AI${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}"
+  left_text "Trạng thái       : ${C_GREEN}$msg_action${C_RESET}"
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác cấu hình Tường lửa.${C_RESET}"
+fi
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
