@@ -25,122 +25,99 @@ function huong_dan() {
   Kết quả: Phần mềm Memcached sẽ được gỡ bỏ khỏi hệ thống, dịch vụ của nó sẽ không còn chạy và các ứng dụng sẽ không thể sử dụng nó để caching nữa.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-echo "========================================================================="
-echo "|$quan_ly_cache => $bat_tat_memcached                          |"
-echo "========================================================================="
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_cache} ➜ Memcached (Object Cache)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-. /etc/wptt/echo-color
-
-# duong_path_memcached_config=$(systemctl cat memcached | grep 'ExecStart' | sed -n 's#^.* \(/.*\.conf\).*#\1#p')
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
   duong_path_memcached_config="/etc/memcached.conf"
 else
   duong_path_memcached_config="/etc/sysconfig/memcached"
 fi
 
-if [[ ! -f $duong_path_memcached_config ]]; then
-  tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-  rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-  if [[ "$rong_ram_mb" = "" ]]; then
-    rong_ram_mb="2048"
-  fi
-  if (($rong_ram_mb < 1024)); then
-    echo "$chi_nen_su_dung_object_cache_toi_thieu_2gb_ram"
-    exec /etc/wptt/wptt-cache-main 1
-  fi
+is_installed=false
+if [[ -f "$duong_path_memcached_config" ]]; then
+  is_installed=true
+fi
 
-  if [[ -f $duong_path_memcached_config ]]; then
-    echoDo "$ban_da_kich_hoat memcached $truoc_do_roi"
-    exec /etc/wptt/wptt-cache-main 1
-  fi
+# BẢNG ĐIỀU KHIỂN
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+if $is_installed; then
+  left_text "Trạng thái    : ${C_GREEN}Đang hoạt động (Memcached)${C_RESET}" 2
+  left_text "Unix Socket   : ${C_YELLOW}/var/run/memcached/memcached.sock${C_RESET}" 2
+else
+  left_text "Trạng thái    : ${C_RED}Chưa cài đặt Memcached${C_RESET}" 2
+fi
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-  echo "$xac_nhan $ban_co_muon $cai memcached?"
-  prompt="$nhap_lua_chon_cua_ban [1-2]: "
-  dongy="n"
-  options=("$dong_y" "$khong_dong_y")
+# ==============================================================================
+# NHÁNH 1: CHƯA CÀI ĐẶT -> TIẾN HÀNH CÀI ĐẶT
+# ==============================================================================
+if ! $is_installed; then
 
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+  if wptt_xac_nhan "Bạn có muốn CÀI ĐẶT Memcached làm Object Cache không?" "" "" "Đồng ý Cài đặt" "Hủy bỏ"; then
+    echo ""
 
-    2)
-      dongy="n"
-      break
-      ;;
+    tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+    rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+    [[ -z "$rong_ram_mb" ]] && rong_ram_mb="2048"
 
-    $((${#options[@]} + 1)))
-      printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    *)
-      printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    esac
-  done
+    if ((rong_ram_mb < 1024)); then
+      echo -e "${C_RED}❌ Lỗi: ${chi_nen_su_dung_object_cache_toi_thieu_2gb_ram:-Chỉ nên sử dụng Object Cache khi VPS có tối thiểu 2GB RAM!}${C_RESET}"
+      sleep 3
+      exec /etc/wptt/wptt-cache-main 1
+    fi
 
-  if [[ $dongy != 'y' ]]; then
-    exec /etc/wptt/wptt-cache-main 1
-    exit
-  fi
+    _runing "Cài đặt và cấu hình Memcached"
+    echo "Kích hoạt Memcached: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-  . /etc/wptt/echo-color
-  _runing "$cai memcached"
-
-  yum install memcached -y >/dev/null 2>&1
-
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    # Cài đặt Package cơ bản
     yum install memcached -y >/dev/null 2>&1
-    lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
-    for phpmemcached in ${lsphp[@]}; do
-      yum install lsphp${phpmemcached}-memcached -y >/dev/null 2>&1
-      yum install lsphp${phpmemcached}-igbinary -y 2>/dev/null
-    done
-  else
-    yum install memcached -y --disablerepo="mariadb" >/dev/null 2>&1
-    lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
-    (/etc/wptt/php/kho-luu-tru-litespeed) #subshell tránh đè biến
 
-    for phpmemcached in ${lsphp[@]}; do
-      if [[ $(dnf list available 2>/dev/null | grep "lsphp${phpmemcached}-pecl-memcached") ]]; then #điều kiện PHP đang được hỗ trợ
-        yum install lsphp${phpmemcached}-pecl-memcached -y --nogpgcheck --disablerepo="mariadb" 2>/dev/null
-        yum install lsphp${phpmemcached}-pecl-igbinary -y --nogpgcheck --disablerepo="mariadb" 2>/dev/null
-      else
-        url_repo_litespeed=$(
-          cat /tmp/php_extension_call_eol | grep lsphp${phpmemcached} | grep -oP 'href="\K[^"]+' | grep -v 'debuginfo\|-devel\|-debugsource' | awk '
+    # Cài đặt PHP Extension tương thích OS
+    if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
+      apt-get update >/dev/null 2>&1
+      apt-get install memcached -y >/dev/null 2>&1
+      lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
+      for phpmemcached in "${lsphp[@]}"; do
+        apt-get install lsphp${phpmemcached}-memcached -y >/dev/null 2>&1
+        apt-get install lsphp${phpmemcached}-igbinary -y >/dev/null 2>&1
+      done
+    else
+      yum install memcached -y --disablerepo="mariadb" >/dev/null 2>&1
+      lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
+      (/etc/wptt/php/kho-luu-tru-litespeed)
+
+      for phpmemcached in "${lsphp[@]}"; do
+        if [[ $(dnf list available 2>/dev/null | grep "lsphp${phpmemcached}-pecl-memcached") ]]; then
+          yum install lsphp${phpmemcached}-pecl-memcached -y --nogpgcheck --disablerepo="mariadb" >/dev/null 2>&1
+          yum install lsphp${phpmemcached}-pecl-igbinary -y --nogpgcheck --disablerepo="mariadb" >/dev/null 2>&1
+        else
+          url_repo_litespeed=$(
+            cat /tmp/php_extension_call_eol 2>/dev/null | grep lsphp${phpmemcached} | grep -oP 'href="\K[^"]+' | grep -v 'debuginfo\|-devel\|-debugsource' | awk '
 BEGIN { FS = "/" }
 {
     filename = $NF
     split(filename, parts, "-")
-
     pkg_name = ""
     version = ""
-
     if (parts[2] == "pecl") {
-        # TRƯỜNG HỢP 1: Gói PECL (ví dụ: lsphp74-pecl-memcached-...)
         pkg_name = parts[1] "-" parts[2] "-" parts[3]
         version = parts[4]
     } else if (parts[2] ~ /^[0-9]+\.[0-9]+/) {
-        # TRƯỜNG HỢP 2 (MỚI): Gói lsphp gốc (ví dụ: lsphp74-7.4.28-...)
         pkg_name = parts[1]
         version = parts[2]
     } else {
-        # TRƯỜNG HỢP 3: Gói extension thông thường (ví dụ: lsphp74-pgsql-...)
         pkg_name = parts[1] "-" parts[2]
         version = parts[3]
     }
-
-    # Logic so sánh phiên bản và lưu trữ vẫn như cũ
     if (version > versions[pkg_name]) {
         versions[pkg_name] = version
         latest_lines[pkg_name] = $0
@@ -152,141 +129,123 @@ END {
         print latest_lines[pkg]
     }
 }'
-        )
-        extensions_memcached=(pecl-igbinary
-          pecl-msgpack
-          pecl-memcached)
-        for extension in ${extensions_memcached[@]}; do
-          if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpmemcached}-${extension}-") ]]; then #kiểm tra extension đó có tồn tại không
-            dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpmemcached}-${extension}-") -y
-            if [[ -z $(rpm -aq | grep "lsphp${phpmemcached}-${extension}-") ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
-              sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-              echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
-              dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpmemcached}-${extension}-") -y
-              su_dung_repo_du_phong=1
+          )
+          extensions_memcached=(pecl-igbinary pecl-msgpack pecl-memcached)
+          for extension in "${extensions_memcached[@]}"; do
+            if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpmemcached}-${extension}-") ]]; then
+              dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpmemcached}-${extension}-") -y >/dev/null 2>&1
+              if [[ -z $(rpm -aq | grep "lsphp${phpmemcached}-${extension}-") ]]; then
+                sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+                echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+                dnf install http://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${phpmemcached}-${extension}-") -y >/dev/null 2>&1
+              fi
             fi
-          fi
-        done
-      fi
-    done
-    rm -f /tmp/php_extension_call_eol
-  fi
+          done
+        fi
+      done
+      rm -f /tmp/php_extension_call_eol
+    fi
 
-  # mkdir -p /tmp/memcached
-  # chown -R memcached:memcached /tmp/memcached
+    # Cấu hình Unix Socket
+    mkdir -p /var/run/memcached
 
-  mkdir -p /var/run/memcached
-
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
-    chown -R memcache:memcache /var/run/memcached
-    echo '-d
+    if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
+      chown -R memcache:memcache /var/run/memcached
+      echo '-d
 logfile /var/log/memcached.log
 -m 128
 -u memcache
 -s /var/run/memcached/memcached.sock
 -a 0766
 -c 10240
--P /var/run/memcached/memcached.pid' >$duong_path_memcached_config
-  else
-    chown -R memcached:memcached /var/run/memcached
-    #config memcached unix socket
-    echo "USER=\"memcached\"
+-P /var/run/memcached/memcached.pid' >"$duong_path_memcached_config"
+      dnf install nc -y >/dev/null 2>&1
+    else
+      chown -R memcached:memcached /var/run/memcached
+      echo "USER=\"memcached\"
 MAXCONN=\"10240\"
 CACHESIZE=\"128\"
-OPTIONS=\"-s '/var/run/memcached/memcached.sock' -a 0766\"" >>$duong_path_memcached_config
-    semanage permissive -a memcached_t
-  fi
+OPTIONS=\"-s '/var/run/memcached/memcached.sock' -a 0766\"" >>"$duong_path_memcached_config"
+      semanage permissive -a memcached_t >/dev/null 2>&1
+      dnf install nc -y --disablerepo=mariadb >/dev/null 2>&1
+    fi
 
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
-    dnf install nc -y >/dev/null 2>&1
+    (/etc/wptt/monit >/dev/null 2>&1)
+
+    systemctl enable memcached.service >/dev/null 2>&1
+    systemctl start memcached.service >/dev/null 2>&1
+    systemctl restart lsws >/dev/null 2>&1
+
+    _rundone "Cài đặt và cấu hình Memcached"
+
+    # BẢNG BÁO CÁO CÀI ĐẶT
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HOÀN TẤT CÀI ĐẶT MEMCACHED${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Trạng thái  : ${C_GREEN}Đã kích hoạt thành công${C_RESET}" 2
+    left_text "Unix Socket : ${C_CYAN}/var/run/memcached/memcached.sock${C_RESET}" 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
   else
-    dnf install nc -y --disablerepo=mariadb >/dev/null 2>&1
+    echo -e "${C_YELLOW}Đã hủy thao tác Cài đặt.${C_RESET}"
   fi
 
-  #setup monit cho memcached
-  (/etc/wptt/monit >/dev/null 2>&1)
-
-  _rundone "$cai memcached"
-  systemctl enable memcached.service >/dev/null 2>&1
-  systemctl start memcached.service >/dev/null 2>&1
-  systemctl restart lsws >/dev/null 2>&1
-  echo "========================================================================="
-  echo "unix stocket path: /var/run/memcached/memcached.sock"
-  echo "========================================================================="
 else
+  if wptt_xac_nhan "Hệ thống đang chạy Memcached. Bạn có chắc chắn muốn GỠ BỎ không?" "" "" "Đồng ý Gỡ bỏ" "Hủy thao tác"; then
+    echo "Huỷ kích hoạt Memcached: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    _runing "Gỡ bỏ Memcached"
+    systemctl stop memcached.service >/dev/null 2>&1
+    systemctl disable memcached.service >/dev/null 2>&1
 
-  echo "$xac_nhan $ban_co_muon $xoa Memcached?"
-  prompt="$nhap_lua_chon_cua_ban [1-2]: "
-  dongy="n"
-  options=("$dong_y" "$khong_dong_y")
+    if cat /etc/*release 2>/dev/null | grep -qi "ubuntu\|debian"; then
+      apt-get remove --purge memcached -y >/dev/null 2>&1
+    else
+      yum remove memcached -y >/dev/null 2>&1
+    fi
 
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+    # Gỡ bỏ các Extension PHP liên quan (Giữ nguyên logic của Gia Tuấn)
+    if [[ ! -d /usr/local/lsmcd ]]; then
+      lsphp=($(ls /usr/local/lsws | grep 'lsphp' | sed 's/^lsphp//g'))
+      for phpmemcached in "${lsphp[@]}"; do
+        if cat /etc/*release 2>/dev/null | grep -qi "ubuntu\|debian"; then
+          apt-get remove --purge lsphp${phpmemcached}-memcached -y >/dev/null 2>&1
+        else
+          yum remove lsphp${phpmemcached}-pecl-memcached -y >/dev/null 2>&1
+          yum remove lsphp${phpmemcached}-memcached -y >/dev/null 2>&1
+        fi
+      done
+    fi
 
-    2)
-      dongy="n"
-      break
-      ;;
+    rm -rf /usr/local/lsws/memcached
+    rm -f "$duong_path_memcached_config"
 
-    $((${#options[@]} + 1)))
-      printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    *)
-      printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    esac
-  done
+    # Xóa Monit rule
+    if cat /etc/*release 2>/dev/null | grep -qi "ubuntu\|debian"; then
+      DIR_MONIT="/etc/monit/conf.d"
+    else
+      DIR_MONIT="/etc/monit.d"
+    fi
+    FILE_MONIT_RULE="$DIR_MONIT/memcached"
+    [[ -f "$FILE_MONIT_RULE" ]] && rm -f "$FILE_MONIT_RULE"
 
-  if [[ $dongy != 'y' ]]; then
-    exec /etc/wptt/wptt-cache-main 1
-    exit
-  fi
-  _runing "$xoa memcached"
-  systemctl stop memcached.service >/dev/null 2>&1
-  systemctl disable memcached.service >/dev/null 2>&1
-  yum remove memcached -y >/dev/null 2>&1
+    if systemctl is-active --quiet monit 2>/dev/null; then
+      systemctl reload monit >/dev/null 2>&1
+    fi
 
-  if [[ ! -d /usr/local/lsmcd ]]; then
-    lsphp=($(ls /usr/local/lsws | grep 'lsphp' | sed 's/^lsphp//g'))
-    for phpmemcached in ${lsphp[@]}; do
-      yum remove lsphp${phpmemcached}-pecl-memcached -y >/dev/null 2>&1
-      yum remove lsphp${phpmemcached}-memcached -y >/dev/null 2>&1
-    done
-  fi
+    systemctl restart lsws >/dev/null 2>&1
 
-  rm -rf /usr/local/lsws/memcached
-  rm -f $duong_path_memcached_config
+    _rundone "Gỡ bỏ Memcached"
 
-  #xoá monit memcached
-  if grep -qi "ubuntu\|debian" /etc/*release; then
-    DIR_MONIT="/etc/monit/conf.d"
+    # BẢNG BÁO CÁO GỠ BỎ
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ MEMCACHED${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Hệ thống đã xóa sạch Memcached và các PHP Extension liên quan." 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
   else
-    DIR_MONIT="/etc/monit.d"
+    echo -e "${C_YELLOW}Đã hủy thao tác Gỡ bỏ.${C_RESET}"
   fi
-
-  FILE_MONIT_RULE="$DIR_MONIT/memcached"
-  # Nhận diện tên dịch vụ là Redis hay Valkey (RHEL 10)
-  if [[ -f $FILE_MONIT_RULE ]]; then
-    rm -f "$FILE_MONIT_RULE"
-  fi
-
-  if systemctl is-active --quiet monit; then
-    systemctl reload monit >/dev/null 2>&1
-  fi
-  #end két thức xoá memcached nếu có
-
-  systemctl restart lsws >/dev/null 2>&1
-  _rundone "$xoa memcached"
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-cache-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
