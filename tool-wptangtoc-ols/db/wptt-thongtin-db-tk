@@ -1,1 +1,177 @@
-      PS3="
+#!/bin/bash
+
+function huong_dan() {
+  Tính năng Xem thông tin tài khoản username database cho phép bạn xem chi tiết về các tài khoản người dùng [username] đã được tạo để truy cập và tương tác với cơ sở dữ liệu [database] trên máy chủ MariaDB.
+
+  Mục Đích Chính
+  * website nào được biến chế database, username database nào.
+  * Kiểm tra và đối chiếu: Hữu ích khi bạn quản lý nhiều website và cần kiểm tra xem database nào tương ứng với website nào.
+  * Quản lý người dùng: Biết được danh sách các user đang tồn tại để dễ dàng quản lý.
+  * Kiểm tra quyền hạn: Xem xét các quyền [ví dụ: SELECT, INSERT, UPDATE, DELETE, CREATE, ALL PRIVILEGES] đã được cấp cho từng username trên các database cụ thể.
+  * Bảo mật: Rà soát và đảm bảo các username chỉ có những quyền cần thiết, xóa bỏ user không dùng hoặc thu hồi quyền không phù hợp.
+  * Gỡ lỗi kết nối: Khi ứng dụng không kết nối được database, việc kiểm tra lại thông tin username và host kết nối của nó là rất quan trọng.
+  * Xác định user cho ứng dụng: Biết được ứng dụng nào đang sử dụng username nào để kết nối vào database.
+
+  Tính năng này rất cần thiết cho việc quản trị cơ sở dữ liệu, đảm bảo an toàn
+}
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_database:-QUẢN LÝ DATABASE} ➜ ${thong_tin_tai_khoan_database:-Xem Thông tin Tài khoản (User/Pass)}${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# HÀM MENU LỌC TÊN MIỀN & TÀI KHOẢN ROOT (UX BO CONG)
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME selects
+  selects=("root|[Tài khoản quản trị Tối cao]")
+  local box_inner_width=${box_inner_width:-71}
+
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+      if [[ "$dom" == ?*.?* && -f "/etc/wptt/vhost/.$dom.conf" ]]; then
+        selects+=("$dom")
+      fi
+    done
+  fi
+
+  if [[ ${#selects[@]} -eq 1 ]]; then
+    echo -e "${C_YELLOW}⚠️ Hệ thống chưa có website nào. Chỉ có thể xem thông tin tài khoản Root.${C_RESET}\n"
+  fi
+
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="${nhap_lua_chon_website_cua_ban:-Lựa chọn Website} bạn muốn tra cứu Database:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local desc=$(echo "$item" | cut -d'|' -f2)
+    
+    if [[ "$dom" == "root" ]]; then
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_RED}%-25s${C_RESET} ${C_YELLOW}%s${C_RESET}" "$i" "root" "$desc")
+      local clean_text=$(printf "  %3d) %-25s %s" "$i" "root" "$desc")
+    else
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$dom")
+      local clean_text=$(printf "  %3d) %s" "$i" "$dom")
+    fi
+
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=${chon_nhanh:-Tìm nhanh}] [0=${exit_thoat:-Thoát}]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
+  fi
+
+  while true; do
+    echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"; NAME="0"; return 0 ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ -n "$dom" ]]; then NAME="$dom"; return 0; else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
+}
+
+lua_chon_NAME
+
+[[ "$NAME" == "0" || -z "$NAME" ]] && { [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1; return 2>/dev/null || exit; }
+
+echo "Xem thông tin tài khoản database $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+# ==============================================================================
+# IN BÁO CÁO THÔNG TIN DATABASE
+# ==============================================================================
+echo ""
+
+if [[ "$NAME" == 'root' ]]; then
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_RED}⚠️ THÔNG TIN TÀI KHOẢN DATABASE ROOT (CAO NHẤT)${C_RESET}"
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Root Username : ${C_RED}$database_admin_username${C_RESET}" 2
+  left_text "Root Password : ${C_YELLOW}$database_admin_password${C_RESET}" 2
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "${C_YELLOW}LƯU Ý: Tuyệt đối không chia sẻ thông tin này cho bất kỳ ai!${C_RESET}" 2
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+else
+  unset DB_Password_web DB_User_web DB_Name_web subfolder_su_dung
+  . "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null
+
+  if [[ -n "$DB_User_web" && -n "$DB_Password_web" ]]; then
+    echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}THÔNG TIN DATABASE WEBSITE CHÍNH${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Website       : ${C_YELLOW}$NAME${C_RESET}" 2
+    left_text "Database Name : ${C_GREEN}$DB_Name_web${C_RESET}" 2
+    left_text "Username      : ${C_GREEN}$DB_User_web${C_RESET}" 2
+    left_text "Password      : ${C_YELLOW}$DB_Password_web${C_RESET}" 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  fi
+
+  # Xử lý thông tin Subfolder (Nếu có)
+  if [[ -n "$subfolder_su_dung" && -d "/etc/wptt/${NAME}-wptt" ]]; then
+    for sub_file in /etc/wptt/${NAME}-wptt/*; do
+      [[ ! -f "$sub_file" ]] && continue
+      unset DB_Password_web DB_User_web DB_Name_web domain thumuc
+      . "$sub_file" 2>/dev/null
+      
+      echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}THÔNG TIN DATABASE SUB-FOLDER${C_RESET}"
+      echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "Website (Sub) : ${C_YELLOW}$domain/$thumuc${C_RESET}" 2
+      left_text "Database Name : ${C_CYAN}$DB_Name_web${C_RESET}" 2
+      left_text "Username      : ${C_CYAN}$DB_User_web${C_RESET}" 2
+      left_text "Password      : ${C_YELLOW}$DB_Password_web${C_RESET}" 2
+      echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    done
+  fi
+fi
+
+echo -en "${C_GREEN}👉 Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+read -r dummy
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
