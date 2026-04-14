@@ -8,149 +8,147 @@ function huong_dan() {
   [Bản nâng cấp Enterprise: Tích hợp Ipset tốc độ cao, nhận diện HTTP/3 UDP và tối ưu pyinotify]
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Bảo mật => Kích hoạt chống search                                      |"
-echo "========================================================================="
-echo ""
-echo ""
-echo ""
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-. /etc/wptt/echo-color
-check=$(cat /etc/fail2ban/jail.local 2>/dev/null | grep '#begin-ddos-search-wordpress')
-if [[ $check = '' ]]; then
-  echo "Xác nhận muốn kích hoạt chống ddos search"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  dongy="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${bao_mat} ➜ Chống DDoS qua công cụ Tìm kiếm (Search Query)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-    2)
-      dongy="n"
-      break
-      ;;
+# ==============================================================================
+# KIỂM TRA TRẠNG THÁI HIỆN TẠI
+# ==============================================================================
+is_ddos_search_active=0
+if grep -q '#begin-ddos-search-wordpress' /etc/fail2ban/jail.local 2>/dev/null; then
+  is_ddos_search_active=1
+fi
 
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+if [[ $is_ddos_search_active -eq 1 ]]; then
+  left_text "Trạng thái bảo vệ : ${C_GREEN}ĐANG BẬT (Active)${C_RESET}" 2
+  left_text "Chính sách BAN    : > 5 lượt Search / 15 giây ➜ Khóa IP 2 tiếng" 2
+else
+  left_text "Trạng thái bảo vệ : ${C_YELLOW}ĐANG TẮT (Inactive)${C_RESET}" 2
+fi
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tính năng này sẽ tự động chặn các IP cố tình Spam chức năng" 2
+left_text "tìm kiếm (?s=) để gây quá tải CPU máy chủ (DB Query Attack)." 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-  if [[ $dongy = 'n' ]]; then
-    exec /etc/wptt/wptt-bao-mat-main 1
-  fi
+# ==============================================================================
+# NHÁNH 1: ĐANG TẮT -> HỎI ĐỂ BẬT LÊN
+# ==============================================================================
+if [[ $is_ddos_search_active -eq 0 ]]; then
+  if wptt_xac_nhan "Bạn có muốn KÍCH HOẠT tính năng Chống DDoS Search không?" "Tính năng này sẽ theo dõi Access Log của toàn bộ Website trên Server." "" "Đồng ý KÍCH HOẠT" "Hủy thao tác"; then
+    echo ""
 
-  _runing "Kích hoạt chặn chống ddos search"
+    # ---------------------------------------------------------
+    # BƯỚC 1: CÀI ĐẶT THƯ VIỆN
+    # ---------------------------------------------------------
+    _runing "Đang kiểm tra và cài đặt thư viện phụ thuộc (ipset, inotify)..."
+    if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+      dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update >/dev/null 2>&1
+        apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
+      }
+    else
+      rpm -q python3-inotify ipset >/dev/null 2>&1 || {
+        dnf install -y python3-inotify ipset >/dev/null 2>&1
+      }
+    fi
+    _rundone "Thư viện nền tảng đã sẵn sàng"
 
-  # =========================================================
-  # AUTO-INSTALL DEPENDENCIES (IPSET & PYINOTIFY)
-  # =========================================================
-  if [ -f /etc/os-release ] && grep -qi "ubuntu" /etc/os-release; then
-    dpkg -s python3-pyinotify ipset >/dev/null 2>&1 || {
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update >/dev/null 2>&1
-      apt-get install -y python3-pyinotify ipset >/dev/null 2>&1
-    }
-  else
-    rpm -q python3-inotify ipset >/dev/null 2>&1 || {
-      dnf install -y python3-inotify ipset >/dev/null 2>&1
-    }
-  fi
+    # ---------------------------------------------------------
+    # BƯỚC 2: KIỂM TRA CLOUDFLARE VÀ CẤU HÌNH LOG VHOST
+    # ---------------------------------------------------------
+    _runing "Đang quét các Website và thiết lập nhật ký truy cập (Access Log)..."
+    if [ "$(ls -At /etc/wptt/vhost 2>/dev/null)" ]; then
+      for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+        NAME=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+        if [[ "$NAME" == ?*.?* ]]; then
 
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
-    selects=()
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+          # Kiểm tra Cloudflare CDN
+          TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
+          if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
+            if ! grep -q 'allow.*103\.21\.244\.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+              _runloi "Phát hiện cấu hình không an toàn!"
+              echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+              center_text "${C_BOLD_WHITE}❌ LỖI: PHÁT HIỆN CLOUDFLARE NHƯNG CHƯA BẬT REAL IP${C_RESET}"
+              echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+              left_text "Website ${C_YELLOW}$NAME${C_RESET} đang sử dụng Cloudflare CDN." 2
+              left_text "Để tránh việc Fail2ban khóa NHẦM IP của máy chủ Cloudflare," 2
+              left_text "bạn phải kích hoạt tính năng [Hiển thị IP Real Bypass Cloudflare]" 2
+              left_text "trong Menu Add-ons trước khi bật chức năng bảo mật này!" 2
+              echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-        unset TRACE_OUTPUT
-        TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
-        # Kiểm tra output có chứa các key đặc trưng của Cloudflare không
-        if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then #check xem có đang sử dụng cloudflare cdn không
-          if [[ $(cat /usr/local/lsws/conf/httpd_config.conf | grep 'allow' | grep '103.21.244.0') = '' ]]; then
-            _runloi "Kích hoạt chặn chống ddos search"
-            echo "Phát hiện website $NAME đang sử dụng Cloudflare CDN"
-            echo "Vui lòng phải kích hoạt sử dụng tính năng Hiện thị IP Log Real bypass Cloudflare CDN (MENU add ons 35=>8)"
-            echo "Thì mới có thể sử dụng được tính năng này để tránh bị chặn nhầm"
-            check_menu_wptangtoc_active=$1
-            if [[ $check_menu_wptangtoc_active = "98" ]]; then
-              exec /etc/wptt/wptt-bao-mat-main 1
+              [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+              exit 1
             fi
-            return 2>/dev/null
-            exit
           fi
-        fi
 
-        if [[ ! $(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | grep 'accesslog') ]]; then
-          sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-          sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-          echo '
-errorlog $VH_ROOT/logs/error.log {
+          # Tự động thêm Access Log nếu chưa có
+          if ! grep -q 'accesslog' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null; then
+            sed -i -e '/^errorlog /,/^}$/d' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+            sed -i -e '/^accesslog /,/^}$/d' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+
+            cat <<EOF >>"/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+
+errorlog \$VH_ROOT/logs/error.log {
   useServer               1
   logLevel                ERROR
   rollingSize             10M
 }
 
-accesslog $VH_ROOT/logs/access.log {
+accesslog \$VH_ROOT/logs/access.log {
   useServer               0
   rollingSize             10M
   keepDays                30
   compressArchive         1
-}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-          mkdir -p /usr/local/lsws/"$NAME"/logs
+}
+EOF
+            mkdir -p "/usr/local/lsws/$NAME/logs"
 
-          #tuong thich ubuntu tuong thich nhom litespeed
-          if $(cat /etc/*release | grep -q "Ubuntu"); then
-            tuong_thich_nhom_litespeed="nogroup"
-          else
             tuong_thich_nhom_litespeed="nobody"
+            cat /etc/*release 2>/dev/null | grep -qi "Ubuntu" && tuong_thich_nhom_litespeed="nogroup"
+
+            chown -R "nobody:$tuong_thich_nhom_litespeed" "/usr/local/lsws/$NAME/logs"
+            chmod 700 "/usr/local/lsws/$NAME/logs"
+            /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
           fi
-
-          chown -R nobody:$tuong_thich_nhom_litespeed /usr/local/lsws/"$NAME"/logs
-          chmod 700 /usr/local/lsws/"$NAME"/logs
-          /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
         fi
-      fi
-    done
-  fi
-
-  # =========================================================
-  # TÍNH TOÁN BIẾN VÀ CẤU HÌNH FAIL2BAN ENTERPRISE
-  # =========================================================
-  rule_fail2ban_name="ddos-search-wptt"
-
-  if [[ -f /etc/csf/csf.conf ]]; then
-    action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
-           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
-  elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-    action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
-  elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = "active" ]]; then
-    action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
-           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
-  else
-    echo "Hiện tại không support một tường lửa nào để sử dụng"
-    check_menu_wptangtoc_active=$1
-    if [[ $check_menu_wptangtoc_active = "98" ]]; then
-      exec /etc/wptt/wptt-bao-mat-main 1
+      done
     fi
-    return 2>/dev/null
-    exit
-  fi
+    _rundone "Cấu hình Log cho các Vhost hoàn tất"
 
-  echo "
+    # ---------------------------------------------------------
+    # BƯỚC 3: CẤU HÌNH FAIL2BAN ENTERPRISE
+    # ---------------------------------------------------------
+    _runing "Đang thiết lập luật Firewall và nạp quy tắc vào Fail2ban..."
+    rule_fail2ban_name="ddos-search-wptt"
+
+    if [[ -f /etc/csf/csf.conf ]]; then
+      action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+    elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) == "active" ]]; then
+      action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
+    elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) == "active" ]]; then
+      action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+    else
+      _runloi "Đang thiết lập luật Firewall và nạp quy tắc vào Fail2ban..."
+      echo -e "\n${C_RED}Lỗi: Hệ thống không tìm thấy tường lửa hỗ trợ (CSF, Firewalld, Nftables).${C_RESET}"
+      sleep 3
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+      exit 1
+    fi
+
+    cat <<EOF >>/etc/fail2ban/jail.local
+
 #begin-ddos-search-wordpress
 [ddos-search-wptangtoc]
 enabled = true
@@ -161,58 +159,52 @@ backend = pyinotify
 maxretry = 5
 bantime = 7200
 findtime = 15
-#end-ddos-search-wordpress" >>/etc/fail2ban/jail.local
+#end-ddos-search-wordpress
+EOF
 
-  # Regex tối ưu chặt chẽ hơn để không bắt nhầm các file tĩnh có chứa "?s="
-  echo '[Definition]
+    # Định nghĩa Regex
+    echo '[Definition]
 failregex = ^<HOST> .* "(GET|POST|HEAD) .*[\?&]s=.* HTTP\/.*" 200' >/etc/fail2ban/filter.d/ddos-search-wptangtoc.conf
 
-  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
-  _rundone "Kích hoạt chặn chống ddos search"
-  echo "Nếu trong 15 giây mà yêu cầu 5 yêu cầu search thì IP sẽ bị khóa trong 2 tiếng"
-fi
+    fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+    _rundone "Hệ thống bảo vệ DDoS Search đã đi vào hoạt động"
 
-if [[ $check ]]; then
-  echo "Bạn đang kích họat chống ddos search"
-  echo "Xác nhận muốn hủy kích hoạt chống ddos search"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  dongy="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+    # BẢNG BÁO CÁO THÀNH CÔNG
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT CHỐNG DDOS SEARCH${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Mọi IP gửi quá 5 yêu cầu Search (?s=) trong vòng 15 giây" 2
+    left_text "sẽ bị Fail2ban tóm gọn và khóa chặt trong 2 tiếng." 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-    2)
-      dongy="n"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
-
-  if [[ $dongy = 'n' ]]; then
-    exec /etc/wptt/wptt-bao-mat-main 1
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác kích hoạt.${C_RESET}\n"
   fi
 
-  _runing "Hủy kích hoạt chống ddos search"
-  sed -i -e '/^#begin-ddos-search-wordpress/,/^#end-ddos-search-wordpress$/d' /etc/fail2ban/jail.local
-  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
-  _rundone "Hủy kích hoạt chống ddos search"
+# ==============================================================================
+# NHÁNH 2: ĐANG BẬT -> HỎI ĐỂ TẮT ĐI
+# ==============================================================================
+else
+  if wptt_xac_nhan "Tính năng Chống DDoS Search đang chạy. Bạn có muốn TẮT không?" "Lưu ý: CPU máy chủ có thể bị quá tải nếu Web đang bị tấn công Search." "" "Đồng ý TẮT" "Hủy thao tác"; then
+    echo ""
+
+    _runing "Đang gỡ bỏ cấu hình luật DDoS Search khỏi Fail2ban..."
+    sed -i -e '/^#begin-ddos-search-wordpress/,/^#end-ddos-search-wordpress$/d' /etc/fail2ban/jail.local
+    rm -f /etc/fail2ban/filter.d/ddos-search-wptangtoc.conf
+
+    fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+    _rundone "Gỡ bỏ cấu hình hoàn tất"
+
+    # BẢNG BÁO CÁO TẮT
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ TÍNH NĂNG CHỐNG DDOS SEARCH${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Luật giới hạn lượt tìm kiếm đã được loại bỏ." 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác tắt bảo vệ.${C_RESET}\n"
+  fi
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-bao-mat-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
