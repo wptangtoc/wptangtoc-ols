@@ -15,30 +15,80 @@ function huong_dan() {
   Tóm lại, kiểm tra dung lượng thư mục lớn nhất là một kỹ năng quản trị Linux cơ bản giúp bạn duy trì sự ổn định và hiệu quả cho không gian lưu trữ của máy chủ.
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý disk => Kiểm tra dung lượng thư mục lớn nhất của website       |"
-echo "========================================================================="
-echo ""
-. /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lựa chọn website kiểm tra thư mục lớn nhất: "
-echo ""
-lua_chon_NAME
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-if [[ $NAME = '' || $NAME = '0' ]]; then
-  exec /etc/wptt/wptt-disk-main 1
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DISK ➜ Tìm 15 Thư Mục Nặng Nhất Trong Website${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-disk-main 1"
 fi
 
+. /etc/wptt/tenmien 2>/dev/null
+lua_chon_NAME "Kiểm tra thư mục lớn nhất"
+
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-disk-main 1
+
+# Kiểm tra thư mục mã nguồn tồn tại
 path="/usr/local/lsws/$NAME/html"
-find $path -not -path "/proc/*" -type d -exec du -Sh {} + 2>/dev/null | sort -rh | uniq | head -n 15
-
-echo "Kiểm tra dung lượng thư mục lớn nhất của website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ ! -d "$path" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Thư mục mã nguồn không tồn tại ($path)!${C_RESET}"
+  sleep 3
   exec /etc/wptt/wptt-disk-main 1
+  exit 1
 fi
+
+echo ""
+_runing "quét sâu và phân tích dung lượng các thư mục trong website $NAME..."
+
+# ==============================================================================
+# THỰC THI LỆNH TÌM KIẾM VÀ TRÍCH XUẤT VÀO MẢNG
+# ==============================================================================
+# Loại trừ các đường dẫn ảo và thực thi du -Sh (tính riêng dung lượng từng folder)
+mapfile -t large_dirs < <(find "$path" -type d 2>/dev/null | xargs du -Sh 2>/dev/null | sort -rh | uniq | head -n 15)
+
+_rundone "quét sâu và phân tích dung lượng các thư mục trong website $NAME..."
+echo "Kiểm tra dung lượng thư mục lớn nhất của website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+# IN BẢNG XẾP HẠNG (LEADERBOARD UI)
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}TOP 15 THƯ MỤC NẶNG NHẤT: ${C_YELLOW}$NAME${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+if [[ ${#large_dirs[@]} -eq 0 ]]; then
+  left_text "  Không tìm thấy dữ liệu thư mục nào phù hợp." 2
+else
+  i=1
+  for line in "${large_dirs[@]}"; do
+    # Bóc tách Size và Path
+    size=$(echo "$line" | awk '{print $1}')
+    dirpath=$(echo "$line" | awk '{print $2}')
+
+    # Rút gọn đường dẫn: Chỉ hiển thị từ sau thư mục /html/
+    # Ví dụ: /usr/local/lsws/domain.com/html/wp-content -> wp-content
+    relative_path="${dirpath#$path/}"
+    [[ "$relative_path" == "$path" ]] && relative_path="(Thư mục gốc)"
+
+    # Căn lề dung lượng
+    size_padded=$(printf "%-6s" "$size")
+
+    # Cắt ngắn đường dẫn nếu quá dài (> 45 ký tự)
+    if [[ ${#relative_path} -gt 45 ]]; then
+      relative_path="...${relative_path: -42}"
+    fi
+
+    # In dòng dữ liệu
+    left_text "  ${C_CYAN}$(printf "%2d" $i).${C_RESET} [${C_RED}${size_padded}${C_RESET}] ${C_BOLD_WHITE}${relative_path}${C_RESET}" 2
+    ((i++))
+  done
+fi
+
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-disk-main 1
