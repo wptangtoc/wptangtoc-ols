@@ -1,146 +1,156 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
-# Function to get service status using systemctl is-active
-# Returns "active", "inactive", "activating", "failed", etc., or "not-found"
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+
 get_status() {
   local service_name="$1"
-  # Check if the service unit exists first
-  # Use systemctl cat to check existence, quieter than list-unit-files | grep
   if ! systemctl cat "${service_name}.service" &>/dev/null; then
     echo "not-found"
     return
   fi
-  # Get the active state
-  systemctl is-active "$service_name.service" 2>/dev/null || echo "inactive" # Return inactive if is-active fails
+  # Lấy trạng thái hoạt động thực tế
+  systemctl is-active "$service_name.service" 2>/dev/null || echo "inactive"
 }
 
-# --- Helper function to clean status string ---
 clean_status() {
   echo "$1" | tr -d '\r' | xargs
 }
 
-# Print header
-printf "+-----------------------------------------------------------------------+\n"
-printf "| Tình trạng hoạt động của các service hiện tại                         |\n" # Adjusted spacing slightly
-printf "+-----------------------------------------------------------------------+\n"
+print_row() {
+  local name="$1"
+  local raw_status=$(clean_status "$2")
+  local color_status=""
+  local status_text=""
 
-# --- Check and print status for each service ---
+  case "$raw_status" in
+  active)
+    color_status="${C_GREEN}"
+    status_text="Đang hoạt động (Active)"
+    ;;
+  inactive)
+    color_status="${C_YELLOW}"
+    status_text="Đã dừng (Inactive)"
+    ;;
+  activating)
+    color_status="${C_CYAN}"
+    status_text="Đang khởi động (Activating)"
+    ;;
+  failed)
+    color_status="${C_RED}"
+    status_text="Lỗi sự cố (Failed)"
+    ;;
+  not-found) return 0 ;; # Bỏ qua không in nếu dịch vụ chưa cài đặt
+  *)
+    color_status="${C_WHITE}"
+    status_text="$raw_status"
+    ;;
+  esac
 
-# LiteSpeed
-if systemctl cat lshttpd.service &>/dev/null; then
-  status_raw=$(get_status "lshttpd")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "LiteSpeed" "$status"
-fi
+  # Căn lề trái 15 ký tự cho Tên Dịch vụ
+  local name_padded=$(printf "%-15s" "$name")
 
-# MariaDB / MySQL
+  # Tính độ dài chuỗi tiếng Việt chuẩn xác để không bị vỡ khung Box
+  local status_len=$(echo -n "$status_text" | awk '{print length($0)}')
+  local pad_len=$((50 - status_len))
+  [[ $pad_len -lt 0 ]] && pad_len=0
+  local padding=$(printf '%*s' "$pad_len" "")
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_BOLD_WHITE}${name_padded}${C_RESET} : ${color_status}${status_text}${C_RESET}${padding} ${C_CYAN}│${C_RESET}"
+}
+
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+# Căn giữa Tiêu đề (Độ rộng trong khung là 71 ký tự)
+title="BẢNG TRẠNG THÁI CÁC DỊCH VỤ (SERVICES) HỆ THỐNG"
+pad=$(((71 - ${#title}) / 2))
+printf "${C_CYAN}│${C_RESET}%*s${C_YELLOW}%s${C_RESET}%*s${C_CYAN}│${C_RESET}\n" $pad "" "$title" $((71 - pad - ${#title})) ""
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+# 1. LiteSpeed Webserver
+print_row "LiteSpeed" "$(get_status lshttpd)"
+
+# 2. MariaDB / MySQL
 db_service=""
 if systemctl cat mariadb.service &>/dev/null; then
   db_service="mariadb"
+  db_name="MariaDB"
 elif systemctl cat mysql.service &>/dev/null; then
   db_service="mysql"
+  db_name="MySQL"
 elif systemctl cat mysqld.service &>/dev/null; then
   db_service="mysqld"
+  db_name="MySQL"
 fi
+[[ -n "$db_service" ]] && print_row "$db_name" "$(get_status "$db_service")"
 
-if [[ -n "$db_service" ]]; then
-  status_raw=$(get_status "$db_service")
-  status=$(clean_status "$status_raw")
-  display_name="MariaDB/MySQL"
-  if [[ "$db_service" == "mariadb" ]]; then
-    display_name="MariaDB"
-  elif [[ "$db_service" == "mysql" || "$db_service" == "mysqld" ]]; then
-    display_name="MySQL"
-  fi
-  printf "| %-12s : %-54s |\n" "$display_name" "$status"
-fi
+# 3. PHP-FPM (Nếu dùng mô hình khác LSAPI, thường LSPHP chạy ngầm OLS, nhưng cứ check thử)
+# print_row "PHP-FPM" "$(get_status php-fpm)" # Mở dòng này nếu bạn dùng Nginx/Apache song song
 
-# Memcached (Standard)
-if systemctl cat memcached.service &>/dev/null; then
-  status_raw=$(get_status "memcached")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "Memcached" "$status"
-fi
+# 4. Object Cache (Ưu tiên: Valkey -> KeyDB -> Redis)
+active_cache=""
+active_name_display=""
 
-# Redis (Using config file check OR service check)
-redis_service=""
-# Check service first
-if systemctl cat redis.service &>/dev/null; then
-  redis_service="redis"
+if systemctl cat valkey.service &>/dev/null; then
+  active_cache="valkey"
+  active_name_display="Valkey"
+elif systemctl cat keydb.service &>/dev/null; then
+  active_cache="keydb"
+  active_name_display="KeyDB"
+elif systemctl cat redis.service &>/dev/null; then
+  active_cache="redis"
+  active_name_display="Redis"
 elif systemctl cat redis-server.service &>/dev/null; then
-  redis_service="redis-server"
-# Fallback to config file check if service not found by common names
-elif [[ -z "$redis_service" && (-f /etc/redis.conf || -f /etc/redis/redis.conf) ]]; then
-  # Attempt to get status even if unit name isn't standard, assuming 'redis' if config exists
-  # This might fail if the service name is very unusual
-  if systemctl cat redis.service &>/dev/null; then
-    redis_service="redis"
-  fi
+  active_cache="redis-server"
+  active_name_display="Redis"
+fi
+[[ -n "$active_cache" ]] && print_row "$active_name_display" "$(get_status "$active_cache")"
+
+# 5. Memcached (Standard)
+if systemctl cat memcached.service &>/dev/null; then
+  print_row "Memcached" "$(get_status memcached)"
 fi
 
-if [[ -n "$redis_service" ]]; then
-  status_raw=$(get_status "$redis_service")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "Redis" "$status"
-fi
-
-# SSH
+# 6. SSH (Bảo mật truy cập)
 ssh_service=""
 if systemctl cat sshd.service &>/dev/null; then
   ssh_service="sshd"
 elif systemctl cat ssh.service &>/dev/null; then
   ssh_service="ssh"
 fi
+[[ -n "$ssh_service" ]] && print_row "SSH" "$(get_status "$ssh_service")"
 
-if [[ -n "$ssh_service" ]]; then
-  status_raw=$(get_status "$ssh_service")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "SSH" "$status"
-fi
-
-# Crond
+# 7. Crond (Lập lịch tự động)
 cron_service=""
 if systemctl cat crond.service &>/dev/null; then
   cron_service="crond"
 elif systemctl cat cron.service &>/dev/null; then
   cron_service="cron"
 fi
+[[ -n "$cron_service" ]] && print_row "Cron Daemon" "$(get_status "$cron_service")"
 
-if [[ -n "$cron_service" ]]; then
-  status_raw=$(get_status "$cron_service")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "Crond" "$status"
-fi
-
-# Fail2Ban
+# 8. Fail2Ban (Bảo mật Anti-Bruteforce)
 if systemctl cat fail2ban.service &>/dev/null; then
-  status_raw=$(get_status "fail2ban")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "Fail2Ban" "$status"
+  print_row "Fail2Ban" "$(get_status fail2ban)"
 fi
 
-# nftables (Currently commented out in your version, kept it that way)
-# if systemctl cat nftables.service &> /dev/null; then
-#   status_raw=$(get_status "nftables")
-#   status=$(clean_status "$status_raw")
-#   printf "| %-12s : %-54s |\n" "nftables" "$status"
-# fi
-
-# firewalld
+# 9. Firewall
 if systemctl cat firewalld.service &>/dev/null; then
-  status_raw=$(get_status "firewalld")
-  status=$(clean_status "$status_raw")
-  printf "| %-12s : %-54s |\n" "FirewallD" "$status"
+  print_row "FirewallD" "$(get_status firewalld)"
+elif systemctl cat ufw.service &>/dev/null; then
+  print_row "UFW Firewall" "$(get_status ufw)"
 fi
 
-# Print footer
-printf "+-----------------------------------------------------------------------+\n"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# Execute the external script (as in your provided code)
 if [[ -f /etc/wptt/wptt-service-main ]]; then
   exec /etc/wptt/wptt-service-main 1
 else
-  printf "| WPTT script not found: /etc/wptt/wptt-service-main                   |\n"
-  printf "+-----------------------------------------------------------------------+\n"
-
+  echo -e "${C_RED}Không tìm thấy script Menu WPTT tại /etc/wptt/wptt-service-main!${C_RESET}"
+  exit 1
 fi
