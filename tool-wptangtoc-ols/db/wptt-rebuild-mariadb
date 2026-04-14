@@ -8,91 +8,88 @@ function huong_dan() {
   Lưu ý: Luôn nhớ sao lưu dữ liệu trước khi thực hiện các thao tác rebuild quan trọng.
 }
 
-. /etc/wptt/.wptt.conf
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Thay đổi phiên bản Maria database                  |"
-echo "========================================================================="
-echo ""
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-#tang kha nang check chinh xac
-checkmaria=$(mysqld --version | grep mysqld | cut -f4 -d " " | grep '^1' | cut -f1-2 -d '.')
-echo "========================================================================="
-echo "|Phiên bản Maria Database hiện tại bạn đang sử dụng là $checkmaria      |"
-echo "========================================================================="
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Rebuild (Sửa chữa & Tối ưu) MariaDB${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-echo "Xác nhân bạn có muốn rebuild máy chủ mariadb không?:"
-prompt="Nhập lựa chọn của bạn [1-2]: "
-dongy="n"
-options=("Đồng ý" "Không đồng ý")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-  case "$REPLY" in
-  1)
-    dongy="y"
-    break
-    ;;
-
-  2)
-    dongy="n"
-    break
-    ;;
-
-  $((${#options[@]} + 1)))
-    printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-    break
-    ;;
-  *)
-    printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-    break
-    ;;
-  esac
-done
-
-if [[ $dongy = 'n' ]]; then
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-  return 2>/dev/null
-  exit
+checkmaria=$(mariadbd --version 2>/dev/null | cut -f4 -d " " | grep '^1' | cut -f1-2 -d '.' | cut -f1 -d '-')
+if [[ -z "$checkmaria" ]]; then
+  checkmaria=$(mysqld --version 2>/dev/null | cut -f4 -d " " | grep '^1' | cut -f1-2 -d '.' | cut -f1 -d '-')
 fi
 
-. /etc/wptt/echo-color
-_runing "rebuild mariadb $checkmaria"
-systemctl stop mariadb.service
+if [[ -z "$checkmaria" ]]; then
+  echo -e "${C_RED}❌ Lỗi: Không thể nhận diện được phiên bản MariaDB trên hệ thống!${C_RESET}"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit 1
+fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  apt-mark unhold mariadb-server mariadb-client >/dev/null 2>&1 #mở khoá
-  yum remove mariadb-* -y
-  yum install mariadb-server mariadb-client -y
-  apt-mark hold mariadb-server mariadb-client >/dev/null 2>&1
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+left_text "Phiên bản hiện tại : ${C_GREEN}MariaDB $checkmaria${C_RESET}" 2
+left_text "Mục đích Rebuild   : Sửa lỗi crash, làm mới file Core, khôi phục lại" 2
+left_text "                     hiệu suất và tự động cấu hình lại theo phần cứng." 2
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_YELLOW}Lưu ý: Tính năng này KHÔNG làm mất dữ liệu (Database) của bạn!${C_RESET}" 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# XÁC NHẬN CHÓT
+# ==============================================================================
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn tiến hành Rebuild hệ thống MariaDB không?" "" "" "Đồng ý Rebuild" "Hủy thao tác"; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit 0
+fi
+
+echo ""
+_runing "Đang dừng dịch vụ MariaDB Server..."
+systemctl stop mariadb.service >/dev/null 2>&1
+_rundone "Dịch vụ đã được dừng an toàn"
+
+# ==============================================================================
+# GỠ CÀI ĐẶT & CÀI ĐẶT LẠI CORE MARIADB
+# ==============================================================================
+_runing "Đang Rebuild (Gỡ & Cài lại) gói phần mềm MariaDB $checkmaria..."
+
+# KHÁNH VY FIX: Sửa lỗi dùng lệnh 'yum' trên Ubuntu
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-mark unhold mariadb-server mariadb-client >/dev/null 2>&1 # mở khóa
+  apt-get remove -y mariadb-server mariadb-client >/dev/null 2>&1
+  apt-get install -y mariadb-server mariadb-client >/dev/null 2>&1
+  apt-mark hold mariadb-server mariadb-client >/dev/null 2>&1 # khóa lại chống update OS
 else
-  yum remove MariaDB-* -y --disableexcludes=all
-  yum install MariaDB-server MariaDB-client -y --disableexcludes=all
+  # Xuyên thủng exclude trong dnf.conf
+  yum remove -y "MariaDB-server" "MariaDB-client" --disableexcludes=all >/dev/null 2>&1
+  yum install -y "MariaDB-server" "MariaDB-client" --disableexcludes=all >/dev/null 2>&1
 fi
+_rundone "Cài đặt lại MariaDB Core thành công"
 
+# ==============================================================================
+# TÍNH TOÁN THÔNG SỐ TỐI ƯU THEO PHẦN CỨNG (RAM/CPU)
+# ==============================================================================
+_runing "Đang phân tích phần cứng và tính toán cấu hình tối ưu..."
 work_cpucore='1024'
 cpucore=$(grep -c ^processor /proc/cpuinfo)
-max_client=$(expr $work_cpucore \* $cpucore \* 2)
-max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
-max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
 tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
 rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-if [[ "$rong_ram_mb" = "" ]]; then
-  rong_ram_mb="2048"
-fi
+[[ -z "$rong_ram_mb" ]] && rong_ram_mb="2048"
+
 tong_ram_mb_db=$(echo "scale=0;${rong_ram_mb}/4" | bc)
-max_conect_db=$(expr $max_client / 8)
-tong_ram_gb=$(expr ${rong_ram_mb} / 1024)
-db_table_size=$(expr $tong_ram_gb \* 64)
-buffer_db=$(expr $rong_ram_mb / 6)
+tong_ram_gb=$((rong_ram_mb / 1024))
+[[ $tong_ram_gb -eq 0 ]] && tong_ram_gb=1
 
-max_connections=$(expr 64 \* ${tong_ram_gb})
+db_table_size=$((tong_ram_gb * 64))
+buffer_db=$((rong_ram_mb / 6))
+max_connections=$((64 * tong_ram_gb))
 
-#cau hinh query cache set up optimize
-if (($cpucore > 2)); then
+if ((cpucore > 2)); then
   query_cache_type=0
   query_cache_size=0
 else
@@ -100,55 +97,77 @@ else
   query_cache_size='50M'
 fi
 
-if [[ $query_cache_type = '' ]]; then
-  query_cache_type=0
-  query_cache_size=0
-fi
-
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+# Nhận diện đường dẫn file config chuẩn
+if cat /etc/*release 2>/dev/null | grep -q "Ubuntu"; then
+  duong_dan_cau_hinh_mariadb="/etc/mysql/mariadb.conf.d/50-server.cnf"
+  [[ ! -f "$duong_dan_cau_hinh_mariadb" ]] && duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
 else
-  duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+  duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/mariadb-server.cnf"
+  [[ ! -f "$duong_dan_cau_hinh_mariadb" ]] && duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
 fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  echo '[mysqld]' >>$duong_dan_cau_hinh_mariadb
+# ==============================================================================
+# BẢO TỒN TEMPLATE GỐC VÀ TIÊM CẤU HÌNH VÀO BẰNG SED
+# ==============================================================================
+# Đảm bảo file cấu hình tồn tại (Nếu yum làm mất, tạo lại bộ khung)
+if [[ ! -s "$duong_dan_cau_hinh_mariadb" ]]; then
+  cat <<EOF >"$duong_dan_cau_hinh_mariadb"
+[server]
+[mysqld]
+[galera]
+[embedded]
+[mariadb]
+[mariadb-${checkmaria}]
+EOF
 fi
 
-echo "key_buffer_size = ${buffer_db}M
-table_cache = 2000
-innodb_buffer_pool_size = ${tong_ram_mb_db}M
-max_connections = $max_connections
-query_cache_type = $query_cache_type
-query_cache_limit = 2M
-query_cache_min_res_unit = 2k
-query_cache_size = $query_cache_size
-tmp_table_size = ${db_table_size}M
-max_heap_table_size = ${db_table_size}M
-thread_cache_size = 81
-max_allowed_packet = 64M
-wait_timeout=60
-interactive_timeout = 60" >>$duong_dan_cau_hinh_mariadb
+# Dọn sạch các biến cũ (nếu có) để tránh Duplicate
+sed -i '/^table_open_cache/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^key_buffer_size/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^innodb_buffer_pool_size/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^max_connections/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^query_cache/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^tmp_table_size/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^max_heap_table_size/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^thread_cache_size/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^max_allowed_packet/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^wait_timeout/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^interactive_timeout/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^skip-log-bin/d' "$duong_dan_cau_hinh_mariadb"
+sed -i '/^skip-networking/d' "$duong_dan_cau_hinh_mariadb"
 
-sed -i '/skip-log-bin/d' $duong_dan_cau_hinh_mariadb
-sed -i '/skip-networking/d' $duong_dan_cau_hinh_mariadb
-sed -i '/\[mysqld\]/a skip-log-bin' $duong_dan_cau_hinh_mariadb
-sed -i '/\[mysqld\]/a skip-networking' $duong_dan_cau_hinh_mariadb #TCP 3306 đóng, chỉ dùng unix stocket unix socket nâng cao hiệu suất và bảo mật MariaDB cắt đứt hoàn toàn dây mạng. Nó vô hiệu hóa module TCP/IP. Kẻ tấn công dùng công cụ quét rách cả máy chủ cũng không tìm thấy dịch vụ Database nào đang chạy. Không có cổng mạng = Vĩnh viễn không bao giờ bị Brute-force mật khẩu hay dính các lỗi bảo mật liên quan đến giao thức mạng.
+# Đóng gói cấu hình tối ưu thành 1 khối (Sử dụng table_open_cache chuẩn)
+C_CONFIG="skip-log-bin\nskip-networking\ntable_open_cache = 2000\nkey_buffer_size = ${buffer_db}M\ninnodb_buffer_pool_size = ${tong_ram_mb_db}M\nmax_connections = $max_connections\ntmp_table_size = ${db_table_size}M\nmax_heap_table_size = ${db_table_size}M\nthread_cache_size = 81\nmax_allowed_packet = 64M\nwait_timeout = 60\ninteractive_timeout = 60"
 
+# Chỉ chèn query cache nếu version nhỏ hơn 10.8
 lowest_version=$(printf '%s\n%s\n' "10.8" "$checkmaria" | sort -V | head -n1)
-# Nếu "10.8" là phiên bản thấp nhất -> Nghĩa là mariadb_version >= 10.8
-if [[ "$lowest_version" == "10.8" ]]; then
-  sed -i '/query_cache/d' /etc/my.cnf.d/server.cnf
+if [[ "$lowest_version" != "10.8" ]]; then
+  C_CONFIG="$C_CONFIG\nquery_cache_type = $query_cache_type\nquery_cache_limit = 2M\nquery_cache_min_res_unit = 2k\nquery_cache_size = $query_cache_size"
 fi
 
-systemctl start mariadb.service
-systemctl enable mariadb.service
-echoDone "rebuild mariadb $checkmaria"
+# Tiêm khối cấu hình vào ngay dưới thẻ [mysqld] bằng SED
+sed -i "/\[mysqld\]/a $C_CONFIG" "$duong_dan_cau_hinh_mariadb"
+_rundone "Thiết lập cấu hình My.cnf hoàn tất"
 
+# ==============================================================================
+# KHỞI ĐỘNG VÀ TÁI CẤU TRÚC (UPGRADE SCHEMA)
+# ==============================================================================
+_runing "Đang khởi động lại MariaDB..."
+systemctl enable mariadb.service >/dev/null 2>&1
+systemctl start mariadb.service >/dev/null 2>&1
+
+if ! systemctl is-active --quiet mariadb; then
+  _runloi "Khởi động MariaDB thất bại"
+  echo -e "\n${C_RED}❌ LỖI: MariaDB không thể khởi động sau khi Rebuild!${C_RESET}"
+  journalctl -u mariadb.service --no-pager | tail -n 10
+  exit 1
+fi
+_rundone "Khởi động MariaDB thành công"
+
+_runing "Đang chạy tái cấu trúc (Upgrade Schema) để làm mới lõi dữ liệu..."
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới có quyền đọc
+chmod 600 "$TEMP_CNF_ROOT"
 
-# Ghi thông tin xác thực vào file tạm ẩn (Tuyệt đối KHÔNG có host=localhost)
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -167,21 +186,21 @@ user=${database_admin_username}
 password=${database_admin_password}
 EOF
 
-# Chạy lệnh tái cấu trúc (Dùng file ẩn TEMP_CNF_ROOT)
 if command -v mariadb-upgrade >/dev/null 2>&1; then
-  mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
+  mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force >/dev/null 2>&1
 elif command -v mysql_upgrade >/dev/null 2>&1; then
-  mysql_upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
-else
-  echo -e "\e[31m[LỖI] Không tìm thấy công cụ nâng cấp cấu trúc!\e[0m"
+  mysql_upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force >/dev/null 2>&1
 fi
-echo -e "✅ Tái cấu trúc (Upgrade Schema) hoàn tất!"
-
 rm -f "$TEMP_CNF_ROOT"
+_rundone "Tái cấu trúc (Upgrade Schema) hoàn tất"
 
-echo "Rebuild mariadb: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+# BẢNG BÁO CÁO THÀNH CÔNG
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT REBUILD MARIADB${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Dịch vụ Database đã được làm mới, tối ưu hóa RAM/CPU và kích hoạt" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+echo "Rebuild mariadb $checkmaria: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
