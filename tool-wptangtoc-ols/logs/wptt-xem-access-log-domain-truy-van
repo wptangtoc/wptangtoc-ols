@@ -13,30 +13,39 @@ function huong_dan() {
   Tính năng này hỗ trợ người dùng dễ dàng lọc, tìm kiếm IP, mã trạng thái [như 404, 500], hoặc URL truy cập. Điều này giúp quản trị viên website nhanh chóng kiểm tra lưu lượng truy cập, phát hiện lỗi hoặc các hoạt động bất thường [như DDoS, Scan lỗi] liên quan đến một website cụ thể.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
 clear
-echo -e "\n========================================================================="
-echo -e "| Quản lý Logs => Truy vấn Access Log Domain [Tìm Kiếm Siêu Tốc]        |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ LOGS ➜ Truy vấn Access Log Domain (Tìm Kiếm Siêu Tốc)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# Kiểm tra yêu cầu hệ thống
+# ==============================================================================
+# KIỂM TRA YÊU CẦU HỆ THỐNG (FZF)
+# ==============================================================================
 if ! command -v fzf &>/dev/null; then
-  echoDo "Lỗi: Hệ thống của bạn chưa cài đặt công cụ FZF!"
-  echo "Vui lòng cài đặt FZF để sử dụng tính năng truy vấn siêu tốc này."
+  echo -e "${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}❌ LỖI: HỆ THỐNG CHƯA CÀI ĐẶT CÔNG CỤ FZF${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "${C_YELLOW}Tính năng này yêu cầu bộ lọc siêu tốc FZF để hoạt động.${C_RESET}" 2
+  left_text "Vui lòng cài đặt FZF trên máy chủ trước khi sử dụng." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-logs-main 1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+  exit 1
 fi
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF) - UX BO CONG
 # ==============================================================================
 function lua_chon_NAME() {
-  unset NAME domain selects
+  unset NAME selects
   selects=()
+  local box_inner_width=${box_inner_width:-71}
 
   local file_list=()
   [[ -d /etc/wptt/vhost ]] && file_list+=(/etc/wptt/vhost/.*.conf)
@@ -45,82 +54,116 @@ function lua_chon_NAME() {
   for filepath in "${file_list[@]}"; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
 
-    local domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
+    local dom="${filepath##*/}"
+    dom="${dom%.conf}"
+    dom="${dom#.}"
 
-    if [[ "$domain" == ?*.?* ]]; then
-      local vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+    if [[ "$dom" == ?*.?* ]]; then
+      local vhost_conf="/usr/local/lsws/conf/vhosts/$dom/$dom.conf"
       if [[ -f "$vhost_conf" ]]; then
         if grep -q 'accesslog ' "$vhost_conf" 2>/dev/null; then
-          selects+=("$domain [Đang BẬT Log]")
+          selects+=("$dom|1") # 1 = Đang Bật
         else
-          selects+=("$domain [Đang TẮT]")
+          selects+=("$dom|0") # 0 = Đang Tắt
         fi
       fi
     fi
   done
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\n\033[1;33mKhông tìm thấy website nào trên hệ thống để thao tác!\033[0m"
+    echo -e "${C_YELLOW}⚠️ Không tìm thấy website nào trên hệ thống để thao tác!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-logs-main 1
   fi
 
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  if [[ ${#selects[@]} -ge 2 ]]; then
-    selects+=("TẤT CẢ WEBSITE (Không hỗ trợ mục này)") # Thêm cho chuẩn form, nhưng sẽ chặn nếu user chọn
-  fi
+  # Render Menu Bo Cong
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Trạng thái hiện tại & Chọn Website muốn Truy vấn Log:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  PS3="$(tput setab 0)-//- Lựa chọn website muốn truy vấn Log [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    break
-  done
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local stt=$(echo "$item" | cut -d'|' -f2)
 
-  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
-  if [[ "$REPLY" == "00" ]]; then
-    local selected_name
-    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website truy vấn Log [0=Thoát]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-
-    if [[ -z "$selected_name" ]]; then
-      echo "Đã hủy chọn."
-      exec /etc/wptt/wptt-logs-main 1
+    local color_stt="${C_GREEN}[Đang BẬT]"
+    local clean_stt="[Đang BẬT]"
+    if [[ "$stt" == "0" ]]; then
+      color_stt="${C_YELLOW}[Đang TẮT]"
+      clean_stt="[Đang TẮT]"
     fi
-    NAME="$selected_name"
-  fi
 
-  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
-    for item in "${selects[@]}"; do
-      local check_dom=$(echo "$item" | cut -f1 -d ' ')
-      if [[ "$check_dom" == "$REPLY" ]]; then
-        NAME="$item"
-        break
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} %s" "$i" "$dom" "${color_stt}${C_RESET}")
+    local clean_text=$(printf "  %3d) %-30s %s" "$i" "$dom" "$clean_stt")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website truy vấn Log >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+      local extracted_data=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+      if [[ -n "$extracted_data" ]]; then
+        NAME=$(echo "$extracted_data" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
       fi
-    done
-  fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        local extracted_data="${selects[$action_index]}"
+        NAME=$(echo "$extracted_data" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
-# Nếu gọi script kèm tên domain từ command line
+# Gọi chức năng chọn Tên miền
 if [[ -n "$1" && "$1" != "98" ]]; then
   NAME="$1"
 else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn
 NAME=$(echo "$NAME" | cut -f1 -d ' ')
 
-# Chốt chặn thoát hiểm và lựa chọn sai
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-logs-main 1
-[[ "$NAME" == "TẤT" ]] && {
-  echoDo "Chức năng này chỉ hỗ trợ truy vấn từng website cụ thể!"
-  sleep 2
-  exec /etc/wptt/wptt-logs-main 1
+# Chốt chặn thoát hiểm
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+  return 2>/dev/null || exit
 }
 
 LOG_DIR="/usr/local/lsws/$NAME/logs"
@@ -131,36 +174,19 @@ VHOST_CONF="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 # KIỂM TRA VÀ KÍCH HOẠT LOG NẾU CHƯA CÓ
 # ==============================================================================
 if [[ ! -d "$LOG_DIR" || ! -f "$LOG_FILE" ]]; then
-  echo -e "\033[1;33mWebsite $NAME chưa được bật tính năng ghi Access Log!\033[0m"
-  echo "Tính năng này mặc định tắt để bảo vệ hiệu suất CPU/Ổ cứng."
-  echo ""
+  echo -e "${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}WEBSITE CHƯA ĐƯỢC BẬT TÍNH NĂNG GHI LOGS${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "${C_YELLOW}Website $NAME hiện tại chưa có file log.${C_RESET}" 2
+  left_text "Để tìm kiếm Access Log, bạn phải BẬT chức năng ghi nhật ký lên." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-  prompt="Bạn có muốn BẬT ghi log cho website $NAME ngay bây giờ không? [1-2]: "
-  options=("$dong_y" "$khong_dong_y")
-  dongy="n"
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
-    2) exec /etc/wptt/wptt-logs-main 1 ;;
-    *)
-      echo -e "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    esac
-  done
+  if wptt_xac_nhan "Bạn có muốn BẬT tính năng ghi Log cho website này ngay bây giờ không?" "" "" "Đồng ý BẬT Log" "Thoát ra"; then
+    echo ""
+    _runing "Đang kích hoạt cấu hình ghi Access & Error Log cho $NAME..."
 
-  if [[ "$dongy" == "y" ]]; then
-    _runing "Kích hoạt ghi Access Log cho domain $NAME"
-
-    if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-      tuong_thich_nhom_litespeed="nogroup"
-    else
-      tuong_thich_nhom_litespeed="nobody"
-    fi
+    tuong_thich_nhom_litespeed="nobody"
+    cat /etc/*release 2>/dev/null | grep -qi "ubuntu" && tuong_thich_nhom_litespeed="nogroup"
 
     # Ghi cấu hình thẳng vào Vhost an toàn
     sed -i -e '/^errorlog /,/^}$/d' "$VHOST_CONF" 2>/dev/null
@@ -182,41 +208,55 @@ accesslog \$VH_ROOT/logs/access.log {
 EOF
 
     mkdir -p "$LOG_DIR"
-    chown -R nobody:$tuong_thich_nhom_litespeed "$LOG_DIR"
+    chown -R "nobody:$tuong_thich_nhom_litespeed" "$LOG_DIR"
     chmod 700 "$LOG_DIR"
 
+    # Reload OLS
     /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
 
-    # Ép OLS sinh file log ngay lập tức bằng 1 request
+    # Ép tạo file bằng 1 HTTP request (Kỹ thuật mồi Log)
     curl -s -k "http://127.0.0.1" -H "Host: $NAME" >/dev/null 2>&1
 
+    # Cập nhật cache WPTangToc
     [[ -f "/etc/wptt/vhost/.$NAME.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost/.$NAME.conf" && echo 'bat_log_domain=1' >>"/etc/wptt/vhost/.$NAME.conf"
 
-    _rundone "Kích hoạt ghi Access Log cho domain $NAME"
+    _rundone "Kích hoạt ghi Log thành công"
     sleep 1
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+    exit 0
   fi
 fi
 
+# Fallback check file lần cuối (Đề phòng mồi curl trễ)
+[[ ! -f "$LOG_FILE" ]] && curl -s -k "http://127.0.0.1" -H "Host: $NAME" >/dev/null 2>&1
+
 if [[ ! -f "$LOG_FILE" ]]; then
-  echoDo "Lỗi: Không tìm thấy file access.log! Vui lòng kiểm tra lại cấu hình."
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy file access.log! Vui lòng kiểm tra lại cấu hình.${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-logs-main 1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+  exit 1
 fi
 
-# ==============================================================================
-# GỌI FZF ĐỂ HIỂN THỊ VÀ TÌM KIẾM LOGS
-# ==============================================================================
+# GỌI FZF ĐỂ HIỂN THỊ VÀ TÌM KIẾM LOGS (UX BO CONG)
+echo -e "\n${C_CYAN}Đang chuẩn bị bộ máy tìm kiếm FZF và đọc file Log...${C_RESET}"
+sleep 2
+
+# Dọn dẹp không gian hiển thị cho FZF
+clear
+
 # Sử dụng tac để đọc log từ mới nhất đến cũ nhất
 tac "$LOG_FILE" |
-  fzf --prompt=">> Tìm kiếm Access Log [$NAME]: " \
-    --height='~90%' \
+  fzf --prompt="🔍 Truy vấn Log [$NAME] >> " \
+    --height='90%' \
     --border=rounded \
-    --color=border:red \
+    --color=border:cyan,header:yellow \
     --layout=reverse \
     --info=inline \
-    --header="Gõ từ khóa (IP, URL, 404, 500...) để lọc | Lên/Xuống để xem | ESC để thoát" \
+    --header="Gõ từ khóa (IP, 404, Googlebot...) để LỌC siêu tốc | Phím lên/xuống để XEM | Phím ESC để THOÁT" \
     --preview="echo {}" \
     --preview-window=up:30%:wrap
-
-# Sau khi tắt FZF (Bấm ESC hoặc Enter), trở về Menu chính
+# Sau khi tắt FZF (Bấm ESC hoặc Enter), làm sạch màn hình và trở về Menu chính
+clear
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1

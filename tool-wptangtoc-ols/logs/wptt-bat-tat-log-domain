@@ -18,22 +18,24 @@ function huong_dan() {
   Bạn có thể dễ dàng Bật/Tắt bằng 1 cú chạm. Hệ thống sẽ tự động nhận diện trạng thái hiện tại để thao tác đảo ngược [Toggle].
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
 clear
-echo -e "\n========================================================================="
-echo -e "| Quản lý Logs => Bật / Tắt ghi Error & Access Logs Domain                |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ LOGS ➜ Bật / Tắt ghi Error & Access Logs Domain${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF) - UX BO CONG
 # ==============================================================================
 function lua_chon_NAME() {
-  unset NAME domain selects
+  unset NAME selects
   selects=()
+  local box_inner_width=${box_inner_width:-71}
 
   # Gộp danh sách file từ cả 2 thư mục (vhost thường và chuyển hướng)
   local file_list=()
@@ -42,22 +44,21 @@ function lua_chon_NAME() {
 
   # Vòng lặp Globbing siêu tốc không qua sub-shell
   for filepath in "${file_list[@]}"; do
-    # Bỏ qua nếu đường dẫn không hợp lệ hoặc chứa ký tự * chưa resolve được
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
 
-    local domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
+    local dom="${filepath##*/}"
+    dom="${dom%.conf}"
+    dom="${dom#.}"
 
-    if [[ "$domain" == ?*.?* ]]; then
-      local vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
-      
+    if [[ "$dom" == ?*.?* ]]; then
+      local vhost_conf="/usr/local/lsws/conf/vhosts/$dom/$dom.conf"
+
       if [[ -f "$vhost_conf" ]]; then
         # Kiểm tra trạng thái xem file cấu hình có đang bật errorlog không
         if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
-          selects+=("$domain [Đang BẬT]")
+          selects+=("$dom|1") # 1 = Đang Bật
         else
-          selects+=("$domain [Đang TẮT]")
+          selects+=("$dom|0") # 0 = Đang Tắt
         fi
       fi
     fi
@@ -65,55 +66,114 @@ function lua_chon_NAME() {
 
   # Lọc trùng lặp và sắp xếp mảng
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\n\033[1;33mKhông tìm thấy website nào trên hệ thống để thao tác!\033[0m"
+    echo -e "${C_YELLOW}Không tìm thấy website nào trên hệ thống để thao tác!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-logs-main 1
   fi
 
+  # Lọc mảng trùng và sắp xếp (Loại bỏ các item trùng lặp do vừa có ở Vhost vừa có ở Chuyen-huong)
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website
-  if [[ ${#selects[@]} -ge 2 ]]; then
-    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
-  fi
+  # Render Menu Bo Cong
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Trạng thái hiện tại & Chọn Website muốn thao tác Logs:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
-  if command -v fzf &>/dev/null; then
-    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
-  else
-    PS3="$(tput setab 0)-//- Lựa chọn website muốn thao tác [0=Thoát]:$(tput sgr0) "
-  fi
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  # Vòng lặp lấy giá trị
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    break
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local stt=$(echo "$item" | cut -d'|' -f2)
+
+    local color_stt="${C_GREEN}[Đang BẬT]"
+    local clean_stt="[Đang BẬT]"
+    if [[ "$stt" == "0" ]]; then
+      color_stt="${C_YELLOW}[Đang TẮT (Tối ưu I/O)]"
+      clean_stt="[Đang TẮT (Tối ưu I/O)]"
+    fi
+
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} %s" "$i" "$dom" "${color_stt}${C_RESET}")
+    local clean_text=$(printf "  %3d) %-30s %s" "$i" "$dom" "$clean_stt")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
   done
 
-  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
-  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website Bật/Tắt Log [0=Thoát]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+  # Thêm dòng chọn TẤT CẢ nếu có >= 2 website
+  if [[ ${#selects[@]} -ge 2 ]]; then
+    echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    local all_text=$(printf "  ${C_CYAN}999)${C_RESET} ${C_YELLOW}TẤT CẢ WEBSITE (Thao tác đồng loạt)${C_RESET}")
+    local clean_all_text=$(printf "  999) TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+    local pad_all=$((box_inner_width - $(echo -n "$clean_all_text" | awk '{print length($0)}')))
+    echo -e "${C_CYAN}│${C_RESET}${all_text}$(printf '%*s' "$pad_all" "")${C_CYAN}│${C_RESET}"
+  fi
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-    if [[ -z "$selected_name" ]]; then
-      echo "Đã hủy chọn."
-      exec /etc/wptt/wptt-logs-main 1
-    fi
-    NAME="$selected_name"
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    [[ ${#selects[@]} -ge 2 ]] && PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) hoặc 999 [00=Tìm nhanh] [0=Thoát]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+    [[ ${#selects[@]} -ge 2 ]] && PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) hoặc 999 [0=Thoát]: "
   fi
 
-  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
-  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
-    for item in "${selects[@]}"; do
-      local check_dom=$(echo "$item" | cut -f1 -d ' ')
-      if [[ "$check_dom" == "$REPLY" ]]; then
-        NAME="$item"
-        break
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    999)
+      if [[ ${#selects[@]} -ge 2 ]]; then
+        NAME="TẤT_CẢ"
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
       fi
-    done
-  fi
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website Logs >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local extracted_data=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+        if [[ -n "$extracted_data" ]]; then
+          NAME=$(echo "$extracted_data" | cut -d'|' -f1)
+          return 0
+        else
+          echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+        fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        local extracted_data="${selects[$action_index]}"
+        NAME=$(echo "$extracted_data" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
 # Nếu gọi script kèm tên domain từ command line
@@ -123,19 +183,21 @@ else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn (cắt phần đuôi trạng thái)
+# Tách lấy tên chuẩn (nếu truyền biến từ ngoài)
 NAME=$(echo "$NAME" | cut -f1 -d ' ')
 
 # --- CHỐT CHẶN THOÁT HIỂM ---
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-logs-main 1
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+  return 2>/dev/null || exit
+}
 
 # ==============================================================================
 # HÀM XÁC ĐỊNH USER LITESPEED
 # ==============================================================================
-if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+tuong_thich_nhom_litespeed="nobody"
+if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
   tuong_thich_nhom_litespeed="nogroup"
-else
-  tuong_thich_nhom_litespeed="nobody"
 fi
 
 # ==============================================================================
@@ -147,18 +209,11 @@ function process_logs_domain() {
   local vhost_conf="/usr/local/lsws/conf/vhosts/$target_domain/$target_domain.conf"
 
   if [[ ! -f "$vhost_conf" ]]; then
-    echo "Bỏ qua $target_domain: Không tìm thấy file vhost conf"
     return
   fi
 
   if [[ "$action" == "bat" ]]; then
-    if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
-      echo "Website $target_domain đã bật Log trước đó. Bỏ qua..."
-      return
-    fi
-
-    UI_STRING="Kích hoạt ghi Error & Access Logs cho $target_domain"
-    _runing "$UI_STRING"
+    if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then return; fi
 
     # Xóa cấu hình rác (nếu có) trước khi tiêm
     sed -i -e '/^errorlog /,/^}$/d' "$vhost_conf"
@@ -191,16 +246,9 @@ EOF
     [[ -f "/etc/wptt/vhost_bk/.$target_domain.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost_bk/.$target_domain.conf" && echo 'bat_log_domain=1' >>"/etc/wptt/vhost_bk/.$target_domain.conf"
 
     echo "Bật log website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "$UI_STRING"
 
   elif [[ "$action" == "tat" ]]; then
-    if ! grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
-      echo "Website $target_domain chưa bật Log. Bỏ qua..."
-      return
-    fi
-
-    UI_STRING="Tắt (Hủy) ghi Error & Access Logs cho $target_domain"
-    _runing "$UI_STRING"
+    if ! grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then return; fi
 
     # Dọn dẹp block cấu hình bằng SED
     sed -i -e '/^errorlog /,/^}$/d' "$vhost_conf"
@@ -222,65 +270,118 @@ EOF
     [[ -f "/etc/wptt/vhost_bk/.$target_domain.conf" ]] && sed -i '/bat_log_domain/d' "/etc/wptt/vhost_bk/.$target_domain.conf"
 
     echo "Tắt log website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "$UI_STRING"
   fi
 }
 
 # ==============================================================================
 # XỬ LÝ LÔGIC RẼ NHÁNH
 # ==============================================================================
+action_msg=""
+action_color=""
 
-if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  echo -e "\nBạn muốn BẬT hay TẮT ghi Logs cho \033[1;33mTẤT CẢ\033[0m website?"
-  prompt="Lựa chọn của bạn [1-2]: "
-  mass_action=""
-  options=("BẬT đồng loạt" "TẮT đồng loạt" "Hủy bỏ")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1) mass_action="bat"; break ;;
-    2) mass_action="tat"; break ;;
-    3) exec /etc/wptt/wptt-logs-main 1 ;;
-    *) printf "\nNhập sai, tự động hủy.\n"; exec /etc/wptt/wptt-logs-main 1 ;;
-    esac
-  done
+if [[ "$NAME" == "TẤT_CẢ" ]]; then
+  echo ""
 
-  # Thao tác hàng loạt (Quét cả vhost và chuyen-huong)
-  local file_list=()
-  [[ -d /etc/wptt/vhost ]] && file_list+=(/etc/wptt/vhost/.*.conf)
-  [[ -d /etc/wptt/chuyen-huong ]] && file_list+=(/etc/wptt/chuyen-huong/*)
+  while true; do
+    echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    left_text "  Bạn muốn ${C_GREEN}BẬT${C_RESET} hay ${C_YELLOW}TẮT${C_RESET} ghi Logs cho ${C_BOLD_WHITE}TẤT CẢ WEBSITE${C_RESET}?" 2
+    echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  ${C_CYAN}1)${C_RESET} ${C_GREEN}Đồng ý BẬT đồng loạt${C_RESET}" 2
+    left_text "  ${C_CYAN}2)${C_RESET} ${C_YELLOW}Đồng ý TẮT đồng loạt${C_RESET}" 2
+    left_text "  ${C_CYAN}0)${C_RESET} Hủy bỏ (Thoát)" 2
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-2] [0=Thoát]: ${C_RESET}"
+    read -r mass_reply
 
-  for filepath in "${file_list[@]}"; do
-    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
-    domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
-    if [[ "$domain" == ?*.?* ]]; then
-      process_logs_domain "$domain" "$mass_action"
+    if [[ "$mass_reply" == "0" ]]; then
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+      exit 0
+    elif [[ "$mass_reply" == "1" ]]; then
+      mass_action="bat"
+      action_msg="Đã BẬT Logs cho toàn bộ Website."
+      action_color="${C_GREEN}"
+      break
+    elif [[ "$mass_reply" == "2" ]]; then
+      mass_action="tat"
+      action_msg="Đã TẮT Logs cho toàn bộ Website (Tối ưu I/O)."
+      action_color="${C_YELLOW}"
+      break
+    else
+      echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}\n"
     fi
   done
+
+  echo ""
+  _runing "Đang cấu hình Logs đồng loạt cho toàn bộ Website..."
+
+  # Thao tác hàng loạt (Sửa lỗi biến local file_list của bản gốc)
+  file_list_mass=()
+  [[ -d /etc/wptt/vhost ]] && file_list_mass+=(/etc/wptt/vhost/.*.conf)
+  [[ -d /etc/wptt/chuyen-huong ]] && file_list_mass+=(/etc/wptt/chuyen-huong/*)
+
+  for filepath in "${file_list_mass[@]}"; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+    dom="${filepath##*/}"
+    dom="${dom%.conf}"
+    dom="${dom#.}"
+    if [[ "$dom" == ?*.?* ]]; then
+      process_logs_domain "$dom" "$mass_action"
+    fi
+  done
+
+  _rundone "Cập nhật cấu hình Logs đồng loạt thành công"
 
 else
   # Đảo trạng thái (Toggle) cho 1 website cụ thể
   vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
   [[ ! -f "$vhost_conf" ]] && {
-    echoDo "Tên miền không tồn tại hoặc chưa được khởi tạo cấu hình Vhost!"
-    sleep 2
-    exec /etc/wptt/wptt-logs-main 1
+    echo -e "\n${C_RED}❌ Tên miền không tồn tại hoặc chưa được khởi tạo cấu hình Vhost!${C_RESET}"
+    sleep 3
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+    exit 1
   }
 
   if grep -q 'errorlog ' "$vhost_conf" 2>/dev/null; then
-    process_logs_domain "$NAME" "tat"
+    if wptt_xac_nhan "Website này đang BẬT ghi Logs. Bạn có muốn TẮT đi không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "Tắt log giúp giảm tải đĩa cứng nhưng khó bắt lỗi nếu web bị sập 500." "Đồng ý TẮT Log" "Hủy thao tác"; then
+      echo ""
+      _runing "TẮT (Hủy) ghi Error & Access Logs cho $NAME..."
+      process_logs_domain "$NAME" "tat"
+      action_msg="Đã TẮT chức năng ghi Logs cho website."
+      action_color="${C_YELLOW}"
+      _rundone "TẮT (Hủy) ghi Error & Access Logs cho $NAME..."
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác tắt Log.${C_RESET}\n"
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+      exit 0
+    fi
   else
-    process_logs_domain "$NAME" "bat"
+    if wptt_xac_nhan "Website này đang TẮT ghi Logs. Bạn có muốn BẬT lên không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "Bật log sẽ lưu nhật ký tại: /usr/local/lsws/$NAME/logs/" "Đồng ý BẬT Log" "Hủy thao tác"; then
+      echo ""
+      _runing "KÍCH HOẠT ghi Error & Access Logs cho $NAME..."
+      process_logs_domain "$NAME" "bat"
+      action_msg="Đã BẬT chức năng ghi Logs cho website."
+      action_color="${C_GREEN}"
+      _rundone "KÍCH HOẠT ghi Error & Access Logs cho $NAME..."
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác bật Log.${C_RESET}\n"
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+      exit 0
+    fi
   fi
 fi
 
-# ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ & NEO MÀN HÌNH
-# ==============================================================================
-# Đổi từ restart sang reload để tránh downtime
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
 
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP LOGS${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+if [[ "$NAME" == "TẤT_CẢ" ]]; then
+  left_text "Phạm vi tác động : ${C_YELLOW}TẤT CẢ WEBSITE${C_RESET}" 2
+else
+  left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
+fi
+left_text "Trạng thái mới   : ${action_color}${action_msg}${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-logs-main 1
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-logs-main 1
