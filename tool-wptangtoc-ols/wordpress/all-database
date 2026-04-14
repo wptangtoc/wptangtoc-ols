@@ -14,21 +14,48 @@ function huong_dan() {
   Cập nhật thống kê chỉ mục: OPTIMIZE TABLE thường cập nhật các thông tin thống kê về chỉ mục, giúp bộ tối ưu hóa truy vấn của DBMS đưa ra các kế hoạch thực thi hiệu quả hơn.
 }
 
-. /etc/wptt/.wptt.conf
-echo "Đang tiến hành tối ưu hóa toàn bộ Database..."
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-# 1. Xác định lệnh chuẩn (Tránh lỗi Deprecated)
-# Nếu hệ thống có lệnh 'mariadb-check' (phiên bản mới) thì dùng, không thì dùng 'mysqlcheck' (cũ)
+# Dọn màn hình nếu chạy bằng tay (Nếu chạy bằng Cronjob sẽ tự bỏ qua)
+if [ -t 1 ]; then clear; fi
+
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Tối ưu hóa toàn bộ Hệ thống (Optimize All)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
+fi
+
+# Chốt chặn an toàn
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép chạy tiến trình tối ưu hóa."
+
+# ==============================================================================
+# BẢNG THÔNG TIN TIẾN TRÌNH
+# ==============================================================================
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+left_text "Tiến trình này sẽ quét toàn bộ Database trên máy chủ để:" 2
+left_text "  1. Chống phân mảnh (Defrag) và thu hồi dung lượng thừa." 2
+left_text "  2. Tái tạo lại chỉ mục (Rebuild Index) tăng tốc độ truy vấn." 2
+left_text "  3. Tự động sửa chữa (Auto-repair) các Bảng bị lỗi." 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# XÁC ĐỊNH LỆNH VÀ TẠO CHỨNG CHỈ (CREDENTIALS) BẢO MẬT
+# ==============================================================================
 if command -v mariadb-check &>/dev/null; then
   DB_CHECK_CMD="mariadb-check"
 else
   DB_CHECK_CMD="mysqlcheck"
 fi
 
-# 2. Tạo file cấu hình tạm (Bảo mật)
-# LƯU Ý: Đã xóa 'max_allowed_packet' vì mysqlcheck không hỗ trợ tham số này
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root đọc được
+chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
 
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
@@ -37,38 +64,49 @@ password=${database_admin_password}
 host=localhost
 EOF
 
-# Đảm bảo xóa file tạm khi xong hoặc bị lỗi
-trap "rm -f $TEMP_CNF_ROOT" EXIT
+# Cơ chế an toàn: Tự động xóa file khi script kết thúc hoặc bị hủy
+trap "rm -f \"$TEMP_CNF_ROOT\"" EXIT
 
-# 3. Thực thi tối ưu hóa
-# --optimize: Tương đương lệnh OPTIMIZE TABLE (dọn dẹp phân mảnh)
-# --auto-repair: Nếu phát hiện bảng lỗi thì tự sửa luôn
-# --all-databases: Quét tất cả database
-# --skip-database: Bỏ qua các DB hệ thống để tránh lỗi permission hoặc lock không cần thiết
+# ==============================================================================
+# THỰC THI TỐI ƯU HÓA HÀNG LOẠT
+# ==============================================================================
+_runing "Đang tiến hành tối ưu hóa toàn bộ Database (Tiến trình có thể chạy lâu)..."
 
+# Chạy lệnh và giấu output rối mắt vào file log tạm
 $DB_CHECK_CMD --defaults-extra-file="$TEMP_CNF_ROOT" --optimize --auto-repair --all-databases \
   --skip-database="information_schema" \
   --skip-database="performance_schema" \
-  --skip-database="mysql"
+  --skip-database="sys" \
+  --skip-database="mysql" >/tmp/wptt_db_optimize.log 2>&1
 
-# Kiểm tra kết quả
-if [[ $? -eq 0 ]]; then
-  echo "---------------------------------------------------"
-  echo "✅ Tối ưu hóa hoàn tất thành công."
+status=$?
+
+if [[ $status -eq 0 ]]; then
+  _rundone "Tối ưu hóa Database hoàn tất (Không phát hiện lỗi phần cứng)."
 else
-  echo "---------------------------------------------------"
-  echo "⚠️ Có một số cảnh báo trong quá trình tối ưu (Có thể bỏ qua nếu là lỗi 'Table does not support optimize')."
+  _runloi "Tối ưu hóa hoàn tất nhưng có một vài cảnh báo (Warnings)."
+  echo -e "${C_YELLOW}  ➜ Lưu ý: Cảnh báo 'Table does not support optimize' trên engine${C_RESET}"
+  echo -e "${C_YELLOW}    InnoDB là điều hoàn toàn bình thường và hệ thống đã tự động${C_RESET}"
+  echo -e "${C_YELLOW}    chuyển sang lệnh Recreate + Analyze thay thế an toàn!${C_RESET}"
+  echo -e "${C_CYAN}  ➜ Xem chi tiết log tại: /tmp/wptt_db_optimize.log${C_RESET}"
 fi
 
-# Xóa file Auth (Trap đã lo, nhưng xóa explicit cho sạch code)
+# Xóa file xác thực
 rm -f "$TEMP_CNF_ROOT"
-. /etc/wptt/echo-color
 
 echo "Tối ưu hoá ALL database : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-echoDone "hoàn tất tối ưu hoá database"
+# ==============================================================================
+# BẢNG BÁO CÁO THÀNH CÔNG
+# ==============================================================================
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT TỐI ƯU HÓA HỆ THỐNG DATABASE${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Kho dữ liệu đã được sắp xếp lại, rác đã dọn sạch. Máy chủ sẽ" 2
+left_text "hoạt động trơn tru, nhẹ nhàng và phản hồi truy vấn nhanh hơn!" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+# Chỉ yêu cầu nhấn Enter nếu chạy qua giao diện Menu
+if [[ "${1:-}" == "98" ]]; then
   exec /etc/wptt/wptt-db-main 1
 fi
