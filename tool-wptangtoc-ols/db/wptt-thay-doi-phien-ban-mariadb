@@ -22,9 +22,6 @@ if [[ "${1:-}" == '98' ]]; then
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
 
-# ==============================================================================
-# RÀO CHẮN 1: KIỂM TRA SỨC KHỎE MARIADB HIỆN TẠI
-# ==============================================================================
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép thay đổi nhánh phiên bản MariaDB để bảo vệ an toàn."
 
 active_hien_tai=$(systemctl is-active mariadb.service 2>/dev/null)
@@ -50,7 +47,7 @@ echo -e "${C_CYAN}╰───────────────────�
 # ==============================================================================
 DB_SIZE=$(du -sm /var/lib/mysql 2>/dev/null | awk '{print $1}')
 FREE_SPACE=$(df -m /var/lib/mysql | awk 'NR==2 {print $4}')
-REQUIRED_SPACE=$((DB_SIZE * 2 + 1024)) # Cần ít nhất gấp đôi DB size + 1GB dự phòng
+REQUIRED_SPACE=$((DB_SIZE * 2 + 1024))
 
 if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
   echo -e "${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -60,7 +57,6 @@ if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
   left_text "Ổ cứng còn trống   : ${FREE_SPACE} MB" 2
   left_text "Yêu cầu an toàn    : Tối thiểu ${REQUIRED_SPACE} MB để chứa bản Backup." 2
   echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  echo -e "${C_YELLOW}Vui lòng dọn dẹp ổ cứng (wptt disk) trước khi thực hiện chức năng này!${C_RESET}"
   sleep 4
   [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
   exit 1
@@ -100,7 +96,7 @@ done
 echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 while true; do
-  echo -en "${C_CYAN}👉 Nhập lựa chọn của bạn (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
+  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
   read -r REPLY
   [[ "$REPLY" == "0" ]] && {
     echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
@@ -184,7 +180,6 @@ EOF
   fi
   rm -f "$TEMP_CNF"
 
-  # Verify dung lượng file Backup (>10KB)
   local check_file_error=0
   if [[ "$sql_gz" == '1' ]]; then check_file_error=$(du -k "/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz" 2>/dev/null | awk '{print $1}'); fi
   if [[ "$sql_gz" == '2' ]]; then check_file_error=$(du -k "/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.zst" 2>/dev/null | awk '{print $1}'); fi
@@ -224,26 +219,27 @@ pkill mysql >/dev/null 2>&1
 rm -rf /var/lib/mysql
 rm -rf /etc/mysql
 rm -f /etc/my.cnf.d/server.cnf
+rm -f /etc/my.cnf.d/mariadb-server.cnf
 
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   export DEBIAN_FRONTEND=noninteractive
+  apt-mark unhold mariadb-server mariadb-client >/dev/null 2>&1 # Mở khóa
   apt-get remove -y mariadb-server mariadb-client mariadb-common >/dev/null 2>&1
   apt-get autoremove -y >/dev/null 2>&1
 else
-  yum remove -y mariadb-server mariadb-client mariadb-common >/dev/null 2>&1
-  yum remove -y MariaDB-server MariaDB-client MariaDB-common >/dev/null 2>&1
+  #Tạm thời Disable Exclude để yum được phép xóa MariaDB
+  yum remove -y "mariadb*" "MariaDB*" galera --disableexcludes=all >/dev/null 2>&1
+  rm -f /etc/yum.repos.d/mariadb*.repo /etc/yum.repos.d/MariaDB*.repo
 fi
 _rundone "Đã xóa sạch tàn dư MariaDB $phien_ban_hien_tai"
 
 _runing "Đang thiết lập Repository cho MariaDB $mariadb_version..."
-# TÍNH TOÁN DYNAMIC REPO CHO RHEL/ALMA/ROCKY (Cập nhật Repo 10)
 if ! grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   OS_ID=$(grep -w '^ID' /etc/os-release | cut -d= -f2 | tr -d '"')
   OS_VER=$(grep -w '^VERSION_ID' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d. -f1)
   ARCH="amd64"
   [[ "$(uname -m)" == "aarch64" ]] && ARCH="aarch64"
 
-  # Từ bản OS 10 trở đi, MariaDB dùng chung nhánh rhel cho Alma/Rocky
   if [[ "$OS_VER" -ge 10 ]]; then
     REPO_OS="rhel"
   elif [[ "$OS_ID" == "almalinux" ]]; then
@@ -259,14 +255,16 @@ if ! grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   cat <<EOF >/etc/yum.repos.d/MariaDB.repo
 [mariadb]
 name = MariaDB
-baseurl = http://yum.mariadb.org/$mariadb_version/$mariadb_repo_name
-gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
-gpgcheck=1
+baseurl = https://mirror.mariadb.org/yum/$mariadb_version/$mariadb_repo_name
+gpgcheck=0
 module_hotfixes=1
 EOF
+
+  # Phá khóa YUM AppStream Module
+  yum module reset mariadb -y >/dev/null 2>&1
+  yum module disable mariadb -y >/dev/null 2>&1
 fi
 
-# THIẾT LẬP REPO CHO UBUNTU
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   curl -LsS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup | bash -s -- --mariadb-server-version="mariadb-$mariadb_version" >/dev/null 2>&1
 fi
@@ -275,21 +273,28 @@ _rundone "Thiết lập Repository thành công (Nhánh: $mariadb_repo_name)"
 _runing "Đang Tải và Cài đặt MariaDB $mariadb_version (Vui lòng chờ)..."
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   apt-get update >/dev/null 2>&1
-  apt-get install -y mariadb-server mariadb-client >/dev/null 2>&1
+  apt-get install -y mariadb-server mariadb-client >/var/log/wptt_mariadb_install.log 2>&1
+  apt-mark hold mariadb-server mariadb-client >/dev/null 2>&1
 else
-  yum install -y MariaDB-server MariaDB-client >/dev/null 2>&1
+  yum clean all >/dev/null 2>&1
+  yum install -y MariaDB-server MariaDB-client --allowerasing --disableexcludes=all >/var/log/wptt_mariadb_install.log 2>&1
+fi
 
-  # Fallback nếu Mirror chính bị sập
-  if [[ ! -d /var/lib/mysql ]]; then
-    sed -i 's|http://yum.mariadb.org|https://mirror.rackspace.com|g' /etc/yum.repos.d/MariaDB.repo
-    yum clean all >/dev/null 2>&1
-    yum install -y MariaDB-server MariaDB-client >/dev/null 2>&1
-  fi
+# ==============================================================================
+# TRẠM KIỂM TRA CHÉO (CROSS-CHECK) PHIÊN BẢN SAU CÀI ĐẶT
+# ==============================================================================
+INSTALLED_VER=$(mariadbd --version 2>/dev/null | cut -f4 -d " " | grep '^1' | cut -f1-2 -d '.' | cut -f1 -d '-')
+if [[ "$INSTALLED_VER" != "$mariadb_version" ]]; then
+  _runloi "Cài đặt MariaDB $mariadb_version thất bại!"
+  echo -e "\n${C_RED}❌ LỖI: Hệ thống từ chối cập nhật hoặc bị xung đột Package!${C_RESET}"
+  echo -e "${C_YELLOW}Bản MariaDB trên máy hiện tại vẫn là: ${INSTALLED_VER:-Không xác định} (Yêu cầu: $mariadb_version)${C_RESET}"
+  echo -e "Vui lòng kiểm tra file log tại: ${C_CYAN}/var/log/wptt_mariadb_install.log${C_RESET} để bắt bệnh."
+  exit 1
 fi
 _rundone "Cài đặt MariaDB $mariadb_version thành công"
 
 # ==============================================================================
-# CẤU HÌNH TỐI ƯU (MY.CNF) - FIX LỖI THIẾU THẺ [mysqld]
+# CẤU HÌNH TỐI ƯU (MY.CNF) - TEMPLATE DYNAMIC VERSION
 # ==============================================================================
 _runing "Đang thiết lập thông số tối ưu my.cnf theo phần cứng..."
 work_cpucore='1024'
@@ -314,16 +319,70 @@ else
   query_cache_size='50M'
 fi
 
-duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
-if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-  duong_dan_cau_hinh_mariadb="/etc/mysql/mariadb.conf.d/50-server.cnf"
+if cat /etc/*release 2>/dev/null | grep -q "Ubuntu"; then
+  duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+else
+  duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
 fi
 
-# DÙNG > ĐỂ GHI ĐÈ HOÀN TOÀN VÀ ĐẢM BẢO CÓ THẺ [mysqld] MỞ ĐẦU
-cat <<EOF >"$duong_dan_cau_hinh_mariadb"
+# TẠO LẠI TEMPLATE CHUẨN KÈM THEO VERSION ĐỘNG TỪ BIẾN $mariadb_version
+if [[ ! -s "$duong_dan_cau_hinh_mariadb" ]]; then
+  cat <<EOF >"$duong_dan_cau_hinh_mariadb"
+#
+# These groups are read by MariaDB server.
+# Use it for options that only the server (but not clients) should see
+#
+# See the examples of server my.cnf files in /usr/share/mysql/
+#
+
+# this is read by the standalone daemon and embedded servers
+[server]
+
+# this is only for the mysqld standalone daemon
 [mysqld]
+
+#
+# * Galera-related settings
+#
+[galera]
+# Mandatory settings
+#wsrep_on=ON
+#wsrep_provider=
+#wsrep_cluster_address=
+#binlog_format=row
+#default_storage_engine=InnoDB
+#innodb_autoinc_lock_mode=2
+#
+# Allow server to accept connections on all interfaces.
+#
+#bind-address=0.0.0.0
+#
+# Optional setting
+#wsrep_slave_threads=1
+#innodb_flush_log_at_trx_commit=0
+
+# this is only for embedded server
+[embedded]
+
+# This group is only read by MariaDB servers, not by MySQL.
+# If you use the same .cnf file for MySQL and MariaDB,
+# you can put MariaDB-only options here
+[mariadb]
+
+# This group is only read by MariaDB-${mariadb_version} servers.
+# If you use the same .cnf file for MariaDB of different versions,
+# use this group for options that older servers don't understand
+[mariadb-${mariadb_version}]
+EOF
+fi
+
+# 1. Thêm thẻ [mysqld] ở cuối file để phân nhóm
+echo "" >>"$duong_dan_cau_hinh_mariadb"
+echo "[mysqld]" >>"$duong_dan_cau_hinh_mariadb"
+
+# 2. Áp dụng phong cách `echo >>` của bạn (đã sửa table_cache -> table_open_cache)
+echo "key_buffer_size = ${buffer_db}M
 table_open_cache = 2000
-key_buffer_size = ${buffer_db}M
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
 max_connections = $max_connections
 query_cache_type = $query_cache_type
@@ -334,21 +393,19 @@ tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 thread_cache_size = 81
 max_allowed_packet = 64M
-wait_timeout = 60
-interactive_timeout = 60
-skip-log-bin
-EOF
+wait_timeout=60
+interactive_timeout = 60" >>"$duong_dan_cau_hinh_mariadb"
+
+# 3. Áp dụng phong cách `sed` của bạn
+sed -i '/\[mysqld\]/a skip-log-bin' "$duong_dan_cau_hinh_mariadb"
 
 # Xử lý an toàn loại bỏ Query Cache nếu MariaDB >= 10.8
 lowest_version=$(printf '%s\n%s\n' "10.8" "$mariadb_version" | sort -V | head -n1)
 if [[ "$lowest_version" == "10.8" ]]; then
-  sed -i '/query_cache/d' "$duong_dan_cau_hinh_mariadb"
+  sed -i '/^query_cache/d' "$duong_dan_cau_hinh_mariadb"
 fi
 _rundone "Cấu hình tối ưu my.cnf hoàn tất"
 
-# ==============================================================================
-# KHỞI TẠO LẠI CẤU TRÚC SYSTEM TABLE NẾU BỊ MẤT (LỖI Errcode: 2)
-# ==============================================================================
 if [[ ! -d "/var/lib/mysql/mysql" ]]; then
   _runing "Đang khôi phục lại cấu trúc System Database..."
   mkdir -p /var/lib/mysql
@@ -358,6 +415,7 @@ if [[ ! -d "/var/lib/mysql/mysql" ]]; then
   elif command -v mysql_install_db >/dev/null 2>&1; then
     mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1
   fi
+  chown -R mysql:mysql /var/lib/mysql
   _rundone "Khởi tạo cấu trúc System Database thành công"
 fi
 
@@ -471,7 +529,7 @@ systemctl restart mariadb.service
 
 # BẢNG BÁO CÁO THÀNH CÔNG
 echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}✅ HOÀN TẤT THAY ĐỔI PHIÊN BẢN MARIADB${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI PHIÊN BẢN MARIADB${C_RESET}"
 echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "Từ phiên bản : ${C_YELLOW}MariaDB $phien_ban_hien_tai${C_RESET}" 2
 left_text "Sang bản mới : ${C_YELLOW}MariaDB $mariadb_version${C_RESET}" 2

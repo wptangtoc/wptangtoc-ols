@@ -17,56 +17,52 @@ function huong_dan() {
 
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_database => $bat Remote Database                                |"
-echo "========================================================================="
-. /etc/wptt/.wptt.conf
-. /etc/wptt/tenmien
-. /etc/wptt/echo-color
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-. /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_database} ➜ Bật/Tắt Truy cập từ xa (Remote Database)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
+
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép thiết lập remote database."
 
-echo ""
-echo ""
-echo "$lua_chon_website_ban_muon Remote Database: "
-echo ""
-lua_chon_NAME
+. /etc/wptt/tenmien 2>/dev/null
+lua_chon_NAME "Remote Database"
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
   exec /etc/wptt/wptt-db-main 1
+  exit 0
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-db-main 1
-  exit
+  exit 1
 fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+# NHẬN DIỆN ĐƯỜNG DẪN CẤU HÌNH MARIADB CHUẨN XÁC THEO OS
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
 else
   duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
 fi
+
 . /etc/wptt/vhost/.$NAME.conf
 
+# File cấu hình tạm thời bảo mật tuyệt đối cho MariaDB
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -81,187 +77,233 @@ quote-names
 max_allowed_packet=1G
 EOF
 
-## Cơ chế an toàn: Tự động xóa file $TEMP_CNF_ROOT khi script kết thúc hoặc bị hủy (Ctrl+C)
+# Cơ chế an toàn: Tự động xóa file khi script kết thúc
 trap "rm -f $TEMP_CNF_ROOT" EXIT
+
+echo ""
+# Kiểm tra xem User này đã được cấp quyền '%' (Remote) chưa
 check_remote=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "SHOW GRANTS FOR '$DB_User_web'@'%';" 2>/dev/null)
-if [[ $check_remote ]]; then
-  read -p "website $NAME đã được kích hoạt remote database bạn có muốn tắt (y/n): " tatremote
-  if [[ $tatremote = 'y' ]]; then
-    _runing "Tắt kích hoạt Remote Database website $NAME"
+
+# ==============================================================================
+# NHÁNH 1: REMOTE ĐANG BẬT -> HỎI ĐỂ TẮT (DISABLE)
+# ==============================================================================
+if [[ -n "$check_remote" ]]; then
+  if wptt_xac_nhan "Website $NAME ĐANG KÍCH HOẠT Remote Database. Bạn có muốn TẮT không?" "" "" "Đồng ý Tắt" "Hủy thao tác"; then
+    echo ""
+    _runing "Đang xóa quyền Remote (Truy cập từ xa) của User: $DB_User_web"
     mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${DB_User_web}'@'%'"
     mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES"
+    _rundone "Đã xóa quyền Remote của User: $DB_User_web"
 
-    if [[ -f /tmp/remote_wptangtoc_ols ]]; then
-      rm -f /tmp/remote_wptangtoc_ols
-    fi
+    # Kiểm tra xem hệ thống còn Website nào đang dùng Remote không
+    _runing "Đang quét hệ thống xem còn Website nào sử dụng Remote Database không..."
+    rm -f /tmp/remote_wptangtoc_ols
 
-    for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+    for entry in $(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV); do
+      domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
       path="/usr/local/lsws/$domain/html"
-      i=1
-
-      if [[ -d "$path" ]]; then
-        . /etc/wptt/vhost/.$domain.conf
-        if [[ $DB_User_web ]]; then
-          mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "SHOW GRANTS FOR '$DB_User_web'@'%';" 2>/dev/null 1>>/tmp/remote_wptangtoc_ols
+      if [[ -d "$path" && "$domain" != "$NAME" ]]; then
+        unset DB_User_web_check
+        . "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
+        if [[ -n "${DB_User_web_check:-$DB_User_web}" ]]; then
+          mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "SHOW GRANTS FOR '${DB_User_web_check:-$DB_User_web}'@'%';" 2>/dev/null 1>>/tmp/remote_wptangtoc_ols
         fi
       fi
     done
 
-    check_con_dung_website_khac=$(cat /tmp/remote_wptangtoc_ols)
-    if [[ $check_con_dung_website_khac = '' ]]; then
+    check_con_dung_website_khac=""
+    [[ -f /tmp/remote_wptangtoc_ols ]] && check_con_dung_website_khac=$(cat /tmp/remote_wptangtoc_ols)
 
-      port_mariadb_remote=$(cat $duong_dan_cau_hinh_mariadb | grep 'port=' | grep -o '[0-9]\+$')
+    # NẾU KHÔNG CÒN AI DÙNG -> ĐÓNG PORT & BẬT LẠI SKIP-NETWORKING
+    if [[ -z "$check_con_dung_website_khac" ]]; then
+      _rundone "Không còn Website nào dùng Remote. Tiến hành niêm phong hệ thống mạng!"
 
-      sed -i "/bind-address/d" $duong_dan_cau_hinh_mariadb
-      sed -i '/port=/d' $duong_dan_cau_hinh_mariadb
+      port_mariadb_remote=$(grep -i '^port[[:space:]]*=' "$duong_dan_cau_hinh_mariadb" | grep -o '[0-9]\+$')
 
-      sed -i '/skip-networking/d' $duong_dan_cau_hinh_mariadb
-      sed -i '/\[mysqld\]/a skip-networking' $duong_dan_cau_hinh_mariadb #TCP 3306 đóng, chỉ dùng unix stocket unix socket nâng cao hiệu suất và bảo mật
+      _runing "Đang đóng kết nối TCP và Bật lại tính năng Skip-Networking..."
+      sed -i '/^bind-address/d' "$duong_dan_cau_hinh_mariadb"
+      sed -i '/^port[[:space:]]*=/d' "$duong_dan_cau_hinh_mariadb"
+      sed -i '/skip-networking/d' "$duong_dan_cau_hinh_mariadb"
+      sed -i '/\[mysqld\]/a skip-networking' "$duong_dan_cau_hinh_mariadb"
+      _rundone "Đã cấu hình MariaDB chỉ dùng Unix Socket (Siêu bảo mật)"
 
-      if [[ $(systemctl status firewalld.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = 'active' ]]; then
+      # Đóng tường lửa Firewalld
+      if [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | awk '{print $2}') == 'active' ]]; then
+        _runing "Đang đóng cổng $port_mariadb_remote trên Firewalld..."
         firewall-cmd --permanent --zone=public --remove-port=${port_mariadb_remote}/tcp >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1
+        _rundone "Đã đóng cổng Firewalld"
       fi
 
-      #đóng port csf
+      # Đóng tường lửa CSF
       if [[ -f /etc/csf/csf.conf ]]; then
+        _runing "Đang đóng cổng $port_mariadb_remote trên tường lửa CSF..."
         sed -i -r '/^TCP_IN /s/"'$port_mariadb_remote'"/""/; s/([",])'$port_mariadb_remote',|,'$port_mariadb_remote'([,"])/\1\2/' /etc/csf/csf.conf
         csf -x >/dev/null 2>&1
         csf -e >/dev/null 2>&1
+        _rundone "Đã đóng cổng CSF"
       fi
 
-      #dong port nftables
-      nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
-      if [[ "$nftables_service" = "active" ]]; then
-        if $(cat /etc/*release | grep -q "Ubuntu"); then
-          path_nftables_config="/etc/nftables.conf"
-        else
-          path_nftables_config="/etc/sysconfig/nftables.conf"
-        fi
-
-        if [[ -f $path_nftables_config ]]; then
-          sed -i '/#port remote mariadb/d' $path_nftables_config
+      # Đóng tường lửa Nftables
+      if [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | awk '{print $2}') == 'active' ]]; then
+        path_nftables_config="/etc/sysconfig/nftables.conf"
+        cat /etc/*release 2>/dev/null | grep -qi "Ubuntu" && path_nftables_config="/etc/nftables.conf"
+        if [[ -f "$path_nftables_config" ]]; then
+          _runing "Đang đóng cổng $port_mariadb_remote trên Nftables..."
+          sed -i '/#port remote mariadb/d' "$path_nftables_config"
           systemctl restart nftables
+          _rundone "Đã đóng cổng Nftables"
         fi
       fi
 
-      systemctl restart mysql.service >/dev/null 2>&1
-      sed -i "s/$port_mariadb_remote/3306/g" /etc/fail2ban/jail.local
-      systemctl restart fail2ban.service
+      _runing "khởi động lại dịch vụ MariaDB và Fail2ban..."
+      systemctl restart mariadb.service >/dev/null 2>&1
+      [[ -n "$port_mariadb_remote" ]] && sed -i "s/$port_mariadb_remote/3306/g" /etc/fail2ban/jail.local
+      systemctl restart fail2ban.service >/dev/null 2>&1
+      _rundone "khởi động lại dịch vụ MariaDB và Fail2ban..."
+
+    else
+      _rundone "Hệ thống vẫn còn Website khác dùng Remote. Giữ nguyên cổng kết nối mạng."
     fi
-    _rundone "Tắt kích hoạt Remote Database website $NAME"
+
+    rm -f /tmp/remote_wptangtoc_ols
+    sleep 2
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+    exit 0
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác Tắt Remote.${C_RESET}\n"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+    exit 0
   fi
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-  exit
 fi
 
-read -p "Bạn có muốn kích hoạt remote database website $NAME (y/n): " kichhoatremote
-if [[ $kichhoatremote = 'y' ]]; then
+# ==============================================================================
+# NHÁNH 2: REMOTE ĐANG TẮT -> HỎI ĐỂ BẬT (ENABLE)
+# ==============================================================================
+if wptt_xac_nhan "Bạn có muốn KÍCH HOẠT Remote Database cho website $NAME không?" "" "" "Đồng ý Bật" "Hủy thao tác"; then
 
-  if [[ $(cat $duong_dan_cau_hinh_mariadb | grep 'Port=') = '' ]]; then
+  # Kiểm tra xem MariaDB đã mở cổng mạng chưa (có chữ port= chưa)
+  if ! grep -qi '^port[[:space:]]*=' "$duong_dan_cau_hinh_mariadb"; then
+    echo ""
+    while true; do
+      echo -en "${C_CYAN}Nhập Port bạn muốn sử dụng cho Remote (VD: 3306, 33066) [0=Thoát]: ${C_RESET}"
+      read -r port
 
-    read -p "$nhap port remote database $ban_muon [0=$exit_thoat]: " port
+      [[ "$port" == "0" || -z "$port" ]] && {
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+        exit 0
+      }
 
-    if [[ "$port" = "0" || "$port" = "" ]]; then
-      exec /etc/wptt/wptt-db-main 1
-      exit
-    fi
-
-    if ! [[ $port =~ ^[0-9]+$ ]] || (($port < 1 || $port > 65535)); then
-      clear
-      echo "Port $khong_dung_dinh_dang $so_nguyen_duong, vui lòng nhập port từ 1 đến 65536"
-      exec /etc/wptt/wptt-db-main 1
-      exit
-    fi
-
-    # kiểm tra port ssh
-    port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$' || echo 22)
-
-    #kiểm tra trung lặp port
-    if [[ "$port" = "$port_checkssh" || "$port" = "80" || "$port" = "443" ]]; then
-      echo "Bạn vui lòng chọn port khác cổng port này đã được sử dụng"
-      exec /etc/wptt/wptt-db-main 1
-      exit
-    fi
-
-    # kiểm tra trùng lặp port webguiadmin
-    if [[ ! -f /usr/local/lsws/conf/disablewebconsole ]]; then
-      port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | cut -f2 -d":")
-      if [[ "$port" = "$port_webgui_openlitespeed" ]]; then
-        echo "Bạn vui lòng chọn port khác cổng port này đã được sử dụng"
-        exec /etc/wptt/wptt-db-main 1
-        exit
+      if ! [[ "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+        echo -e "${C_RED}❌ Lỗi: Port phải là số nguyên từ 1 đến 65535! Vui lòng nhập lại.${C_RESET}"
+        continue
       fi
+
+      # Kiểm tra trùng Port SSH
+      port_checkssh=$(grep "^Port " /etc/ssh/sshd_config | grep -o '[0-9]\+' || echo 22)
+      if [[ "$port" == "$port_checkssh" || "$port" == "80" || "$port" == "443" ]]; then
+        echo -e "${C_RED}❌ Lỗi: Cổng $port đã được sử dụng bởi hệ thống (SSH/Web). Hãy chọn cổng khác!${C_RESET}"
+        continue
+      fi
+
+      # Kiểm tra trùng Port WebGUI OLS
+      if [[ ! -f /usr/local/lsws/conf/disablewebconsole ]]; then
+        port_webgui_openlitespeed=$(grep "address" /usr/local/lsws/admin/conf/admin_config.conf | cut -f2 -d":")
+        if [[ "$port" == "$port_webgui_openlitespeed" ]]; then
+          echo -e "${C_RED}❌ Lỗi: Cổng $port đã được sử dụng bởi LiteSpeed WebAdmin. Hãy chọn cổng khác!${C_RESET}"
+          continue
+        fi
+      fi
+
+      break # Nhập đúng thì thoát vòng lặp
+    done
+
+    # =========================================================
+    # THIẾT LẬP MỞ MẠNG VÀ CẤU HÌNH TƯỜNG LỬA
+    # =========================================================
+    echo ""
+    _runing "Đang loại bỏ Skip-Networking và gắn cổng Port $port cho MariaDB..."
+    sed -i '/^bind-address/d' "$duong_dan_cau_hinh_mariadb"
+    sed -i '/^port[[:space:]]*=/d' "$duong_dan_cau_hinh_mariadb"
+    sed -i '/skip-networking/d' "$duong_dan_cau_hinh_mariadb" # FIX KHÁNH VY: Dùng đúng biến cấu hình theo OS
+
+    # Tiêm cấu hình mạng xuống ngay dưới [mysqld]
+    sed -i "/\[mysqld\]/a port=$port\nbind-address=0.0.0.0" "$duong_dan_cau_hinh_mariadb"
+    _rundone "Cấu hình mạng MariaDB hoàn tất"
+
+    # Mở Firewalld
+    if [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | awk '{print $2}') == 'active' ]]; then
+      _runing "Mở cổng $port trên Firewalld..."
+      firewall-cmd --permanent --zone=public --add-port=$port/tcp >/dev/null 2>&1
+      firewall-cmd --reload >/dev/null 2>&1
+      _rundone "Mở cổng $port trên Firewalld..."
     fi
 
-    _runing "Thiết lập remote mariadb"
-    sed -i "/bind-address/d" $duong_dan_cau_hinh_mariadb
-    sed -i '/port=/d' $duong_dan_cau_hinh_mariadb
-    echo "port=$port" >>$duong_dan_cau_hinh_mariadb
-    echo 'bind-address=0.0.0.0' >>$duong_dan_cau_hinh_mariadb
-    sed -i '/skip-networking/d' /etc/my.cnf.d/server.cnf #mở port TCP mariadb
-
-    firewall-cmd --permanent --zone=public --add-port=$port/tcp >/dev/null 2>&1
-    firewall-cmd --reload >/dev/null 2>&1
-    #mở tường lửa csf
+    # Mở CSF
     if [[ -f /etc/csf/csf.conf ]]; then
-      if [[ $(cat /etc/csf/csf.conf | grep '^TCP_IN' | grep "$port,") = '' ]]; then
+      _runing "mở cổng $port trên tường lửa CSF..."
+      if ! grep -q "^TCP_IN =.*$port," /etc/csf/csf.conf; then
         sed -i "s/^TCP_IN = \"/TCP_IN = \"$port,/g" /etc/csf/csf.conf
         csf -x >/dev/null 2>&1
         csf -e >/dev/null 2>&1
       fi
+      _rundone "mở cổng $port trên tường lửa CSF..."
     fi
 
-    #mở port nftables
-    nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
-    if [[ "$nftables_service" = "active" ]]; then
-      if $(cat /etc/*release | grep -q "Ubuntu"); then
-        path_nftables_config="/etc/nftables.conf"
-      else
-        path_nftables_config="/etc/sysconfig/nftables.conf"
-      fi
-
-      if [[ -f $path_nftables_config ]]; then
-        sed -i '/#port remote mariadb/d' $path_nftables_config
-        sed -i "/chain input /a\ \ tcp dport $port accept #port remote mariadb" $path_nftables_config
+    # Mở Nftables
+    if [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | awk '{print $2}') == 'active' ]]; then
+      path_nftables_config="/etc/sysconfig/nftables.conf"
+      cat /etc/*release 2>/dev/null | grep -qi "Ubuntu" && path_nftables_config="/etc/nftables.conf"
+      if [[ -f "$path_nftables_config" ]]; then
+        _runing "Đang mở cổng $port trên Nftables..."
+        sed -i '/#port remote mariadb/d' "$path_nftables_config"
+        sed -i "/chain input /a\ \ tcp dport $port accept #port remote mariadb" "$path_nftables_config"
         systemctl restart nftables >/dev/null 2>&1
+        _rundone "Đã cấu hình Nftables"
       fi
     fi
 
+    _runing "khởi động lại dịch vụ MariaDB và Fail2ban..."
     sed -i "s/3306/$port/g" /etc/fail2ban/jail.local
     systemctl restart mariadb.service >/dev/null 2>&1
     systemctl restart fail2ban.service >/dev/null 2>&1
-    _rundone "Thiết lập remote mariadb"
+    _rundone "khởi động lại dịch vụ MariaDB và Fail2ban..."
+  else
+    # Nếu mạng đã mở rồi thì chỉ lấy Port ra để in thông báo
+    port=$(grep -i '^port[[:space:]]*=' "$duong_dan_cau_hinh_mariadb" | grep -o '[0-9]\+$')
   fi
 
-  _runing "Kích hoạt Remote Database website $NAME"
+  # =========================================================
+  # CẤP QUYỀN DATABASE VÀ IN THÔNG TIN
+  # =========================================================
+  _runing "Cấp quyền Remote cho User: $DB_User_web ..."
   echo "Kích hoạt remote database website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
   mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE USER IF NOT EXISTS '$DB_User_web'@'%' IDENTIFIED BY '$DB_Password_web'"
-  # mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON $DB_Name_web.* TO '$DB_User_web'@'%' WITH GRANT OPTION"
   mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON $DB_Name_web.* TO '$DB_User_web'@'%';"
   mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES"
-  rm -f $TEMP_CNF_ROOT
-  ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-  if [[ -z $ip ]]; then #bài toán nếu webserver chỉ hỗ trợ mỗi ipv6 không hỗ trợ ipv4
-    ip=$(curl -sk --connect-timeout 5 --max-time 10 https://ipv6.icanhazip.com)
-  fi
-  _rundone "Kích hoạt Remote Database website $NAME"
-  echo "Thông tin tài khoản database website $NAME"
-  echo "-------------------------------------------------------------------------"
-  echo "1.  Database Name 		: $DB_Name_web"
-  echo "2.  UserName 			: $DB_User_web"
-  echo "3.  PassWord 			: $DB_Password_web"
-  echo "4.  IP 				: $ip"
-  echo "5.  Port 			: $port"
-  echo "-------------------------------------------------------------------------"
+  _rundone "Cấp quyền Remote cho User: $DB_User_web ..."
+
+  # Lấy IP Public
+  ip=$(curl -skf --connect-timeout 5 "https://ipv4.icanhazip.com" || curl -skf --connect-timeout 5 "https://checkip.amazonaws.com")
+  [[ -z "$ip" ]] && ip=$(curl -sk --connect-timeout 5 "https://ipv6.icanhazip.com") # Fallback IPv6
+
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT BẬT REMOTE DATABASE${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Sử dụng các thông tin dưới đây để kết nối bằng phần mềm" 2
+  left_text "quản lý Database (Navicat, DBeaver, MySQL Workbench...):" 2
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text " 1. Máy chủ (Host/IP) : ${C_YELLOW}$ip${C_RESET}" 2
+  left_text " 2. Cổng mạng (Port)  : ${C_YELLOW}$port${C_RESET}" 2
+  left_text " 3. Tên Database      : ${C_YELLOW}$DB_Name_web${C_RESET}" 2
+  left_text " 4. Tên Đăng nhập     : ${C_YELLOW}$DB_User_web${C_RESET}" 2
+  left_text " 5. Mật khẩu (Pass)   : ${C_YELLOW}$DB_Password_web${C_RESET}" 2
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+else
+  echo -e "${C_YELLOW}Đã hủy thao tác Bật Remote.${C_RESET}\n"
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
