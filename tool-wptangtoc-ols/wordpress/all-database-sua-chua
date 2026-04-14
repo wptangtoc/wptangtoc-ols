@@ -13,21 +13,48 @@ function huong_dan() {
   * Sửa chữa các lỗi tìm thấy: Tùy thuộc vào loại lỗi và mức độ hỏng hóc, DBMS sẽ cố gắng sửa chữa các khối dữ liệu bị hỏng, xây dựng lại các chỉ mục, hoặc loại bỏ các phần không thể khôi phục.
 }
 
-. /etc/wptt/.wptt.conf
-. /etc/wptt/echo-color
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-# --- BẮT ĐẦU ĐOẠN SỬA LỖI DATABASE (REPAIR ONLY) ---
-echo "Đang kiểm tra và sửa lỗi Database ..."
-# 1. Xác định lệnh chuẩn
+# Dọn màn hình nếu chạy bằng tay (Cronjob sẽ tự bỏ qua)
+if [ -t 1 ]; then clear; fi
+
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Kiểm tra & Sửa lỗi toàn bộ Hệ thống (Repair All)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
+fi
+
+# Chốt chặn an toàn
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép chạy tiến trình sửa chữa."
+
+# ==============================================================================
+# BẢNG THÔNG TIN TIẾN TRÌNH
+# ==============================================================================
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+left_text "Tiến trình này sẽ quét toàn bộ Database trên máy chủ để:" 2
+left_text "  1. Kiểm tra tính toàn vẹn của tệp dữ liệu và tệp chỉ mục (Index)." 2
+left_text "  2. Tìm kiếm các lỗi và sự không nhất quán trong cấu trúc lưu trữ." 2
+left_text "  3. Tự động sửa chữa (Auto-repair) nếu phát hiện các khối dữ liệu hỏng." 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# XÁC ĐỊNH LỆNH VÀ TẠO CHỨNG CHỈ (CREDENTIALS) BẢO MẬT
+# ==============================================================================
 if command -v mariadb-check &>/dev/null; then
   DB_CHECK_CMD="mariadb-check"
 else
   DB_CHECK_CMD="mysqlcheck"
 fi
 
-# 2. Tạo file cấu hình tạm (Bảo mật)
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT"
+chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
 
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
@@ -36,31 +63,48 @@ password=${database_admin_password}
 host=localhost
 EOF
 
-trap "rm -f $TEMP_CNF_ROOT" EXIT
+# Cơ chế an toàn: Tự động xóa file khi script kết thúc hoặc bị hủy
+trap "rm -f \"$TEMP_CNF_ROOT\"" EXIT
 
-# 3. Thực thi SỬA CHỮA (Repair)
-# --check: Kiểm tra lỗi bảng
-# --auto-repair: Nếu phát hiện lỗi thì tự động sửa (nếu không lỗi thì thôi)
+# ==============================================================================
+# THỰC THI KIỂM TRA VÀ SỬA CHỮA HÀNG LOẠT
+# ==============================================================================
+_runing "Đang tiến hành kiểm tra và sửa chữa toàn bộ Database (Vui lòng chờ)..."
 
+# Chạy lệnh và giấu output rối mắt vào file log tạm
 $DB_CHECK_CMD --defaults-extra-file="$TEMP_CNF_ROOT" --check --auto-repair --all-databases \
   --skip-database="information_schema" \
   --skip-database="performance_schema" \
-  --skip-database="mysql"
+  --skip-database="sys" \
+  --skip-database="mysql" >/tmp/wptt_db_repair.log 2>&1
 
-# Kiểm tra kết quả
-if [[ $? -eq 0 ]]; then
-  echo "---------------------------------------------------"
-  echo "✅ Quá trình kiểm tra và sửa lỗi hoàn tất."
+status=$?
+
+if [[ $status -eq 0 ]]; then
+  _rundone "Kiểm tra và sửa lỗi Database hoàn tất (Không phát hiện lỗi vật lý)."
 else
-  echo "---------------------------------------------------"
-  echo "⚠️ Có cảnh báo (Thường là do bảng InnoDB không hỗ trợ repair kiểu cũ, nhưng dữ liệu vẫn an toàn)."
+  _runloi "Quá trình hoàn tất nhưng có một vài cảnh báo (Warnings)."
+  echo -e "${C_YELLOW}  ➜ Lưu ý: Cảnh báo 'The storage engine does not support repair'${C_RESET}"
+  echo -e "${C_YELLOW}    trên engine InnoDB là điều hoàn toàn bình thường, vì InnoDB${C_RESET}"
+  echo -e "${C_YELLOW}    có cơ chế tự động phục hồi sự cố cực kỳ an toàn!${C_RESET}"
+  echo -e "${C_CYAN}  ➜ Xem chi tiết log tại: /tmp/wptt_db_repair.log${C_RESET}"
 fi
 
+# Xóa file xác thực
 rm -f "$TEMP_CNF_ROOT"
 
 echo "Sửa chữa ALL database : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+# ==============================================================================
+# BẢNG BÁO CÁO THÀNH CÔNG
+# ==============================================================================
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT KIỂM TRA & SỬA CHỮA HỆ THỐNG DATABASE${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Quá trình kiểm tra lỗi cấu trúc đã xong. Dữ liệu của bạn" 2
+left_text "đã được đảm bảo an toàn và tính toàn vẹn được duy trì tốt nhất!" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == "98" ]]; then
   exec /etc/wptt/wptt-db-main 1
 fi

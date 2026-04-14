@@ -10,49 +10,48 @@ function huong_dan() {
   Hệ thống sẽ tự động trích xuất thông tin Database từ file cấu hình Vhost tĩnh của tên miền, hỗ trợ xem chi tiết dung lượng của từng Bảng [Tables] bên trong để bạn dễ dàng dọn dẹp và tối ưu.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
-. /etc/wptt/core-functions
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
 # Xử lý điều hướng menu con
-if [[ "$1" == '98' ]]; then
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
 
-# Chốt chặn an toàn: Kiểm tra MariaDB có đang sống không
+# Chốt chặn an toàn
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép kiểm tra dung lượng database."
 
 clear
-echo -e "\n========================================================================="
-echo -e "| Quản lý Database => Xem dung lượng Database          |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Kiểm tra Dung lượng Database${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# 1. Gọi thư viện lựa chọn tên miền
-. /etc/wptt/tenmien
-echo -e "Lựa chọn website bạn muốn kiểm tra Database:\n"
-lua_chon_NAME
+. /etc/wptt/tenmien 2>/dev/null
+lua_chon_NAME "kiểm tra dung lượng Database"
 
 # Kiểm tra thoát hiểm
 [[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-db-main 1
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  echoDo "Tên miền không tồn tại trên hệ thống này!"
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-db-main 1
+  exit 1
 fi
 
 # 2. Load file cấu hình Vhost tĩnh để lấy các biến môi trường
-. "$pathcheck"
+. "$pathcheck" 2>/dev/null
 
-# Lấy biến DB_Name_web (Hệ thống WPTangToc sinh ra biến này trong file .conf)
 db_chon="$DB_Name_web"
 
+# Tạo file cấu hình tạm thời bảo mật tuyệt đối
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -66,21 +65,37 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
-trap "rm -f $TEMP_CNF_ROOT" EXIT
 
-# 3. Kiểm tra Database có thực sự tồn tại trên MariaDB không
-check_db=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '$db_chon';")
+# Cơ chế an toàn: Tự động xóa file khi script kết thúc
+trap "rm -f \"$TEMP_CNF_ROOT\"" EXIT
+
+# ==============================================================================
+# 3. KIỂM TRA DATABASE CÓ TỒN TẠI HAY KHÔNG
+# ==============================================================================
+_runing "Đang kết nối Database và trích xuất dữ liệu dung lượng..."
+check_db=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "SELECT schema_name FROM information_schema.schemata WHERE schema_name = '$db_chon';" 2>/dev/null)
+
 if [[ -z "$check_db" ]]; then
-  echo -e "\n\033[1;31m Lỗi: Không tìm thấy Database '$db_chon' trong MariaDB!\033[0m"
-  echo " Có thể Database này đã bị xóa hoặc file cấu hình lưu sai tên."
-  sleep 3
+  _runloi "Kết nối Database thất bại"
+  echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}LỖI: KHÔNG TÌM THẤY DATABASE${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Tên Database dự kiến: ${C_YELLOW}$db_chon${C_RESET}" 2
+  left_text "Nguyên nhân         : Database này đã bị xóa, hoặc thông tin" 2
+  left_text "                      lưu trong file cấu hình Vhost bị sai lệch." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  sleep 4
   exec /etc/wptt/wptt-db-main 1
+  exit 1
 fi
+_rundone "Trích xuất dữ liệu thành công"
 
-# 4. In bảng chi tiết Table-level
-echo -e "\n\033[1;36m[+] CHI TIẾT TỪNG BẢNG TRONG DATABASE: $db_chon\033[0m"
+# ==============================================================================
+# 4. IN BẢNG CHI TIẾT TỪNG BẢNG (TABLE-LEVEL)
+# ==============================================================================
+echo -e "\n${C_CYAN}BẢNG PHÂN BỔ DUNG LƯỢNG TRONG DATABASE: ${C_YELLOW}$db_chon${C_RESET}"
 mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "
-  SELECT table_name AS 'Tên Bảng', 
+  SELECT table_name AS 'Tên Bảng (Tables)', 
   ROUND(((data_length + index_length) / 1024 / 1024), 2) AS 'Dung lượng (MB)',
   table_rows AS 'Số Dòng (Ước tính)'
   FROM information_schema.TABLES 
@@ -88,14 +103,29 @@ mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "
   ORDER BY (data_length + index_length) DESC;
 " -t
 
-# In tổng cộng
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "
-  SELECT CONCAT('=> TỔNG DUNG LƯỢNG DATABASE [', '$db_chon', '] LÀ: ', ROUND(SUM(data_length + index_length) / 1024 / 1024, 2), ' MB') 
+# ==============================================================================
+# 5. TỔNG KẾT VÀ BÁO CÁO (UX BO CONG)
+# ==============================================================================
+# Lấy tổng dung lượng gán vào biến
+total_size=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "
+  SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) 
   FROM information_schema.TABLES 
   WHERE table_schema = '$db_chon';
-"
+" 2>/dev/null)
 
-rm -f $TEMP_CNF_ROOT
-echo -e "\n========================================================================="
-read -p "Nhấn phím [Enter] để quay lại menu..." dummy
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-db-main 1
+[[ -z "$total_size" ]] && total_size="0.00"
+
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}BÁO CÁO TỔNG QUAN DATABASE${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Website sở hữu : ${C_YELLOW}$NAME${C_RESET}" 2
+left_text "Tên Database   : ${C_YELLOW}$db_chon${C_RESET}" 2
+left_text "Tổng Dung lượng: ${C_BOLD_WHITE}${total_size} MB${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+rm -f "$TEMP_CNF_ROOT"
+
+echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+read -r dummy
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
