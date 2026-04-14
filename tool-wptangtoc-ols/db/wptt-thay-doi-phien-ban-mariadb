@@ -54,7 +54,7 @@ REQUIRED_SPACE=$((DB_SIZE * 2 + 1024)) # Cần ít nhất gấp đôi DB size + 
 
 if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
   echo -e "${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}LỖI NGHIÊM TRỌNG: KHÔNG ĐỦ DUNG LƯỢNG Ổ CỨNG${C_RESET}"
+  center_text "${C_BOLD_WHITE}❌ LỖI NGHIÊM TRỌNG: KHÔNG ĐỦ DUNG LƯỢNG Ổ CỨNG${C_RESET}"
   echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "Dung lượng Database: ${DB_SIZE} MB" 2
   left_text "Ổ cứng còn trống   : ${FREE_SPACE} MB" 2
@@ -100,7 +100,7 @@ done
 echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 while true; do
-  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
+  echo -en "${C_CYAN}👉 Nhập lựa chọn của bạn (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
   read -r REPLY
   [[ "$REPLY" == "0" ]] && {
     echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
@@ -117,7 +117,7 @@ while true; do
 done
 
 if [[ "$mariadb_version" == "$phien_ban_hien_tai" ]]; then
-  echo -e "\n${C_YELLOW}Bạn đang sử dụng đúng phiên bản $phien_ban_hien_tai rồi! Hủy thao tác.${C_RESET}"
+  echo -e "\n${C_YELLOW}⚠️ Bạn đang sử dụng đúng phiên bản $phien_ban_hien_tai rồi! Hủy thao tác.${C_RESET}"
   sleep 3
   [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
   exit 0
@@ -231,20 +231,19 @@ if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   apt-get autoremove -y >/dev/null 2>&1
 else
   yum remove -y mariadb-server mariadb-client mariadb-common >/dev/null 2>&1
+  yum remove -y MariaDB-server MariaDB-client MariaDB-common >/dev/null 2>&1
 fi
 _rundone "Đã xóa sạch tàn dư MariaDB $phien_ban_hien_tai"
 
 _runing "Đang thiết lập Repository cho MariaDB $mariadb_version..."
-# ==============================================================================
-# THUẬT TOÁN DYNAMIC REPO THÔNG MINH CHO RHEL/ALMA/ROCKY (8, 9, 10, 11...)
-# ==============================================================================
+# TÍNH TOÁN DYNAMIC REPO CHO RHEL/ALMA/ROCKY (Cập nhật Repo 10)
 if ! grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   OS_ID=$(grep -w '^ID' /etc/os-release | cut -d= -f2 | tr -d '"')
   OS_VER=$(grep -w '^VERSION_ID' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d. -f1)
   ARCH="amd64"
   [[ "$(uname -m)" == "aarch64" ]] && ARCH="aarch64"
 
-  # Logic Fix Lỗi: Alma/Rocky 10 không có nhánh riêng, ép dùng chung RHEL
+  # Từ bản OS 10 trở đi, MariaDB dùng chung nhánh rhel cho Alma/Rocky
   if [[ "$OS_VER" -ge 10 ]]; then
     REPO_OS="rhel"
   elif [[ "$OS_ID" == "almalinux" ]]; then
@@ -290,7 +289,7 @@ fi
 _rundone "Cài đặt MariaDB $mariadb_version thành công"
 
 # ==============================================================================
-# CẤU HÌNH TỐI ƯU (MY.CNF)
+# CẤU HÌNH TỐI ƯU (MY.CNF) - FIX LỖI THIẾU THẺ [mysqld]
 # ==============================================================================
 _runing "Đang thiết lập thông số tối ưu my.cnf theo phần cứng..."
 work_cpucore='1024'
@@ -316,11 +315,15 @@ else
 fi
 
 duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
-grep -qi "ubuntu" /etc/os-release 2>/dev/null && duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  duong_dan_cau_hinh_mariadb="/etc/mysql/mariadb.conf.d/50-server.cnf"
+fi
 
-cat <<EOF >>"$duong_dan_cau_hinh_mariadb"
+# DÙNG > ĐỂ GHI ĐÈ HOÀN TOÀN VÀ ĐẢM BẢO CÓ THẺ [mysqld] MỞ ĐẦU
+cat <<EOF >"$duong_dan_cau_hinh_mariadb"
+[mysqld]
+table_open_cache = 2000
 key_buffer_size = ${buffer_db}M
-table_cache = 2000
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
 max_connections = $max_connections
 query_cache_type = $query_cache_type
@@ -331,10 +334,10 @@ tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 thread_cache_size = 81
 max_allowed_packet = 64M
-wait_timeout=60
+wait_timeout = 60
 interactive_timeout = 60
+skip-log-bin
 EOF
-sed -i '/\[mysqld\]/a skip-log-bin' "$duong_dan_cau_hinh_mariadb"
 
 # Xử lý an toàn loại bỏ Query Cache nếu MariaDB >= 10.8
 lowest_version=$(printf '%s\n%s\n' "10.8" "$mariadb_version" | sort -V | head -n1)
@@ -343,9 +346,33 @@ if [[ "$lowest_version" == "10.8" ]]; then
 fi
 _rundone "Cấu hình tối ưu my.cnf hoàn tất"
 
+# ==============================================================================
+# KHỞI TẠO LẠI CẤU TRÚC SYSTEM TABLE NẾU BỊ MẤT (LỖI Errcode: 2)
+# ==============================================================================
+if [[ ! -d "/var/lib/mysql/mysql" ]]; then
+  _runing "Đang khôi phục lại cấu trúc System Database..."
+  mkdir -p /var/lib/mysql
+  chown -R mysql:mysql /var/lib/mysql
+  if command -v mariadb-install-db >/dev/null 2>&1; then
+    mariadb-install-db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1
+  elif command -v mysql_install_db >/dev/null 2>&1; then
+    mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1
+  fi
+  _rundone "Khởi tạo cấu trúc System Database thành công"
+fi
+
 # Khởi động MariaDB
 systemctl enable mariadb >/dev/null 2>&1
 systemctl start mariadb >/dev/null 2>&1
+
+# Trạm Kiểm Soát An Toàn Khởi Động
+if ! systemctl is-active --quiet mariadb; then
+  _runloi "Khởi động MariaDB thất bại"
+  echo -e "\n${C_RED}❌ LỖI NGHIÊM TRỌNG: MariaDB không thể khởi động!${C_RESET}"
+  echo -e "${C_YELLOW}Vui lòng xem log hệ thống bên dưới để bắt bệnh:${C_RESET}"
+  journalctl -u mariadb.service --no-pager | tail -n 15
+  exit 1
+fi
 
 _runing "Đang cấu hình Root Password và bảo mật sơ bộ..."
 mariadb <<EOF
@@ -444,7 +471,7 @@ systemctl restart mariadb.service
 
 # BẢNG BÁO CÁO THÀNH CÔNG
 echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI PHIÊN BẢN MARIADB${C_RESET}"
+center_text "${C_BOLD_WHITE}✅ HOÀN TẤT THAY ĐỔI PHIÊN BẢN MARIADB${C_RESET}"
 echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "Từ phiên bản : ${C_YELLOW}MariaDB $phien_ban_hien_tai${C_RESET}" 2
 left_text "Sang bản mới : ${C_YELLOW}MariaDB $mariadb_version${C_RESET}" 2
