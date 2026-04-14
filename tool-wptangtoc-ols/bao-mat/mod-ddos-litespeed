@@ -24,56 +24,61 @@ function huong_dan() {
   Nếu IP đó truy cập gọi file tính động [html document] quá 20 giây sẽ bị chặn
 }
 
-. /etc/wptt/echo-color
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-if [[ $mod_chong_ddos = '' ]]; then
-  echo "Xác nhận bạn muốn sử dụng chế độ chống ddos tôi đang bị tấn công"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  dongy="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${bao_mat} ➜ Chế độ Chống DDoS (I'm Under Attack)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-    2)
-      dongy="n"
-      break
-      ;;
+config_file="/usr/local/lsws/conf/httpd_config.conf"
 
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
+# ==============================================================================
+# KIỂM TRA TRẠNG THÁI HIỆN TẠI
+# ==============================================================================
+is_under_attack=0
+if [[ "$mod_chong_ddos" == "1" ]] || grep -q 'staticReqPerSec.*40' "$config_file" 2>/dev/null; then
+  is_under_attack=1
+fi
 
-  if [[ $dongy = 'n' ]]; then
-    exec /etc/wptt/wptt-bao-mat-main 1
-  fi
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+if [[ $is_under_attack -eq 1 ]]; then
+  left_text "Trạng thái bảo vệ : ${C_RED}ĐANG BẬT (Under Attack Mode)${C_RESET}" 2
+  left_text "Cảnh báo          : ${C_YELLOW}Giới hạn Request rất gắt gao. Người dùng thật${C_RESET}" 2
+  left_text "                    ${C_YELLOW}có thể phải xác thực reCAPTCHA liên tục.${C_RESET}" 2
+else
+  left_text "Trạng thái bảo vệ : ${C_GREEN}ĐANG TẮT (Chế độ Bình Thường)${C_RESET}" 2
+  left_text "Hiệu suất Server  : Đạt mức tối đa (Raw Performance)" 2
+fi
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tính năng này can thiệp vào lõi OpenLiteSpeed, ép bật reCAPTCHA," 2
+left_text "bóp nghẹt số Request/giây và giảm Timeout để chống cạn kiệt RAM." 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-  _runing "Bật chế độ chống ddos tôi đang bị tấn công"
-  #Bạn nên điều chỉnh Max Connections và Max SSL Connections cao hơn bình thường có thể 30k hay 20k, hoặc thậm chí cao hơn miễn là máy chủ có đủ bộ nhớ ram trống. Mục đích của việc thay đổi là để tăng dung lượng, không phải để giới hạn bản thân dưới cuộc tấn công DoS.
+# Tính toán tài nguyên phần cứng chung
+cpucore=$(grep -c ^processor /proc/cpuinfo)
+work_cpucore=1024
 
-  work_cpucore='1024'
-  cpucore=$(grep -c ^processor /proc/cpuinfo)
+# ==============================================================================
+# NHÁNH 1: ĐANG TẮT -> HỎI ĐỂ BẬT LÊN
+# ==============================================================================
+if [[ $is_under_attack -eq 0 ]]; then
+  if wptt_xac_nhan "Website đang bị tấn công? Bạn có CHẮC CHẮN muốn BẬT chế độ chống DDoS?" "LƯU Ý: Chỉ kích hoạt khi thực sự có bão Traffic/DDoS." "Khi bão tan, hãy nhớ vào tắt đi để website hoạt động trơn tru nhất." "Đồng ý BẬT" "Hủy thao tác"; then
+    echo ""
 
-  # gấp 4 lần so với hiện tại: bình thường nhân 3, ddos cho nhân 12: tận chí có thể cao hơn, để tránh sập port 443
-  max_client_max=$(expr $work_cpucore \* $cpucore \* 12)
+    _runing "Đang cấu hình bóp nghẹt băng thông và bật reCAPTCHA..."
 
-  #cho tuning lên cao khg bị xung đột thực thi trước, không nó xoá mất perClientConnLimit
+    # Tính toán Max Client khẩn cấp (x12 để tránh nghẽn Port 443 do botnet giữ connection)
+    max_client_max=$((work_cpucore * cpucore * 12))
 
-  #  connTimeout             20 tức là thời gian kết nối tối đa để chống kỹ thuật: slowloris, có thể giảm xuống 5 đến 15 nếu muốn.
-  sed -i -e '/^tuning /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
-  echo "tuning  {
+    # 1. Cấu hình lại khối Tuning (Giảm Timeout chống Slowloris)
+    sed -i -e '/^tuning /,/^}$/d' "$config_file"
+    cat <<EOF >>"$config_file"
+tuning  {
   maxConnections          $max_client_max
   maxSSLConnections       $max_client_max
   connTimeout             20
@@ -104,22 +109,15 @@ if [[ $mod_chong_ddos = '' ]]; then
 
   quicEnable              1
   quicShmDir              /dev/shm
-} " >>/usr/local/lsws/conf/httpd_config.conf
+} 
+EOF
 
-  sed -i -e '/^perClientConnLimit /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
-  sed -i -e '/^lsrecaptcha /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+    # 2. Xóa cấu hình giới hạn cũ và lsrecaptcha
+    sed -i -e '/^perClientConnLimit /,/^}$/d' "$config_file"
+    sed -i -e '/^lsrecaptcha /,/^}$/d' "$config_file"
 
-  #nên đặt 3 yêu cầu html trở lên, trên 1/giây vì có thể người dùng sẽ dùng tính năng hover thì có thể bị gây chặn không cần thiết
-  #quá 20 giây chặn slow http
-  #ý nghĩa config Yêu cầu tĩnh/giây = 40, và Yêu cầu động/giây = 3 điều tiết băng thông.
-  #banPeriod: nếu bị quá sẽ bị khoá 600 giây (10 PHút) có thể tăng cao hơn nếu muốn
-  #hardLimit nếu 20 kết nối trong vòng 15 gracePeriod thì bị block 600 giây
-
-  #https://docs.litespeedtech.com/lsws/cp/cpanel/antiddos/
-
-  #softLimit là Khi một IP đạt đến 15 kết nối đồng thời, LiteSpeed sẽ bắt đầu giảm ưu tiên của nó.
-  #hardLimit là Khi một IP đạt đến 20 kết nối đồng thời, LiteSpeed sẽ bắt đầu block chặn.
-  cat >>"/usr/local/lsws/conf/httpd_config.conf" <<EOF
+    # 3. Tiêm cấu hình Giới hạn siêu ngặt nghèo
+    cat <<EOF >>"$config_file"
 perClientConnLimit {
   staticReqPerSec         40
   dynReqPerSec            3
@@ -131,67 +129,56 @@ perClientConnLimit {
   gracePeriod             15
   banPeriod               900
 }
-EOF
 
-  echo 'lsrecaptcha  {
+lsrecaptcha  {
   enabled                 1
   type                    1
-
   botWhiteList  {
-
   }
-}' >>/usr/local/lsws/conf/httpd_config.conf
+}
+EOF
 
-  sed -i '/mod_chong_ddos/d' /etc/wptt/.wptt.conf
-  echo 'mod_chong_ddos=1' >>/etc/wptt/.wptt.conf
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  _rundone "Bật chế độ chống ddos tôi đang bị tấn công"
-  echo "Khi cơn bão đã qua đi (hết bị hacker sơ múi) thì hãy tắt chế độ này để để cho website hoạt động tốt nhất"
-fi
+    # Cập nhật biến môi trường
+    sed -i '/mod_chong_ddos/d' /etc/wptt/.wptt.conf
+    echo 'mod_chong_ddos=1' >>/etc/wptt/.wptt.conf
 
-if [[ $mod_chong_ddos ]]; then
-  echo "Xác nhận bạn muốn tắt chế độ chống ddos tôi đang bị tấn công"
-  prompt="Nhập lựa chọn của bạn [1-2]: "
-  dongy="n"
-  options=("Đồng ý" "Không đồng ý")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
+    _rundone "Cập nhật các thông số bảo vệ lõi thành công"
 
-    2)
-      dongy="n"
-      break
-      ;;
+    _runing "Đang nạp lại cấu hình OpenLiteSpeed (Restart)..."
+    /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+    _rundone "Lớp khiên bảo vệ đã được dựng lên"
 
-    $((${#options[@]} + 1)))
-      printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    *)
-      printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-      break
-      ;;
-    esac
-  done
+    # BẢNG BÁO CÁO THÀNH CÔNG
+    echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}ĐÃ KÍCH HOẠT CHẾ ĐỘ CHỐNG DDOS KHẨN CẤP${C_RESET}"
+    echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Mức độ bảo vệ hiện tại:" 2
+    left_text " - Giới hạn File động (PHP) : ${C_YELLOW}3 Yêu cầu / 1 Giây / 1 IP${C_RESET}" 2
+    left_text " - Giới hạn File tĩnh       : ${C_YELLOW}40 Yêu cầu / 1 Giây / 1 IP${C_RESET}" 2
+    left_text " - Thời gian khóa (Ban)     : ${C_YELLOW}900 Giây (15 Phút)${C_RESET}" 2
+    left_text " - Trạng thái Anti-Bot      : ${C_YELLOW}Bật xác thực reCAPTCHA Server${C_RESET}" 2
+    echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-  if [[ $dongy = 'n' ]]; then
-    exec /etc/wptt/wptt-bao-mat-main 1
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác kích hoạt chế độ chống DDoS.${C_RESET}\n"
   fi
 
-  _runing "Tắt chế độ chống ddos tôi đang bị tấn công"
+# ==============================================================================
+# NHÁNH 2: ĐANG BẬT -> HỎI ĐỂ TẮT ĐI
+# ==============================================================================
+else
+  if wptt_xac_nhan "Website đã hết bão Traffic? Bạn có muốn TẮT chế độ chống DDoS?" "Thao tác này sẽ dỡ bỏ giới hạn reCAPTCHA và đưa Server về trạng" "thái hiệu suất cao nhất để phục vụ người dùng bình thường." "Đồng ý TẮT" "Hủy thao tác"; then
+    echo ""
 
-  work_cpucore='1024'
-  cpucore=$(grep -c ^processor /proc/cpuinfo)
+    _runing "Đang gỡ bỏ giới hạn và khôi phục hiệu suất tối đa..."
 
-  # gấp 4 lần so với hiện tại: bình thường nhân 3
-  max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
+    # Tính toán Max Client bình thường (x3)
+    max_client_max=$((work_cpucore * cpucore * 3))
 
-  sed -i -e '/^tuning /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
-  echo "tuning  {
+    # 1. Cấu hình lại khối Tuning (Timeout bình thường)
+    sed -i -e '/^tuning /,/^}$/d' "$config_file"
+    cat <<EOF >>"$config_file"
+tuning  {
   maxConnections          $max_client_max
   maxSSLConnections       $max_client_max
   connTimeout             300
@@ -222,20 +209,44 @@ if [[ $mod_chong_ddos ]]; then
 
   quicEnable              1
   quicShmDir              /dev/shm
-} " >>/usr/local/lsws/conf/httpd_config.conf
+} 
+EOF
 
-  sed -i -e '/^perClientConnLimit /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
-  sed -i -e '/^lsrecaptcha /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
-  echo 'perClientConnLimit  {
+    # 2. Xóa cấu hình giới hạn ngặt nghèo và lsrecaptcha
+    sed -i -e '/^perClientConnLimit /,/^}$/d' "$config_file"
+    sed -i -e '/^lsrecaptcha /,/^}$/d' "$config_file"
+
+    # 3. Tiêm lại giới hạn siêu rộng (Gần như không giới hạn)
+    cat <<EOF >>"$config_file"
+perClientConnLimit  {
   softLimit               100000
   hardLimit               150000
-}' >>/usr/local/lsws/conf/httpd_config.conf
-  sed -i '/mod_chong_ddos/d' /etc/wptt/.wptt.conf
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  _rundone "Tắt chế độ chống ddos tôi đang bị tấn công"
+}
+EOF
+
+    #tune auto config tối ưu
+    echo '100' >/etc/wptt/.ram_hien_tai #để ép thực thi wptt-auto-tune
+    (/bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1)
+
+    # Cập nhật biến môi trường
+    sed -i '/mod_chong_ddos/d' /etc/wptt/.wptt.conf
+    _rundone "Dỡ bỏ khiên bảo vệ, khôi phục thông số chuẩn"
+
+    _runing "Nạp lại cấu hình OpenLiteSpeed (Restart)..."
+    /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+    _rundone "Nạp lại cấu hình OpenLiteSpeed (Restart)..."
+
+    # BẢNG BÁO CÁO TẮT
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}ĐÃ TẮT CHẾ ĐỘ CHỐNG DDOS (KHÔI PHỤC BÌNH THƯỜNG)${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Mọi giới hạn khắt khe và hệ thống reCAPTCHA đã được gỡ bỏ." 2
+    left_text "Website của bạn đã quay trở lại trạng thái tối ưu tốc độ." 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác tắt chế độ chống DDoS.${C_RESET}\n"
+  fi
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-bao-mat-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
