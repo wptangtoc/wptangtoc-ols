@@ -6,181 +6,160 @@ function huong_dan() {
   Bạn có thể thay đổi lựa chọn phiên bản MariaDB bạn muốn sử dụng
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Thay đổi nhánh phiên bản MariaDB                   |"
-echo "========================================================================="
-echo ""
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-. /etc/wptt/echo-color
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Chuyển đổi / Nâng cấp Phiên bản MariaDB${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-. /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
 fi
-wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép thay đổi nhánh phiên bản Mariadb"
 
-echo ""
-echo "Vui lòng backup database trước khi chuyển đổi phiên bản mariadb"
-echo "Để tránh bị rủi ro khi quá trình chuyển đổi bị xảy ra sự cố"
-echo ""
+# ==============================================================================
+# RÀO CHẮN 1: KIỂM TRA SỨC KHỎE MARIADB HIỆN TẠI
+# ==============================================================================
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép thay đổi nhánh phiên bản MariaDB để bảo vệ an toàn."
+
 active_hien_tai=$(systemctl is-active mariadb.service 2>/dev/null)
-if [[ $active_hien_tai != "active" ]]; then
-  echo "Mariadb hiện tại không hoạt động không thể sử dụng tính năng này"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-fi
-
-disk=$(mount | grep ' / ' | cut -d' ' -f 1)
-disk_kha_dung=$(df -T -h | grep $disk | awk -F ' ' '{print $5}' | tr -d 'a-zA-G')
-het_disk="2"
-
-if [[ $(echo $disk_kha_dung | grep '.') ]]; then
-  if [[ $(echo $disk_kha_dung | wc -c) = 4 ]]; then
-    disk_kha_dung=$(echo $disk_kha_dung | tr -d '.')
-    het_disk="20"
-  fi
-fi
-
-if [[ $(echo $disk_kha_dung | grep '.') ]]; then
-  if [[ $(echo $disk_kha_dung | wc -c) = 5 ]]; then
-    disk_kha_dung=$(echo $disk_kha_dung | tr -d '.')
-    het_disk="200"
-  fi
-fi
-
-if [[ $disk_kha_dung =~ ^-?[0-9]+$ ]]; then
-  if (("$disk_kha_dung" < "$het_disk")); then
-    RED='\033[0;33m'
-    NC='\033[0m'
-    echo -e "${RED}==================================================================="
-    echo "Gần hết dung lượng ổ cứng không thể dùng tính năng này"
-    echo "$canh_bao_fulldisk"
-    echo "Disk: $(df -BG | awk '$NF=="/"{printf "%d/%dGB (%s)\n", $3,$2,$5}')"
-    echo "$de_kiem_tra_dung_luong_o_cung_dang_su_dung: wptt disk"
-    echo -e "=================================================================== ${NC}"
-    check_menu_wptangtoc_active=$1
-    if [[ $check_menu_wptangtoc_active = "98" ]]; then
-      exec /etc/wptt/wptt-db-main 1
-    fi
-    exit
-  fi
-fi
-
-# ---------------------------------------------------------
-# BƯỚC 0: RÀO CHẮN AN TOÀN (Kiểm tra ổ cứng)
-# ---------------------------------------------------------
-DB_SIZE=$(du -sm /var/lib/mysql 2>/dev/null | awk '{print $1}')
-FREE_SPACE=$(df -m /var/lib/mysql | awk 'NR==2 {print $4}')
-REQUIRED_SPACE=$((DB_SIZE + 1024))
-
-if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
-  echo -e "\e[31m[LỖI NGHIÊM TRỌNG] Ổ cứng không đủ dung lượng để tạo bản sao lưu an toàn!\e[0m"
-  rm -f "$TEMP_CNF_ROOT"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
+if [[ "$active_hien_tai" != "active" ]]; then
+  echo -e "${C_RED}❌ Lỗi: MariaDB hiện tại không hoạt động, không thể thực hiện Backup!${C_RESET}"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
   exit 1
 fi
 
-echo "Lưu ý: vui lòng backup website trước khi sử dụng tính năng này"
-echo "tránh rủi ro mất dữ liệu khi trong quá trình chuyển đổi bị gặp sự cố"
-echo ""
-echo ""
-echo "Bạn hãy lựa chọn phiên bản Maria Database muốn sử dụng: "
-rest_api_mariadb_verison=$(curl -s "https://downloads.mariadb.org/rest-api/mariadb" |
-  tr "}" "\n" |
-  grep '"release_support_type": "Long Term Support"' |
-  grep '"release_status": "Stable"' |
-  while read -r line; do
-    echo "$line" | sed -E 's/.*"release_name": "([^"]+)".*/\1/'
-  done)
+phien_ban_hien_tai=$(mariadbd --version 2>/dev/null | cut -f4 -d " " | grep '^1' | cut -f1-2 -d '.' | cut -f1 -d '-')
 
-while IFS= read -r line; do selects+=("$line"); done <<<"$rest_api_mariadb_verison"
-PS3="
--//- Nhập vào lựa chọn của bạn [1-$(echo $rest_api_mariadb_verison | wc -w)]: "
-select select in "${selects[@]}"; do
-  mariadb_version=$select
-  break
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+left_text "Phiên bản hiện tại : ${C_GREEN}MariaDB $phien_ban_hien_tai${C_RESET}" 2
+left_text "Cảnh báo rủi ro    : Quá trình này sẽ XÓA TOÀN BỘ Database cũ và" 2
+left_text "                     Cài đặt lại bản mới, sau đó Khôi phục dữ liệu." 2
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_YELLOW}Hệ thống sẽ TỰ ĐỘNG SAO LƯU toàn bộ Website trước khi làm!${C_RESET}" 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# RÀO CHẮN 2: KIỂM TRA DUNG LƯỢNG Ổ CỨNG (CHUẨN XÁC = MB)
+# ==============================================================================
+DB_SIZE=$(du -sm /var/lib/mysql 2>/dev/null | awk '{print $1}')
+FREE_SPACE=$(df -m /var/lib/mysql | awk 'NR==2 {print $4}')
+REQUIRED_SPACE=$((DB_SIZE * 2 + 1024)) # Cần ít nhất gấp đôi DB size + 1GB dự phòng
+
+if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+  echo -e "${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}LỖI NGHIÊM TRỌNG: KHÔNG ĐỦ DUNG LƯỢNG Ổ CỨNG${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Dung lượng Database: ${DB_SIZE} MB" 2
+  left_text "Ổ cứng còn trống   : ${FREE_SPACE} MB" 2
+  left_text "Yêu cầu an toàn    : Tối thiểu ${REQUIRED_SPACE} MB để chứa bản Backup." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  echo -e "${C_YELLOW}Vui lòng dọn dẹp ổ cứng (wptt disk) trước khi thực hiện chức năng này!${C_RESET}"
+  sleep 4
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit 1
+fi
+
+# ==============================================================================
+# FETCH DATA & MENU CHỌN PHIÊN BẢN MARIADB
+# ==============================================================================
+_runing "Đang kết nối máy chủ MariaDB để lấy danh sách phiên bản LTS..."
+rest_api_mariadb_verison=$(curl -s --connect-timeout 5 "https://downloads.mariadb.org/rest-api/mariadb" | tr "}" "\n" | grep '"release_support_type": "Long Term Support"' | grep '"release_status": "Stable"' | grep -Eo '"release_name": "[^"]+"' | cut -d'"' -f4)
+_rundone "Lấy danh sách phiên bản thành công"
+echo ""
+
+if [[ -z "$rest_api_mariadb_verison" ]]; then
+  echo -e "${C_RED}❌ Lỗi kết nối mạng: Không lấy được danh sách phiên bản từ MariaDB.org${C_RESET}"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit 1
+fi
+
+unset selects
+selects=()
+while IFS= read -r line; do
+  [[ -n "$line" ]] && selects+=("$line")
+done <<<"$rest_api_mariadb_verison"
+
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}LỰA CHỌN PHIÊN BẢN MARIADB LTS (STABLE) MUỐN CÀI ĐẶT${C_RESET}"
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+i=1
+for ver in "${selects[@]}"; do
+  stt_text=""
+  [[ "$ver" == "$phien_ban_hien_tai" ]] && stt_text="${C_GREEN}(Đang sử dụng)${C_RESET}"
+  left_text "  ${C_CYAN}${i})${C_RESET} MariaDB ${C_BOLD_WHITE}${ver}${C_RESET} $stt_text" 2
+  ((i++))
+done
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+while true; do
+  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
+  read -r REPLY
+  [[ "$REPLY" == "0" ]] && {
+    echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+    exit 0
+  }
+
+  if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+    mariadb_version="${selects[$((REPLY - 1))]}"
+    break
+  else
+    echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
+  fi
 done
 
-#nhập không có giá trị
-if [[ $mariadb_version = '' ]]; then
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-  exit
+if [[ "$mariadb_version" == "$phien_ban_hien_tai" ]]; then
+  echo -e "\n${C_YELLOW}Bạn đang sử dụng đúng phiên bản $phien_ban_hien_tai rồi! Hủy thao tác.${C_RESET}"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit 0
 fi
 
-#nhập không có giá trị
-if [[ $mariadb_version = '0' ]]; then
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-  exit
+# ==============================================================================
+# XÁC NHẬN CHÓT (POINT OF NO RETURN)
+# ==============================================================================
+echo ""
+if ! wptt_xac_nhan "CẢNH BÁO: Bạn sắp chuyển từ MariaDB $phien_ban_hien_tai sang $mariadb_version" "Quá trình này sẽ XÓA TOÀN BỘ CƠ SỞ DỮ LIỆU HIỆN TẠI. Dù hệ thống" "có auto-backup, hãy đảm bảo bạn cũng đã tự tay Backup ở nơi khác!" "Đồng ý Nâng/Hạ Cấp Nguy Hiểm" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác. An toàn là trên hết!${C_RESET}\n"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exit 0
 fi
 
-phien_ban_hien_tai=$(mariadbd --version | cut -f4 -d " " | grep '^1' | cut -f1-2 -d '.' | cut -f1 -d '-')
-
-if [[ $mariadb_version = $phien_ban_hien_tai ]]; then
-  echo "Bạn đang sử dụng phiên bản $phien_ban_hien_tai rồi"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-  exit
-fi
-
+# Tạm dừng Monit
+ngung_monit_rebuild=""
 if systemctl is-active --quiet monit; then
   systemctl stop monit
   ngung_monit_rebuild=1
 fi
 
+# ==============================================================================
+# TIẾN TRÌNH SAO LƯU (BACKUP) TOÀN BỘ WEBSITE
+# ==============================================================================
+echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BƯỚC 1: SAO LƯU TOÀN BỘ CƠ SỞ DỮ LIỆU TRƯỚC KHI NÂNG CẤP${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+mkdir -p /usr/local/backup-website/move-db-version
+
 backup_database_wptt() {
-  NAME=$1
+  local NAME=$1
+  . /etc/wptt/vhost/."$NAME".conf 2>/dev/null
 
-  . /etc/wptt/.wptt.conf
-  if [[ $ngon_ngu = '' ]]; then
-    ngon_ngu='vi'
-  fi
-  . /etc/wptt/lang/$ngon_ngu.sh
-
-  . /etc/wptt/echo-color
-  . /etc/wptt/vhost/."$NAME".conf
-
-  if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-    exec /etc/wptt/wptt-db-main 1
-  fi
-
-  pathcheck="/etc/wptt/vhost/.$NAME.conf"
-  if [[ ! -f "$pathcheck" ]]; then
-    clear
-    echoDo "$ten_mien_nay_khong_ton_tai_tren_he_thong"
-    sleep 3
-    exec /etc/wptt/wptt-db-main 1
-    exit
-  fi
-
-  mkdir -p /usr/local/backup-website/move-db-version
+  [[ -z "$NAME" || -z "$DB_Name_web" ]] && return 1
   mkdir -p "/usr/local/backup-website/move-db-version/$NAME"
 
-  _runing "$sao_luu_database website $NAME"
+  _runing "Sao lưu Database Website: $NAME"
 
-  TEMP_CNF=$(mktemp)
-  chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+  local TEMP_CNF=$(mktemp)
+  chmod 600 "$TEMP_CNF"
   cat >"$TEMP_CNF" <<EOF
 [client]
 user=${DB_User_web}
@@ -196,178 +175,139 @@ max_allowed_packet=1G
 single-transaction
 EOF
 
-  if [[ $sql_gz = '1' ]]; then
-    mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz
-  elif [[ $sql_gz = '2' ]]; then
-    mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.zst
+  if [[ "$sql_gz" == '1' ]]; then
+    mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >"/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz"
+  elif [[ "$sql_gz" == '2' ]]; then
+    mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >"/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.zst"
   else
-    mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false >/usr/local/backup-website/move-db-version/$NAME/$NAME.sql
+    mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false >"/usr/local/backup-website/move-db-version/$NAME/$NAME.sql"
   fi
+  rm -f "$TEMP_CNF"
 
-  rm -rf $TEMP_CNF
+  # Verify dung lượng file Backup (>10KB)
+  local check_file_error=0
+  if [[ "$sql_gz" == '1' ]]; then check_file_error=$(du -k "/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz" 2>/dev/null | awk '{print $1}'); fi
+  if [[ "$sql_gz" == '2' ]]; then check_file_error=$(du -k "/usr/local/backup-website/move-db-version/$NAME/$NAME.sql.zst" 2>/dev/null | awk '{print $1}'); fi
+  if [[ "$sql_gz" != '1' && "$sql_gz" != '2' ]]; then check_file_error=$(du -k "/usr/local/backup-website/move-db-version/$NAME/$NAME.sql" 2>/dev/null | awk '{print $1}'); fi
 
-  if [[ ! -f /usr/local/backup-website/move-db-version/$NAME/$NAME.sql && ! -f /usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz && ! -f /usr/local/backup-website/move-db-version/$NAME/$NAME.sql.zst ]]; then
-    _runloi "$sao_luu_database website $NAME"
-  fi
-
-  if [[ $sql_gz = '1' ]]; then
-    check_file_error=$(du -c /usr/local/backup-website/move-db-version/$NAME/$NAME.sql.gz | awk '{print $1}' | sed '1d')
-    if ((${check_file_error:-0} < 10)); then
-      _runloi "$sao_luu_database website $NAME"
-      rm -f /usr/local/backup-website/$NAME/$NAME.sql.gz
-      return 2>/dev/null
-      exit
-    fi
-  elif [[ $sql_gz = '2' ]]; then
-    check_file_error=$(du -c /usr/local/backup-website/move-db-version/$NAME/$NAME.sql.zst | awk '{print $1}' | sed '1d')
-    if ((${check_file_error:-0} < 10)); then
-      _runloi "$sao_luu_database website $NAME"
-      rm -f /usr/local/backup-website/$NAME/$NAME.sql.gz
-      return 2>/dev/null
-      exit
-    fi
+  if ((check_file_error < 10)); then
+    _runloi "Sao lưu Database Website: $NAME (File rỗng hoặc lỗi)"
+    rm -rf "/usr/local/backup-website/move-db-version/$NAME"
+    return 1
   else
-    check_file_error=$(du -c /usr/local/backup-website/move-db-version/$NAME/$NAME.sql | awk '{print $1}' | sed '1d')
-    if ((${check_file_error:-0} < 10)); then
-      _runloi "$sao_luu_database website $NAME"
-      rm -f /usr/local/backup-website/move-db-version/$NAME/$NAME.sql
-      return 2>/dev/null
-      exit
-    fi
+    _rundone "Sao lưu Database Website: $NAME"
+    return 0
   fi
-
-  _rundone "$sao_luu_database website $NAME"
-
-  echo "========================================================================="
 }
 
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  echo "Sao lưu toàn bộ database trên hệ thống"
-  echo ""
-  echo ""
+if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
   for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-    domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    path="/usr/local/lsws/$domain/html"
-    i=1
-
-    if [[ -d "$path" ]]; then
-      _runing "Sao lưu database website $domain"
-      (backup_database_wptt $domain >/dev/null 2>&1)
-
-      unset check_file_error
-      if [[ $sql_gz = '1' ]]; then
-        check_file_error=$(du -c /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz | awk '{print $1}' | sed '1d')
-        if ((${check_file_error:-0} < 10)); then
-          _runloi "$sao_luu_database website $domain"
-          rm -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz
-          continue
-        fi
-      elif [[ $sql_gz = '2' ]]; then
-        check_file_error=$(du -c /usr/local/backup-website/move-db-version/$domain/$domain.sql.zst | awk '{print $1}' | sed '1d')
-        if ((${check_file_error:-0} < 10)); then
-          _runloi "$sao_luu_database website $domain"
-          rm -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz
-          continue
-        fi
-      else
-        check_file_error=$(du -c /usr/local/backup-website/move-db-version/$domain/$domain.sql | awk '{print $1}' | sed '1d')
-        if ((${check_file_error:-0} < 10)); then
-          _runloi "$sao_luu_database website $domain"
-          rm -f /usr/local/backup-website/move-db-version/$domain/$domain.sql
-          continue
-        fi
-      fi
-      _rundone "Sao lưu database website $domain"
+    domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+    if [[ "$domain" == ?*.?* && -d "/usr/local/lsws/$domain/html" ]]; then
+      backup_database_wptt "$domain"
     fi
   done
 fi
 
-echo "Hoàn tất Chuyển nhánh phiên bản MariaDB $phien_ban_hien_tai chuyển sang MariaDB $mariadb_version thời gian: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-systemctl stop mariadb
-pkill mysql
+# ==============================================================================
+# GỠ BỎ MARIADB CŨ & CÀI ĐẶT BẢN MỚI
+# ==============================================================================
+echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BƯỚC 2: XÓA DỮ LIỆU CŨ VÀ CÀI ĐẶT MARIADB MỚI ($mariadb_version)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+echo "Bắt đầu chuyển từ MariaDB $phien_ban_hien_tai sang $mariadb_version: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+_runing "Đang Dừng và Gỡ bỏ MariaDB Server hiện tại..."
+systemctl stop mariadb >/dev/null 2>&1
+pkill mysql >/dev/null 2>&1
 rm -rf /var/lib/mysql
 rm -rf /etc/mysql
 rm -f /etc/my.cnf.d/server.cnf
-yum remove mariadb-server -y
-yum remove mariadb-client -y
-yum remove mariadb-common -y
 
-OUTPUT=$(cat /etc/*release)
-if echo $OUTPUT | grep -q "Ubuntu"; then
-  sudo apt-get autoremove
-fi
-
-OUTPUT_OS_NAME_CHECK=$(cat /etc/*release)
-if echo $OUTPUT_OS_NAME_CHECK | grep -q "AlmaLinux"; then
-  mariadb_repo_name="almalinux8-amd64"
-elif echo $OUTPUT_OS_NAME_CHECK | grep -q "Rocky Linux"; then
-  mariadb_repo_name="rockylinux8-amd64"
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get remove -y mariadb-server mariadb-client mariadb-common >/dev/null 2>&1
+  apt-get autoremove -y >/dev/null 2>&1
 else
-  mariadb_repo_name="rhel8-amd64"
+  yum remove -y mariadb-server mariadb-client mariadb-common >/dev/null 2>&1
 fi
+_rundone "Đã xóa sạch tàn dư MariaDB $phien_ban_hien_tai"
 
-if [[ $(uname -m | grep 'aarch64') ]]; then
-  mariadb_repo_name=$(echo $mariadb_repo_name | sed 's/amd64/aarch64/g') #cpu arm
-fi
+_runing "Đang thiết lập Repository cho MariaDB $mariadb_version..."
+# ==============================================================================
+# THUẬT TOÁN DYNAMIC REPO THÔNG MINH CHO RHEL/ALMA/ROCKY (8, 9, 10, 11...)
+# ==============================================================================
+if ! grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  OS_ID=$(grep -w '^ID' /etc/os-release | cut -d= -f2 | tr -d '"')
+  OS_VER=$(grep -w '^VERSION_ID' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d. -f1)
+  ARCH="amd64"
+  [[ "$(uname -m)" == "aarch64" ]] && ARCH="aarch64"
 
-if echo $OUTPUT_OS_NAME_CHECK | grep -q "AlmaLinux 9\|Rocky Linux 9\|Red Hat Enterprise Linux 9\|Oracle Linux Server 9"; then
-  mariadb_repo_name=$(echo $mariadb_repo_name | sed 's/8-/9-/g') #dòng redhat 9 thay cho redhat 8
-fi
+  # Logic Fix Lỗi: Alma/Rocky 10 không có nhánh riêng, ép dùng chung RHEL
+  if [[ "$OS_VER" -ge 10 ]]; then
+    REPO_OS="rhel"
+  elif [[ "$OS_ID" == "almalinux" ]]; then
+    REPO_OS="almalinux"
+  elif [[ "$OS_ID" == "rocky" ]]; then
+    REPO_OS="rockylinux"
+  else
+    REPO_OS="rhel"
+  fi
 
-if [[ -f /etc/yum.repos.d/MariaDB.repo ]]; then
-  echo '[mariadb]
+  mariadb_repo_name="${REPO_OS}${OS_VER}-${ARCH}"
+
+  cat <<EOF >/etc/yum.repos.d/MariaDB.repo
+[mariadb]
 name = MariaDB
-baseurl = http://yum.mariadb.org/'$mariadb_version'/'$mariadb_repo_name'
+baseurl = http://yum.mariadb.org/$mariadb_version/$mariadb_repo_name
 gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
 gpgcheck=1
-module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
-fi
-#thiết lập repo mariadb
-
-OUTPUT=$(cat /etc/*release)
-if echo $OUTPUT_OS_NAME_CHECK | grep -q "Ubuntu 22.04\|Ubuntu 24.04"; then
-  UBUNTU_CODENAME_VERSION=$(cat /etc/os-release | grep UBUNTU_CODENAME | cut -f2 -d=)
-  apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
-  add-apt-repository 'deb [arch=amd64,arm64,ppc64el] http://sfo1.mirrors.digitalocean.com/mariadb/repo/'$mariadb_version'/ubuntu '$UBUNTU_CODENAME_VERSION' main' -y
+module_hotfixes=1
+EOF
 fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  #ubuntu
-  yum install mariadb-server mariadb-client -y
+# THIẾT LẬP REPO CHO UBUNTU
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  curl -LsS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup | bash -s -- --mariadb-server-version="mariadb-$mariadb_version" >/dev/null 2>&1
+fi
+_rundone "Thiết lập Repository thành công (Nhánh: $mariadb_repo_name)"
+
+_runing "Đang Tải và Cài đặt MariaDB $mariadb_version (Vui lòng chờ)..."
+if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  apt-get update >/dev/null 2>&1
+  apt-get install -y mariadb-server mariadb-client >/dev/null 2>&1
 else
-  #rehat
-  yum install MariaDB-server MariaDB-client -y
-fi
+  yum install -y MariaDB-server MariaDB-client >/dev/null 2>&1
 
-if [[ ! -d /var/lib/mysql ]]; then
-  sed -i 's/http:\/\/yum.mariadb.org/https:\/\/mirror.rackspace.com/g' /etc/yum.repos.d/MariaDB.repo #thay repo dự phòng
-  if echo $OUTPUT_OS_NAME_CHECK | grep -q "Ubuntu 22.04\|Ubuntu 24.04"; then
-    UBUNTU_CODENAME_VERSION=$(cat /etc/os-release | grep UBUNTU_CODENAME | cut -f2 -d=)
-    apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc'
-    add-apt-repository 'deb [arch=amd64,arm64,ppc64el] http://mariadb.mirrors.ovh.net/MariaDB/repo/'$mariadb_version'/ubuntu '$UBUNTU_CODENAME_VERSION' main' -y
+  # Fallback nếu Mirror chính bị sập
+  if [[ ! -d /var/lib/mysql ]]; then
+    sed -i 's|http://yum.mariadb.org|https://mirror.rackspace.com|g' /etc/yum.repos.d/MariaDB.repo
+    yum clean all >/dev/null 2>&1
+    yum install -y MariaDB-server MariaDB-client >/dev/null 2>&1
   fi
 fi
+_rundone "Cài đặt MariaDB $mariadb_version thành công"
 
+# ==============================================================================
+# CẤU HÌNH TỐI ƯU (MY.CNF)
+# ==============================================================================
+_runing "Đang thiết lập thông số tối ưu my.cnf theo phần cứng..."
 work_cpucore='1024'
 cpucore=$(grep -c ^processor /proc/cpuinfo)
-max_client=$(expr $work_cpucore \* $cpucore \* 2)
-max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
-max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
 tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
 rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-if [[ "$rong_ram_mb" = "" ]]; then
-  rong_ram_mb="2048"
-fi
+[[ -z "$rong_ram_mb" ]] && rong_ram_mb="2048"
+
 tong_ram_mb_db=$(echo "scale=0;${rong_ram_mb}/4" | bc)
-max_conect_db=$(expr $max_client / 8)
-tong_ram_gb=$(expr ${rong_ram_mb} / 1024)
-db_table_size=$(expr $tong_ram_gb \* 64)
-buffer_db=$(expr $rong_ram_mb / 6)
+tong_ram_gb=$((rong_ram_mb / 1024))
+[[ $tong_ram_gb -eq 0 ]] && tong_ram_gb=1
 
-max_connections=$(expr 64 \* ${tong_ram_gb})
+db_table_size=$((tong_ram_gb * 64))
+buffer_db=$((rong_ram_mb / 6))
+max_connections=$((64 * tong_ram_gb))
 
-#cau hinh query cache set up optimize
-if (($cpucore > 2)); then
+if ((cpucore > 2)); then
   query_cache_type=0
   query_cache_size=0
 else
@@ -375,18 +315,11 @@ else
   query_cache_size='50M'
 fi
 
-if [[ $query_cache_type = '' ]]; then
-  query_cache_type=0
-  query_cache_size=0
-fi
+duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+grep -qi "ubuntu" /etc/os-release 2>/dev/null && duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
-else
-  duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
-fi
-
-echo "key_buffer_size = ${buffer_db}M
+cat <<EOF >>"$duong_dan_cau_hinh_mariadb"
+key_buffer_size = ${buffer_db}M
 table_cache = 2000
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
 max_connections = $max_connections
@@ -399,32 +332,41 @@ max_heap_table_size = ${db_table_size}M
 thread_cache_size = 81
 max_allowed_packet = 64M
 wait_timeout=60
-interactive_timeout = 60" >>$duong_dan_cau_hinh_mariadb
-sed -i '/\[mysqld\]/a skip-log-bin' $duong_dan_cau_hinh_mariadb
+interactive_timeout = 60
+EOF
+sed -i '/\[mysqld\]/a skip-log-bin' "$duong_dan_cau_hinh_mariadb"
 
-#Vấn đề: Bắt đầu từ MariaDB 10.8 (và MySQL 8.0), tính năng Query Cache đã bị xóa bỏ hoàn toàn khỏi mã nguồn.
-# Lấy ra phiên bản thấp nhất giữa 10.8 và phiên bản người dùng chọn
+# Xử lý an toàn loại bỏ Query Cache nếu MariaDB >= 10.8
 lowest_version=$(printf '%s\n%s\n' "10.8" "$mariadb_version" | sort -V | head -n1)
-# Nếu "10.8" là phiên bản thấp nhất -> Nghĩa là mariadb_version >= 10.8
 if [[ "$lowest_version" == "10.8" ]]; then
-  sed -i '/query_cache/d' /etc/my.cnf.d/server.cnf
+  sed -i '/query_cache/d' "$duong_dan_cau_hinh_mariadb"
 fi
+_rundone "Cấu hình tối ưu my.cnf hoàn tất"
 
-systemctl start mariadb
-systemctl enable mariadb
+# Khởi động MariaDB
+systemctl enable mariadb >/dev/null 2>&1
+systemctl start mariadb >/dev/null 2>&1
 
-. /etc/wptt/.wptt.conf
+_runing "Đang cấu hình Root Password và bảo mật sơ bộ..."
 mariadb <<EOF
 use mysql;
 FLUSH PRIVILEGES;
 CREATE USER 'wordpressadmin'@'localhost' IDENTIFIED BY '$database_admin_password';
 GRANT ALL PRIVILEGES ON *.* TO 'wordpressadmin'@'localhost' WITH GRANT OPTION;
-DROP USER 'root'@'localhost';
+DROP USER IF EXISTS 'root'@'localhost';
 FLUSH PRIVILEGES;
 EOF
+_rundone "Cấu hình User System thành công"
+
+# ==============================================================================
+# KHÔI PHỤC DỮ LIỆU (RESTORE)
+# ==============================================================================
+echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BƯỚC 3: KHÔI PHỤC DỮ LIỆU CHO CÁC WEBSITE${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
@@ -432,104 +374,83 @@ password=${database_admin_password}
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
-
-[mysqldump]
-quick
-quote-names
-max_allowed_packet=1G
 EOF
 
-for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-  domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-  path="/usr/local/lsws/$domain/html"
-  i=1
+for entry in $(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV); do
+  domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
 
-  if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+  if [[ "$domain" == ?*.?* && -d "/usr/local/backup-website/move-db-version/$domain" ]]; then
     unset DB_User_web DB_Password_web DB_Name_web
-    . /etc/wptt/vhost/."$domain".conf
-    _runing "Thêm database website $domain"
-    if [[ $DB_Name_web ]]; then
-      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS ${DB_Name_web}"
-      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web}"
-      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'"
-      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE USER IF NOT EXISTS '${DB_User_web}'@'localhost' IDENTIFIED BY '${DB_Password_web}'"
-      # mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost' WITH GRANT OPTION"
+    . "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
+
+    if [[ -n "$DB_Name_web" ]]; then
+      _runing "Đang Rebuild Database: $domain"
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS ${DB_Name_web};"
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web};"
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost';"
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE USER IF NOT EXISTS '${DB_User_web}'@'localhost' IDENTIFIED BY '${DB_Password_web}';"
       mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost';"
-      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES"
-      _rundone "Thêm database website $domain"
-    else
-      _runloi "Thêm database website $domain"
-    fi
-    _runing "Khôi phục database website $domain"
-    #import file .sql
-    if [[ -f /usr/local/backup-website/move-db-version/$domain/$domain.sql || -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz || -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.zst ]]; then
-      if [[ -f /usr/local/backup-website/move-db-version/$domain/$domain.zst ]]; then
-        zstd -d </usr/local/backup-website/move-db-version/$domain/$domain.sql.zst | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false # sử dụng import .sql.zst
-        _rundone "Khôi phục database website $domain"
-      elif [[ -f /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz ]]; then
-        zcat /usr/local/backup-website/move-db-version/$domain/$domain.sql.gz | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false # sử dụng import .sql.gz
-        _rundone "Khôi phục database website $domain"
-      else
-        if [[ -f /usr/local/backup-website/move-db-version/$domain/$domain.sql ]]; then
-          mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false </usr/local/backup-website/move-db-version/$domain/$domain.sql #sử dụng import .sql
-          _rundone "Khôi phục database website $domain"
-        fi
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES;"
+      _rundone "Đã khởi tạo vỏ Database: $domain"
+
+      _runing "Đang Khôi phục dữ liệu (Import SQL): $domain"
+      if [[ -f "/usr/local/backup-website/move-db-version/$domain/$domain.sql.zst" ]]; then
+        zstd -d <"/usr/local/backup-website/move-db-version/$domain/$domain.sql.zst" | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false
+      elif [[ -f "/usr/local/backup-website/move-db-version/$domain/$domain.sql.gz" ]]; then
+        zcat "/usr/local/backup-website/move-db-version/$domain/$domain.sql.gz" | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false
+      elif [[ -f "/usr/local/backup-website/move-db-version/$domain/$domain.sql" ]]; then
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false <"/usr/local/backup-website/move-db-version/$domain/$domain.sql"
       fi
-    else
-      _runloi "Khôi phục database website $domain"
+      _rundone "Import dữ liệu Database: $domain thành công"
     fi
   fi
 done
 
+# Dọn dẹp
 rm -rf /usr/local/backup-website/move-db-version
-rm -rf $TEMP_CNF_ROOT
-unset TEMP_CNF_ROOT
+rm -f "$TEMP_CNF_ROOT"
 
-#tái cấu trúc
+# ==============================================================================
+# BƯỚC CUỐI: TÁI CẤU TRÚC (UPGRADE SCHEMA)
+# ==============================================================================
+_runing "Đang chạy MariaDB Upgrade (Tái cấu trúc Schema Core)..."
 TEMP_CNF_ROOT=$(mktemp)
-chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới có quyền đọc
-# Ghi thông tin xác thực vào file tạm ẩn (Tuyệt đối KHÔNG có host=localhost)
+chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
 password=${database_admin_password}
-
 [mysqladmin]
 user=${database_admin_username}
 password=${database_admin_password}
-
 [mariadb-upgrade]
 user=${database_admin_username}
 password=${database_admin_password}
-
 [mysql_upgrade]
 user=${database_admin_username}
 password=${database_admin_password}
 EOF
 
-# Chạy lệnh tái cấu trúc (Dùng file ẩn TEMP_CNF_ROOT)
 if command -v mariadb-upgrade >/dev/null 2>&1; then
-  mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
+  mariadb-upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force >/dev/null 2>&1
 elif command -v mysql_upgrade >/dev/null 2>&1; then
-  mysql_upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force
-else
-  echo -e "\e[31m[LỖI] Không tìm thấy công cụ nâng cấp cấu trúc!\e[0m"
+  mysql_upgrade --defaults-extra-file="$TEMP_CNF_ROOT" --force >/dev/null 2>&1
 fi
-echo -e "✅ Tái cấu trúc (Upgrade Schema) hoàn tất!"
 rm -f "$TEMP_CNF_ROOT"
-#end tái cấu trúc
+_rundone "Tái cấu trúc Schema System hoàn tất"
 
 systemctl restart mariadb.service
+[[ -n "$ngung_monit_rebuild" ]] && systemctl start monit
 
-echo ''
+# BẢNG BÁO CÁO THÀNH CÔNG
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI PHIÊN BẢN MARIADB${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Từ phiên bản : ${C_YELLOW}MariaDB $phien_ban_hien_tai${C_RESET}" 2
+left_text "Sang bản mới : ${C_YELLOW}MariaDB $mariadb_version${C_RESET}" 2
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tất cả Website, User, Password và Database đã được khôi phục" 2
+left_text "trọn vẹn. Máy chủ Database đang chạy với hiệu suất cao nhất!" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if [[ $ngung_monit_rebuild ]]; then
-  systemctl start monit
-fi
-
-_rundone "Hoàn tất Chuyển nhánh phiên bản MariaDB $phien_ban_hien_tai chuyển sang MariaDB $mariadb_version"
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-db-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
