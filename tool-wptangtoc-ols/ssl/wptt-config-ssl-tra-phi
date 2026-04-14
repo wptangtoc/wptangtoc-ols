@@ -2,132 +2,277 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2022
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý SSL => Kích hoạt SSL trả phí paid                              |"
-echo "========================================================================="
-. /etc/wptt/.wptt.conf
-. /etc/wptt/echo-color
-NAME=$1
+# @since: 2026
 
-if [[ $NAME = "98" ]]; then
-  NAME=""
-fi
+function huong_dan() {
+  Tính năng bổ sung Kích hoạt SSL trả phí...
+}
 
-if [[ $NAME = "" ]]; then
-  . /etc/wptt/tenmien
-  echo ""
-  echo ""
-  echo "Lựa chọn website muốn kích hoạt SSL trả phí paid (HTTPS): "
-  echo ""
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ SSL ➜ Kích hoạt SSL Trả phí / Custom SSL${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+function lua_chon_NAME() {
+  unset NAME selects
+  selects=()
+  local box_inner_width=${box_inner_width:-71}
+
+  local file_list=()
+  [[ -d /etc/wptt/vhost ]] && file_list+=(/etc/wptt/vhost/.*.conf)
+
+  for filepath in "${file_list[@]}"; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+
+    local dom="${filepath##*/}"
+    dom="${dom%.conf}"
+    dom="${dom#.}"
+
+    if [[ "$dom" == ?*.?* ]]; then
+      local vhost_conf="/usr/local/lsws/conf/vhosts/$dom/$dom.conf"
+      if [[ -f "$vhost_conf" ]]; then
+        # Check xem đã có thư mục ssl chưa
+        if [[ -d "/usr/local/lsws/$dom/ssl" ]]; then
+          selects+=("$dom|1")
+        else
+          selects+=("$dom|0")
+        fi
+      fi
+    fi
+  done
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "${C_YELLOW}⚠️ Không tìm thấy website nào trên hệ thống để thao tác!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-ssl-main 1
+  fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # Render Menu Bo Cong
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Chọn Website muốn kích hoạt SSL trả phí / Custom SSL:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local stt=$(echo "$item" | cut -d'|' -f2)
+
+    local color_stt="${C_GREEN}[Đã có thư mục SSL]"
+    local clean_stt="[Đã có thư mục SSL]"
+    if [[ "$stt" == "0" ]]; then
+      color_stt="${C_YELLOW}[Chưa thiết lập]"
+      clean_stt="[Chưa thiết lập]"
+    fi
+
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} %s" "$i" "$dom" "${color_stt}${C_RESET}")
+    local clean_text=$(printf "  %3d) %-30s %s" "$i" "$dom" "$clean_stt")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+  else
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+  fi
+
+  while true; do
+    echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local extracted_data=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+        if [[ -n "$extracted_data" ]]; then
+          NAME=$(echo "$extracted_data" | cut -d'|' -f1)
+          return 0
+        else
+          echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+        fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        local extracted_data="${selects[$action_index]}"
+        NAME=$(echo "$extracted_data" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
+}
+
+# Nếu gọi script kèm tên domain từ command line
+if [[ -n "$1" && "$1" != "98" ]]; then
+  NAME="$1"
+else
   lua_chon_NAME
 fi
 
-path="/etc/wptt/vhost/.$NAME.conf"
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
-fi
+NAME=$(echo "$NAME" | cut -f1 -d ' ')
+
+# Chốt chặn
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  return 2>/dev/null || exit
+}
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống!${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-ssl-main 1
-  exit
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  exit 1
 fi
 
+# ==============================================================================
+# KHỞI TẠO VÀ CHUẨN BỊ THƯ MỤC
+# ==============================================================================
 thu_muc_ssl_tra_phi="/usr/local/lsws/$NAME/ssl"
-if [[ ! -d $thu_muc_ssl_tra_phi ]]; then
-  echo "Bạn chưa thiết lập cài đặt SSL trả phí cho website $NAME"
-  sleep 3
-  exec /etc/wptt/wptt-ssl-main 1
-  exit
+
+# Nếu chưa có thư mục, tự động tạo thay vì báo lỗi
+if [[ ! -d "$thu_muc_ssl_tra_phi" ]]; then
+  mkdir -p "$thu_muc_ssl_tra_phi"
+  chown -R nobody:nobody "$thu_muc_ssl_tra_phi" 2>/dev/null
 fi
 
-cd $thu_muc_ssl_tra_phi
+echo ""
+_runing "Đang quét và tự động chuẩn hóa các tệp tin SSL..."
+cd "$thu_muc_ssl_tra_phi" || exit 1
 
-if [[ ! $thu_muc_ssl_tra_phi/cert.crt ]]; then
-  cert=$(ls | grep '.crt' | grep '_' | head -1)
-  if [[ "$cert" ]]; then
-    \mv "$cert" cert.crt
+# ==============================================================================
+# LOGIC AUTO-RENAME & MERGE THÔNG MINH
+# ==============================================================================
+# Xử lý Certificate
+if [[ ! -f cert.crt ]]; then
+  cert=$(ls | grep '\.crt$' | grep '_' | head -1)
+  [[ -n "$cert" ]] && mv "$cert" cert.crt
+fi
+
+# Xử lý CA Bundle (Auto Merge)
+if [[ ! -f ca_bundle.crt ]]; then
+  ca_bundle=$(ls | grep '\.ca-bundle$' | head -1)
+  [[ -n "$ca_bundle" ]] && mv "$ca_bundle" ca_bundle.crt
+fi
+
+if [[ ! -f ca_bundle.crt ]]; then
+  if [[ -f ChainCA1.crt && -f ChainCA2.crt && -f RootCA.crt ]]; then
+    cat RootCA.crt >>ca_bundle.crt
+    echo -e "\n\n" >>ca_bundle.crt
+    cat ChainCA1.crt >>ca_bundle.crt
+    echo -e "\n\n" >>ca_bundle.crt
+    cat ChainCA2.crt >>ca_bundle.crt
+    rm -f ChainCA1.crt ChainCA2.crt RootCA.crt
   fi
 fi
 
-if [[ ! -f $thu_muc_ssl_tra_phi/ca_bundle.crt ]]; then
-  ca_bundle=$(ls | grep '.ca-bundle' | head -1)
-  if [[ $ca_bundle ]]; then
-    \mv "$ca_bundle" ca_bundle.crt
-  fi
+# Xử lý Private Key
+if [[ ! -f "$NAME.key" ]]; then
+  private_key=$(ls | grep '\.key$' | head -1)
+  [[ -n "$private_key" ]] && mv "$private_key" "$NAME.key"
 fi
 
-if [[ ! -f $thu_muc_ssl_tra_phi/ca_bundle.crt ]]; then
-  if [[ -f $thu_muc_ssl_tra_phi/ChainCA1.crt && -f $thu_muc_ssl_tra_phi/ChainCA2.crt && -f $thu_muc_ssl_tra_phi/RootCA.crt ]]; then
-    cat $thu_muc_ssl_tra_phi/RootCA.crt >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    echo '' >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    echo '' >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    cat $thu_muc_ssl_tra_phi/ChainCA1.crt >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    echo '' >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    echo '' >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    cat $thu_muc_ssl_tra_phi/ChainCA2.crt >>$thu_muc_ssl_tra_phi/ca_bundle.crt
-    rm -f ChainCA1.crt
-    rm -f ChainCA2.crt
-    rm -f RootCA.crt
-  fi
-fi
+_rundone "Quét thư mục hoàn tất"
 
-if [[ ! -f $thu_muc_ssl_tra_phi/$NAME.key ]]; then
-  private_key=$(ls | grep '.key' | head -1)
-  if [[ "$private_key" ]]; then
-    \mv "$private_key" $NAME.key
-  fi
-fi
+# ==============================================================================
+# KIỂM TRA ĐIỀU KIỆN VÀ BÁO CÁO TRẠNG THÁI FILE
+# ==============================================================================
+has_key=0
+has_cert=0
+has_ca=0
 
-if [[ -f $thu_muc_ssl_tra_phi/$NAME.key ]]; then
-  echo "Hệ thống xác nhận đã có private key"
-  chmod 600 $thu_muc_ssl_tra_phi/$NAME.key
-  a=1
+# Check Private Key
+if [[ -f "$NAME.key" ]]; then
+  has_key=1
+  chmod 600 "$NAME.key"
+  stt_key="${C_GREEN}Đã tìm thấy${C_RESET}"
 else
-  echo "Hệ thống xác nhận chưa có private key"
-  echo "Yêu cầu cho file vào đường dẫn: $thu_muc_ssl_tra_phi/$NAME.key"
+  stt_key="${C_RED}❌ Đang thiếu${C_RESET} (Yêu cầu file: $NAME.key)"
 fi
 
-if [[ -f $thu_muc_ssl_tra_phi/cert.crt ]]; then
-  b=1
-  echo "Hệ thống xác nhận đã có cert ssl"
+# Check Certificate
+if [[ -f cert.crt ]]; then
+  has_cert=1
+  stt_cert="${C_GREEN}Đã tìm thấy${C_RESET}"
 else
-  echo "Hệ thống xác nhận chưa có cert ssl"
-  echo "Yêu cầu cho file vào đường dẫn: $thu_muc_ssl_tra_phi/cert.crt"
+  stt_cert="${C_RED}❌ Đang thiếu${C_RESET} (Yêu cầu file: cert.crt)"
 fi
 
-if [[ -f $thu_muc_ssl_tra_phi/ca_bundle.crt ]]; then
-  c=1
-  echo "Hệ thống xác nhận đã có ca_bundle"
+# Check CA Bundle
+if [[ -f ca_bundle.crt ]]; then
+  has_ca=1
+  stt_ca="${C_GREEN}Đã tìm thấy${C_RESET}"
 else
-  echo "Hệ thống xác nhận chưa có ca_bundle"
-  echo "Yêu cầu cho file vào đường dẫn: $thu_muc_ssl_tra_phi/ca_bundle.crt"
+  stt_ca="${C_RED}❌ Đang thiếu${C_RESET} (Yêu cầu file: ca_bundle.crt)"
 fi
 
-check_xac_thuc_du_file=$(expr $a + $b + $c)
+total_files=$((has_key + has_cert + has_ca))
 
-if [[ $check_xac_thuc_du_file = "3" ]]; then
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  echo "========================================================================="
-  echo "Kích hoạt SSL trả phí thành công"
-  echo "========================================================================="
+# ==============================================================================
+# KẾT QUẢ
+# ==============================================================================
+if [[ $total_files -eq 3 ]]; then
+  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT SSL TRẢ PHÍ (CUSTOM SSL)${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website     : ${C_YELLOW}$NAME${C_RESET}" 2
+  left_text "Private Key : $stt_key" 2
+  left_text "Certificate : $stt_cert" 2
+  left_text "CA Bundle   : $stt_ca" 2
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Chứng chỉ SSL của bạn đã được nhận diện và áp dụng an toàn." 2
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
 else
-  echo "Kích hoạt SSL trả phí không thành công vì thiếu FILE"
-  if [[ $a = '' ]]; then
-    echo "Thiếu file private_key (tên file sẽ là $NAME.key)"
-  fi
-  if [[ $b = '' ]]; then
-    echo "Thiếu file cert (tên file sẽ là cert.crt)"
-  fi
-  if [[ $c = '' ]]; then
-    echo "Thiếu file ca_bundle (tên file sẽ là ca_bundle.crt)"
-  fi
-  echo "Khi uploads bổ sung file đầy đủ tiếp tục gõ lẹnh: wptt ssl-tra-phi-config $NAME"
+  echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}LỖI: CHƯA ĐỦ FILE ĐỂ KÍCH HOẠT SSL${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Private Key : $stt_key" 2
+  left_text "Certificate : $stt_cert" 2
+  left_text "CA Bundle   : $stt_ca" 2
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Vui lòng sử dụng SFTP/FTP để upload các file còn thiếu vào" 2
+  left_text "thư mục: ${C_YELLOW}$thu_muc_ssl_tra_phi${C_RESET}" 2
+  left_text "Sau khi upload xong, hãy chạy lại chức năng này để kích hoạt." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
