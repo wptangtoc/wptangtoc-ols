@@ -16,55 +16,135 @@ function huong_dan() {
   Tính năng này giúp quá trình chuyển nhà cho website của bạn trở nên mượt mà và ít căng thẳng hơn, đảm bảo website hoạt động ổn định trên môi trường mới.
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$chuyen_tat_ca_website_wptangtoc_ve_wptangtoc_ols	                  |"
-echo "========================================================================="
-echo "Ghi chú: Tính năng này chỉ hỗ trợ chuyển từ wptangtoc ols qua wptantoc ols với nhau"
-echo "Dán paste đoạn lệnh này vào terminal SSH webserver cũ của bạn để sao lưu toàn bộ bên hệ thống cũ: "
-echo "Lệnh: curl -sO https://wptangtoc.com/share/wptt-all && bash wptt-all"
-echo ""
-read -p "Xác nhận đã hoàn tất chạy lệnh trên sao lưu dữ liệu bên webserver cũ và tiếp tục chạy (y/n): " dongy
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-. /etc/wptt/.wptt.conf
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}CHUYỂN VÙNG DỮ LIỆU ➜ Chuyển TOÀN BỘ Website (HTTP Migration)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-read -p "Nhập tên domain website chinh: " domain_download_list
-cd
-rm -f danh-sach-website-wptangtoc-ols.txt
-wget http://$domain_download_list/danh-sach-website-wptangtoc-ols.txt --no-check-certificate
+# ==============================================================================
+# BƯỚC 1: HƯỚNG DẪN THAO TÁC TRÊN SERVER CŨ
+# ==============================================================================
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}BƯỚC 1: ĐÓNG GÓI DỮ LIỆU TRÊN MÁY CHỦ CŨ${C_RESET}"
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tính năng này chỉ hỗ trợ kéo dữ liệu từ WPTangToc OLS cũ." 2
+left_text "Vui lòng đăng nhập SSH vào máy chủ CŨ và chạy lệnh dưới đây:" 2
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+center_text "${C_GREEN}curl -sO https://wptangtoc.com/share/wptt-all && bash wptt-all${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if [[ ! -f danh-sach-website-wptangtoc-ols.txt ]]; then
-  echo "Xac nhan khong nhap vps chinh cu khong chinh xac"
-  return 2>/dev/null
-  exit
+if ! wptt_xac_nhan "Bạn đã chạy xong lệnh ĐÓNG GÓI trên máy chủ CŨ chưa?" "Hệ thống sẽ tiến hành kết nối và kéo toàn bộ danh sách về." "" "Đã Xong! Tiếp tục" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
+  exit 0
 fi
 
-domain_them=($(cat danh-sach-website-wptangtoc-ols.txt))
+# ==============================================================================
+# BƯỚC 2: KẾT NỐI VÀ LẤY DANH SÁCH WEBSITE TỪ SERVER CŨ
+# ==============================================================================
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "Nếu bạn quên website chính VPS cũ là gì:"
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Lệnh: ${C_GREEN}awk -F'=' '/Website_chinh/{print $2}' /etc/wptt/.wptt.conf${C_RESET}"
+left_text "Để xác định chính xác website chính"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-domain_trung_lap=($(ls -A /etc/wptt/vhost | sed 's/^.//' | sed 's/.conf//'))
+while true; do
+  echo -en "${C_CYAN}Nhập Tên miền chính của máy chủ CŨ [0=Thoát]: ${C_RESET}"
+  read -r domain_download_list
+  [[ "$domain_download_list" == "0" || -z "$domain_download_list" ]] && exit 0
 
-echo '--------------------------------------------------'
-for NAME in ${domain_them[@]}; do
-  echo "Tien hanh chuyen website $NAME"
+  # Xóa khoảng trắng
+  domain_download_list="${domain_download_list//[[:space:]]/}"
+  [[ -n "$domain_download_list" ]] && break
+done
+
+_runing "Đang kết nối đến $domain_download_list để lấy danh sách Website..."
+
+FILE_DANH_SACH="/tmp/danh-sach-website-wptangtoc-ols.txt"
+rm -f "$FILE_DANH_SACH"
+
+# Dùng wget -qT 10 để tải ngầm, timeout 10s tránh bị treo
+wget -q -T 10 "http://$domain_download_list/danh-sach-website-wptangtoc-ols.txt" --no-check-certificate -O "$FILE_DANH_SACH"
+
+if [[ ! -f "$FILE_DANH_SACH" || ! -s "$FILE_DANH_SACH" ]]; then
+  _runloi "Kết nối thất bại!"
+  echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}KHÔNG THỂ LẤY DANH SÁCH WEBSITE${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "1. Tên miền máy chủ cũ bạn nhập không chính xác." 2
+  left_text "2. Bạn CHƯA chạy lệnh đóng gói (curl...) bên máy chủ cũ." 2
+  left_text "3. Tường lửa (Firewall) máy chủ cũ đang chặn kết nối HTTP." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   sleep 3
-  if [[ ! "${domain_trung_lap[@]}" =~ "${NAME}" ]]; then
-    echo "Them domain $NAME vao WPTangToc OLS"
-    . /etc/wptt/domain/wptt-themwebsite $NAME
-  fi
-  . /etc/wptt/chuyen-web/wptt-chuyen-website $NAME 1
-  echo "Chuyen Hoan tat website $NAME"
-done
-echo '--------------------------------------------------'
+  exit 1
+fi
 
-cd && rm -f danh-sach-website-wptangtoc-ols.txt
-for NAME in ${domain_them[@]}; do
-  rm -f /usr/local/lsws/$NAME/html/danh-sach-website-wptangtoc-ols.txt
-  rm -f /usr/local/lsws/$NAME/html/wptt-all
+_rundone "Lấy danh sách Website thành công!"
+mapfile -t domain_them < <(cat "$FILE_DANH_SACH" | sed '/^$/d')
+tong_so=${#domain_them[@]}
+
+# ==============================================================================
+# BƯỚC 3: TIẾN HÀNH VÒNG LẶP CHUYỂN TỪNG WEBSITE
+# ==============================================================================
+domain_trung_lap=($(ls -A /etc/wptt/vhost 2>/dev/null | sed 's/^.//' | sed 's/.conf//'))
+
+echo -e "\n${C_YELLOW}Bắt đầu quá trình di cư $tong_so Website...${C_RESET}"
+sleep 1.5
+
+thu_tu=1
+for NAME in "${domain_them[@]}"; do
+  echo -e "\n${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+  echo -e "${C_BOLD_WHITE}ĐANG XỬ LÝ: [ $thu_tu / $tong_so ] ➜ ${C_YELLOW}$NAME${C_RESET}"
+  echo -e "${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+  sleep 1
+
+  # Kiểm tra và thêm Vhost nếu chưa có
+  if [[ ! " ${domain_trung_lap[@]} " =~ " ${NAME} " ]]; then
+    _runing "khởi tạo không gian Web (Vhost) cho $NAME..."
+    . /etc/wptt/domain/wptt-themwebsite "$NAME" >/dev/null 2>&1
+    _rundone "khởi tạo không gian Web (Vhost) cho $NAME..."
+  fi
+
+  # GỌI SCRIPT CHUYỂN WEBSITE ĐƠN LẺ (Truyền tham số 1 để báo hiệu là đang chạy All)
+  . /etc/wptt/chuyen-web/wptt-chuyen-website "$NAME" 1
+
+  ((thu_tu++))
 done
-echo '--------------------------------------------------'
+
+# ==============================================================================
+# BƯỚC 4: DỌN DẸP VÀ BÁO CÁO TỔNG KẾT
+# ==============================================================================
+_runing "Đang dọn dẹp các tệp tin tạm và làm sạch hệ thống..."
+rm -f "$FILE_DANH_SACH"
+for NAME in "${domain_them[@]}"; do
+  rm -f "/usr/local/lsws/$NAME/html/danh-sach-website-wptangtoc-ols.txt"
+  rm -f "/usr/local/lsws/$NAME/html/wptt-all"
+done
+_rundone "Dọn dẹp hệ thống hoàn tất"
+
+# Lấy IP Máy chủ mới
+ip=$(curl -skf --connect-timeout 5 "https://ipv4.icanhazip.com" || curl -skf --connect-timeout 5 "https://checkip.amazonaws.com")
+[[ -z "$ip" ]] && ip=$(curl -sk --connect-timeout 5 "https://ipv6.icanhazip.com")
+
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT CHUYỂN $tong_so WEBSITE VỀ MÁY CHỦ MỚI${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Hệ thống đã kéo và bung toàn bộ dữ liệu thành công!" 2
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_YELLOW}HƯỚNG DẪN BƯỚC TIẾP THEO:${C_RESET}" 2
+left_text "  Bạn vui lòng truy cập trang quản lý Tên miền (Cloudflare...)" 2
+left_text "  và trỏ IP của tất cả các tên miền về máy chủ mới: ${C_BOLD_WHITE}$ip${C_RESET}" 2
+left_text "  Sau đó vào Menu số (3) để cài đặt SSL là xong." 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# Liệt kê lại các domain đang có trên máy chủ
 . /etc/wptt/domain/wptt-list-domain
-echo "Hoàn tất chuyển toàn bộ website vào VPS mới"
-ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-echo "Hay tro ip cac website ve IP: $ip va tien hanh cai dat ssl de su dung"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
