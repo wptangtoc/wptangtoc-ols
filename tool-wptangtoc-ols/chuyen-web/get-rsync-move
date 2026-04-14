@@ -13,149 +13,172 @@ function huong_dan() {
   - Đảm bảo tiến trình Rsync dữ liệu từ máy chủ cũ đã chạy XONG HOÀN TOÀN trước khi kích hoạt lệnh này.
 }
 
-domain_them=$(cat /usr/local/lsws/*/html/danh-sach-website-wptangtoc-ols.txt)
-if [[ $domain_them = '' ]]; then
-  echo "Không xác định được danh sách"
-  echo "Không có website nào đã chuẩn bị được nạp vào"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-chuyen-web-main 1
-  fi
-  exit
-fi
-
-rm -f /usr/local/lsws/*/html/danh-sach-website-wptangtoc-ols.txt
-
-domain_trung_lap=($(ls -A /etc/wptt/vhost | sed 's/^.//' | sed 's/.conf//'))
-
-echo '--------------------------------------------------'
-for NAME in ${domain_them[@]}; do
-  sleep 3
-  if [[ ! "${domain_trung_lap[@]}" =~ "${NAME}" ]]; then
-    echo "Thêm domain $NAME vào hệ thống"
-    . /etc/wptt/domain/wptt-themwebsite $NAME
-    rm -f /usr/local/lsws/$NAME/html/index.html
-    #subfolder add website
-    if [[ -f /usr/local/lsws/$NAME/html/subfolder-wptt.txt ]]; then
-      for thumuc in $(cat /usr/local/lsws/$NAME/html/subfolder-wptt.txt); do
-        . /etc/wptt/domain/wptt-subfolder-website "$NAME" "$thumuc"
-      done
-    fi
-  fi
-done
-echo '--------------------------------------------------'
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 clear
-. /etc/wptt/.wptt.conf
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}Chuyển Website ➜ Khởi tạo Website sau di cư (Get Rsync)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+list_file=$(find /usr/local/lsws/*/html/danh-sach-website-wptangtoc-ols.txt 2>/dev/null | head -n 1)
+domain_them=$(cat "$list_file" 2>/dev/null)
+
+if [[ -z "$domain_them" ]]; then
+  echo -e "${C_RED}❌ Lỗi: Không tìm thấy danh sách website nào vừa được di cư về!${C_RESET}"
+  echo -e "Hãy đảm bảo quá trình Rsync dữ liệu đã hoàn tất thành công.\n"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
+  exit 1
+fi
+
+# Dọn dẹp danh sách tạm
+find /usr/local/lsws/*/html/ -name "danh-sach-website-wptangtoc-ols.txt" -delete
+
+# Lấy danh sách domain đã có trên máy chủ
+domain_da_co=($(ls -A /etc/wptt/vhost 2>/dev/null | sed 's/^.//' | sed 's/.conf//'))
+
+# ==============================================================================
+# BƯỚC 1: KHỞI TẠO VHOST & SUBFOLDER
+# ==============================================================================
+# echo -e "${C_CYAN}Bước 1: Khởi tạo không gian Web (Vhost)...${C_RESET}"
+for NAME in $domain_them; do
+  if [[ ! " ${domain_da_co[@]} " =~ " ${NAME} " ]]; then
+    _runing "khởi tạo website: $NAME"
+    . /etc/wptt/domain/wptt-themwebsite "$NAME" >/dev/null 2>&1
+    rm -f "/usr/local/lsws/$NAME/html/index.html"
+
+    # Xử lý Subfolder (Nếu có)
+    sub_file="/usr/local/lsws/$NAME/html/subfolder-wptt.txt"
+    if [[ -f "$sub_file" ]]; then
+      for thumuc in $(cat "$sub_file"); do
+        . /etc/wptt/domain/wptt-subfolder-website "$NAME" "$thumuc" >/dev/null 2>&1
+      done
+    fi
+    _rundone "khởi tạo website: $NAME"
+  fi
+done
+
+# ==============================================================================
+# BƯỚC 2: XỬ LÝ DATABASE & IMPORT SQL
+# ==============================================================================
+# echo -e "\n${C_CYAN}Bước 2: Khôi phục Cơ sở dữ liệu & Cấu hình WordPress...${C_RESET}"
 
 INIT_SQL="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET AUTOCOMMIT=0;"
 END_SQL="COMMIT; SET FOREIGN_KEY_CHECKS=1; SET UNIQUE_CHECKS=1; SET AUTOCOMMIT=1;"
 
-for NAME in ${domain_them[@]}; do
-  if [[ -f /usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql ]]; then
-    echo "Chuyển website $NAME"
-    . /etc/wptt/vhost/.$NAME.conf
+for NAME in $domain_them; do
+  sql_file="/usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql"
+
+  if [[ -f "$sql_file" ]]; then
+    echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────${C_RESET}"
+    left_text "➜ Get xử lý Website: ${C_BOLD_WHITE}$NAME${C_RESET}"
+
+    # Nạp cấu hình Database vừa tạo
+    . "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null
 
     TEMP_CNF_ROOT=$(mktemp)
-    chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+    chmod 600 "$TEMP_CNF_ROOT"
     cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
 password=${database_admin_password}
 host=localhost
 max_allowed_packet=1G
-default-character-set=utf8mb4
-
-[mysqldump]
-quick
-quote-names
-max_allowed_packet=1G
-single-transaction
 EOF
     trap "rm -f $TEMP_CNF_ROOT" EXIT
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS ${DB_Name_web}"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web}"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE USER IF NOT EXISTS '${DB_User_web}'@'localhost' IDENTIFIED BY '${DB_Password_web}'"
-    # mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost' WITH GRANT OPTION"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost';"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES"
 
+    # Tạo Database & User
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS ${DB_Name_web}; CREATE DATABASE ${DB_Name_web};"
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'; CREATE USER '${DB_User_web}'@'localhost' IDENTIFIED BY '${DB_Password_web}'; GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost'; FLUSH PRIVILEGES;"
+
+    # Import SQL siêu tốc
+    # _runing "Nạp dữ liệu (Import SQL)..."
     if command -v pv &>/dev/null; then
       (
         echo "$INIT_SQL"
-        pv -N "Importing" "/usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql"
+        pv -n "$sql_file"
         echo "$END_SQL"
-      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false
+      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" 2>/dev/null
     else
       (
         echo "$INIT_SQL"
-        cat "/usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql"
+        cat "$sql_file"
         echo "$END_SQL"
-      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --ssl-verify-server-cert=false
+      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" 2>/dev/null
     fi
+    # _rundone "Nạp dữ liệu (Import SQL)..."
 
-    # mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --force </usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql #import
-    rm -f /usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql
-    rm -f $TEMP_CNF_ROOT
-    . /etc/wptt/db/wptt-ket-noi $NAME >/dev/null 2>&1
-    . /etc/wptt/wptt-phanquyen $NAME
-  fi
+    # Dọn dẹp & Phân quyền
+    rm -f "$sql_file"
+    rm -f "$TEMP_CNF_ROOT"
+    . /etc/wptt/db/wptt-ket-noi "$NAME" >/dev/null 2>&1
+    . /etc/wptt/wptt-phanquyen "$NAME" >/dev/null 2>&1
 
-  if [[ -d /usr/local/lsws/$NAME/logs ]]; then
-    sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-    sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-    echo '
+    # Cấu hình Logs cho Vhost
+    if [[ -d /usr/local/lsws/$NAME/logs ]]; then
+      _runing "cấu hình Logs website $NAME"
+      sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+      sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+      echo '
 errorlog $VH_ROOT/logs/error.log {
-useServer               1
-logLevel                ERROR
-rollingSize             10M
+  useServer               1
+  logLevel                ERROR
+  rollingSize             10M
 }
-
 accesslog $VH_ROOT/logs/access.log {
-useServer               0
-rollingSize             10M
-keepDays                30
-compressArchive         1
+  useServer               0
+  rollingSize             10M
+  keepDays                30
+  compressArchive         1
 }' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
+      _rundone "cấu hình Logs website $NAME"
+    fi
   fi
 
-  if [[ -f /usr/local/lsws/$NAME/html/subfolder-wptt.txt ]]; then
-    domain_all=$(find /usr/local/lsws/$NAME/html -type f -name 'wp-config.php')
-    for entry in ${domain_all[@]}; do
-      path=$(echo $entry | sed 's/\/wp-config.php//g')
-      i=1
+  # Xử lý Website trong Subfolder (nếu có)
+  sub_file="/usr/local/lsws/$NAME/html/subfolder-wptt.txt"
+  if [[ -f "$sub_file" ]]; then
+    wp_configs=$(find "/usr/local/lsws/$NAME/html" -type f -name 'wp-config.php')
+    for config_path in $wp_configs; do
+      dir_path=$(dirname "$config_path")
+      # Bỏ qua folder gốc
+      [[ "$dir_path" == "/usr/local/lsws/$NAME/html" ]] && continue
 
-      #bypass website gốc
-      thumuc=$(echo $path | cut -f7 -d '/')
-      if [[ $thumuc = '' ]]; then
-        continue
-      fi
-
-      if [[ -f "$path/wp-config.php" ]]; then
-        cd $path && curl -sO https://wptangtoc.com/giatuan/wptt-import-db && bash wptt-import-db
-        rm -f $path/giatuan-wptangtoc.sql
+      if [[ -f "$dir_path/giatuan-wptangtoc.sql" ]]; then
+        _runing "Đang xử lý Sub-Website tại: $(basename "$dir_path")"
+        (cd "$dir_path" && curl -sO https://wptangtoc.com/giatuan/wptt-import-db && bash wptt-import-db >/dev/null 2>&1)
+        rm -f "$dir_path/giatuan-wptangtoc.sql"
+        _rundone "Sub-Website hoàn tất"
       fi
     done
-    rm -f /usr/local/lsws/$NAME/html/subfolder-wptt.txt
+    rm -f "$sub_file"
   fi
 done
 
+# ==============================================================================
+# KẾT THÚC VÀ BÁO CÁO
+# ==============================================================================
 chown root:root /usr/local/lsws
-
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-rm -f wptt-rsync-move
-rm -f ~/wptt-rsync-move
-echo "Hoàn tất nạp tất cả website vào hệ thống"
-ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-if [[ -z $ip ]]; then #bài toán nếu webserver chỉ hỗ trợ mỗi ipv6 không hỗ trợ ipv4
-  ip=$(curl -sk --connect-timeout 5 --max-time 10 https://ipv6.icanhazip.com)
-fi
 
-echo "-------------------------------------------------------------------------"
-echo "Hãy trỏ IP các website về địa chỉ máy chủ: $ip"
-echo "Và tiến hành cài đặt SSL để đưa website vào hoạt động chính thức."
-echo "-------------------------------------------------------------------------"
-sleep 2
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
+rm -f wptt-rsync-move ~/wptt-rsync-move
+
+# Lấy IP Máy chủ
+ip=$(curl -skf --connect-timeout 5 "https://ipv4.icanhazip.com" || curl -skf --connect-timeout 5 "https://checkip.amazonaws.com")
+[[ -z "$ip" ]] && ip=$(curl -sk --connect-timeout 5 "https://ipv6.icanhazip.com")
+
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT NẠP TẤT CẢ WEBSITE VÀO HỆ THỐNG${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Quá trình di cư và khởi tạo đã thành công tốt đẹp!" 2
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Địa chỉ IP máy chủ mới : ${C_YELLOW}$ip${C_RESET}" 2
+left_text "Hành động tiếp theo    : Trỏ DNS các website về IP trên và" 2
+left_text "                         tiến hành cài đặt SSL ngay lập tức." 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
