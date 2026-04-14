@@ -11,39 +11,113 @@ function huong_dan() {
 
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Xem thông tin database                             |"
-echo "========================================================================="
-echo ""
-echo ""
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-echo "Danh sách các Database"
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Xem Danh sách Cơ sở dữ liệu${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
+fi
+
+# Chốt chặn an toàn
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép truy xuất thông tin."
+
+# ==============================================================================
+# KHỞI TẠO FILE XÁC THỰC BẢO MẬT
+# ==============================================================================
 TEMP_CNF_ROOT=$(mktemp)
 chmod 600 "$TEMP_CNF_ROOT" # Chỉ root mới đọc được
+
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=${database_admin_username}
 password=${database_admin_password}
 host=localhost
-max_allowed_packet=1G
-default-character-set=utf8mb4
-
-[mysqldump]
-quick
-quote-names
-max_allowed_packet=1G
 EOF
 
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "show databases where \`database\` not in('information_schema', 'test', 'sys', 'mysql', 'performance_schema')"
-rm -rf $TEMP_CNF_ROOT
-echo ""
+trap "rm -f \"$TEMP_CNF_ROOT\"" EXIT
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+# ==============================================================================
+# QUÉT CẤU HÌNH ĐỂ TÌM "CHỦ NHÂN" CỦA TỪNG DATABASE
+# ==============================================================================
+_runing "Đang kết nối đến MariaDB và truy xuất danh sách Database..."
+
+# Khai báo mảng kết hợp (Associative Array) để ánh xạ Database -> Domain
+declare -A db_to_domain
+
+if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+    domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+    path_conf="/etc/wptt/vhost/.$domain.conf"
+
+    if [[ "$domain" == ?*.?* && -f "$path_conf" ]]; then
+      unset DB_Name_web
+      . "$path_conf" 2>/dev/null
+      # Nếu domain có khai báo database, lưu vào mảng
+      if [[ -n "$DB_Name_web" ]]; then
+        db_to_domain["$DB_Name_web"]="$domain"
+      fi
+    fi
+  done
+fi
+
+# ==============================================================================
+# TRUY XUẤT VÀ HIỂN THỊ DỮ LIỆU
+# ==============================================================================
+# Lấy danh sách Database, loại trừ DB hệ thống
+dbs=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -e "SHOW DATABASES WHERE \`database\` NOT IN ('information_schema', 'test', 'sys', 'mysql', 'performance_schema');" 2>/dev/null)
+
+if [[ -z "$dbs" ]]; then
+  _runloi "Truy xuất hoàn tất: Không có Database người dùng nào."
+  echo -e "\n${C_YELLOW}Hiện tại chưa có Database nào được tạo trên hệ thống (ngoại trừ các DB lõi).${C_RESET}"
+else
+  db_count=$(echo "$dbs" | wc -l)
+  # KHÁNH VY FIX: Bỏ biến màu ra khỏi _rundone để không bị in mã Raw
+  _rundone "Truy xuất thành công! Tìm thấy tổng cộng $db_count Database."
+
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  # KHÁNH VY FIX: Bỏ Icon Emoji để không làm lệch thuật toán tính Box Width
+  center_text "${C_BOLD_WHITE}DANH SÁCH DATABASE HIỆN CÓ${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  i=1
+  for db in $dbs; do
+    domain_owner="${db_to_domain[$db]}"
+
+    left_text "  ${C_CYAN}$i.${C_RESET} ${C_BOLD_WHITE}$db${C_RESET}" 2
+
+    # Kiểm tra xem Database này có thuộc về Website nào không
+    if [[ -n "$domain_owner" ]]; then
+      left_text "     ➜ Biên chế cho Website: ${C_GREEN}$domain_owner${C_RESET}" 2
+    else
+      left_text "     ➜ ${C_RED}Chưa biên chế (Database tự do / Mồ côi)${C_RESET}" 2
+      left_text "     ➜ ${C_RED}không thể tương thích với một số tính năng của WPTangToc OLS${C_RESET}" 2
+    fi
+
+    # Tạo vạch ngăn cách nhẹ nếu chưa phải item cuối cùng
+    if [[ $i -lt $db_count ]]; then
+      left_text "" 2
+    fi
+    ((i++))
+  done
+
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+fi
+
+# Xóa file xác thực
+rm -f "$TEMP_CNF_ROOT"
+
+# ==============================================================================
+# ĐIỀU HƯỚNG QUAY LẠI MENU
+# ==============================================================================
+if [[ "${1:-}" == "98" ]]; then
   exec /etc/wptt/wptt-db-main 1
 fi
