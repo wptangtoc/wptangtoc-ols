@@ -1,48 +1,136 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+
+if [[ $2 = 'premium' ]]; then
+  unset key_activate
+  . /etc/wptt/.wptt.conf
+  if [[ -z $key_activate ]]; then
+    echo "Tính năng này là tính năng Premium bạn phải mua Active key mới có thể sử dụng được"
+    echo "Bạn hãy activate key thì sẽ được sử dụng tất cả các tính năng trong add ons"
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" ]]; then
+      exec /etc/wptt/wptt-add-one-main 1
+    fi
+    exit
+  fi
 fi
-. /etc/wptt/lang/$ngon_ngu.sh
 
-if [[ $NAME = '98' ]]; then
-  NAME=''
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DOMAIN ➜ Thiết Lập Proxy Ngược (Reverse Proxy)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# BƯỚC 1: LỰA CHỌN TÊN MIỀN
+# ==============================================================================
+NAME="${1:-}"
+[[ "$NAME" == '98' ]] && NAME=''
+
+if [[ -z "$NAME" ]]; then
+  . /etc/wptt/tenmien 2>/dev/null
+  lua_chon_NAME "Cài đặt Proxy Ngược"
 fi
-NAME=$1
 
-if [[ $NAME = '' ]]; then
-  . /etc/wptt/tenmien
-  echo ""
-  echo ""
-  echo "Lựa chọn muốn proxy nguồn: "
-  echo ""
-  lua_chon_NAME
+[[ -z "$NAME" || "$NAME" == "0" ]] && exit 0
+
+if [[ ! -d "/usr/local/lsws/conf/vhosts/$NAME" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền $NAME không tồn tại trên hệ thống!${C_RESET}"
+  sleep 3
+  exit 1
 fi
 
-if [[ $(cat /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf | grep 'proxy') ]]; then
-  echo "Đã setup proxy ngược trước đó rồi"
-  echo "Tiến hành xoá setup proxy ngược"
-  # sed -i -e '/^context \/ {/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-  #sed -i -e '/^context \/.well-known\/acme-challenge {/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-  sed -i -e '/^extprocessor '$NAME'proxy {/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-  sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/$NAME/html/.htaccess
+# ==============================================================================
+# BƯỚC 2: KIỂM TRA TRẠNG THÁI PROXY HIỆN TẠI (BẬT / TẮT)
+# ==============================================================================
+check_proxy=$(grep "extprocessor ${NAME}proxy" /usr/local/lsws/conf/httpd_config.conf 2>/dev/null)
+
+if [[ -n "$check_proxy" ]]; then
+  # TRƯỜNG HỢP: ĐÃ CÓ PROXY -> HỎI XÓA
+  echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}TRẠNG THÁI: ĐÃ CÀI ĐẶT PROXY${C_RESET}"
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website ${C_YELLOW}$NAME${C_RESET} hiện đang được định tuyến" 2
+  left_text "traffic sang một máy chủ (IP) khác thông qua Proxy Ngược." 2
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  if ! wptt_xac_nhan "Bạn có muốn GỠ BỎ (Xóa) cấu hình Proxy Ngược này không?" "Traffic sẽ được trả về xử lý tại Source Code trên máy chủ hiện tại." "" "Đồng ý Gỡ Bỏ" "Hủy thao tác"; then
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+    exit 0
+  fi
+
+  _runing "Đang tiến hành gỡ bỏ thiết lập Proxy Ngược cho $NAME..."
+  # Xóa khai báo extprocessor trong file tổng
+  sed -i -e "/^extprocessor ${NAME}proxy \{/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
+
+  # Xóa luật Rewrite trong .htaccess
+  if [[ -f "/usr/local/lsws/$NAME/html/.htaccess" ]]; then
+    sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/$NAME/html/.htaccess
+  fi
+
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-  echo "Hoàn tất xoá proxy ngược"
-  exit
+  _rundone "Đã gỡ bỏ Proxy Ngược thành công!"
+
+  echo "Xoá PROXY ngược $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  echo -e "\n${C_GREEN}Website $NAME đã trở về trạng thái hoạt động bình thường.${C_RESET}\n"
+  sleep 2
+  exit 0
 fi
 
-if [[ $2 ]]; then
-  ip=$(echo $2 | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-fi
+# ==============================================================================
+# BƯỚC 3: TRƯỜNG HỢP CHƯA CÓ PROXY -> TIẾN HÀNH CÀI ĐẶT
+# ==============================================================================
+ip="${2:-}"
 
-if [[ $ip = '' ]]; then
-  read -p 'Nhập ip muốn proxy nguồn: ' ip
-fi
-
-# Tự động loại bỏ toàn bộ khoảng trắng (space/tab) nếu người dùng lỡ tay nhập thừa
+# Xóa toàn bộ khoảng trắng nếu có
 ip="${ip//[[:space:]]/}"
+ip=$(echo "$ip" | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
+if [[ -z "$ip" ]]; then
+  echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  left_text "  Đang thiết lập cho Website : ${C_YELLOW}$NAME${C_RESET}" 2
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  while true; do
+    echo -en "${C_CYAN}Nhập IP của Máy chủ Đích (Nơi chứa Source Code thật) [0=Thoát]: ${C_RESET}"
+    read -r input_ip
+
+    [[ "$input_ip" == "0" || -z "$input_ip" ]] && {
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+      exit 0
+    }
+
+    # Validation IPv4
+    input_ip="${input_ip//[[:space:]]/}"
+    ip=$(echo "$input_ip" | grep -E -o '^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$')
+
+    if [[ -n "$ip" ]]; then
+      break
+    else
+      echo -e "${C_RED}❌ Lỗi: Địa chỉ IP không hợp lệ! Vui lòng nhập đúng định dạng IPv4 (VD: 192.168.1.1).${C_RESET}\n"
+    fi
+  done
+fi
+
+echo ""
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn đẩy traffic của $NAME sang IP $ip không?" "Lưu ý: Mọi traffic sẽ đi qua máy chủ này để đến IP đích (trừ yêu cầu cấp SSL)." "" "Đồng ý Lưu" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  exit 0
+fi
+
+echo ""
+_runing "Đang thiết lập cấu hình Proxy Ngược vào máy chủ..."
+
+# 1. Ghi cấu hình Proxy vào file tổng của LiteSpeed
 echo "
 extprocessor ${NAME}proxy {
   type                    proxy
@@ -52,32 +140,20 @@ extprocessor ${NAME}proxy {
   retryTimeout            20
   respBuffer              0
 }
-
 " >>/usr/local/lsws/conf/httpd_config.conf
 
-# sed -i -e '/^context/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+# 2. Xử lý file .htaccess của tên miền
+mkdir -p "/usr/local/lsws/$NAME/html"
+touch "/usr/local/lsws/$NAME/html/.htaccess"
 
-# echo "
-# context / {
-#   type                    proxy
-#   handler                 ${NAME}proxy
-#   addDefaultCharset	  off
-# }
-# " >> /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
-
-#clear htaccess
-echo '' >/usr/local/lsws/"$NAME"/html/.htaccess
-
-#dùng htaccess làm proxy thay vì dùng context nó có khả năng tuỳ biến linh động hơn, để có thể sử dụng htaccess tiếp theo
-#còn dùng context cắm proxy thì không thể dùng htaccess được nữa
-#bypass url well-known để cài đặt ssl letsencrypt và gia hạn ssl cho proxy gốc
+# Cài đặt rule bypass .well-known để gia hạn SSL
 sed -i '1 i #begin-proxy-wptangtoc\
 RewriteCond %{REQUEST_URI} !.*well-known.*$ [NC]\
 RewriteRule ^(.*)$ http:\/\/'$NAME'proxy\/$1 [P]\
 #end-proxy-wptangtoc' /usr/local/lsws/"$NAME"/html/.htaccess
 
-#setup ip domain
-if [[ $(cat /usr/local/lsws/conf/httpd_config.conf | grep 'listener' | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}') ]]; then
+# 3. Setup IP Domain (Proxy Host) nếu cần thiết
+if grep -qE 'listener.*[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
   sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/$NAME/html/.htaccess
   sed -i '1 i #begin-proxy-wptangtoc\
 RewriteCond %{REQUEST_URI} !.*well-known.*$ [NC]\
@@ -85,13 +161,21 @@ RewriteRule ^(.*)$ http:\/\/'$NAME'proxy\/$1 [P,L,E=PROXY-HOST:www.'$NAME']\
 #end-proxy-wptangtoc' /usr/local/lsws/"$NAME"/html/.htaccess
 fi
 
-#sed -i '/X-Powered-By/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+_rundone "Cập nhật file cấu hình và .htaccess hoàn tất"
 
-# nếu proxy-host nếu muốn làm proxy ip domain
-#RewriteRule ^(.*)$ http://test5.wptangtoc-ols.oneproxy/$1 [P,L,E=PROXY-HOST:www.$NAME]
-
+_runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+_rundone "Proxy đã được kích hoạt"
 
 echo "Setup PROXY ngược $NAME về $ip : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-echo "Hoàn tất thiết lập proxy website $NAME về $ip"
+# ==============================================================================
+# BẢNG BÁO CÁO THÀNH CÔNG
+# ==============================================================================
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP PROXY NGƯỢC${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Domain Nguồn   : ${C_YELLOW}$NAME${C_RESET}" 2
+# left_text "Máy chủ Đích   : ${C_BOLD_WHITE}$ip:80${C_RESET}" 2
+left_text "Ghi chú        : ${C_CYAN}Traffic đã được định tuyến thành công.${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
