@@ -262,7 +262,7 @@ de="để"
 luu_lai="lưu lại"
 
 #cau hinh php menu main
-cau_hinh_uploads_max_php="Cấu hình uploads max php.ini"
+cau_hinh_uploads_max_php="Cấu hình Upload Max Filesize"
 khoi_phuc_uploads_max_php="Khôi phục uploads max php.ini"
 khoi_phuc_php_cau_hinh="Khôi phục reset mặc định php.ini"
 cau_hinh_php_ini="Cấu hình PHP.ini"
