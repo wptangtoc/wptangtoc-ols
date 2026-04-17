@@ -4,35 +4,43 @@ function huong_dan() {
   Tính năng Mở khóa toàn bộ IP [Unban All] trong WPTangToc OLS.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
 clear
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "| $quan_ly_ip => Mở khóa toàn bộ địa chỉ IP đã chặn               |"
-echo "========================================================================="
-echo ""
-echo ""
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ IP ➜ Mở Khóa Toàn Bộ Địa Chỉ IP (Unban All)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-. /etc/wptt/echo-color
-echo "Đang tiến hành mở khóa toàn bộ IP trên hệ thống..."
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-khoa-ip-main 1"
+fi
+
+# ==============================================================================
+# CẢNH BÁO XÁC NHẬN AN TOÀN
+# ==============================================================================
+if ! wptt_xac_nhan "BẠN CÓ CHẮC CHẮN MUỐN MỞ KHÓA TOÀN BỘ IP?" \
+  "Thao tác này sẽ xóa mọi danh sách đen (Blacklist) trên toàn hệ thống." \
+  "Bao gồm: Fail2ban, CSF, Firewalld, Nftables và bộ nhớ LiteSpeed." \
+  "Đồng ý MỞ KHÓA" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-khoa-ip-main 1
+  exit 0
+fi
+
 echo ""
-
-# Biến đếm bước tự động
-STEP=1
-
 REGEX_IP='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|\b([0-9a-fA-F:]+:+)+[0-9a-fA-F]+\b'
-# =========================================================
+CLEARED_LIST=""
+
+# ==============================================================================
 # 1. MỞ KHÓA TRÊN FAIL2BAN
-# =========================================================
+# ==============================================================================
 if systemctl is-active --quiet fail2ban; then
-  echo -ne "\e[36m[$STEP] Đang quét và dọn dẹp Fail2ban...\e[0m "
+  _runing "Đang quét và dọn dẹp Danh sách đen Fail2ban..."
 
   # Ưu tiên dùng lệnh unban all của bản Fail2ban mới
   fail2ban-client unban --all >/dev/null 2>&1 || {
@@ -43,40 +51,40 @@ if systemctl is-active --quiet fail2ban; then
   }
   fail2ban-client reload >/dev/null 2>&1
 
-  echo -e "\e[32m[ HOÀN TẤT ]\e[0m"
-  ((STEP++))
+  _rundone "Mở khóa Fail2ban hoàn tất"
+  CLEARED_LIST+="Fail2ban, "
 fi
 
-# =========================================================
+# ==============================================================================
 # 2. MỞ KHÓA TRÊN CSF
-# =========================================================
+# ==============================================================================
 if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
-  echo -ne "\e[36m[$STEP] Đang quét và dọn dẹp Tường lửa CSF...\e[0m "
+  _runing "Đang quét và dọn dẹp Tường lửa CSF..."
 
   csf -tf >/dev/null 2>&1
   csf -df >/dev/null 2>&1
 
-  echo -e "\e[32m[ HOÀN TẤT ]\e[0m"
-  ((STEP++))
+  _rundone "Mở khóa CSF Firewall hoàn tất"
+  CLEARED_LIST+="CSF Firewall, "
 fi
 
-# =========================================================
+# ==============================================================================
 # 3. MỞ KHÓA TRÊN NFTABLES
-# =========================================================
+# ==============================================================================
 if systemctl is-active --quiet nftables; then
-  echo -ne "\e[36m[$STEP] Đang quét và dọn dẹp Nftables...\e[0m "
+  _runing "Đang quét và dọn dẹp Tường lửa Nftables..."
 
   (/etc/wptt/bao-mat/nftables/unbanall.sh >/dev/null 2>&1)
 
-  echo -e "\e[32m[ HOÀN TẤT ]\e[0m"
-  ((STEP++))
+  _rundone "Mở khóa Nftables hoàn tất"
+  CLEARED_LIST+="Nftables, "
 fi
 
-# =========================================================
+# ==============================================================================
 # 4. MỞ KHÓA TRÊN FIREWALLD (Native Zone Drop + Dọn Rác)
-# =========================================================
+# ==============================================================================
 if systemctl is-active --quiet firewalld; then
-  echo -ne "\e[36m[$STEP] Đang quét và dọn dẹp Firewalld...\e[0m "
+  _runing "Đang quét và dọn dẹp Tường lửa Firewalld..."
 
   # A. THUẬT TOÁN UNBAN CHUẨN (Tháo mọi IP đang bị treo trên Zone Drop)
   DROP_SOURCES=$(firewall-cmd --zone=drop --list-sources 2>/dev/null)
@@ -87,7 +95,7 @@ if systemctl is-active --quiet firewalld; then
     done
   fi
 
-  # C. DỌN RÁC 2: Tẩy trần tàn dư Rich-rule (Từ bản WPTangToc cũ - tương thích ngược trước 26-03-2026 về trước)
+  # B. DỌN RÁC: Tẩy trần tàn dư Rich-rule (Từ bản WPTangToc cũ trước 26-03-2026)
   RICH_RULES=$(firewall-cmd --permanent --list-rich-rules 2>/dev/null | grep -E 'reject|drop' | grep 'source address')
   if [[ -n "$RICH_RULES" ]]; then
     while IFS= read -r rule; do
@@ -97,34 +105,39 @@ if systemctl is-active --quiet firewalld; then
       fi
     done <<<"$RICH_RULES"
   fi
-  # kết thúc C: tương thích ngược
 
-  echo -e "\e[32m[ HOÀN TẤT ]\e[0m"
-  ((STEP++))
+  _rundone "Mở khóa Firewalld hoàn tất"
+  CLEARED_LIST+="Firewalld, "
 fi
 
-# =========================================================
+# ==============================================================================
 # 5. MỞ KHÓA TRÊN OPENLITESPEED (Xả RAM OLS-Dynamic)
-# =========================================================
+# ==============================================================================
 if [[ -d /usr/local/lsws ]]; then
   # Check an toàn: có file rtreport VÀ bên trong chứa dòng chữ BLOCKED_IP
   if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1 && grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -qE "$REGEX_IP"; then
-    echo -ne "\e[36m[$STEP] Đang quét và xả bộ nhớ OpenLiteSpeed (Dynamic Block)...\e[0m "
+    _runing "Đang xả bộ nhớ OpenLiteSpeed (Dynamic Block)..."
     /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-    echo -e "\e[32m[ HOÀN TẤT - ĐÃ RESTART OLS ]\e[0m"
-    ((STEP++))
+    _rundone "Xả bộ nhớ OpenLiteSpeed hoàn tất"
+    CLEARED_LIST+="LiteSpeed, "
   fi
 fi
 
-# Bắt lỗi nếu server không có bất kỳ Firewall nào hoạt động
-if [[ $STEP -eq 1 ]]; then
-  echo -e "\e[33m[!] CẢNH BÁO: Không tìm thấy Tường lửa nào đang hoạt động trên hệ thống!\e[0m"
+# ==============================================================================
+# BÁO CÁO KẾT QUẢ
+# ==============================================================================
+if [[ -z "$CLEARED_LIST" ]]; then
+  echo -e "\n${C_YELLOW}Hệ thống hiện không có Tường lửa nào đang hoạt động để mở khóa!${C_RESET}\n"
+else
+  # Xóa dấu phẩy thừa ở cuối chuỗi
+  CLEARED_LIST=$(echo "$CLEARED_LIST" | sed 's/, $//')
+
+  echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT MỞ KHÓA TOÀN BỘ IP${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Các dịch vụ đã quét : ${C_YELLOW}${CLEARED_LIST}${C_RESET}" 2
+  left_text "Trạng thái          : ${C_BOLD_WHITE}Tất cả IP đã được cấp quyền truy cập lại.${C_RESET}" 2
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
 
-echo ""
-_rundone "Đã mở khóa thành công toàn bộ địa chỉ IP."
-
-check_menu_wptangtoc_active=${1:-}
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-khoa-ip-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-khoa-ip-main 1

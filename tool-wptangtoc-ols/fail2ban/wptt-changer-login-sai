@@ -1,22 +1,81 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT ➜ Thiết lập giới hạn đăng nhập SSH (Fail2ban)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-bao-mat-main 1"
+fi
+
+# Lấy Port SSH hiện tại (Mặc định 22)
+port_checkssh=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n 1)
+port_checkssh=${port_checkssh:-22}
+
+# Lấy Maxretry hiện tại (Mặc định 5)
+current_maxretry=$(grep "^maxretry" /etc/fail2ban/jail.d/sshd.local 2>/dev/null | cut -d "=" -f2 | tr -d ' ')
+current_maxretry=${current_maxretry:-5}
+
+# Lấy Bantime hiện tại (Mặc định 3600)
+check_times_ban=$(grep "^bantime" /etc/fail2ban/jail.d/sshd.local 2>/dev/null | cut -d "=" -f2 | tr -d ' ')
+check_times_ban=${check_times_ban:-3600}
+
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+left_text "  Cổng SSH đang bảo vệ  : ${C_BOLD_WHITE}$port_checkssh${C_RESET}" 2
+left_text "  Giới hạn nhập sai     : ${C_YELLOW}$current_maxretry lần${C_RESET}" 2
+left_text "  Thời gian khóa (Ban)  : ${C_RED}$check_times_ban giây${C_RESET}" 2
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# NHẬP LIỆU GIỚI HẠN MỚI
+# ==============================================================================
+while true; do
+  echo -e "Gợi ý: Mức tiêu chuẩn an toàn là ${C_YELLOW}3${C_RESET} hoặc ${C_YELLOW}5${C_RESET} lần."
+  echo -en "${C_CYAN}👉 Nhập số lần cho phép nhập sai mật khẩu (1-60) [0=Thoát]: ${C_RESET}"
+  read -r tamkhoa
+
+  [[ "$tamkhoa" == "0" || -z "$tamkhoa" ]] && {
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+    exit 0
+  }
+
+  # Dọn dẹp khoảng trắng
+  tamkhoa="${tamkhoa//[[:space:]]/}"
+
+  if [[ "$tamkhoa" =~ ^[0-9]+$ ]] && [ "$tamkhoa" -ge 1 ] && [ "$tamkhoa" -le 60 ]; then
+    break
+  else
+    echo -e "${C_RED}❌ Lỗi: Giá trị không hợp lệ! Vui lòng chỉ nhập số nguyên từ 1 đến 60.${C_RESET}\n"
+  fi
+done
 
 echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quan ly Fail2ban => Thay doi so lan login SSH sai bi tam khoa ip       |"
-echo "========================================================================="
-echo ""
-echo ""
-port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | cut -f2 -d" ")
-read -p "Nhap lan gioi han sai nhap SSH se bi tam khoa IP: " tamkhoa
-if [[ ! $tamkhoa =~ ^-?[0-9]+$ ]]; then
-    echo "Vui long nhap so nguyen duong tu 1 den 60"
-    exit
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn lưu giới hạn đăng nhập SSH mới không?" "Bất kỳ IP nào nhập sai mật khẩu quá $tamkhoa lần sẽ bị khóa." "" "Đồng ý Lưu" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+  exit 0
 fi
-check_times_ban=$(cat /etc/fail2ban/jail.d/sshd.local | grep "bantime" | cut -f2 -d "=" | cut -f2 -d " ")
-port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | cut -f2 -d" ")
-cat >"/etc/fail2ban/jail.d/sshd.local" <<END
+
+# ==============================================================================
+# GHI CẤU HÌNH VÀ KHỞI ĐỘNG LẠI FAIL2BAN
+# ==============================================================================
+echo ""
+_runing "Đang ghi cấu hình giới hạn (maxretry = $tamkhoa) vào Fail2ban..."
+
+cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
 [sshd]
 enabled = true
 port = $port_checkssh
@@ -24,7 +83,23 @@ port = $port_checkssh
 logpath = %(sshd_log)s
 maxretry = $tamkhoa
 bantime = $check_times_ban
-END
-fail2ban-client reload
-systemctl restart fail2ban
-echo "Da hoan tat thay doi $tamkhoa , neu truy cap ssh nhap sai qua $tamkhoa se bi tam khoa trong $check_times_ban giay"
+EOF
+
+_rundone "Ghi cấu hình thành công"
+
+_runing "Đang nạp lại quy tắc Tường lửa Fail2ban..."
+if command -v fail2ban-client >/dev/null 2>&1; then
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
+else
+  systemctl restart fail2ban >/dev/null 2>&1
+fi
+_rundone "Tường lửa đã cập nhật giới hạn mới"
+
+echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP BẢO VỆ SSH${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Ngưỡng khóa IP : ${C_RED}Nhập sai quá $tamkhoa lần${C_RESET}" 2
+left_text "Thời gian phạt : ${C_YELLOW}Khóa trong $check_times_ban giây${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
