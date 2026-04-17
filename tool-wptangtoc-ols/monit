@@ -1,6 +1,10 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
 
-# Cấu hình biến sẵn
+# Cấu hình biến sẵn theo hệ điều hành
 if grep -qi "ubuntu" /etc/*release; then
   OS_FAMILY="ubuntu"
   FILE_MONITRC="/etc/monit/monitrc"
@@ -20,8 +24,20 @@ fi
 # Cờ theo dõi sự thay đổi (Nếu có thay đổi mới thì mới Restart Monit ở cuối)
 RELOAD_MONIT=0
 
+# ==============================================================================
+# NHẬN DIỆN TÍNH NĂNG TELEGRAM
+# ==============================================================================
+SCRIPT_TELEGRAM="/etc/wptt/service/reboot-app/wptt-monit-telegram.sh"
+TELEGRAM_ACTIVE="0"
+
+# Nếu người dùng đang BẬT Telegram, cờ này sẽ kích hoạt việc thay đổi lệnh Start
+if [[ -f "$SCRIPT_TELEGRAM" ]]; then
+  TELEGRAM_ACTIVE="1"
+  echo -e "\e[36m[*] Phát hiện tính năng Cảnh báo Telegram đang BẬT. Sẽ tự động chèn Hook...\e[0m"
+fi
+
 # ------------------------------------------------------------------------------
-# 1. CÀI ĐẶT MONIT
+# 1. CÀI ĐẶT MONIT VÀ CẤU HÌNH LÕI
 # ------------------------------------------------------------------------------
 if command -v monit >/dev/null 2>&1; then
   echo -e "\e[33m[!] Monit đã được cài đặt. Bỏ qua bước tải gói.\e[0m"
@@ -31,31 +47,26 @@ else
     export DEBIAN_FRONTEND=noninteractive
     apt-get update >/dev/null 2>&1
     apt-get install monit -y >/dev/null 2>&1
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install epel-release -y >/dev/null 2>&1
-    dnf install monit -y >/dev/null 2>&1
-  elif command -v yum >/dev/null 2>&1; then
-    yum install epel-release -y >/dev/null 2>&1
-    yum install monit -y >/dev/null 2>&1
   else
-    echo -e "\e[31m[x] Lỗi: Hệ điều hành này không được WPTangToc OLS hỗ trợ!\e[0m"
-    exit 1
+    if command -v dnf >/dev/null 2>&1; then DNF_CMD="dnf"; else DNF_CMD="yum"; fi
+    $DNF_CMD install epel-release -y >/dev/null 2>&1
+    $DNF_CMD install monit -y >/dev/null 2>&1
   fi
   echo -e "\e[32m[✔] Cài đặt gói Monit thành công.\e[0m"
 fi
 
 # Tạo sẵn thư mục chứa rule
-mkdir -p $DIR_MONIT
+mkdir -p "$DIR_MONIT"
 
 # Cấu hình Monit Core
 if grep -q "^set httpd port 2812" "$FILE_MONITRC"; then
   echo -e "\e[33m[!] Monit Core đã được tối ưu. Bỏ qua.\e[0m"
 else
   echo -e "\e[32m[+] Đang cấu hình Monit Core (HTTP & Daemon 30s)...\e[0m"
-  sed -i 's/# set httpd port 2812/set httpd port 2812/' $FILE_MONITRC
-  sed -i 's/#     use address localhost/    use address localhost/' $FILE_MONITRC
-  sed -i 's/#     allow localhost/    allow localhost/' $FILE_MONITRC
-  sed -i 's/set daemon  120/set daemon 30/; s/set daemon 120/set daemon 30/' $FILE_MONITRC
+  sed -i 's/# set httpd port 2812/set httpd port 2812/' "$FILE_MONITRC"
+  sed -i 's/#     use address localhost/    use address localhost/' "$FILE_MONITRC"
+  sed -i 's/#     allow localhost/    allow localhost/' "$FILE_MONITRC"
+  sed -i 's/set daemon  120/set daemon 30/; s/set daemon 120/set daemon 30/' "$FILE_MONITRC"
 
   # Ép dùng IPv4 127.0.0.1 thay cho localhost tránh tốn thời gian phân giải dns
   sed -i 's/use address localhost/use address 127.0.0.1/g' /etc/monitrc 2>/dev/null
@@ -63,7 +74,7 @@ else
   sed -i 's/use address localhost/use address 127.0.0.1/g' /etc/monit/monitrc 2>/dev/null
   sed -i 's/allow localhost/allow 127.0.0.1/g' /etc/monit/monitrc 2>/dev/null
 
-  if grep -qi "ubuntu" /etc/*release; then
+  if [[ "$OS_FAMILY" == "ubuntu" ]] && ! grep -q "set httpd port 2812" /etc/monit/monitrc; then
     echo -e "\nset httpd port 2812\n    use address 127.0.0.1\n    allow 127.0.0.1" >>/etc/monit/monitrc
   fi
   RELOAD_MONIT=1
@@ -73,9 +84,15 @@ fi
 # 2. RULE GIÁM SÁT OPENLITESPEED
 # ------------------------------------------------------------------------------
 echo -e "\e[32m[+] Đang cập nhật rule giám sát OpenLiteSpeed...\e[0m"
-cat >$DIR_MONIT/lshttpd <<EOF
+if [[ "$TELEGRAM_ACTIVE" == "1" ]]; then
+  CMD_START_LSHTTPD="/bin/bash $SCRIPT_TELEGRAM lshttpd 'OpenLiteSpeed (lshttpd)'"
+else
+  CMD_START_LSHTTPD="/usr/bin/systemctl start lshttpd"
+fi
+
+cat >"$DIR_MONIT/lshttpd" <<EOF
 check process lshttpd with pidfile /var/run/openlitespeed.pid
-  start program = "/usr/bin/systemctl start lshttpd"
+  start program = "$CMD_START_LSHTTPD"
   stop program  = "/usr/bin/systemctl stop lshttpd"
   if failed host 127.0.0.1 port 80 with timeout 5 seconds then restart
   if 5 restarts within 5 cycles then timeout
@@ -86,9 +103,15 @@ RELOAD_MONIT=1
 # 3. RULE GIÁM SÁT MARIADB
 # ------------------------------------------------------------------------------
 echo -e "\e[32m[+] Đang cập nhật rule giám sát MariaDB...\e[0m"
-cat >$DIR_MONIT/mariadb <<EOF
+if [[ "$TELEGRAM_ACTIVE" == "1" ]]; then
+  CMD_START_MARIADB="/bin/bash $SCRIPT_TELEGRAM mariadb 'MariaDB/MySQL'"
+else
+  CMD_START_MARIADB="/usr/bin/systemctl start mariadb"
+fi
+
+cat >"$DIR_MONIT/mariadb" <<EOF
 check process mariadb matching "mariadbd|mysqld"
-  start program = "/usr/bin/systemctl start mariadb"
+  start program = "$CMD_START_MARIADB"
   stop program  = "/usr/bin/systemctl stop mariadb"
   if failed unixsocket $SOCK_MARIADB protocol mysql then restart
   if 5 restarts within 5 cycles then timeout
@@ -98,7 +121,6 @@ RELOAD_MONIT=1
 # ------------------------------------------------------------------------------
 # 4. RULE GIÁM SÁT OBJECT CACHE (TỰ ĐỘNG NHẬN DIỆN ENGINE DUY NHẤT)
 # ------------------------------------------------------------------------------
-# Xóa trắng toàn bộ file Monit cũ của 3 Engine để tránh xung đột
 for cache_engine in valkey keydb redis; do
   if [ -f "$DIR_MONIT/$cache_engine" ]; then
     rm -f "$DIR_MONIT/$cache_engine"
@@ -106,31 +128,29 @@ for cache_engine in valkey keydb redis; do
   fi
 done
 
-# Kiểm tra xem máy chủ đang thực sự chạy Engine nào
 ACTIVE_CACHE=""
 if systemctl is-enabled --quiet valkey 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
   ACTIVE_CACHE="valkey"
 elif systemctl is-enabled --quiet keydb 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
   ACTIVE_CACHE="keydb"
-elif systemctl is-enabled --quiet redis 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
-  ACTIVE_CACHE="redis"
-fi
+elif systemctl is-enabled --quiet redis 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then ACTIVE_CACHE="redis"; fi
 
 if [[ -n "$ACTIVE_CACHE" ]]; then
   echo -e "\e[32m[+] Phát hiện $ACTIVE_CACHE. Đang khởi tạo rule giám sát độc quyền...\e[0m"
 
-  # Xác định tên tiến trình cho từng thằng
-  if [[ "$ACTIVE_CACHE" == "valkey" ]]; then
-    PROC_MATCH="valkey-server"
-  elif [[ "$ACTIVE_CACHE" == "keydb" ]]; then
-    PROC_MATCH="keydb-server"
+  [[ "$ACTIVE_CACHE" == "valkey" ]] && PROC_MATCH="valkey-server"
+  [[ "$ACTIVE_CACHE" == "keydb" ]] && PROC_MATCH="keydb-server"
+  [[ "$ACTIVE_CACHE" == "redis" ]] && PROC_MATCH="redis-server"
+
+  if [[ "$TELEGRAM_ACTIVE" == "1" ]]; then
+    CMD_START_CACHE="/bin/bash $SCRIPT_TELEGRAM $ACTIVE_CACHE 'Object Cache ($ACTIVE_CACHE)'"
   else
-    PROC_MATCH="redis-server"
+    CMD_START_CACHE="/usr/bin/systemctl start $ACTIVE_CACHE"
   fi
 
-  cat >$DIR_MONIT/$ACTIVE_CACHE <<EOF
+  cat >"$DIR_MONIT/$ACTIVE_CACHE" <<EOF
 check process $ACTIVE_CACHE matching "$PROC_MATCH"
-  start program = "/usr/bin/systemctl start $ACTIVE_CACHE"
+  start program = "$CMD_START_CACHE"
   stop program  = "/usr/bin/systemctl stop $ACTIVE_CACHE"
   if failed unixsocket /var/run/$ACTIVE_CACHE/${ACTIVE_CACHE}.sock protocol redis then restart
   if 5 restarts within 5 cycles then timeout
@@ -145,9 +165,16 @@ fi
 # ------------------------------------------------------------------------------
 if [[ -f "$PATH_MEMCACHE_CONF" ]]; then
   echo -e "\e[32m[+] Phát hiện Memcached. Đang cập nhật rule giám sát...\e[0m"
-  cat >$DIR_MONIT/memcached <<EOF
+
+  if [[ "$TELEGRAM_ACTIVE" == "1" ]]; then
+    CMD_START_MEMCACHED="/bin/bash $SCRIPT_TELEGRAM memcached 'Memcached'"
+  else
+    CMD_START_MEMCACHED="/usr/bin/systemctl start memcached"
+  fi
+
+  cat >"$DIR_MONIT/memcached" <<EOF
 check process memcached matching "memcached"
-  start program = "/usr/bin/systemctl start memcached"
+  start program = "$CMD_START_MEMCACHED"
   stop program  = "/usr/bin/systemctl stop memcached"
   if failed unixsocket /var/run/memcached/memcached.sock protocol memcache then restart
   if 5 restarts within 5 cycles then timeout
@@ -167,13 +194,10 @@ systemctl enable monit >/dev/null 2>&1
 
 if [ "$RELOAD_MONIT" -eq 1 ]; then
   echo -e "\e[32m[+] Cập nhật cấu hình mới. Đang nạp lại Monit daemon...\e[0m"
-  systemctl daemon-reload
-  systemctl restart monit
+  systemctl daemon-reload >/dev/null 2>&1
+  systemctl restart monit >/dev/null 2>&1
   monit monitor all >/dev/null 2>&1
   echo -e "\e[32m[✔] HOÀN TẤT! Các rule mới đã được kích hoạt.\e[0m"
 else
   echo -e "\e[32m[✔] KHÔNG CÓ SỰ THAY ĐỔI NÀO. Hệ thống đã ở trạng thái tối ưu nhất!\e[0m"
 fi
-
-# Lệnh: monit summary để kiểm tra
-# Lệnh: monit status để xem các thông tin chi tiết
