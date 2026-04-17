@@ -1,48 +1,118 @@
 #!/bin/bash
-. /etc/wptt/.wptt.conf
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Bao Mat => Thong bao het tai nguyen may chu                            |"
-echo "========================================================================="
-echo ""
-ip=$1
-cpu_usage=$(top -b -n2 -p 1 | fgrep "Cpu(s)" | tail -1 | awk -F'id,' -v prefix="$prefix" '{ split($1, vs, ","); v=vs[length(vs)]; sub("%", "", v); printf "%s%.1f%%\n", prefix, 100 - v }' | sed "s/%//")
-cpu_dang_su_dung=$(expr 100 - $cpu_usage)
-ram_usage=$(free | grep Mem | awk '{print $3/$2 * 100.0}' | cut -f1 -d ",")
-date="$(date "+%d-%m-%Y %H:%M")"
-function hello_tuan() {
-  text="
-Thông báo sắp hết tài nguyên
-webserver - $ip
----------------------------
-Nội dung: $1
-Ngày: ${date}
-website trong máy chủ gồm có: $(
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      path="/usr/local/lsws/$domain/html"
-      i=1
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
 
-      if [[ -d "$path" ]]; then
-        echo "$domain -"
-      fi
-    done
-  )
--------------------------------------
-Cảm ơn bạn đã chọn WPTangToc OLS
-WPTangToc OLS phiên bản : $version_wptangtoc_ols
-Phát triển bởi [Gia Tuấn](https://wptangtoc.com/gia-tuan)
-	"
-  url="https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${telegram_api}/sendMessage"
-  curl -s -d "chat_id=$telegram_id&text=${text}&disable_web_page_preview=true&parse_mode=markdown" $url >/dev/null
-}
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-if (("$cpu_dang_su_dung" > "$2")); then
-  hello_tuan "CPU đang tải: ${cpu_usage}%"
+# Lấy IP Máy chủ và Ngưỡng cảnh báo từ đối số dòng lệnh (Hoặc mặc định 85%)
+IP_SERVER="${1:-$(curl -s https://ipv4.icanhazip.com)}"
+THRESHOLD="${2:-85}"
+date_now="$(date "+%d-%m-%Y %H:%M:%S")"
+
+# Nếu chạy tay trực tiếp trên Terminal sẽ hiện giao diện Bo Cong
+if [ -t 1 ]; then
+  clear
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}BẢO MẬT ➜ Theo Dõi & Cảnh Báo Tài Nguyên Máy Chủ${C_RESET}"
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  _runing "Đang đo lường tài nguyên phần cứng hiện tại..."
 fi
 
-if (("$ram_usage" > "$2")); then
-  hello_tuan "Ram đang sử dụng: ${ram_usage}%"
+# ==============================================================================
+# ĐO LƯỜNG TÀI NGUYÊN (Ép số thập phân về số Nguyên để so sánh chuẩn)
+# ==============================================================================
+# 1. CPU Usage: Dùng trick -p 1 của WPTangToc để giảm overhead, bắt đúng số nhàn rỗi (id)
+cpu_idle=$(top -b -n2 -p 1 | grep -i "Cpu(s)" | tail -1 | awk -F'id,' '{ split($1, vs, ","); v=vs[length(vs)]; sub("%", "", v); print v }' | tr -d ' ')
+cpu_usage=$(echo "$cpu_idle" | awk '{printf "%.0f", 100 - $1}')
+
+# 2. RAM Usage: Tính % dựa trên lệnh free
+ram_usage=$(free -m | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
+
+# 3. Disk Usage: Kiểm tra dung lượng phân vùng Root (/)
+disk_usage=$(df -h / | awk 'NR==2 {print $5}' | sed 's/%//')
+
+if [ -t 1 ]; then
+  _rundone "Hoàn tất đo lường."
+  echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  left_text "  Thông số CPU  : ${C_BOLD_WHITE}${cpu_usage}%${C_RESET}" 2
+  left_text "  Thông số RAM  : ${C_BOLD_WHITE}${ram_usage}%${C_RESET}" 2
+  left_text "  Thông số Disk : ${C_BOLD_WHITE}${disk_usage}%${C_RESET}" 2
+  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Mức cảnh báo  : ${C_RED}>= ${THRESHOLD}%${C_RESET}" 2
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+fi
+
+# ==============================================================================
+# LỌC DANH SÁCH WEBSITE ĐANG CÓ
+# ==============================================================================
+domain_list=""
+for entry in $(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV); do
+  domain=$(echo "$entry" | sed 's/^\.//' | sed 's/\.conf$//')
+  path="/usr/local/lsws/$domain/html"
+  if [[ -d "$path" ]]; then
+    domain_list+="🌐 $domain%0A"
+  fi
+done
+[[ -z "$domain_list" ]] && domain_list="Không có website nào."
+
+# ==============================================================================
+# KIỂM TRA NGƯỠNG VÀ LÊN KỊCH BẢN THÔNG BÁO (GỘP CHUNG 1 LẦN GỬI)
+# ==============================================================================
+canh_bao=""
+
+if ((cpu_usage >= THRESHOLD)); then
+  canh_bao+="🔥 CPU đang tải: ${cpu_usage}%%0A"
+fi
+
+if ((ram_usage >= THRESHOLD)); then
+  canh_bao+="🔥 RAM đang sử dụng: ${ram_usage}%%0A"
+fi
+
+if ((disk_usage >= THRESHOLD)); then
+  canh_bao+="🔥 Ổ cứng (Disk) đang đầy: ${disk_usage}%%0A"
+fi
+
+# ==============================================================================
+# GỬI TELEGRAM NẾU CÓ TÀI NGUYÊN VƯỢT NGƯỠNG
+# ==============================================================================
+if [[ -n "$canh_bao" ]]; then
+
+  if [ -t 1 ]; then _runing "Phát hiện quá tải! Đang gửi cảnh báo qua Telegram..."; fi
+
+  # Mã hóa nội dung (URL Encode ngắt dòng %0A) để truyền chuẩn Markdown
+  text="🚨 *THÔNG BÁO SẮP HẾT TÀI NGUYÊN* 🚨%0A"
+  text+="🖥 *Máy chủ:* \`${IP_SERVER}\`%0A"
+  text+="⏱ *Thời gian:* ${date_now}%0A"
+  text+="---------------------------%0A"
+  text+="⚠️ *Chi tiết quá tải (Ngưỡng ${THRESHOLD}%):*%0A"
+  text+="${canh_bao}"
+  text+="---------------------------%0A"
+  text+="📂 *Các Website đang hoạt động:*%0A"
+  text+="${domain_list}%0A"
+  text+="---------------------------%0A"
+  text+="WPTangToc OLS - Phiên bản: ${version_wptangtoc_ols}%0A"
+  text+="Phát triển bởi [Gia Tuấn](https://wptangtoc.com)"
+
+  url="https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${telegram_api}/sendMessage"
+  curl -s -X POST "$url" \
+    -d "chat_id=${telegram_id}" \
+    -d "text=${text}" \
+    -d "disable_web_page_preview=true" \
+    -d "parse_mode=markdown" >/dev/null
+
+  if [ -t 1 ]; then _rundone "Đã gửi thông báo Telegram thành công!"; fi
+
+else
+  if [ -t 1 ]; then echo -e "${C_GREEN}Tuyệt vời! Tài nguyên hệ thống vẫn đang ở mức ổn định (Dưới ${THRESHOLD}%).${C_RESET}\n"; fi
+fi
+
+check_menu_wptangtoc_active="${3:-}"
+if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
+  exec /etc/wptt/wptt-bao-mat-main 1
 fi
