@@ -4,9 +4,6 @@
 # @email: giatuan@wptangtoc.com
 # @since: 2026
 
-# ==============================================================================
-# NẠP CẤU HÌNH VÀ THƯ VIỆN WPTANGTOC
-# ==============================================================================
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
@@ -20,12 +17,9 @@ echo -e "${C_CYAN}╰───────────────────�
 
 if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
-  WPTT_MENU_BACK="/etc/wptt/service/wptt-reboot-main 1"
+  WPTT_MENU_BACK="/etc/wptt/wptt-bao-mat-main 1"
 fi
 
-# ==============================================================================
-# KIỂM TRA ĐIỀU KIỆN TIÊN QUYẾT (TELEGRAM API)
-# ==============================================================================
 if [[ -z "$telegram_api" || -z "$telegram_id" ]]; then
   echo -e "${C_RED}❌ Lỗi: Bạn chưa cấu hình Bot Telegram!${C_RESET}"
   echo -e "Vui lòng vào Quản lý Telegram để cài đặt trước khi sử dụng tính năng này."
@@ -34,9 +28,6 @@ if [[ -z "$telegram_api" || -z "$telegram_id" ]]; then
   exit 1
 fi
 
-# ==============================================================================
-# NHẬN DIỆN OS & ĐƯỜNG DẪN MONIT
-# ==============================================================================
 if grep -qi "ubuntu" /etc/*release 2>/dev/null; then
   OS_FAMILY="ubuntu"
   DIR_MONIT="/etc/monit/conf.d"
@@ -78,7 +69,7 @@ echo -e "${C_CYAN}╰───────────────────�
 if [[ "$TRANG_THAI" == "ON" ]]; then
   if ! wptt_xac_nhan "Bạn có muốn TẮT thông báo Telegram của Monit không?" "Monit vẫn sẽ giám sát và cứu hộ dịch vụ bình thường (Im lặng)." "" "Đồng ý Tắt" "Giữ nguyên (Hủy)"; then
     echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-    [[ "${1:-}" == "98" ]] && exec /etc/wptt/service/wptt-reboot-main 1
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
     exit 0
   fi
 
@@ -93,45 +84,52 @@ if [[ "$TRANG_THAI" == "ON" ]]; then
   _rundone "Thiết lập cấu hình Monit về trạng thái Mặc định (Im lặng)"
 
   sleep 2
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/service/wptt-reboot-main 1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
   exit 0
 fi
 
 # ==============================================================================
 # XỬ LÝ NHÁNH 2: ĐANG TẮT -> YÊU CẦU BẬT (CHÈN HOOK TELEGRAM)
 # ==============================================================================
-if ! wptt_xac_nhan "Bạn có muốn BẬT thông báo Telegram cho Auto-Reboot không?" "Hệ thống sẽ gắn thêm Hook cảnh báo vào các Rule của Monit." "" "Đồng ý BẬT" "Hủy thao tác"; then
+if ! wptt_xac_nhan "Bạn có muốn BẬT thông báo Telegram cho Auto-Reboot không?" "Hệ thống sẽ gắn thêm Hook cảnh báo vào các lệnh Start của Monit." "" "Đồng ý BẬT" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/service/wptt-reboot-main 1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
   exit 0
 fi
 
 echo ""
-_runing "Đang tạo Script kết nối Telegram (Webhook)..."
+_runing "Đang tạo Script cứu hộ & thông báo Telegram..."
 
-# Dọn dẹp Cronjob cũ nếu người dùng lên đời từ bản trước
 rm -f /etc/cron.d/reboot-check-service*
 if grep -qi "ubuntu" /etc/*release 2>/dev/null; then systemctl restart cron.service >/dev/null 2>&1; else systemctl restart crond.service >/dev/null 2>&1; fi
 
 mkdir -p /etc/wptt/service/reboot-app
 cat >"$SCRIPT_TELEGRAM" <<'EOF'
 #!/bin/bash
-. /etc/wptt/.wptt.conf
-IP_SERVER=$(curl -s https://ipv4.icanhazip.com || curl -s https://checkip.amazonaws.com)
-DATE_NOW=$(date "+%d-%m-%Y %H:%M:%S")
-SERVICE_NAME="$1"
+SERVICE_CMD="$1"
+SERVICE_NAME="$2"
 
-TEXT="🚨 *MONIT CẢNH BÁO: KHÔI PHỤC DỊCH VỤ* 🚨%0A"
-TEXT+="🖥 *Máy chủ:* \`${IP_SERVER}\`%0A"
-TEXT+="⏱ *Thời gian:* ${DATE_NOW}%0A"
-TEXT+="---------------------------%0A"
-TEXT+="⚠️ *Dịch vụ:* ${SERVICE_NAME}%0A"
-TEXT+="⚙️ *Hành động:* Hệ thống phát hiện dịch vụ bị treo/tắt và đã tiến hành Auto-Restart thành công.%0A"
-TEXT+="---------------------------%0A"
-TEXT+="WPTangToc OLS - Phiên bản: ${version_wptangtoc_ols}%0A"
+# 1. THỰC THI KHỞI ĐỘNG LẠI DỊCH VỤ (ƯU TIÊN SỐ 1 ĐỂ WEB KHÔNG CHẾT)
+/usr/bin/systemctl start "$SERVICE_CMD"
 
-URL="https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${telegram_api}/sendMessage"
-curl -s -X POST "$URL" -d "chat_id=${telegram_id}" -d "text=${TEXT}" -d "disable_web_page_preview=true" -d "parse_mode=markdown" >/dev/null
+# 2. TIẾN HÀNH GỬI THÔNG BÁO TELEGRAM (CHẠY NGẦM ĐỂ KHÔNG CHẶN MONIT)
+(
+  . /etc/wptt/.wptt.conf
+  IP_SERVER=$(curl -skf --connect-timeout 5 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 https://checkip.amazonaws.com)
+  DATE_NOW=$(date "+%d-%m-%Y %H:%M:%S")
+
+  TEXT="🚨 *MONIT CẢNH BÁO: KHÔI PHỤC DỊCH VỤ* 🚨%0A"
+  TEXT+="🖥 *Máy chủ:* \`${IP_SERVER}\`%0A"
+  TEXT+="⏱ *Thời gian:* ${DATE_NOW}%0A"
+  TEXT+="---------------------------%0A"
+  TEXT+="⚠️ *Dịch vụ:* ${SERVICE_NAME}%0A"
+  TEXT+="⚙️ *Hành động:* Hệ thống phát hiện dịch vụ bị treo/tắt và đã tự động Start lại thành công.%0A"
+  TEXT+="---------------------------%0A"
+  TEXT+="WPTangToc OLS - Phiên bản: ${version_wptangtoc_ols}%0A"
+
+  URL="https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${telegram_api}/sendMessage"
+  curl -s -X POST "$URL" -d "chat_id=${telegram_id}" -d "text=${TEXT}" -d "disable_web_page_preview=true" -d "parse_mode=markdown" >/dev/null
+) &
 EOF
 chmod +x "$SCRIPT_TELEGRAM"
 _rundone "Khởi tạo Script Telegram hoàn tất"
@@ -142,21 +140,19 @@ mkdir -p "$DIR_MONIT"
 # 1. Bơm Hook vào OpenLiteSpeed
 cat >"$DIR_MONIT/lshttpd" <<EOF
 check process lshttpd with pidfile /var/run/openlitespeed.pid
-  start program = "/usr/bin/systemctl start lshttpd"
+  start program = "/bin/bash $SCRIPT_TELEGRAM lshttpd 'OpenLiteSpeed (lshttpd)'"
   stop program  = "/usr/bin/systemctl stop lshttpd"
   if failed host 127.0.0.1 port 80 with timeout 5 seconds then restart
   if 5 restarts within 5 cycles then timeout
-  if changed pid then exec "$SCRIPT_TELEGRAM 'OpenLiteSpeed (lshttpd)'"
 EOF
 
 # 2. Bơm Hook vào MariaDB
 cat >"$DIR_MONIT/mariadb" <<EOF
 check process mariadb matching "mariadbd|mysqld"
-  start program = "/usr/bin/systemctl start mariadb"
+  start program = "/bin/bash $SCRIPT_TELEGRAM mariadb 'MariaDB/MySQL'"
   stop program  = "/usr/bin/systemctl stop mariadb"
   if failed unixsocket $SOCK_MARIADB protocol mysql then restart
   if 5 restarts within 5 cycles then timeout
-  if changed pid then exec "$SCRIPT_TELEGRAM 'MariaDB/MySQL'"
 EOF
 
 # 3. Bơm Hook vào Object Cache
@@ -174,11 +170,10 @@ if [[ -n "$ACTIVE_CACHE" ]]; then
   [[ "$ACTIVE_CACHE" == "redis" ]] && PROC_MATCH="redis-server"
   cat >"$DIR_MONIT/$ACTIVE_CACHE" <<EOF
 check process $ACTIVE_CACHE matching "$PROC_MATCH"
-  start program = "/usr/bin/systemctl start $ACTIVE_CACHE"
+  start program = "/bin/bash $SCRIPT_TELEGRAM $ACTIVE_CACHE 'Object Cache ($ACTIVE_CACHE)'"
   stop program  = "/usr/bin/systemctl stop $ACTIVE_CACHE"
   if failed unixsocket /var/run/$ACTIVE_CACHE/${ACTIVE_CACHE}.sock protocol redis then restart
   if 5 restarts within 5 cycles then timeout
-  if changed pid then exec "$SCRIPT_TELEGRAM 'Object Cache ($ACTIVE_CACHE)'"
 EOF
 fi
 
@@ -186,11 +181,10 @@ fi
 if [[ -f "$PATH_MEMCACHE_CONF" ]]; then
   cat >"$DIR_MONIT/memcached" <<EOF
 check process memcached matching "memcached"
-  start program = "/usr/bin/systemctl start memcached"
+  start program = "/bin/bash $SCRIPT_TELEGRAM memcached 'Memcached'"
   stop program  = "/usr/bin/systemctl stop memcached"
   if failed unixsocket /var/run/memcached/memcached.sock protocol memcache then restart
   if 5 restarts within 5 cycles then timeout
-  if changed pid then exec "$SCRIPT_TELEGRAM 'Memcached'"
 EOF
 else
   rm -f "$DIR_MONIT/memcached"
@@ -200,9 +194,6 @@ systemctl daemon-reload >/dev/null 2>&1
 systemctl restart monit >/dev/null 2>&1
 _rundone "Cập nhật Hook và Reload Monit thành công"
 
-# ==============================================================================
-# BẢNG BÁO CÁO THÀNH CÔNG
-# ==============================================================================
 echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT THÔNG BÁO TELEGRAM${C_RESET}"
 echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -210,4 +201,4 @@ left_text "Chế độ Auto-Reboot : ${C_YELLOW}Vẫn đang giám sát (Mỗi 30
 left_text "Thông báo khi sập  : ${C_BOLD_WHITE}Đã liên kết với Bot Telegram${C_RESET}" 2
 echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/service/wptt-reboot-main 1
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
