@@ -4,21 +4,23 @@ function huong_dan() {
   Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hiện đang bị ngăn chặn truy cập vào máy chủ.
 }
 
-clear
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "| $quan_ly_ip => $danh_sach_ip_da_bi_khoa                               |"
-echo "========================================================================="
-echo ""
-echo ""
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ IP ➜ Danh Sách IP Đang Bị Khóa (Blacklist)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-khoa-ip-main 1"
+fi
+
+_runing "Đang càn quét dữ liệu từ các lớp Tường lửa (Fail2ban, CSF, OLS...)"
 
 # Tạo một file tạm an toàn để gom data thô
 TMP_LIST=$(mktemp)
@@ -26,9 +28,9 @@ TMP_LIST=$(mktemp)
 # Biến Regex bắt chính xác IPv4 và IPv6 (Tối đa 39 ký tự)
 REGEX_IP='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|\b([0-9a-fA-F:]+:+)+[0-9a-fA-F]+\b'
 
-# =========================================================
+# ==============================================================================
 # 1. QUÉT FAIL2BAN (Dán nhãn chi tiết đến từng Jail)
-# =========================================================
+# ==============================================================================
 if systemctl is-active --quiet fail2ban; then
   for JAIL in $(fail2ban-client status 2>/dev/null | grep 'Jail list:' | cut -d ':' -f2 | tr ',' '\n' | sed -e 's/^[ \t]*//'); do
     if [[ -n "$JAIL" ]]; then
@@ -37,16 +39,16 @@ if systemctl is-active --quiet fail2ban; then
   done
 fi
 
-# =========================================================
+# ==============================================================================
 # 2. QUÉT CSF
-# =========================================================
+# ==============================================================================
 if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.deny ]]; then
   grep -vE '^#|^$' /etc/csf/csf.deny | grep -oE "$REGEX_IP" | awk '{print "CSF", $1}' >>"$TMP_LIST"
 fi
 
-# =========================================================
+# ==============================================================================
 # 3. QUÉT OPENLITESPEED (Khóa Tĩnh & Khóa Động)
-# =========================================================
+# ==============================================================================
 # A. Quét config tĩnh (OLS-Static)
 if [[ -f /usr/local/lsws/conf/httpd_config.conf ]]; then
   grep -E '^[ \t]*deny' /usr/local/lsws/conf/httpd_config.conf | grep -oE "$REGEX_IP" | awk '{print "OLS-Static", $1}' >>"$TMP_LIST"
@@ -57,25 +59,23 @@ if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1; then
   grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -oE "$REGEX_IP" | awk '{print "OLS-Dynamic", $1}' >>"$TMP_LIST"
 fi
 
-# =========================================================
-# 4. QUÉT FIREWALLD (Native Zone Drop - Siêu Sạch)
-# =========================================================
+# ==============================================================================
+# 4. QUÉT FIREWALLD (Native Zone Drop)
+# ==============================================================================
 if systemctl is-active --quiet firewalld; then
   firewall-cmd --zone=drop --list-sources 2>/dev/null | tr ' ' '\n' | grep -oE "$REGEX_IP" | awk '{print "Firewalld", $1}' >>"$TMP_LIST"
 fi
 
-# =========================================================
+# ==============================================================================
 # 5. QUÉT NFTABLES (Bảng Custom Blackblock - LOẠI TRỪ 0.0.0.0)
-# =========================================================
+# ==============================================================================
 if systemctl is-active --quiet nftables; then
   nft list set ip blackblock blackaction 2>/dev/null | grep -oE "$REGEX_IP" | grep -v "^0\.0\.0\.0$" | awk '{print "Nftables", $1}' >>"$TMP_LIST"
 fi
 
-# =========================================================
-# LÕI LỌC IP THÔNG MINH & HIỂN THỊ GIAO DIỆN BẢNG 3 CỘT
-# =========================================================
-. /etc/wptt/echo-color
-
+# ==============================================================================
+# LÕI LỌC IP THÔNG MINH (DEDUPLICATE)
+# ==============================================================================
 # Dùng awk gom nhóm tag và tạo dấu phân cách "|" để cắt cột
 FINAL_LIST=$(awk '{
   ip = $2; source = $1;
@@ -85,41 +85,40 @@ FINAL_LIST=$(awk '{
   for (ip in map) print ip "|" map[ip]
 }' "$TMP_LIST" | sort -V)
 
+# Dọn rác file tạm
+rm -f "$TMP_LIST"
+
+_rundone "Hoàn tất thu thập dữ liệu IP"
+
+# ==============================================================================
+# HIỂN THỊ GIAO DIỆN BẢNG 3 CỘT (ULTIMATE UX)
+# ==============================================================================
 if [[ -z "$FINAL_LIST" ]]; then
-  echo -e "\e[32m[✓] TUYỆT VỜI! Hệ thống của bạn hiện tại không có IP nào bị chặn.\e[0m"
+  echo -e "\n${C_GREEN}✅ TUYỆT VỜI! Hệ thống của bạn hiện tại không có IP nào bị chặn.${C_RESET}\n"
 else
-  # Giao diện Bảng 3 Cột (Tổng chiều rộng 83 ký tự - Chống vỡ khung)
-  echo "+-------+-----------------------------------------+-------------------------------+"
-  echo "| STT   | ĐỊA CHỈ IP BỊ CHẶN (BLACKLIST)          | NGUỒN CHẶN (TAGS)             |"
-  echo "+-------+-----------------------------------------+-------------------------------+"
+  # Giao diện Bảng 3 Cột bo góc mềm mại
+  echo -e "\n${C_CYAN}╭───────┬─────────────────────────────────────────┬───────────────────────────────╮${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}STT${C_RESET}   ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}ĐỊA CHỈ IP BỊ CHẶN (BLACKLIST)${C_RESET}          ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}NGUỒN CHẶN (TAGS)${C_RESET}             ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}├───────┼─────────────────────────────────────────┼───────────────────────────────┤${C_RESET}"
 
   # Đọc từng dòng, tách IP và Tag thông qua dấu "|"
   STT=1
   while IFS='|' read -r ip tags; do
     if [[ -n "$ip" ]]; then
-      # %-5s: Cột STT, %-39s: Cột IP (Vừa khít IPv6), %-29s: Cột Tag
-      printf "| %-5s | %-39s | %-29s |\n" "[$STT]" "$ip" "$tags"
+      # Sử dụng printf căn lề chuẩn (%-5s, %-39s, %-29s) bọc trong biến màu sắc
+      printf "${C_CYAN}│${C_RESET} %-5s ${C_CYAN}│${C_RESET} ${C_RED}%-39s${C_RESET} ${C_CYAN}│${C_RESET} ${C_YELLOW}%-29s${C_RESET} ${C_CYAN}│${C_RESET}\n" "[$STT]" "$ip" "$tags"
       ((STT++))
     fi
   done <<<"$FINAL_LIST"
 
-  echo "+-------+-----------------------------------------+-------------------------------+"
+  echo -e "${C_CYAN}╰───────┴─────────────────────────────────────────┴───────────────────────────────╯${C_RESET}"
 
-  # Thuật toán tính toán Padding hoàn hảo cho Footer
+  # Footer tổng kết
   COUNT=$((STT - 1))
-  TEXT=" IP đang bị khoá trên hệ thống"
-
-  # Xử lý độ dài chuỗi tiếng Việt có dấu (UTF-8) để khung không bị vỡ
-  PADDING_LENGTH=$((70 - ${#COUNT} - 30))
-  printf "| Tổng: | \e[31m%s\e[0m %s%*s |\n" "$COUNT" "$TEXT" "$PADDING_LENGTH" ""
-
-  echo "+-------+-----------------------------------------+-------------------------------+"
+  echo -e "  ${C_BOLD_WHITE}Tổng cộng:${C_RESET} Đang có ${C_RED}$COUNT${C_RESET} địa chỉ IP bị cách ly khỏi hệ thống.\n"
 fi
 
-# Dọn rác file tạm
-rm -f "$TMP_LIST"
-
-check_menu_wptangtoc_active=${1:-}
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-khoa-ip-main 1
-fi
+# ==============================================================================
+# HOÀN TẤT VÀ THOÁT
+# ==============================================================================
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-khoa-ip-main 1
