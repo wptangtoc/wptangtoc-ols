@@ -313,7 +313,6 @@ fi
 _runing "Đang liên hệ với Let's Encrypt và cấp phát chứng chỉ..."
 
 echo "$NAME" >>"/tmp/ssl-$NAME.txt"
-# Lọc logic WWW và Multisite (Giữ nguyên logic cực tốt của bạn)
 if [[ -f "/usr/local/lsws/$NAME/html/wp-config.php" ]] && grep -q 'MULTISITE' "/usr/local/lsws/$NAME/html/wp-config.php"; then
   wp site list --field=url --path="/usr/local/lsws/$NAME/html" --allow-root 2>/dev/null | cut -f3 -d '/' | sort -u | uniq >>"/tmp/ssl-$NAME.txt"
 fi
@@ -371,11 +370,74 @@ http_status=$(curl -o /dev/null -s -w "%{http_code}" "https://${NAME}" 2>/dev/nu
 
 if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && "$http_status" -ne 301 && "$http_status" -ne 404) ]]; then
   _runloi "Cấp phát chứng chỉ thất bại"
-  echo -e "\n${C_RED}Lỗi: Quá trình cài đặt SSL Let's Encrypt không thành công!${C_RESET}"
+  echo -e "${C_RED}Lỗi: Quá trình cài đặt SSL Let's Encrypt không thành công!${C_RESET}"
   if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" ]]; then
     echo "Chứng chỉ đã được tải về nhưng cấu hình Web Server không nhận diện đúng HTTPS."
   else
+    LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
+    IS_BANNED=0
+
+    LIMIT_MSG=$(tail -n 500 "$LOG_FILE" | grep -E -i "rateLimited|too many certificates" | tail -n 1)
+
+    if [[ -n "$LIMIT_MSG" ]]; then
+      IS_BANNED=1
+
+      # Trích xuất thời gian chính xác từ Log (Cắt chuỗi sau chữ "retry after" và trước "UTC")
+      RETRY_UTC=$(echo "$LIMIT_MSG" | sed -n 's/.*retry after \([0-9-]* [0-9:]*\) UTC.*/\1/p')
+
+      # Phân loại nguyên nhân và gán thời gian hiển thị
+      if echo "$LIMIT_MSG" | grep -qi "too many certificates already issued"; then
+        BAN_REASON="Cài trùng lặp quá nhiều (Giới hạn 5 lần / tuần)."
+        WAIT_TIME="Bắt buộc phải đợi hệ thống mở khóa (Tối đa 7 ngày)"
+      elif echo "$LIMIT_MSG" | grep -qi "too many failed authorizations"; then
+        BAN_REASON="Xác thực lỗi quá nhiều lần (Giới hạn 5 lần / giờ)."
+        WAIT_TIME="Hãy đợi đúng 1 tiếng đồng hồ nữa rồi thử lại."
+      elif echo "$LIMIT_MSG" | grep -qi "Certificates per Registered Domain"; then
+        BAN_REASON="Vượt giới hạn chứng chỉ tên miền (50 lần/tuần)."
+        WAIT_TIME="Phải đợi Let's Encrypt reset lại quota trong tuần tới."
+      else
+        BAN_REASON="Vi phạm chính sách chống Spam API của Let's Encrypt."
+        WAIT_TIME="Vui lòng thử lại sau vài giờ hoặc vài ngày."
+      fi
+
+      echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: TÊN MIỀN BỊ KHÓA SSL TẠM THỜI${C_RESET}"
+      echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "Domain bị chặn: ${C_YELLOW}$NAME${C_RESET}" 2
+      left_text "Nguyên nhân   : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
+      left_text "Cách xử lý    : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
+      echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "Giải thích: Let's Encrypt giới hạn số lần tạo SSL để chống Spam." 2
+      left_text "Do bạn đã 'vọc' hoặc thử cài đặt thất bại quá nhiều lần, hệ" 2
+      left_text "thống hãng đã đưa tên miền này vào danh sách chặn tạm thời." 2
+      left_text "Không cố thử lại lúc này vì sẽ làm thời gian bị khóa lâu hơn!" 2
+      echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+      return 1 2>/dev/null || exit 1
+    fi
+
     echo "Bạn có thể kiểm tra chi tiết lỗi tại file log: /var/log/letsencrypt/letsencrypt.log"
+    if wptt_xac_nhan "Bạn có muốn xem toàn bộ nội dung letsencrypt.log không? " "Mở trình đọc Log chuyên sâu để tự dò lỗi." "" "Đồng ý (xem log)" "Không đồng ý (Hủy thao tác)"; then
+      echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}HƯỚNG DẪN SỬ DỤNG TRÌNH ĐỌC LOG (LESS)${C_RESET}"
+      echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "File đang xem : ${C_YELLOW}$LOG_FILE${C_RESET}" 2
+      echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ⬇️ ⬆️  Nhấn phím mũi tên [Lên/Xuống] để cuộn từng dòng." 2
+      left_text " ␣    Nhấn phím [Space] để cuộn nhanh từng trang." 2
+      left_text " 🔍   Nhấn phím [/] và nhập từ khóa để TÌM KIẾM (Bấm 'n' tìm tiếp)." 2
+      left_text " ❌   ${C_RED}Nhấn phím [q] để THOÁT${C_RESET} và quay lại Menu." 2
+      echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+      echo -e "${C_CYAN}Đang chuẩn bị dữ liệu và mở trình đọc log...${C_RESET}"
+      sleep 3
+
+      # Làm sạch màn hình trước khi gọi less để giao diện log tràn viền sạch sẽ
+      clear
+
+      # Sử dụng less với tham số +G để tự động nhảy xuống dòng log mới nhất ở cuối file
+      less +G "/var/log/letsencrypt/letsencrypt.log"
+    fi
   fi
 
   # Auto fix bug 0001
@@ -385,7 +447,8 @@ if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && 
     /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
     _rundone "Đã khôi phục liên kết chứng chỉ"
   fi
-  exit 1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  return 1 2>/dev/null || exit 1
 else
   _rundone "Cấp phát chứng chỉ Let's Encrypt thành công"
 fi

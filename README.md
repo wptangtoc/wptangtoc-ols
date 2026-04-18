@@ -50,10 +50,10 @@ Oracle Linux Server 9
 
 
 <li>
-Ubuntu 22.04
+Ubuntu 22.04 (Đang thử nghiệm)
 </li>
 <li>
-Ubuntu 24.04
+Ubuntu 24.04 (Đang thử nghiệm)
 </li>
 
 </ul>
