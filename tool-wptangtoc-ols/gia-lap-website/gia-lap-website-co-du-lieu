@@ -13,16 +13,18 @@ function huong_dan() {
   * Cho phép lập trình viên xây dựng, chỉnh sửa và kiểm tra các thành phần của website [HTML, CSS, JavaScript, backend logic]
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Giả lập => Nhân bản giả lập website                                     |"
-echo "========================================================================="
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-#check service chính xem có hoạt động hay không
-. /etc/wptt/core-functions
-if [[ "$1" == '98' ]]; then
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}GIẢ LẬP WEBSITE ➜ Nhân Bản Môi Trường Thử Nghiệm (Staging)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-gia-lap-main 1"
 fi
@@ -30,162 +32,203 @@ fi
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối giả lập website"
 wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị sập! Hệ thống từ chối giả lập website"
 
-. /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lựa chọn website bạn muốn nhân bản giả lập: "
-lua_chon_NAME
+NAME=${2:-}
 
-. /etc/wptt/echo-color
+if [[ -z "$NAME" ]]; then
+  . /etc/wptt/tenmien-only-website-by-wordpress
+  lua_chon_NAME "Nhân bản giả lập"
+fi
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
   exec /etc/wptt/wptt-gia-lap-main 1
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-gia-lap-main 1
-  exit
 fi
 
+# Vẫn giữ vòng bảo vệ cấp 2 đề phòng trường hợp sếp gọi file qua command line (truyền thẳng tham số $2)
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  echo -e "\n${C_RED}❌ Hệ thống xác nhận bạn không sử dụng WordPress.${C_RESET}"
+  echo -e "${C_YELLOW}Tính năng này hiện tại chỉ hỗ trợ hoạt động trên mã nguồn WordPress.${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-gia-lap-main 1
-  exit
 fi
 
-NAME_WPTANGTOC=$(echo $NAME)
+# ==============================================================================
+# KHỞI TẠO BIẾN VÀ ĐỊNH DANH DOMAIN GIẢ LẬP
+# ==============================================================================
+NAME_WPTANGTOC="$NAME"
 domain_phuc_vu="wptangtoc-ols.com"
-
 ten_ngau_nhien=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 3)
-
 ten_mien_random=${NAME//[-._]/$ten_ngau_nhien}
-subdomain_ten_mien=$(echo $ten_mien_random | tr '[:upper:]' '[:lower:]')
+subdomain_ten_mien=$(echo "$ten_mien_random" | tr '[:upper:]' '[:lower:]')
+STAGING_DOMAIN="${subdomain_ten_mien}.${domain_phuc_vu}"
 
 ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
-
-if [[ -z $ip ]]; then
-  echo "Tính năng này chỉ support hoạt động trên máy chủ có ipv4 thôi"
-  echo "Hiện tại chưa support mỗi ipv6"
-  echo "Hiện tại để có thể sử dụng tính năng này yêu cầu bạn phải có ipv4"
+if [[ -z "$ip" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tính năng này chỉ support hoạt động trên máy chủ có IPv4!${C_RESET}"
+  echo -e "Hiện tại hệ thống chưa support độc lập IPv6."
+  sleep 3
   exec /etc/wptt/wptt-gia-lap-main 1
-  exit
 fi
 
-_runing "Cấu hình domain giả lập ${subdomain_ten_mien}.${domain_phuc_vu}"
-#ghi chu thư viện này bị ghi đè biến $NAME hãy né không sử dụng bên $NAME hãy chuyển sang biến khác
-# bash /etc/wptt/gia-lap-website/cf-dns.sh -d $domain_phuc_vu -n $subdomain_ten_mien -t A -c $ip -p 0 -l 1 -x n 2>/tmp/dns-cloudflare.log 1>/tmp/dns-cloudflare.log
+echo ""
+echo -e "${C_YELLOW}Hệ thống sẽ nhân bản toàn bộ Code & Database sang tên miền tạm thời.${C_RESET}"
+echo -e "   Quá trình này có thể mất vài phút tùy vào dung lượng Website.\n"
+
+# ==============================================================================
+# CẤU HÌNH CLOUDFLARE DNS
+# ==============================================================================
+_runing "Đang kết nối Cloudflare API để tạo tên miền giả lập ($STAGING_DOMAIN)..."
 . /etc/wptt/gia-lap-website/cloudflare-dns "${subdomain_ten_mien}" "$ip"
+_rundone "Cấu hình tên miền giả lập hoàn tất ($STAGING_DOMAIN)"
 
-_rundone "Cấu hình domain giả lập ${subdomain_ten_mien}.${domain_phuc_vu}"
+echo "Gỉa lập website $NAME_WPTANGTOC sang $STAGING_DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-echo "Gỉa lập website $NAME_WPTANGTOC sang ${subdomain_ten_mien}.${domain_phuc_vu}: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+# ==============================================================================
+# SAO CHÉP MÃ NGUỒN VÀ DỮ LIỆU
+# ==============================================================================
+_runing "Đang Clone (Nhân bản) mã nguồn và Database từ website gốc..."
+. /etc/wptt/wptt-sao-chep-website "$NAME_WPTANGTOC" "$STAGING_DOMAIN" >/dev/null 2>&1
+_rundone "Sao chép mã nguồn và Database hoàn tất"
 
-_runing "Sao chép website $NAME_WPTANGTOC"
-. /etc/wptt/wptt-sao-chep-website "$NAME_WPTANGTOC" "${subdomain_ten_mien}.${domain_phuc_vu}" >/dev/null 2>&1
-_rundone "Sao chép website $NAME_WPTANGTOC"
+# ==============================================================================
+# THAY ĐỔI CẤU HÌNH WP-CLI (ĐỔI CHUỖI URL)
+# ==============================================================================
+_runing "Đang sửa đổi URL (Search & Replace) trong Database bằng WP-CLI..."
+. /etc/wptt/php/php-cli-domain-config "$NAME"
+PHP_BIN="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
 
-. /etc/wptt/php/php-cli-domain-config $NAME
+$PHP_BIN /usr/local/bin/wp option set blog_public 0 --allow-root --path="/usr/local/lsws/$STAGING_DOMAIN/html" >/dev/null 2>&1
+$PHP_BIN /usr/local/bin/wp option update home "https://$STAGING_DOMAIN" --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
+$PHP_BIN /usr/local/bin/wp option update siteurl "https://$STAGING_DOMAIN" --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
 
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option set blog_public 0 --allow-root --path=/usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html >/dev/null 2>&1
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option update home "https://${subdomain_ten_mien}.${domain_phuc_vu}" --path=/usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html --allow-root >/dev/null 2>&1
-/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp option update siteurl "https://${subdomain_ten_mien}.${domain_phuc_vu}" --path=/usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html --allow-root >/dev/null 2>&1
-
-if [[ -d /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/quan-ly-files ]]; then
-  rm -rf /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/quan-ly-files
+if [[ -d "/usr/local/lsws/$STAGING_DOMAIN/html/quan-ly-files" ]]; then
+  rm -rf "/usr/local/lsws/$STAGING_DOMAIN/html/quan-ly-files"
 fi
+_rundone "Cấu hình Database cho tên miền mới hoàn tất"
 
-if [[ -f /tmp/dem-check_dns-wptangtoc-ols ]]; then
-  rm -f /tmp/dem-check_dns-wptangtoc-ols
-fi
-
+# ==============================================================================
+# CHỜ XÁC THỰC DNS (CÓ SPINNER UX)
+# ==============================================================================
 unset check_dns api_google_check_dns_online_ipv4 api_cloudflare_dns_check_ipv4
 a=0
-while [[ -z $check_dns && -z $api_google_check_dns_online_ipv4 && -z $api_cloudflare_dns_check_ipv4 ]]; do
-  _runing "Xác thực dns domain ${subdomain_ten_mien}.${domain_phuc_vu}"
-  check_dns=$(host ${subdomain_ten_mien}.${domain_phuc_vu} | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 
-  api_google_check_dns_online_ipv4=$(curl -s --connect-timeout 5 https://dns.google/resolve?name=${subdomain_ten_mien}.${domain_phuc_vu}\&type=A | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' | head -1) #check api dns gooogle online
+# Spinner Effect
+tput civis
+spin='-\|/'
+spinner_idx=0
 
-  api_cloudflare_dns_check_ipv4=$(curl -s --connect-timeout 5 -H 'accept: application/dns-json' 'https://cloudflare-dns.com/dns-query?name=${subdomain_ten_mien}.${domain_phuc_vu}\&type=A' | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' | head -1)
+if [[ -f "/tmp/dem-check_dns-wptangtoc-ols" ]]; then
+  rm -f "/tmp/dem-check_dns-wptangtoc-ols"
+fi
 
-  a=$(expr $a + 1)
-  echo $a >/tmp/dem-check_dns-wptangtoc-ols
+while [[ -z "$check_dns" && -z "$api_google_check_dns_online_ipv4" && -z "$api_cloudflare_dns_check_ipv4" ]]; do
+  spinner_idx=$(( (spinner_idx+1) % 4 ))
+  echo -en "\r  ${C_CYAN} Đang chờ Cloudflare cập nhật máy chủ DNS toàn cầu... ${C_YELLOW}${spin:$spinner_idx:1}${C_RESET} ($a giây)"
+  
+  check_dns=$(host "$STAGING_DOMAIN" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+  api_google_check_dns_online_ipv4=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=$STAGING_DOMAIN&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+  api_cloudflare_dns_check_ipv4=$(curl -s --connect-timeout 5 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$STAGING_DOMAIN&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+
+  a=$((a + 3))
+  echo "$a" > /tmp/dem-check_dns-wptangtoc-ols
   sleep 3
 
-  if [[ $(cat /tmp/dem-check_dns-wptangtoc-ols) = '15' ]]; then
-    . /etc/wptt/gia-lap-website/cloudflare-dns "${subdomain_ten_mien}" "$ip"
+  # Trigger gửi lại API ở mốc 15s
+  if [[ $(cat /tmp/dem-check_dns-wptangtoc-ols) == '15' ]]; then
+    . /etc/wptt/gia-lap-website/cloudflare-dns "${subdomain_ten_mien}" "$ip" >/dev/null 2>&1
   fi
 
-  if [[ $(cat /tmp/dem-check_dns-wptangtoc-ols) = '30' ]]; then
-    . /etc/wptt/domain/wptt-xoa-website "${subdomain_ten_mien}.${domain_phuc_vu}" >/dev/null 2>&1
-    _runloi "Xác thực dns domain ${subdomain_ten_mien}.${domain_phuc_vu}"
-    echoDo "Chưa thể khởi tạo website giả lập vui lòng thử lại sau"
-
+  # Hủy bỏ sau 30s Timeout
+  if [[ $(cat /tmp/dem-check_dns-wptangtoc-ols) == '30' ]]; then
+    echo -en "\r\033[K" # Clear dòng
+    tput cnorm
+    _runloi "Xác thực DNS quá thời gian (Timeout 30s)"
+    echo -e "${C_RED}❌ Chưa thể khởi tạo website giả lập lúc này (Cloudflare phản hồi chậm).${C_RESET}"
+    echo -e "Hệ thống đang tự động gỡ bỏ các tệp tin lỗi sinh ra..."
+    . /etc/wptt/domain/wptt-xoa-website "$STAGING_DOMAIN" >/dev/null 2>&1
+    sleep 3
     exec /etc/wptt/wptt-gia-lap-main 1
   fi
 done
 
-_rundone "Xác thực dns domain ${subdomain_ten_mien}.${domain_phuc_vu}"
+echo -en "\r\033[K" # Xóa spinner
+tput cnorm
+_rundone "Cập nhật DNS toàn cầu thành công"
 
-_runing "Kiểm tra website giả lập"
+# ==============================================================================
+# KIỂM TRA TRẠNG THÁI WEBSITE SAU KHI DỰNG
+# ==============================================================================
+_runing "Đang rà soát tổng thể mã nguồn và thiết lập SEO..."
 
-if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
-  checkssl=$(curl -Is http://${NAME} | grep -c "WPTangTocOLS")
+if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  checkssl=$(curl -Is "http://${NAME}" 2>/dev/null | grep -c "WPTangTocOLS")
 else
-  checkssl=$(curl -Is https://${NAME} | grep -c "WPTangTocOLS")
+  checkssl=$(curl -Is "https://${NAME}" 2>/dev/null | grep -c "WPTangTocOLS")
 fi
 
-if [[ $checkssl = '0' ]]; then
-  . /etc/wptt/domain/wptt-xoa-website "${subdomain_ten_mien}.${domain_phuc_vu}" >/dev/null 2>&1
-  _runloi "Kiểm tra website giả lập"
+if [[ "$checkssl" == '0' ]]; then
+  . /etc/wptt/domain/wptt-xoa-website "$STAGING_DOMAIN" >/dev/null 2>&1
+  _runloi "Khởi tạo môi trường Litespeed bị lỗi. Đã rollback (Hủy lệnh)."
   exec /etc/wptt/wptt-gia-lap-main 1
 else
-  #add noindex domain giả lập
-  sed -i '/extraHeaders /a X-Robots-Tag noindex' /usr/local/lsws/conf/vhosts/"${subdomain_ten_mien}.${domain_phuc_vu}"/"${subdomain_ten_mien}.${domain_phuc_vu}".conf
-  if [[ -f /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php ]]; then
-    sed -i "/WP_SITEURL/d" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php
-    sed -i "/WP_HOME/d" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php
+  # Đóng dấu chặn Google Bots (Noindex)
+  sed -i '/extraHeaders /a X-Robots-Tag noindex' "/usr/local/lsws/conf/vhosts/$STAGING_DOMAIN/$STAGING_DOMAIN.conf"
+  
+  # Cập nhật Salt Key WordPress
+  if [[ -f "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php" ]]; then
+    sed -i "/WP_SITEURL/d" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"
+    sed -i "/WP_HOME/d" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"
 
-    /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path=/usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html --allow-root >/dev/null 2>&1
+    $PHP_BIN /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
+    for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php" | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"; done
 
-    for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php; done #để sửa trùng loọp nếu có WP_CACHE_KEY_SALT chỉ dữ liệu một cái WP_CACHE_KEY_SALT
-
-    if [[ $(cat /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php | grep WP_CACHE_KEY_SALT) = '' ]]; then #chưa add WP_CACHE_KEY_SALT, thì add lại điều kiện
-      sed -i "/define( 'WP_CACHE_KEY_SALT'/d" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php && sed -i "/^define( 'NONCE_SALT'/a define( 'WP_CACHE_KEY_SALT', '${subdomain_ten_mien}.${domain_phuc_vu}' );" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php
-      /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path=/usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html --allow-root >/dev/null 2>&1
-
-      for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu}/html/wp-config.php; done #để sửa trùng loọp nếu có WP_CACHE_KEY_SALT chỉ dữ liệu một cái WP_CACHE_KEY_SALT
-
+    if ! grep -q "WP_CACHE_KEY_SALT" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"; then
+      sed -i "/define( 'WP_CACHE_KEY_SALT'/d" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"
+      sed -i "/^define( 'NONCE_SALT'/a define( 'WP_CACHE_KEY_SALT', '$STAGING_DOMAIN' );" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"
+      $PHP_BIN /usr/local/bin/wp config shuffle-salts WP_CACHE_KEY_SALT --force --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
+      for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php" | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" "/usr/local/lsws/$STAGING_DOMAIN/html/wp-config.php"; done
     fi
-
   fi
-
-  #ánh xạ mã nguồn
-  ln -sf /usr/local/lsws/${subdomain_ten_mien}.${domain_phuc_vu} /home >/dev/null 2>&1
+  # Ánh xạ thư mục cho FTP/Quản lý File
+  ln -sf "/usr/local/lsws/$STAGING_DOMAIN" /home >/dev/null 2>&1
 fi
-_runing "Kiểm tra website giả lập"
+_rundone "Khóa SEO (Noindex) và làm sạch Cache tự động hoàn tất"
 
-_runing "Cài đặt SSL cho website giả lập"
-wptt ssl ${subdomain_ten_mien}.${domain_phuc_vu} >/dev/null 2>&1
-_rundone "Cài đặt SSL cho website giả lập"
+# ==============================================================================
+# CÀI ĐẶT SSL CHO WEBSITE GIẢ LẬP
+# ==============================================================================
+_runing "Đang cài đặt bảo mật SSL (Let's Encrypt) cho website thử nghiệm..."
+wptt ssl "$STAGING_DOMAIN" >/dev/null 2>&1
+_rundone "Cài đặt SSL cho bản sao hoàn tất"
 
-echo "domain_gia_lap=1" >>/etc/wptt/vhost/.${subdomain_ten_mien}.${domain_phuc_vu}.conf
-echo "==================================================================="
-echo "Hoàn tất giả lập website $NAME_WPTANGTOC sang ${subdomain_ten_mien}.${domain_phuc_vu}"
-echo "==================================================================="
-echo "Truy cập: https://${subdomain_ten_mien}.${domain_phuc_vu}"
-echo "Mọi tài khoản WordPress thì vẫn như domain gốc"
-echo "==================================================================="
+# Đánh dấu Vhost này là bản giả lập
+echo "domain_gia_lap=1" >>"/etc/wptt/vhost/.$STAGING_DOMAIN.conf"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+# ==============================================================================
+# BẢNG BÁO CÁO KẾT QUẢ
+# ==============================================================================
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}🎉 HOÀN TẤT NHÂN BẢN GIẢ LẬP WEBSITE${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "  Bản gốc       : ${C_YELLOW}$NAME_WPTANGTOC${C_RESET}" 2
+left_text "  Bản sao (Mới) : ${C_GREEN}https://$STAGING_DOMAIN${C_RESET}" 2
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text " ${C_YELLOW}💡 Ghi chú quan trọng:${C_RESET}" 2
+left_text " - Mọi tài khoản, mật khẩu Đăng nhập WordPress vẫn y hệt như web gốc." 2
+left_text " - Bản sao đã được ẩn khỏi Google (Noindex) để chống trùng lặp nội dung." 2
+left_text " - Bạn có thể thoải mái cài Plugin/Theme thử nghiệm mà không sợ sập." 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+check_menu_wptangtoc_active=${1:-}
+if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
+  echo -en "${C_GREEN}👉 Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r dummy
   exec /etc/wptt/wptt-gia-lap-main 1
 fi
