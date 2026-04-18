@@ -17,88 +17,152 @@ function huong_dan() {
   Quản lý swap hiệu quả giúp cân bằng giữa việc có đủ bộ nhớ ảo để hệ thống ổn định và việc tránh lạm dụng swap gây ảnh hưởng đến hiệu suất chung.
 }
 
-if [[ $1 = "" ]]; then
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+
+# ==============================================================================
+# HEADER & CLEAR SCREEN
+# ==============================================================================
+if [[ -z "$1" ]]; then
   . /etc/wptt/wptt-header-menu
   header_menu
 else
-  . /etc/wptt/echo-color
-  echoDo "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+  clear
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}QUẢN LÝ HỆ THỐNG ➜ Quản Lý Bộ Nhớ Ảo (Swap / ZRAM)${C_RESET}"
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
-echo ""
-echo ""
-echo ""
-echo ""
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+# ==============================================================================
+# PHÂN TÍCH VÀ HIỂN THỊ TRẠNG THÁI BỘ NHỚ ẢO (DASHBOARD PRO)
+# ==============================================================================
+# Lấy thông số Swap từ lõi /proc/meminfo để chống lỗi sai ngôn ngữ (Locale)
+sw_total_kb=$(awk '/SwapTotal/ {print $2}' /proc/meminfo 2>/dev/null)
+sw_free_kb=$(awk '/SwapFree/ {print $2}' /proc/meminfo 2>/dev/null)
 
-# Lấy thông số Swap tổng
-read sw_total sw_used sw_free < <(free -m | awk '/Swap/ {print $2, $3, $4}')
+[[ -z "$sw_total_kb" ]] && sw_total_kb=0
+[[ -z "$sw_free_kb" ]] && sw_free_kb=0
+
+sw_total=$(( sw_total_kb / 1024 ))
+sw_free=$(( sw_free_kb / 1024 ))
+sw_used=$(( sw_total - sw_free ))
+
+echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "TỔNG QUAN TRẠNG THÁI BỘ NHỚ ẢO"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
 if [[ "$sw_total" -eq 0 ]]; then
-  echo -e "Trạng thái Swap: \033[31mChưa kích hoạt\033[0m"
+  left_text "  Trạng thái : ${C_RED}Chưa kích hoạt${C_RESET}" 2
+  left_text "  Dung lượng : ${C_BOLD_WHITE}0 MB${C_RESET}" 2
 else
   # Quét trực tiếp file /proc/swaps trên RAM để xác định công nghệ
   has_zram=0
   has_trad=0
   while read -r filename rest; do
-    [[ "$filename" == "Filename" ]] && continue # Bỏ qua dòng tiêu đề
+    [[ "$filename" == "Filename" ]] && continue
     if [[ "$filename" == *zram* ]]; then
       has_zram=1
     elif [[ -n "$filename" ]]; then
       has_trad=1
     fi
-  done </proc/swaps
+  done < /proc/swaps
 
-  # Phân loại và tô màu giao diện
+  # Phân loại và tô màu giao diện cơ bản
   swap_type="Không xác định"
   if [[ $has_zram -eq 1 && $has_trad -eq 1 ]]; then
-    swap_type="\033[33mHỗn hợp (ZRAM + Ổ cứng)\033[0m"
+    swap_type="${C_YELLOW}Hỗn hợp (ZRAM + Ổ cứng)${C_RESET}"
   elif [[ $has_zram -eq 1 ]]; then
-    swap_type="\033[32mZRAM\033[0m (Nén tốc độ cao trên RAM)"
+    swap_type="${C_GREEN}ZRAM (Nén tốc độ cao trên RAM)${C_RESET} ${C_YELLOW}★ Khuyên dùng${C_RESET}"
   elif [[ $has_trad -eq 1 ]]; then
-    swap_type="\033[33mTruyền thống\033[0m (Đọc/Ghi trên ổ cứng)"
+    swap_type="${C_YELLOW}Truyền thống (Đọc/Ghi trên ổ cứng)${C_RESET}"
   fi
 
-  echo -e "Dung lượng Swap: ${sw_total}MB (Đang dùng: ${sw_used}MB - Trống: ${sw_free}MB)"
-  echo -e "Công nghệ Swap : $swap_type"
-fi
+  left_text "  Trạng thái : ${C_GREEN}Đang hoạt động${C_RESET}" 2
+  left_text "  Công nghệ  : $swap_type" 2
+  left_text "  Dung lượng : ${C_BOLD_WHITE}${sw_total} MB${C_RESET} (Đang dùng: ${C_RED}${sw_used}MB${C_RESET} - Trống: ${C_GREEN}${sw_free}MB${C_RESET})" 2
 
-echo ""
-echo "$quan_ly_swap:"
-echo ""
+  # Hiển thị chi tiết sâu nếu đang dùng ZRAM
+  if [[ $has_zram -eq 1 ]]; then
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ${C_YELLOW}THỐNG KÊ CHI TIẾT HIỆU SUẤT ZRAM:${C_RESET}" 2
+    
+    # Quét lấy tên block device zram đầu tiên (Thường là zram0)
+    zram_dev=$(ls /sys/block/ 2>/dev/null | grep -E '^zram[0-9]+$' | head -n 1)
+    
+    if [[ -n "$zram_dev" ]]; then
+      # Trích xuất thuật toán đang được kích hoạt (nằm trong ngoặc vuông [algo])
+      z_alg=$(cat "/sys/block/$zram_dev/comp_algorithm" 2>/dev/null | awk -F'[][]' '{print $2}')
+      [[ -z "$z_alg" ]] && z_alg="Không xác định"
+
+      # Lấy dữ liệu kích thước bằng Bytes
+      z_orig=$(cat "/sys/block/$zram_dev/orig_data_size" 2>/dev/null)
+      z_compr=$(cat "/sys/block/$zram_dev/compr_data_size" 2>/dev/null)
+      [[ -z "$z_orig" ]] && z_orig=0
+      [[ -z "$z_compr" ]] && z_compr=0
+
+      # Quy đổi ra MB
+      z_orig_mb=$(( z_orig / 1024 / 1024 ))
+      z_compr_mb=$(( z_compr / 1024 / 1024 ))
+
+      # Tính toán tỷ lệ nén (Compression Ratio)
+      if [[ "$z_compr" -gt 0 ]]; then
+        z_ratio=$(awk "BEGIN {printf \"%.2f\", $z_orig / $z_compr}")
+      else
+        z_ratio="0.00"
+      fi
+
+      left_text "  Thuật toán nén : ${C_CYAN}${z_alg^^}${C_RESET}" 2
+      left_text "  Dữ liệu thực tế: ${C_BOLD_WHITE}${z_orig_mb} MB${C_RESET} (Kích thước trước khi nén)" 2
+      left_text "  Lưu trên RAM   : ${C_RED}${z_compr_mb} MB${C_RESET} (Dung lượng RAM thật bị chiếm)" 2
+      
+      # Nhấn mạnh độ hiệu quả của việc nén
+      if [[ "$z_orig_mb" -eq 0 ]]; then
+        left_text "  Tỷ lệ nén      : ${C_GREEN}Chưa có dữ liệu để nén${C_RESET}" 2
+      else
+        left_text "  Tỷ lệ nén      : ${C_GREEN}~ ${z_ratio}x${C_RESET} (Tiết kiệm gấp ${z_ratio} lần bộ nhớ)" 2
+      fi
+    else
+      left_text "  Trạng thái     : Không thể đọc dữ liệu lõi ZRAM." 2
+    fi
+  fi
+fi
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
 
 options=(
-  "$them swap" #1
-  "$xoa swap"  #2
-  "Bật/tắt zram"
+  "Thêm Swap (Dạng ổ cứng truyền thống)"
+  "Xóa Swap (Dạng ổ cứng truyền thống)"
+  "Bật / Tắt ZRAM (Nén RAM - Khuyên dùng)"
 )
 
-# Hàm thực thi hành động dựa trên index (cho menu Quản lý Swap)
+# Hàm thực thi hành động dựa trên index
 run_action() {
   local index=$1
   local script_path=""
-  local script_args="98" # Tham số 98 cho các script này
+  local script_args="98" # Tham số 98 để luồng script con biết đường quay lại Menu
 
   case $index in
   0) script_path="/etc/wptt/swap/wptt-tao-swap" ;;
   1) script_path="/etc/wptt/swap/wptt-xoa-swap" ;;
   2) script_path="/etc/wptt/zram" ;;
   *)
-    echo "${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: Index $index."
+    echo -e "\n${C_RED}❌ ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}.${C_RESET}"
     return 1
     ;;
   esac
 
   # Kiểm tra và chạy script con
-  if [[ -x "$script_path" ]]; then
-    exec "$script_path" "$script_args"
+  if [[ -x "$script_path" || -f "$script_path" ]]; then
+    exec bash "$script_path" "$script_args"
   else
-    echo "Lỗi: Không tìm thấy hoặc không thể thực thi script '$script_path'."
+    echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy hoặc không thể thực thi script '$script_path'.${C_RESET}"
+    sleep 2
+    exec /etc/wptt/wptt-swap-main 1
   fi
-  # read -rp "Nhấn Enter để quay lại menu..." # Bỏ comment nếu muốn tạm dừng
 }
+
+# Gọi thư viện hiển thị Menu FZF/Select
 . /etc/wptt/wptt-callback-menu-chon
