@@ -13,140 +13,264 @@ function huong_dan() {
 
 }
 
-echo "========================================================================="
-echo "|Quản lý SSL => Quản Lý DNS API Cloudflare => Thiết lập                 |"
-echo "========================================================================="
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
-. /etc/wptt/echo-color
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ SSL ➜ Quản Lý DNS API ➜ Thiết Lập Cloudflare API${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 mkdir -p /etc/wptt/.cloudflare
-function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
+
+NAME=$1
+[[ "$NAME" == "98" ]] && NAME=""
+
+# ==============================================================================
+# HÀM MENU LỌC DOMAIN ĐÃ TRỎ CLOUDFLARE (UX BO CONG)
+# ==============================================================================
+if [[ -z "$NAME" ]]; then
+  function lua_chon_NAME() {
+    unset NAME selects
     selects=()
-    for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [[ ! -f /etc/wptt/.cloudflare/wptt-$NAME.ini ]]; then
-        selects+=("$NAME")
+    local box_inner_width=${box_inner_width:-71}
+
+    # Quét toàn bộ Vhost và Vhost chuyển hướng
+    for dir in "/etc/wptt/vhost" "/etc/wptt/chuyen-huong"; do
+      if [[ -d "$dir" ]]; then
+        for filepath in "$dir"/.*.conf; do
+          [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+          local domain="${filepath##*/}"
+          domain="${domain%.conf}"
+          domain="${domain#.}"
+          
+          # Chỉ lấy domain hợp lệ và chưa thiết lập API
+          if [[ "$domain" == ?*.?* && ! -f "/etc/wptt/.cloudflare/wptt-$domain.ini" ]]; then
+            selects+=("$domain")
+          fi
+        done
       fi
     done
 
-    if [[ $selects = '' ]]; then
-      echo "Tất cả domain trên hệ thống đã được kích hoạt cloudflare api dns hết rồi"
+    if [[ ${#selects[@]} -eq 0 ]]; then
+      echo -e "${C_GREEN}✅ Tuyệt vời! Tất cả tên miền trên hệ thống đều đã được thiết lập Cloudflare API DNS.${C_RESET}\n"
+      sleep 3
       exec /etc/wptt/ssl/cloudflare-api-dns-main 1
     fi
 
-    PS3="
-$(tput setab 0)-//- Nhập lựa chọn website của bạn muốn thiết lập Cloudflare DNS API [0=Thoát]:$(tput sgr0) "
-    select select in ${selects[@]}; do
-      NAME=$select
-      index=$REPLY
-      break
+    # Render Menu
+    echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    local title_text="Lựa chọn Website để thiết lập Liên kết API:"
+    local len=$(echo -n "$title_text" | awk '{print length($0)}')
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+    local i=1
+    for dom in "${selects[@]}"; do
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} ${C_YELLOW}[Chưa thiết lập]${C_RESET}" "$i" "$dom")
+      local clean_text=$(printf "  %3d) %-30s [Chưa thiết lập]" "$i" "$dom")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+      ((i++))
     done
-  else
-    clear
-    echo "Không xác định được domain"
-    exit
-  fi
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+    local fzf_installed=false
+    if command -v fzf &>/dev/null; then
+      fzf_installed=true
+      PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    else
+      PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+    fi
+
+    while true; do
+      echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+      if ! read -r REPLY; then exit 1; fi
+      REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+      case "$REPLY" in
+      0)
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        NAME="0"
+        return 0
+        ;;
+      00)
+        if $fzf_installed; then
+          local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website thiết lập CF API >> " --height=40% --border=rounded --color=border:cyan --cycle --reverse)
+          local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1 | tr -d ' ')
+          if [[ -n "$dom" ]]; then
+            NAME="$dom"
+            return 0
+          else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+        else
+          echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+        fi
+        ;;
+      *)
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+          local action_index=$((REPLY - 1))
+          NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1 | tr -d ' ')
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+        fi
+        ;;
+      esac
+    done
+  }
+  lua_chon_NAME
+fi
+
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/ssl/cloudflare-api-dns-main 1
+  return 2>/dev/null || exit
 }
 
-echo "Lựa chọn website thiết lập Cloudflare api dns: "
-echo ""
-lua_chon_NAME
-
-path="/etc/wptt/vhost/.$NAME.conf"
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/ssl/cloudflare-api-dns-main 1
-fi
-
+# ==============================================================================
+# KIỂM TRA MÔI TRƯỜNG & TÊN MIỀN
+# ==============================================================================
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+if [[ ! -f "$pathcheck" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]]; then
+  echo -e "\n${C_RED}Lỗi: Tên miền $NAME không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
-  exit
 fi
 
-if [[ -f /etc/wptt/.cloudflare/wptt-$NAME.ini ]]; then
-  echo "Xác nhận bạn đã thiết lập DNS cloudflare API"
+if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
+  echo -e "\n${C_YELLOW}Tên miền $NAME đã được thiết lập Cloudflare API từ trước!${C_RESET}"
   sleep 2
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
-  exit
 fi
 
-check_dns_subdomain=$(host -t ns $NAME | grep 'has no NS record')
-if [[ $check_dns_subdomain ]]; then
-  subdomain_to_domain=$(echo $NAME | cut -f2-5 -d '.')
-  check_dns=$(host -t ns $subdomain_to_domain | grep 'cloudflare')
+# ==============================================================================
+# KIỂM TRA NAMESERVER (BẮT BUỘC DÙNG CLOUDFLARE)
+# ==============================================================================
+echo ""
+_runing "Đang kiểm tra Nameserver của tên miền $NAME..."
+
+check_dns_subdomain=$(host -t ns "$NAME" 2>/dev/null | grep 'has no NS record')
+if [[ -n "$check_dns_subdomain" ]]; then
+  subdomain_to_domain=$(echo "$NAME" | awk -F'.' '{print $(NF-1)"."$NF}')
+  check_dns=$(host -t ns "$subdomain_to_domain" 2>/dev/null | grep -i 'cloudflare')
 else
-  check_dns=$(host -t ns $NAME | grep 'cloudflare')
+  check_dns=$(host -t ns "$NAME" 2>/dev/null | grep -i 'cloudflare')
 fi
 
-if [[ $check_dns = "" ]]; then
-  echo "Xác nhận domain $NAME không sử dụng DNS cloudflare"
-  echo "Tính năng này để sử dụng bạn cần phải sử dụng DNS cloudflare"
-  sleep 3
+if [[ -z "$check_dns" ]]; then
+  _runloi "Tên miền chưa kết nối với Cloudflare!"
+  echo -e "${C_RED}❌ Lỗi: Tên miền $NAME hiện KHÔNG sử dụng Nameserver của Cloudflare.${C_RESET}"
+  echo -e "Tính năng này bắt buộc tên miền gốc (Domain) phải được quản lý DNS tại Cloudflare."
+  sleep 4
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
-  exit
 fi
+_rundone "Xác nhận tên miền đang sử dụng Cloudflare DNS"
 
-echo "Mục đích tính năng này giúp cài đặt SSL letsencrypt không cần trỏ DNS về IP webserver"
+# ==============================================================================
+# NHẬP THÔNG TIN XÁC THỰC (API)
+# ==============================================================================
+echo -e "\n${C_YELLOW}Tính năng này giúp cài đặt SSL Let's Encrypt ẩn danh, không cần trỏ IP Webserver.${C_RESET}"
 
-read -p "Nhập Email đăng nhập đăng ký cloudflare của domain $NAME [ 0 = Thoát ]: " email_cloudflare
-if [[ $email_cloudflare = "0" || $email_cloudflare = "" ]]; then
+echo -en "${C_CYAN}Nhập Email đăng nhập Cloudflare [0=Thoát]: ${C_RESET}"
+read -r email_cloudflare
+if [[ "$email_cloudflare" == "0" || -z "$email_cloudflare" ]]; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
-  exit
 fi
 
-echo "Truy cập: https://dash.cloudflare.com/profile/api-tokens => rồi ấn vào nút view màu xanh để xem API"
-read -p "Nhập cloudflare Global API KEY [ 0 = Thoát ]: " KEY
+echo -e "\n👉 Hướng dẫn lấy Key: Truy cập ${C_BOLD_WHITE}https://dash.cloudflare.com/profile/api-tokens${C_RESET}"
+echo -e "   Kéo xuống dòng ${C_YELLOW}'Global API Key'${C_RESET} => Bấm nút 'View' màu xanh để copy."
+echo -e "   ${C_RED}Cảnh báo: Global API Key chứa quyền cao nhất, hãy bảo mật thông tin này!${C_RESET}"
 
-if [[ $KEY = "0" || $KEY = "" ]]; then
+echo -en "${C_CYAN}👉 Nhập Cloudflare Global API KEY [0=Thoát]: ${C_RESET}"
+read -r KEY
+
+if [[ "$KEY" == "0" || -z "$KEY" ]]; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
-  exit
 fi
 
-_runing "Thiết lập Cloudflare DNS API"
+# ==============================================================================
+# THIẾT LẬP VÀ XÁC THỰC KẾT NỐI API
+# ==============================================================================
+echo ""
+_runing "Đang kết nối và xác thực với máy chủ API Cloudflare..."
 echo "Thiết lập Cloudflare DNS API website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-mkdir -p /etc/wptt/.cloudflare
-
-check_install=$(ls /etc/wptt/.cloudflare | grep 'wptt')
 
 echo "dns_cloudflare_email = $email_cloudflare
-dns_cloudflare_api_key = $KEY" >>/etc/wptt/.cloudflare/wptt-$NAME.ini
+dns_cloudflare_api_key = $KEY" >"/etc/wptt/.cloudflare/wptt-$NAME.ini"
 
-chmod 700 -R /etc/wptt/.cloudflare
+chmod 600 "/etc/wptt/.cloudflare/wptt-$NAME.ini" # Đổi về 600 để tăng cường bảo mật cho file chứa API Key
 
-if [[ $check_install = "" ]]; then
+# Cài đặt gói Python Certbot Cloudflare nếu chưa có
+check_install=$(ls /etc/wptt/.cloudflare | grep 'wptt')
+if [[ -z "$check_install" ]]; then
   dnf install -y python3-cloudflare >/dev/null 2>&1
   dnf install -y python3-certbot-dns-cloudflare >/dev/null 2>&1
 fi
 
+# Hàm xác thực Zone ID
 function dns_coudflare_xac_thuc_zones() {
+  local target_domain=$1
   AUTH_HEADERS=("X-Auth-Email: $email_cloudflare" "X-Auth-Key: $KEY")
-  kiem_tra_ket_noi=$(curl -X GET "https://api.cloudflare.com/client/v4/zones?name=$1" \
+  
+  # Dùng curl gọi API và Python để parse JSON lấy Zone ID
+  curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$target_domain" \
     "${AUTH_HEADERS[@]/#/-H}" \
     -H "Content-Type: application/json" |
-    python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')" >/tmp/check-dns-cloudflare 2>&1)
+    python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if 'result' in data and data['result'] else '')" >/tmp/check-dns-cloudflare 2>&1
 }
 
-if [[ $check_dns_subdomain ]]; then
-  subdomain_to_domain=$(echo $NAME | cut -f2-5 -d '.')
+# Thực thi xác thực dựa trên tên miền gốc hoặc subdomain
+if [[ -n "$check_dns_subdomain" ]]; then
   dns_coudflare_xac_thuc_zones "$subdomain_to_domain"
 else
   dns_coudflare_xac_thuc_zones "$NAME"
 fi
 
-if [[ $(cat /tmp/check-dns-cloudflare) ]]; then
-  _rundone "Thiết lập Cloudflare DNS API"
+# Đọc kết quả Zone ID
+ZONE_ID=$(cat /tmp/check-dns-cloudflare)
+rm -f /tmp/check-dns-cloudflare
+
+# ==============================================================================
+# BÁO CÁO KẾT QUẢ
+# ==============================================================================
+if [[ -n "$ZONE_ID" ]]; then
+  _rundone "Xác thực API Cloudflare thành công"
+  
+  echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP CLOUDFLARE API DNS${C_RESET}"
+  echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Tên miền liên kết : ${C_YELLOW}$NAME${C_RESET}" 2
+  left_text "  Tài khoản CF      : ${C_CYAN}$email_cloudflare${C_RESET}" 2
+  left_text "  Zone ID Trích xuất: ${C_BOLD_WHITE}$ZONE_ID${C_RESET}" 2
+  left_text "  Trạng thái        : ${C_GREEN}Đã sẵn sàng Cài đặt & Gia hạn SSL tự động.${C_RESET}" 2
+  echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 else
-  rm -f /etc/wptt/.cloudflare/wptt-$NAME.ini
-  _runloi "Thiết lập Cloudflare DNS API"
-  echoDo "Vui lòng thử lại sau"
+  rm -f "/etc/wptt/.cloudflare/wptt-$NAME.ini"
+  _runloi "Xác thực API Cloudflare thất bại"
+  
+  echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}LỖI KẾT NỐI API CLOUDFLARE${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Nguyên nhân 1: Bạn nhập sai Email đăng nhập Cloudflare." 2
+  left_text "  Nguyên nhân 2: Bạn nhập sai Global API Key." 2
+  left_text "  Cách xử lý   : Vui lòng kiểm tra lại thông tin và thử lại." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+check_menu_wptangtoc_active=${1:-}
+if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
 fi
