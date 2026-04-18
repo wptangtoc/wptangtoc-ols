@@ -53,7 +53,6 @@ if [[ -z "$NAME" ]]; then
     selects=()
     local box_inner_width=${box_inner_width:-71}
 
-    # 1. Quét Vhost thường
     if [ "$(ls -At /etc/wptt/vhost 2>/dev/null)" ]; then
       for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
         local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
@@ -63,7 +62,6 @@ if [[ -z "$NAME" ]]; then
       done
     fi
 
-    # 2. Quét Vhost chuyển hướng
     if [[ -d /etc/wptt/chuyen-huong ]]; then
       for entry2 in $(ls -A /etc/wptt/chuyen-huong 2>/dev/null); do
         local dom2=$(echo "$entry2" | sed 's/^.//' | sed 's/.conf//')
@@ -73,7 +71,6 @@ if [[ -z "$NAME" ]]; then
       done
     fi
 
-    # Lọc trùng lặp mảng
     if [[ ${#selects[@]} -gt 0 ]]; then
       mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
     else
@@ -128,7 +125,7 @@ if [[ -z "$NAME" ]]; then
         ;;
       00)
         if $fzf_installed; then
-          local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm tên miền cài SSL >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+          local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm tên miền cài SSL >> " --height=40% --border=rounded --color=border:cyan --cycle --reverse)
           selected_item=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
           if [[ -n "$selected_item" ]]; then
             NAME="$selected_item"
@@ -144,7 +141,7 @@ if [[ -z "$NAME" ]]; then
           NAME="${selects[$action_index]}"
           return 0
         else
-          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+          echo -e "\n${C_RED}Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
         fi
         ;;
       esac
@@ -158,9 +155,6 @@ fi
   return 2>/dev/null || exit
 }
 
-# ==============================================================================
-# KIỂM TRA TRẠNG THÁI VÀ MÔI TRƯỜNG WEB
-# ==============================================================================
 unset lock_down
 if [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
   . "/etc/wptt/vhost/.$NAME.conf"
@@ -173,7 +167,7 @@ if [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
 fi
 
 if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]]; then
-  echo -e "\n${C_RED}❌ Tên miền $NAME không tồn tại trên hệ thống này!${C_RESET}"
+  echo -e "\n${C_RED}Tên miền $NAME không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-ssl-main 1
 fi
@@ -201,59 +195,51 @@ if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
   return 2>/dev/null || exit
 fi
 
-check_http_online=$(curl -Is "http://$NAME" 2>/dev/null)
-if [[ -z "$check_http_online" ]]; then
-  check_http_online=$(curl -Is "http://$NAME" 2>/dev/null)
-  if [[ -z "$check_http_online" ]]; then
-    echo -e "\n${C_RED}❌ Lỗi: Website $NAME hiện không phản hồi HTTP (Offline).${C_RESET}"
-    echo -e "${C_YELLOW}Không thể cài đặt chứng chỉ SSL qua phương thức Webroot.${C_RESET}"
-    sleep 3
-    exec /etc/wptt/wptt-ssl-main 1
-  fi
-fi
+# (Đã lược bỏ hàm curl HTTP check theo yêu cầu để tối ưu hệ thống)
 
 # ==============================================================================
-# KIỂM TRA DNS (IPV4 & IPV6) BẰNG ĐA PHƯƠNG THỨC
+# KIỂM TRA DNS (IPV4 & IPV6) (ĐÃ FIX LỖI GREP CHUỖI RỖNG)
 # ==============================================================================
 echo ""
 _runing "Đang kiểm tra phân giải DNS cho tên miền $NAME..."
 
-error_ssl_ipv4=""
-error_ssl_ipv6=""
+error_ssl_ipv4="1"
+error_ssl_ipv6="1"
 
-# Check IPv4
+# Lấy danh sách IP của Máy chủ hiện tại
+server_ips=$(ip a | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sed '/127.0.0.1/d' | sed '/192.168/d' | sort -u)
+public_ip=$(curl -sf --connect-timeout 5 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+server_ips="$server_ips $public_ip"
+
+# Lấy kết quả phân giải DNS của tên miền
 checkdns=$(host "$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 checkdns2=$(nslookup "$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-checkdns3_api_google_check_dns_online_ipv4=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=${NAME}&type=A" | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' | head -1)
-api_cloudflare_dns_check_ipv4=$(curl -s --connect-timeout 5 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=${NAME}&type=A" | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' | head -1)
+checkdns3=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+checkdns4=$(curl -s --connect-timeout 5 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
 
-ip=$(ip a | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sed '/127.0.0.1/d' | sed '/192.168/d' | sort -u)
-ip+=" "$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+# KIỂM TRA ĐỐI CHIẾU IP AN TOÀN (Ngăn lỗi chuỗi rỗng)
+for resolved_ip in "$checkdns" "$checkdns2" "$checkdns3" "$checkdns4"; do
+  if [[ -n "$resolved_ip" ]] && echo "$server_ips" | grep -q "\b$resolved_ip\b"; then
+    error_ssl_ipv4="0"
+    break
+  fi
+done
 
-if [[ -n "$ip" ]]; then
-  if ! [[ $(echo "$ip" | grep "$checkdns" 2>/dev/null) || $(echo "$ip" | grep "$checkdns2" 2>/dev/null) || $(echo "$ip" | grep "$checkdns3_api_google_check_dns_online_ipv4" 2>/dev/null) || $(echo "$ip" | grep "$api_cloudflare_dns_check_ipv4" 2>/dev/null) ]]; then
-    error_ssl_ipv4='1'
+# Kiểm tra IPv6 (Chỉ kiểm tra nếu Litespeed đang cấu hình lắng nghe IPv6)
+if grep -q 'address.*\[ANY\]' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+  server_ipv6=$(curl -s --connect-timeout 5 https://ipv6.icanhazip.com 2>/dev/null)
+  checkdns_v6=$(host "$NAME" 2>/dev/null | grep IPv6 | grep -Eio '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|...' | head -1)
+  
+  if [[ -n "$checkdns_v6" && -n "$server_ipv6" ]] && echo "$server_ipv6" | grep -qiw "$checkdns_v6"; then
+    error_ssl_ipv6="0"
   fi
 fi
 
-# Check IPv6 (NếU Litespeed bật IPv6)
-check_server_dang_su_dung_ipv6=$(cat /usr/local/lsws/conf/httpd_config.conf | grep 'address' | grep '\[ANY\]')
-if [[ -n "$check_server_dang_su_dung_ipv6" ]]; then
-  checkdns_v6=$(host "$NAME" 2>/dev/null | grep IPv6 | grep -Eio '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|...' | head -1) # Giữ lại regex ipv6 phức tạp của bạn ở bản gốc
-  # (Rút gọn log hiển thị regex ipv6 để dễ nhìn, mã thực thi vẫn tuân thủ logic gốc của bạn)
-  ipv6_local=$(curl -s https://ipv6.icanhazip.com 2>/dev/null)
-
-  # Giả lập logic check ipv6... (Đã rút gọn if/else tránh quá dài)
-  # ...
-  error_ssl_ipv6='1' # Default true if mismatch
-else
-  error_ssl_ipv6='1'
-fi
-
-# XỬ LÝ LỖI DNS HOẶC CLOUDFLARE
-if [[ "$error_ssl_ipv4" == '1' && "$error_ssl_ipv6" == '1' ]]; then
+# XỬ LÝ NẾU TÊN MIỀN CHƯA TRỎ IP HOẶC ĐANG BẬT PROXY CLOUDFLARE
+if [[ "$error_ssl_ipv4" == "1" && "$error_ssl_ipv6" == "1" ]]; then
   _runloi "Kiểm tra phân giải DNS thất bại"
 
+  # Kiểm tra nhanh có phải đang cắm qua proxy Cloudflare hay không
   TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
   if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
     echo -e "\n${C_YELLOW}⚠️ PHÁT HIỆN TÊN MIỀN ĐANG BẬT PROXY CLOUDFLARE (ĐÁM MÂY CAM) ☁️${C_RESET}"
@@ -271,18 +257,19 @@ if [[ "$error_ssl_ipv4" == '1' && "$error_ssl_ipv6" == '1' ]]; then
     exec /etc/wptt/wptt-ssl-main 1
   fi
 
+  # Báo lỗi tên miền không tồn tại hoặc trỏ sai IP (Trường hợp beta2 của sếp)
   echo -e "\n${C_RED}❌ LỖI: TÊN MIỀN CHƯA ĐƯỢC TRỎ IP VỀ MÁY CHỦ!${C_RESET}"
-  server_ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}')
-  echo -e "Tên miền ${C_YELLOW}$NAME${C_RESET} hiện đang trỏ tới: ${C_YELLOW}${checkdns:-Không xác định}${C_RESET}"
-  echo -e "Vui lòng trỏ bản ghi A về IP máy chủ hiện tại: ${C_GREEN}$server_ip${C_RESET}"
+  echo -e "Tên miền ${C_YELLOW}$NAME${C_RESET} hiện đang trỏ tới: ${C_YELLOW}${checkdns:-Không xác định (Name or service not known)}${C_RESET}"
+  echo -e "Vui lòng truy cập trang quản lý Tên miền, trỏ bản ghi A về IP máy chủ hiện tại: ${C_GREEN}$public_ip${C_RESET}"
   echo -e "Sau khi lưu DNS, hãy chờ vài phút và thử cài lại SSL."
-  sleep 5
+  echo -en "\n${C_CYAN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r dummy
   exec /etc/wptt/wptt-ssl-main 1
 fi
 _rundone "Kiểm tra DNS thành công (IP khớp với máy chủ)"
 
 # ==============================================================================
-# KIỂM TRA CHỨNG CHỈ TỒN TẠI VÀ SUBDOMAIN (WWW)
+# KIỂM TRA CHỨNG CHỈ TỒN TẠI VÀ THU HỒI
 # ==============================================================================
 rm -f "/tmp/ssl-$NAME.txt"
 
@@ -333,16 +320,16 @@ certbot certonly --non-interactive --agree-tos --register-unsafely-without-email
 if [[ -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" ]]; then
   sed -i -e '/^vhssl /,/^}$/d' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
   echo "vhssl  {
-keyFile                 /etc/letsencrypt/live/$NAME/privkey.pem
-certFile                /etc/letsencrypt/live/$NAME/cert.pem
-certChain               0
-CACertFile              /etc/letsencrypt/live/$NAME/chain.pem
-sslProtocol             24
-renegProtection         1
-sslSessionCache         1
-sslSessionTickets       1
-enableSpdy              15
-enableQuic              1
+  keyFile                 /etc/letsencrypt/live/$NAME/privkey.pem
+  certFile                /etc/letsencrypt/live/$NAME/cert.pem
+  certChain               0
+  CACertFile              /etc/letsencrypt/live/$NAME/chain.pem
+  sslProtocol             24
+  renegProtection         1
+  sslSessionCache         1
+  sslSessionTickets       1
+  enableSpdy              15
+  enableQuic              1
 }" >>"/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 fi
 
@@ -352,9 +339,9 @@ if [[ "$NAME" == "$Website_chinh" && -f "/usr/local/lsws/conf/httpd_config.conf"
   sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
 
-  sed -i "/https/a   keyFile              \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a   certFile             \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a   CACertFile           \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   keyFile                \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   certFile               \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   CACertFile             \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
 fi
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
@@ -364,31 +351,29 @@ if [[ -d "/etc/letsencrypt/live/www.$NAME" ]]; then
 fi
 
 # ==============================================================================
-# KIỂM TRA THÀNH CÔNG VÀ BÁO CÁO
+# KIỂM TRA THÀNH CÔNG VÀ BÁO CÁO LỖI (TÍCH HỢP BẢNG RATE LIMIT)
 # ==============================================================================
 http_status=$(curl -o /dev/null -s -w "%{http_code}" "https://${NAME}" 2>/dev/null)
 
 if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && "$http_status" -ne 301 && "$http_status" -ne 404) ]]; then
   _runloi "Cấp phát chứng chỉ thất bại"
   echo -e "${C_RED}Lỗi: Quá trình cài đặt SSL Let's Encrypt không thành công!${C_RESET}"
+  
   if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" ]]; then
     echo "Chứng chỉ đã được tải về nhưng cấu hình Web Server không nhận diện đúng HTTPS."
   else
     LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
     IS_BANNED=0
 
-    LIMIT_MSG=$(tail -n 500 "$LOG_FILE" | grep -E -i "rateLimited|too many certificates" | tail -n 1)
+    # Quét log để tìm mã lỗi Rate Limit
+    LIMIT_MSG=$(tail -n 500 "$LOG_FILE" 2>/dev/null | grep -E -i "rateLimited|too many certificates" | tail -n 1)
 
     if [[ -n "$LIMIT_MSG" ]]; then
       IS_BANNED=1
 
-      # Trích xuất thời gian chính xác từ Log (Cắt chuỗi sau chữ "retry after" và trước "UTC")
-      RETRY_UTC=$(echo "$LIMIT_MSG" | sed -n 's/.*retry after \([0-9-]* [0-9:]*\) UTC.*/\1/p')
-
-      # Phân loại nguyên nhân và gán thời gian hiển thị
       if echo "$LIMIT_MSG" | grep -qi "too many certificates already issued"; then
         BAN_REASON="Cài trùng lặp quá nhiều (Giới hạn 5 lần / tuần)."
-        WAIT_TIME="Bắt buộc phải đợi hệ thống mở khóa (Tối đa 7 ngày)"
+        WAIT_TIME="Vui lòng chờ hệ thống mở khóa (Tối đa 7 ngày)."
       elif echo "$LIMIT_MSG" | grep -qi "too many failed authorizations"; then
         BAN_REASON="Xác thực lỗi quá nhiều lần (Giới hạn 5 lần / giờ)."
         WAIT_TIME="Hãy đợi đúng 1 tiếng đồng hồ nữa rồi thử lại."
@@ -401,23 +386,28 @@ if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && 
       fi
 
       echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: TÊN MIỀN BỊ KHÓA SSL TẠM THỜI${C_RESET}"
+      center_text "${C_BOLD_WHITE}⚠️ TỪ CHỐI CẤP PHÁT: TÊN MIỀN BỊ KHÓA SSL TẠM THỜI${C_RESET}"
       echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "Domain bị chặn: ${C_YELLOW}$NAME${C_RESET}" 2
-      left_text "Nguyên nhân   : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
-      left_text "Cách xử lý    : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
+      left_text "  Tên miền bị chặn : ${C_YELLOW}$NAME${C_RESET}" 2
+      left_text "  Nguyên nhân      : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
+      left_text "  Cách xử lý       : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
       echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "Giải thích: Let's Encrypt giới hạn số lần tạo SSL để chống Spam." 2
-      left_text "Do bạn đã 'vọc' hoặc thử cài đặt thất bại quá nhiều lần, hệ" 2
-      left_text "thống hãng đã đưa tên miền này vào danh sách chặn tạm thời." 2
-      left_text "Không cố thử lại lúc này vì sẽ làm thời gian bị khóa lâu hơn!" 2
+      left_text " ${C_YELLOW}💡 GIẢI THÍCH & LỜI KHUYÊN TỪ HỆ THỐNG:${C_RESET}" 2
+      left_text " - Let's Encrypt giới hạn số lần tạo SSL để chống lạm dụng tài nguyên." 2
+      left_text " - Hệ thống ghi nhận tên miền này đã chạm ngưỡng giới hạn (do thử" 2
+      left_text "   cài lại quá nhiều lần hoặc xác thực thất bại liên tục)." 2
+      left_text " - ${C_RED}Tuyệt đối KHÔNG thử cài lại ngay lúc này${C_RESET} để tránh bị khóa lâu hơn." 2
+      left_text " - Vui lòng kiểm tra lại cấu hình DNS / Tắt đám mây Cloudflare trước" 2
+      left_text "   khi cài lại ở lần tiếp theo." 2
       echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      
       [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
       return 1 2>/dev/null || exit 1
     fi
 
-    echo "Bạn có thể kiểm tra chi tiết lỗi tại file log: /var/log/letsencrypt/letsencrypt.log"
-    if wptt_xac_nhan "Bạn có muốn xem toàn bộ nội dung letsencrypt.log không? " "Mở trình đọc Log chuyên sâu để tự dò lỗi." "" "Đồng ý (xem log)" "Không đồng ý (Hủy thao tác)"; then
+    # Lựa chọn xem file log nếu lỗi không phải do Rate Limit
+    echo -e "\nBạn có thể kiểm tra chi tiết nguyên nhân lỗi tại file log: ${C_YELLOW}$LOG_FILE${C_RESET}"
+    if wptt_xac_nhan "Bạn có muốn xem toàn bộ nội dung letsencrypt.log không?" "Mở trình đọc Log chuyên sâu để tự dò lỗi." "" "Đồng ý (xem log)" "Không đồng ý (Hủy thao tác)"; then
       echo -e "${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
       center_text "${C_BOLD_WHITE}HƯỚNG DẪN SỬ DỤNG TRÌNH ĐỌC LOG (LESS)${C_RESET}"
       echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -431,12 +421,8 @@ if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && 
 
       echo -e "${C_CYAN}Đang chuẩn bị dữ liệu và mở trình đọc log...${C_RESET}"
       sleep 3
-
-      # Làm sạch màn hình trước khi gọi less để giao diện log tràn viền sạch sẽ
       clear
-
-      # Sử dụng less với tham số +G để tự động nhảy xuống dòng log mới nhất ở cuối file
-      less +G "/var/log/letsencrypt/letsencrypt.log"
+      less +G "$LOG_FILE"
     fi
   fi
 
@@ -453,26 +439,29 @@ else
   _rundone "Cấp phát chứng chỉ Let's Encrypt thành công"
 fi
 
+# Cấu hình Redirect HTTPS
 _runing "Cấu hình Redirect HTTP ➜ HTTPS"
 (/etc/wptt/ssl/wptt-renew-chuyen-huong "$NAME" >/dev/null 2>&1)
 _rundone "Cấu hình Redirect HTTP ➜ HTTPS"
 
-# BẢNG BÁO CÁO KẾT QUẢ BO CONG
+# ==============================================================================
+# BẢNG BÁO CÁO KẾT QUẢ THÀNH CÔNG
+# ==============================================================================
 echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}CÀI ĐẶT SSL LET'S ENCRYPT THÀNH CÔNG${C_RESET}"
 echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "Website được bảo vệ : ${C_YELLOW}https://$NAME${C_RESET}" 2
-left_text "Trạng thái ổ khóa   : ${C_GREEN}An toàn (Valid Certificate)${C_RESET}" 2
-left_text "Chuyển hướng (301)  : Đã BẬT (HTTP ➜ HTTPS)" 2
+left_text "  Website được bảo vệ : ${C_YELLOW}https://$NAME${C_RESET}" 2
+left_text "  Trạng thái ổ khóa   : ${C_GREEN}An toàn (Valid Certificate)${C_RESET}" 2
+left_text "  Chuyển hướng (301)  : Đã BẬT (HTTP ➜ HTTPS)" 2
 if [[ -n "$chuyenhuongwww" ]]; then
-  left_text "Kèm Subdomain       : Đã tích hợp www.$NAME" 2
+  left_text "  Kèm Subdomain       : Đã tích hợp www.$NAME" 2
 fi
-left_text "Ngày hết hạn SSL    : WPTangToc OLS sẽ tự động gia hạn vĩnh viễn" 2
+left_text "  Ngày hết hạn SSL    : WPTangToc OLS sẽ tự động gia hạn vĩnh viễn" 2
 echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
-# Fix CSF Firewall
+# Fix CSF Firewall mở Port 443
 if [[ -f /etc/csf/csf.conf ]]; then
   if ! grep '^TCP_IN' /etc/csf/csf.conf | grep -q "443"; then
     sed -i 's/^TCP_IN = "/TCP_IN = "443,/g' /etc/csf/csf.conf
@@ -481,4 +470,6 @@ if [[ -f /etc/csf/csf.conf ]]; then
   fi
 fi
 
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+if [[ "${1:-}" == "98" ]]; then
+  exec /etc/wptt/wptt-ssl-main 1
+fi
