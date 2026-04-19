@@ -131,7 +131,7 @@ gia_han_thu_cong_ssl_letencrypt="Gia hạn thủ công chứng chỉ SSL FREE Le
 thiet_lap_ssl_tra_phi="Thiết lập chứng chỉ SSL trả phí"
 xoa_chung_chi_ssl_tra_phi="Xóa chứng chỉ SSL trả phí thương mại"
 kiem_tra_chung_chi_ssl_dang_su_dung="Kiểm tra chứng chỉ SSL đang sử dụng"
-renew_thiet_lap_chuyen_huong_http_sang_https="Renew thiết lập lại chuyển hướng HTTP to HTTPS"
+renew_thiet_lap_chuyen_huong_http_sang_https="Renew [HTTP to HTTPS]"
 
 #ssl ben trong
 chung_chi="chứng chỉ"
@@ -390,14 +390,14 @@ tieng_anh="English"
 
 #quản lý wordpress menu main
 tai="Tải"
-chinh_sua_code_truc_tiep_wp_admin_wordpress="chỉnh sửa code trong dashboard"
+chinh_sua_code_truc_tiep_wp_admin_wordpress="chỉnh sửa code dashboard"
 truy_van_va_thay_the="Truy vấn và thay thế"
 che_do_bao_tri="chế độ bảo trì"
 toi_uu="Tối ưu"
 hinh_anh="hình ảnh"
 tang_gioi_han_ram="Tăng giới hạn ram"
 tien_to="tiền tố"
-reset_lai_ve_wordpress_moi_hoan_toan="Reset lại về WordPress mới hoàn toàn"
+reset_lai_ve_wordpress_moi_hoan_toan="Reset lại về WordPress mới"
 tai_tao_lai="Tái tạo lại"
 kham_suc_khoe="Khám sức khỏe"
 binh_luan="bình luận"
