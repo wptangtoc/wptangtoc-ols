@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 # ==============================================================================
 # NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
@@ -13,9 +16,10 @@ function lua_chon_NAME() {
   unset NAME
   local selects=()
   local i=1
-  local box_inner_width=${box_inner_width:-71}
+  # Mặc định chuẩn khung 78
+  local box_inner_width=${box_inner_width:-78}
 
-  # 1. Quét file siêu tốc trên RAM (Lọc các domain có cài WordPress)
+  # 1. Quét file siêu tốc trên RAM (LỌC NGHIÊM NGẶT CÁC DOMAIN CÓ CÀI WORDPRESS)
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
@@ -24,22 +28,24 @@ function lua_chon_NAME() {
     domain="${domain#.}"
 
     if [[ "$domain" == ?*.?* ]]; then
+      # Điều kiện lõi: Bắt buộc phải có wp-load và wp-config
       if [[ -f /usr/local/lsws/$domain/html/wp-load.php && -f /usr/local/lsws/$domain/html/wp-config.php ]]; then
         selects+=("$domain")
       fi
     fi
   done
 
-  # 2. Kiểm tra nếu VPS chưa có website nào
+  # 2. Kiểm tra nếu VPS chưa có website nào thỏa mãn
   if [[ ${#selects[@]} -eq 0 ]]; then
     clear
-    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
+    echo -e "\n${C_RED}❌ Lỗi: Không có website WordPress nào tồn tại trên hệ thống.${C_RESET}"
     exit
   fi
 
   # 3. Sắp xếp mảng chuẩn Version (Tự nhiên)
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
+  # Logic đặc biệt: Thêm tùy chọn Tất Cả nếu có từ 2 website WP trở lên
   if [[ ${#selects[@]} -gt 1 ]]; then
     selects+=("Tất cả website")
   fi
@@ -52,8 +58,11 @@ function lua_chon_NAME() {
   # Tiêu đề hành động (Lệch trái)
   if [[ -n "$action_desc" ]]; then
     local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website của bạn muốn} $action_desc:"
-    local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-    local len=${#clean_title}
+    local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+    
+    # Tính số ký tự thực tế (Chống lỗi UTF-8)
+    local len=$(LC_ALL=C.UTF-8 printf "%s" "$clean_title" | wc -m | tr -d ' ' 2>/dev/null)
+    [[ -z "$len" || "$len" == "0" ]] && len=${#clean_title}
 
     # Căn lề trái (cách 2 khoảng trắng), tính khoảng trắng bù bên phải
     local pad_r=$((box_inner_width - len - 2))
@@ -76,26 +85,36 @@ function lua_chon_NAME() {
   for domain in "${selects[@]}"; do
     local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
 
-    # Tính toán khoảng trắng bù trừ
+    # Tính toán khoảng trắng bù trừ chống UTF-8
     local clean_text=$(printf "  %3d) %s" "$i" "$domain")
-    local len=${#clean_text}
+    local len=$(LC_ALL=C.UTF-8 printf "%s" "$clean_text" | wc -m | tr -d ' ' 2>/dev/null)
+    [[ -z "$len" || "$len" == "0" ]] && len=${#clean_text}
+    
     local pad=$((box_inner_width - len))
     [[ $pad -lt 0 ]] && pad=0
 
-    # In dòng dữ liệu phẳng lì
+    # In dòng dữ liệu
     echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-  # 5. Chuẩn bị Dòng nhắc lệnh (Prompt)
+  # ============================================================================
+  # 5. TỐI ƯU UX DÒNG NHẮC LỆNH (PROMPT) THÔNG MINH
+  # ============================================================================
   local fzf_installed=false
   if command -v fzf &>/dev/null; then
     fzf_installed=true
-    PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
-  else
-    PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
   fi
+
+  local prompt_quick_select=""
+  # CHỈ hiển thị Chọn Nhanh khi có FZF và CÓ TỪ 2 WEBSITE TRỞ LÊN (Không tính mục Tất cả)
+  # Mảng có 1 web + 1 mục "Tất cả" = 2. Nên phải lớn hơn 2 thì mới có nghĩa là có nhiều web.
+  if [[ "$fzf_installed" == true && ${#selects[@]} -gt 2 ]]; then
+    prompt_quick_select=" [00=${chon_nhanh:-Chọn nhanh}]"
+  fi
+
+  PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]})${prompt_quick_select} [0=${exit_thoat:-Thoát}]: "
 
   # ============================================================================
   # 6. ĐỘNG CƠ NHẬN PHÍM AN TOÀN
@@ -118,7 +137,8 @@ function lua_chon_NAME() {
       ;;
 
     00)
-      if $fzf_installed; then
+      # Chỉ cho phép chạy 00 nếu có nhiều hơn 1 website (lớn hơn 2 phần tử bao gồm "Tất cả")
+      if [[ "$fzf_installed" == true && ${#selects[@]} -gt 2 ]]; then
         local fzf_height=$((${#selects[@]} + 4))
         local fzf_prompt="${nhap_lua_chon_website_cua_ban:-Tìm kiếm website} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
 
@@ -135,7 +155,7 @@ function lua_chon_NAME() {
           continue
         fi
       else
-        echo -e "\n${C_RED}Lỗi: ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ} '00'. FZF chưa được cài đặt.${C_RESET}"
+        echo -e "\n${C_RED}❌ Lỗi: ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ} '00'. Tính năng chọn nhanh không khả dụng lúc này.${C_RESET}"
         continue
       fi
       ;;
@@ -161,6 +181,10 @@ function lua_chon_NAME() {
           echo -e "\n${C_RED}❌ Lỗi: Tên miền '$REPLY' không tồn tại hoặc không phải là WordPress.${C_RESET}"
           continue
         fi
+      # Bắt cả việc gõ chay "tat ca website" để phòng hờ
+      elif [[ "$REPLY" == "tat ca website" || "$REPLY" == "tất cả website" ]]; then
+         NAME="Tất cả website"
+         return 0
       else
         echo -e "\n${C_RED}❌ ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
         continue
