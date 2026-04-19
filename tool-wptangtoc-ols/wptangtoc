@@ -6,31 +6,6 @@
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
-stty iutf8 # Tương thích gõ tiếng Việt Telex
-
-# Khai báo bảng màu UI chuẩn WPTangToc
-C_RED='\033[1;31m'
-C_GREEN='\033[1;32m'
-C_YELLOW='\033[1;33m'
-C_CYAN='\033[1;36m'
-C_RESET='\033[0m'
-
-# Kích thước khung chuẩn (Đồng bộ với Header/Status)
-box_inner_width=71
-
-# ==============================================================================
-# BẪY TÍN HIỆU (TRAP) - CHỐNG VĂNG SSH KHI BẤM CTRL+C (THOÁT RA SHELL)
-# ==============================================================================
-C_GREEN='\033[1;32m'
-C_RESET='\033[0m'
-trap '
-  stty sane  # KHÔI PHỤC HIỂN THỊ CHỮ: Sửa lỗi gõ phím bị tàng hình
-  tput cnorm # Hiện lại con trỏ chuột nhấp nháy
-  echo -e "\n\nĐã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu."
-  echo -e "${C_GREEN}Chào mừng bạn quay lại màn hình Shell!${C_RESET}"
-  export WPTT_BYPASS=1 # Cấp lệnh bài miễn tử
-  exec bash
-' SIGINT SIGTERM SIGQUIT
 
 # ==============================================================================
 # 1. KIỂM TRA PHỤ THUỘC LÕI (DEPENDENCIES)
@@ -38,7 +13,6 @@ trap '
 function check_dependencies() {
   local missing_tools=()
   local os_packages=()
-
   local tools=("pv" "wp" "curl" "zip" "unzip" "wget")
 
   for tool in "${tools[@]}"; do
@@ -55,15 +29,13 @@ function check_dependencies() {
   done
 
   if [ ${#missing_tools[@]} -ne 0 ]; then
-    echo -e "${C_YELLOW}Đang tự động cài đặt các công cụ còn thiếu: ${missing_tools[*]}...${C_RESET}"
-    if [ ${#os_packages[@]} -ne 0 ]; then
-      if [ -f /etc/redhat-release ]; then
-        dnf install -y epel-release >/dev/null 2>&1
-        dnf install -y "${os_packages[@]}" >/dev/null 2>&1
-      elif [ -f /etc/debian_version ]; then
-        apt-get update >/dev/null 2>&1
-        apt-get install -y "${os_packages[@]}" >/dev/null 2>&1
-      fi
+    echo -e "\033[1;33mĐang tự động cài đặt các công cụ còn thiếu: ${missing_tools[*]}...\033[0m"
+    if [ -f /etc/redhat-release ]; then
+      dnf install -y epel-release >/dev/null 2>&1
+      dnf install -y "${os_packages[@]}" >/dev/null 2>&1
+    elif [ -f /etc/debian_version ]; then
+      apt-get update >/dev/null 2>&1
+      apt-get install -y "${os_packages[@]}" >/dev/null 2>&1
     fi
 
     if [[ " ${missing_tools[*]} " =~ " wp " ]]; then
@@ -75,7 +47,6 @@ function check_dependencies() {
     clear
   fi
 }
-
 check_dependencies
 
 # ==============================================================================
@@ -84,11 +55,11 @@ check_dependencies
 if [[ -f "/etc/wptt/.wptt.conf" ]]; then
   . "/etc/wptt/.wptt.conf"
 else
-  echo -e "${C_RED}Lỗi: Không tìm thấy tệp cấu hình của wptangtoc ols${C_RESET}"
+  echo -e "\033[1;31mLỗi: Không tìm thấy tệp cấu hình của wptangtoc ols\033[0m"
   exit
 fi
 
-if [[ -z "$ngon_ngu" ]]; then ngon_ngu='vi'; fi
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 lang_file="/etc/wptt/lang/${ngon_ngu}.sh"
 if [[ -f "$lang_file" ]]; then
   . "$lang_file"
@@ -98,134 +69,52 @@ else
 fi
 
 # ==============================================================================
-# 3. HÀM VẼ GIAO DIỆN (UI RENDER ENGINE)
+# 3. MẢNG MENU CHÍNH (36 TÍNH NĂNG)
 # ==============================================================================
-center_text() {
-  local text="$1"
-  local clean_text=$(echo -e "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-  local text_len=${#clean_text}
-
-  if ((text_len >= box_inner_width)); then
-    printf "${C_CYAN}│${C_RESET} %b ${C_CYAN}│${C_RESET}\n" "$text"
-    return
-  fi
-  local total_padding=$((box_inner_width - text_len))
-  local pad_left=$((total_padding / 2))
-  local pad_right=$((total_padding - pad_left))
-
-  printf "${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$pad_left" "" "$text" "$pad_right" ""
-}
-
-print_status_line() {
-  local label="$1"
-  local value="$2"
-  local color_code="$3"
-  local raw_text="${label}${value}"
-  local text_len=${#raw_text}
-  local pad_right=$((box_inner_width - text_len - 2))
-  local spaces=$(printf '%*s' "$pad_right" "")
-  echo -e "${C_CYAN}│${C_RESET}  ${label}${color_code}${value}${C_RESET}${spaces}${C_CYAN}│${C_RESET}"
-}
-
-# ==============================================================================
-# 4. KHỞI TẠO MENU CHÍNH
-# ==============================================================================
-if [[ $1 = "" ]]; then
-  clear
-  # KIỂM TRA TRẠNG THÁI DỊCH VỤ
-  if command -v systemctl &>/dev/null; then
-    ols1=$(/usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -i 'litespeed is running')
-    mariadb1=$(systemctl is-active mariadb.service 2>/dev/null)
-
-    if [[ -z "$ols1" ]]; then
-      /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-      ols1=$(/usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -i 'litespeed is running')
-    fi
-
-    if [[ "$mariadb1" != "active" ]]; then
-      systemctl restart mariadb.service >/dev/null 2>&1
-      mariadb1=$(systemctl is-active mariadb.service 2>/dev/null)
-    fi
-  else
-    ols1="unknown"
-    mariadb1="unknown"
-  fi
-
-  # VẼ BANNER
-  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text ""
-  center_text "${C_YELLOW}WPTANGTOC OLS $phien_ban: $version_wptangtoc_ols${C_RESET}"
-  center_text "$phat_trien_boi_gia_tuan" ""
-
-  if [[ "$wptangtoc_ols_giatuan" == "1" && -n "$key_activate" ]]; then
-    center_text "WPTangToc OLS Enterprise + Premium"
-  elif [[ "$wptangtoc_ols_giatuan" == "1" ]]; then
-    center_text "WPTangToc OLS Enterprise"
-  elif [[ -n "$key_activate" ]]; then
-    center_text "WPTangToc OLS Premium"
-  fi
-
-  if [[ "$beta_wptangtoc_ols" == "1" ]]; then center_text "WPTangToc OLS Beta"; fi
-  center_text ""
-  echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
-
-  # IN TRẠNG THÁI MÁY CHỦ VÀO TRONG BOX
-  if [[ -n "$ols1" && "$mariadb1" == "active" ]]; then
-    print_status_line "${tinh_trang_may_chu:-Tình trạng máy chủ}: " "${hoat_dong_tot:-Hoạt động tốt}" "$C_GREEN"
-  elif [[ "$ols1" == "unknown" || "$mariadb1" == "unknown" ]]; then
-    print_status_line "${tinh_trang_may_chu:-Tình trạng máy chủ}: " "Không thể xác định" "$C_YELLOW"
-  else
-    print_status_line "${tinh_trang_may_chu:-Tình trạng máy chủ}: " "${may_chu_dang_gap_van_de:-Máy chủ đang gặp vấn đề}" "$C_RED"
-    [[ -z "$ols1" ]] && print_status_line " ↳ Cảnh báo: " "Webserver LiteSpeed đang ngừng hoạt động!" "$C_RED"
-    [[ "$mariadb1" != "active" ]] && print_status_line " ↳ Cảnh báo: " "MariaDB Database đang ngừng hoạt động!" "$C_RED"
-  fi
-  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
-  echo -e "\n${C_YELLOW}${wptangtoc_ols_menu_chinh:-Menu chính WPTangToc OLS}:${C_RESET}\n"
-else
-  # Chế độ gọi trực tiếp
-  if [[ -x "/etc/wptt/echo-color" ]]; then . /etc/wptt/echo-color; fi
-  echo -e "\n${C_YELLOW}${wptangtoc_ols_menu_chinh:-Menu chính WPTangToc OLS}:${C_RESET}\n"
-fi
+MENU_TITLE="WPTANGTOC OLS $phien_ban: $version_wptangtoc_ols"
 
 options=(
-  "$quan_ly_wordpress"
-  "$quan_ly_domain"
-  "$quan_ly_ssl"
-  "$quan_ly_database"
-  "$backup_restore"
-  "$tai_ma_nguon_wordpress"
-  "$quan_ly_sevice"
-  "$quan_ly_ip"
-  "$quan_ly_ssh"
-  "$quan_ly_update"
-  "Preload Cache"
-  "$quan_ly_webguiadmin"
-  "$cau_hinh_webserver"
-  "$quan_ly_php"
-  "$quan_ly_logs"
-  "Duplicate nhân bản website"
-  "$quan_ly_ma_nguon"
-  "$phan_quyen"
-  "$quan_ly_cache"
-  "$quan_ly_disk"
-  "$thong_tin_webserver"
-  "$bao_mat"
-  "$update_wptangtoc_ols"
-  "$quan_ly_phpmyadmin"
-  "$gui_yeu_cau_gia_tuan"
-  "$quan_ly_swap"
-  "$chuyen_website"
-  "$quan_ly_file_manager"
-  "$quan_ly_tai_nguyen"
-  "$gia_lap_website"
-  "$tai_tro_du_an"
-  "$nhom_facebook_thao_luan"
-  "$quan_ly_ngon_ngu"
-  "Tài liệu hướng dẫn"
-  "WPTangToc OLS Premium add ons"
-  "Mở Terminal / Dòng lệnh CLI"
+  "$quan_ly_wordpress"             #0
+  "$quan_ly_domain"                #1
+  "$quan_ly_ssl"                   #2
+  "$quan_ly_database"              #3
+  "$backup_restore"                #4
+  "$tai_ma_nguon_wordpress"        #5
+  "$quan_ly_sevice"                #6
+  "$quan_ly_ip"                    #7
+  "$quan_ly_ssh"                   #8
+  "$quan_ly_update"                #9
+  "Preload Cache"                  #10
+  "$quan_ly_webguiadmin"           #11
+  "$cau_hinh_webserver"            #12
+  "$quan_ly_php"                   #13
+  "$quan_ly_logs"                  #14
+  "Duplicate nhân bản website"     #15
+  "$quan_ly_ma_nguon"              #16
+  "$phan_quyen"                    #17
+  "$quan_ly_cache"                 #18
+  "$quan_ly_disk"                  #19
+  "$thong_tin_webserver"           #20
+  "$bao_mat"                       #21
+  "$update_wptangtoc_ols"          #22
+  "$quan_ly_phpmyadmin"            #23
+  "$gui_yeu_cau_gia_tuan"          #24
+  "$quan_ly_swap"                  #25
+  "$chuyen_website"                #26
+  "$quan_ly_file_manager"          #27
+  "$quan_ly_tai_nguyen"            #28
+  "$gia_lap_website"               #29
+  "$tai_tro_du_an"                 #30
+  "$nhom_facebook_thao_luan"       #31
+  "$quan_ly_ngon_ngu"              #32
+  "Tài liệu hướng dẫn"             #33
+  "WPTangToc OLS Premium add ons"  #34
+  "Mở Terminal / Dòng lệnh CLI"    #35
 )
 
+# ==============================================================================
+# 4. LOGIC XỬ LÝ (RUN_ACTION)
+# ==============================================================================
 run_action() {
   local index=$1
   local script_path=""
@@ -237,203 +126,121 @@ run_action() {
   2) script_path="/etc/wptt/wptt-ssl-main" ;;
   3) script_path="/etc/wptt/wptt-db-main" ;;
   4) script_path="/etc/wptt/wptt-backup-restore-main" ;;
-  5)
-    script_path="/etc/wptt/wptt-install-wordpress2"
-    script_args="99"
-    ;;
+  5) script_path="/etc/wptt/wptt-install-wordpress2"; script_args="99" ;;
   6) script_path="/etc/wptt/wptt-service-main" ;;
   7) script_path="/etc/wptt/wptt-khoa-ip-main" ;;
   8) script_path="/etc/wptt/wptt-ssh-main" ;;
   9) script_path="/etc/wptt/wptt-update-main" ;;
-  10)
-    script_path="/etc/wptt/wptt-preload-cache2"
-    script_args="98"
-    ;;
+  10) script_path="/etc/wptt/wptt-preload-cache2"; script_args="98" ;;
   11) script_path="/etc/wptt/wptt-webadmin-main" ;;
   12) script_path="/etc/wptt/wptt-cau-hinh-websever-main" ;;
   13) script_path="/etc/wptt/wptt-php-ini-main" ;;
   14) script_path="/etc/wptt/wptt-logs-main" ;;
-  15)
-    script_path="/etc/wptt/wptt-sao-chep-website"
-    script_args="98"
-    ;;
+  15) script_path="/etc/wptt/wptt-sao-chep-website"; script_args="98" ;;
   16) script_path="/etc/wptt/wptt-ma-nguon-main" ;;
-  17)
-    script_path="/etc/wptt/wptt-phanquyen"
-    script_args="99"
-    ;;
+  17) script_path="/etc/wptt/wptt-phanquyen"; script_args="99" ;;
   18) script_path="/etc/wptt/wptt-cache-main" ;;
-  19)
-    script_path="/etc/wptt/wptt-disk-main"
-    script_args="98"
-    ;;
-  20)
-    script_path="/etc/wptt/wptt-kiemtra"
-    script_args="98"
-    ;;
+  19) script_path="/etc/wptt/wptt-disk-main"; script_args="98" ;;
+  20) script_path="/etc/wptt/wptt-kiemtra"; script_args="98" ;;
   21) script_path="/etc/wptt/wptt-bao-mat-main" ;;
-  22)
-    script_path="/etc/wptt/wptt-update"
-    script_args="97"
-    ;;
+  22) script_path="/etc/wptt/wptt-update"; script_args="97" ;;
   23) script_path="/etc/wptt/wptt-phpmyadmin-main" ;;
-  24)
-    script_path="/etc/wptt/wptt-feedback"
-    script_args="98"
-    ;;
+  24) script_path="/etc/wptt/wptt-feedback"; script_args="98" ;;
   25) script_path="/etc/wptt/wptt-swap-main" ;;
   26) script_path="/etc/wptt/wptt-chuyen-web-main" ;;
   27) script_path="/etc/wptt/wptt-quan-ly-files-main" ;;
-  28)
-    script_path="/etc/wptt/wptt-tai-nguyen-main"
-    script_args="98"
-    ;;
-  29)
-    script_path="/etc/wptt/wptt-gia-lap-main"
-    script_args="98"
-    ;;
-  30)
-    script_path="/etc/wptt/wptt-donate"
-    script_args="98"
-    ;;
-  31)
-    script_path="/etc/wptt/wptt-nhom-fb"
-    script_args="98"
-    ;;
-  32)
-    script_path="/etc/wptt/lang-main"
-    script_args="98"
-    ;;
-  33)
-    script_path="/etc/wptt/search-wptangtoc-huong-dan"
-    script_args="98"
-    ;;
-  34)
-    script_path="/etc/wptt/wptt-add-one-main"
-    script_args="98"
-    ;;
-  35)
-    script_path="/etc/wptt/terminal-cli"
-    script_args="98"
-    ;;
-  *)
-    echo -e "${C_RED}Lỗi: Hành động không xác định cho chỉ mục $index.${C_RESET}"
-    return 1
-    ;;
+  28) script_path="/etc/wptt/wptt-tai-nguyen-main"; script_args="98" ;;
+  29) script_path="/etc/wptt/wptt-gia-lap-main"; script_args="98" ;;
+  30) script_path="/etc/wptt/wptt-donate"; script_args="98" ;;
+  31) script_path="/etc/wptt/wptt-nhom-fb"; script_args="98" ;;
+  32) script_path="/etc/wptt/lang-main"; script_args="98" ;;
+  33) script_path="/etc/wptt/search-wptangtoc-huong-dan"; script_args="98" ;;
+  34) script_path="/etc/wptt/wptt-add-one-main"; script_args="98" ;;
+  35) script_path="/etc/wptt/terminal-cli"; script_args="98" ;;
   esac
 
-  if [[ -x "$script_path" ]]; then
-    exec "$script_path" $script_args
+  if [[ -x "$script_path" || -f "$script_path" ]]; then
+    exec bash "$script_path" $script_args
   else
-    echo -e "${C_RED}Lỗi: Không tìm thấy hoặc không thể thực thi script '$script_path'.${C_RESET}"
+    echo -e "\n\033[1;31m[!] Lỗi: Không tìm thấy script '$script_path'.\033[0m"
+    sleep 2
   fi
 }
 
-fzf_installed=false
-if command -v fzf &>/dev/null; then
-  fzf_installed=true
-  PROMPT_TEXT="$(tput setab 0)${nhap_lua_chon_cua_ban} (1-${#options[@]}) [00=${chon_nhanh}] [0=${exit_thoat}]:$(tput sgr0) "
-else
-  PROMPT_TEXT="$(tput setab 0)${nhap_lua_chon_cua_ban} (1-${#options[@]}) [0=${exit_thoat}]:$(tput sgr0) "
-fi
-
-# TẮT PROMPT CỦA LỆNH SELECT (Để tránh in thừa chữ "#?")
-PS3=""
+# ==============================================================================
+# 5. HÀM GIAO DIỆN CỤC BỘ (CHỈ DÙNG CHO MENU CHÍNH)
+# ==============================================================================
+print_status_local() {
+  local label="$1"; local val="$2"; local color="$3"
+  local plain_text="  ${label} ${val}"
+  local pad=$(( 78 - ${#plain_text} )); [[ $pad -lt 0 ]] && pad=0
+  printf "${MARGIN}\033[1;36m│\033[0m  \033[1;37m%s\033[0m %b%*s\033[1;36m│\033[0m\n" "$label" "${color}${val}\033[0m" "$pad" ""
+}
 
 # ==============================================================================
-# TỐI ƯU HÓA 1: CACHING (BỘ NHỚ ĐỆM) TRÁNH ĐỌC Ổ CỨNG LẶP LẠI
-# Quét file lấy số thứ tự Terminal CLI đúng 1 lần duy nhất trước khi vào vòng lặp
+# 6. GIAO DIỆN TÙY CHỈNH (HOOK ĐỂ THƯ VIỆN GỌI LẠI)
 # ==============================================================================
-found_idx=$(awk '/^[[:space:]]*[0-9]+\)/ {num=$1} /terminal-cli/ {print num; exit}' /usr/bin/wptangtoc 2>/dev/null | tr -d ')')
-if [[ -n "$found_idx" ]]; then
-  cli_menu_num=$((found_idx + 1))
-else
-  cli_menu_num="36" # Giá trị an toàn dự phòng
-fi
+draw_custom_grid() {
+  # 6.1. In thông tin bản quyền và Tác giả
+  print_header "$phat_trien_boi_gia_tuan"
+  if [[ "$wptangtoc_ols_giatuan" == "1" && -n "$key_activate" ]]; then print_header "Bản Quyền: Enterprise + Premium"
+  elif [[ "$wptangtoc_ols_giatuan" == "1" ]]; then print_header "Bản Quyền: Enterprise"
+  elif [[ -n "$key_activate" ]]; then print_header "Bản Quyền: Premium"
+  fi
+  [[ "$beta_wptangtoc_ols" == "1" ]] && print_header "[Phiên bản Beta]"
+  
+  print_spacer
+  echo -e "${MARGIN}\033[1;36m├──────────────────────────────────────────────────────────────────────────────┤\033[0m"
 
-# ==============================================================================
-# ĐỘNG CƠ NHẬN PHÍM MỚI (BẢO TOÀN GIAO DIỆN GỐC - NHẬN CTRL+C 100%)
-# ==============================================================================
-while true; do
-
-  # TUYỆT KỸ: Dùng /dev/null ép select chỉ in Menu 1 lần duy nhất rồi tắt ngay
-  select opt in "${options[@]}"; do break; done </dev/null
-
-  # In dòng nhắc lệnh thủ công
-  echo -en "$PROMPT_TEXT"
-
-  # FIX LỖI CPU 100%: Dùng lệnh read để hứng phím và BẢO VỆ CHỐNG LẶP VÔ HẠN
-  if ! read -r REPLY; then
-    echo -e "\n${C_RED}Đã mất kết nối Terminal (EOF). Tự động thoát để bảo vệ CPU...${C_RESET}"
-    exit 1
+  # 6.2. Kiểm tra Live Status (LiteSpeed & MariaDB)
+  if command -v systemctl &>/dev/null; then
+    ols1=$(/usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -i 'litespeed is running')
+    mariadb1=$(systemctl is-active mariadb.service 2>/dev/null)
+    if [[ -z "$ols1" ]]; then
+      /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+      ols1=$(/usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -i 'litespeed is running')
+    fi
+    if [[ "$mariadb1" != "active" ]]; then
+      systemctl restart mariadb.service >/dev/null 2>&1
+      mariadb1=$(systemctl is-active mariadb.service 2>/dev/null)
+    fi
+  else
+    ols1="unknown"; mariadb1="unknown"
   fi
 
-  case "$REPLY" in
-  0)
-    echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-    if [[ -x "/etc/wptt/wptt-status2" ]]; then exec /etc/wptt/wptt-status2; fi
-    exit 0
-    ;;
-  00)
-    if $fzf_installed; then
-      fzf_height=$((${#options[@]} + 3))
-      fzf_prompt="${nhap_lua_chon_cua_ban:-Tìm kiếm lựa chọn} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
+  # 6.3. In trạng thái Server
+  if [[ -n "$ols1" && "$mariadb1" == "active" ]]; then
+    print_status_local "${tinh_trang_may_chu:-Tình trạng máy chủ}:" "Hoạt động tốt" "\033[1;32m"
+  elif [[ "$ols1" == "unknown" || "$mariadb1" == "unknown" ]]; then
+    print_status_local "${tinh_trang_may_chu:-Tình trạng máy chủ}:" "Không thể xác định" "\033[1;33m"
+  else
+    print_status_local "${tinh_trang_may_chu:-Tình trạng máy chủ}:" "Đang gặp sự cố!" "\033[1;31m"
+    [[ -z "$ols1" ]] && print_status_local " ↳ Cảnh báo:" "Webserver LiteSpeed ngừng hoạt động!" "\033[1;31m"
+    [[ "$mariadb1" != "active" ]] && print_status_local " ↳ Cảnh báo:" "Database MariaDB ngừng hoạt động!" "\033[1;31m"
+  fi
+  
+  echo -e "${MARGIN}\033[1;36m├──────────────────────────────────────────────────────────────────────────────┤\033[0m"
+  print_spacer
 
-      # Tích hợp thêm màu sắc cho bảng FZF
-      selected_opt=$(printf '%s\n' "${options[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border --cycle --reverse --color="bg+:#222222,fg+:#00ff00,hl:#ff0000,prompt:#00ffff,pointer:#ffff00")
-      selected_opt=$(echo "$selected_opt" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-      fzf_exit_status=$?
+  # 6.4. Vẽ tự động 2 cột thông minh (Bẻ đôi mảng Options)
+  local total=${#options[@]}
+  local half=$(( (total + 1) / 2 ))
 
-      if [[ $fzf_exit_status -eq 0 ]] && [[ -n "$selected_opt" ]]; then
-        selected_index=-1
-        for i in "${!options[@]}"; do
-          if [[ "$(echo -n "${options[$i]}" | sed 's/[[:space:]]*$//')" == "$(echo -n "$selected_opt" | sed 's/[[:space:]]*$//')" ]]; then
-            selected_index=$i
-            break
-          fi
-        done
+  for ((i=0; i<half; i++)); do
+    local l_idx=$i
+    local r_idx=$((i + half))
 
-        if [[ $selected_index -ne -1 ]]; then
-          echo -e "Đã chọn: ${C_CYAN}${options[$selected_index]}${C_RESET}"
-          run_action "$selected_index"
-        else
-          echo -e "${C_RED}Lỗi: Không thể khớp lựa chọn FZF. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
-        fi
-      else
-        echo -e "\n${C_YELLOW}${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
-      fi
+    local l_num=$((l_idx + 1)); local l_text="${options[$l_idx]}"
+    local r_num=""; local r_text=""
+    
+    if [[ $r_idx -lt $total ]]; then
+      r_num=$((r_idx + 1)); r_text="${options[$r_idx]}"
     fi
-    continue
-    ;;
-  *)
-    # 1. Nếu nhập đúng số thứ tự trong Menu
-    if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#options[@]} ]; then
-      action_index=$((REPLY - 1))
-      echo -e "Đã chọn: ${C_CYAN}${options[$action_index]}${C_RESET}"
-      run_action "$action_index"
-    else
-      # 2. Xử lý khi nhập sai (Chữ cái, lệnh, hoặc ký tự lạ)
-      if [[ -n "$REPLY" ]]; then
+    print_row "$l_num" "$l_text" "$r_num" "$r_text"
+  done
+}
 
-        # ======================================================================
-        # TỐI ƯU HÓA 2: PURE BASH STRING MANIPULATION
-        # Dùng ${REPLY%% *} để cắt lấy chữ đầu tiên (Cắt từ dấu cách đầu tiên đến cuối)
-        # Nhanh gấp 100 lần so với việc gọi `echo "$REPLY" | awk '{print $1}'`
-        # ======================================================================
-        first_word="${REPLY%% *}"
-
-        # Dùng command -v để check xem từ đó có phải lệnh hệ thống thực sự không (Lệnh này siêu nhẹ)
-        if command -v "$first_word" >/dev/null 2>&1; then
-          # Sử dụng biến $cli_menu_num đã được Cache ở ngoài vòng lặp
-          echo -e "\n${C_YELLOW}Có vẻ bạn đang muốn chạy dòng lệnh Linux CLI: ${C_CYAN}$REPLY${C_RESET}"
-          echo -e "Để gõ lệnh, bạn hãy chọn MENU ${C_GREEN}[ Mở Terminal / Dòng lệnh CLI - (Menu $cli_menu_num) ]${C_RESET} hoặc ấn Ctrl + C trước nhé!\n"
-        else
-          # Nếu nhập bậy bạ (không phải số, cũng không phải lệnh)
-          echo -e "\n${C_RED}${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
-        fi
-      fi
-    fi
-    continue
-    ;;
-  esac
-done
+# ==============================================================================
+# 7. KÍCH HOẠT THƯ VIỆN UI ENGINE (BỘ NÃO HIỂN THỊ CHÍNH)
+# ==============================================================================
+. /etc/wptt/wptt-callback-menu-chon

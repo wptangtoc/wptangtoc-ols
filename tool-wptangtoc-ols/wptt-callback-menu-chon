@@ -1,141 +1,214 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
-# Khai báo bảng màu phòng trường hợp chưa được nạp
+# ==============================================================================
+# 1. KHỞI TẠO BIẾN & MÀU SẮC
+# ==============================================================================
 C_RED='\033[1;31m'
 C_GREEN='\033[1;32m'
 C_YELLOW='\033[1;33m'
 C_CYAN='\033[1;36m'
+C_BOLD_WHITE='\033[1;37m'
 C_RESET='\033[0m'
-# ==============================================================================
-# BẪY TÍN HIỆU (TRAP) - CHỐNG VĂNG SSH KHI BẤM CTRL+C (THOÁT RA SHELL)
-# ==============================================================================
-trap '
-  stty sane  # KHÔI PHỤC HIỂN THỊ CHỮ: Sửa lỗi gõ phím bị tàng hình
-  tput cnorm # Hiện lại con trỏ chuột nhấp nháy
-  echo -e "\n\nĐã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu."
-  echo -e "${C_GREEN}Chào mừng bạn quay lại màn hình Shell!${C_RESET}"
-  export WPTT_BYPASS=1 # Cấp lệnh bài miễn tử
-  exec bash
-' SIGINT SIGTERM SIGQUIT
-# --- Vòng lặp Menu Tương tác ---
-stty iutf8 # Tương thích với bộ gõ tiếng Việt Telex
-fzf_installed=false
-if command -v fzf &>/dev/null; then
-  fzf_installed=true
-fi
 
-# Chuyển PS3 thành PROMPT_TEXT để tự in dòng nhắc lệnh (Đồng bộ với Menu Chính)
-if $fzf_installed; then
-  PROMPT_TEXT="$(tput setab 0)${nhap_lua_chon_cua_ban:-Nhập lựa chọn} (1-${#options[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]:$(tput sgr0) "
-else
-  PROMPT_TEXT="$(tput setab 0)${nhap_lua_chon_cua_ban:-Nhập lựa chọn} (1-${#options[@]}) [0=${exit_thoat:-Thoát}]:$(tput sgr0) "
-fi
-
-# Tắt prompt mặc định của select
+stty iutf8
 PS3=""
 
+cli_menu_num=$(awk '/^[[:space:]]*[0-9]+\)/ {num=$1} /terminal-cli/ {print num; exit}' /usr/bin/wptangtoc 2>/dev/null | tr -d ')')
+[[ -z "$cli_menu_num" ]] && cli_menu_num="36"
+
 # ==============================================================================
-# TỐI ƯU HÓA 1: CACHING (ĐỌC Ổ CỨNG 1 LẦN DUY NHẤT)
-# Tìm số thứ tự Menu Terminal CLI lưu vào bộ nhớ tạm trước khi vào vòng lặp
+# 2. ĐỊNH TUYẾN NGỮ CẢNH (CONTEXT-AWARE ROUTING)
 # ==============================================================================
-found_idx=$(awk '/^[[:space:]]*[0-9]+\)/ {num=$1} /terminal-cli/ {print num; exit}' /usr/bin/wptangtoc 2>/dev/null | tr -d ')')
-if [[ -n "$found_idx" ]]; then
-  cli_menu_num=$((found_idx + 1))
+# Phân biệt đang chạy ở Menu Chính hay Menu Con để Route lệnh thoát (Phím 0) cho đúng
+if [[ "$0" == *"/wptangtoc" || "$0" == *"wptangtoc" || "$MENU_TITLE" == *"WPTANGTOC OLS"* ]]; then
+  TEXT_BACK="Về Status Dashboard"
+  ROUTE_BACK="/etc/wptt/wptt-status2"
 else
-  cli_menu_num="36" # Backup an toàn
+  TEXT_BACK="Quay lại Menu Chính"
+  ROUTE_BACK="/usr/bin/wptangtoc"
 fi
 
 # ==============================================================================
-# ĐỘNG CƠ NHẬN PHÍM MỚI (BẢO VỆ CPU & CHỐNG RỚT MẠNG ĐỘT NGỘT)
+# 3. BẪY TÍN HIỆU (BẢO VỆ SHELL)
 # ==============================================================================
+trap '
+  stty sane; tput cnorm
+  echo -e "\n\nĐã thoát. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại."
+  export WPTT_BYPASS=1
+  exec bash
+' SIGINT SIGTERM SIGQUIT
+
+# ==============================================================================
+# 4. CÁC HÀM VẼ GIAO DIỆN (ÉP SÁT LỀ TRÁI THEO YÊU CẦU UX)
+# ==============================================================================
+MARGIN=""
+calc_margin() {
+  MARGIN="" # Đã vô hiệu hóa tính năng tự động căn giữa để đảm bảo đồng bộ với các tính năng cũ
+}
+
+truncate_text() {
+  local text="$1"
+  local max_len=$2
+  [[ ${#text} -gt $max_len ]] && echo "${text:0:$((max_len-2))}.." || echo "$text"
+}
+
+print_item() {
+  local num="$1"
+  local text="$2"
+  [[ -z "$text" ]] && { echo "|"; return; }
+
+  if [[ -z "$num" ]]; then
+    local plain=$(truncate_text "▶ $text" 36)
+    local colored="${C_YELLOW}▶ ${C_BOLD_WHITE}${plain:2}${C_RESET}"
+    echo "$plain|$colored"
+  else
+    local plain=$(truncate_text "$(printf "[%2s] %s" "$num" "$text")" 36)
+    local item_text="${plain:5}"
+    local colored="${C_GREEN}[$(printf "%2s" "$num")]${C_RESET} ${C_CYAN}${item_text}${C_RESET}"
+    echo "$plain|$colored"
+  fi
+}
+
+print_row() {
+  local l_num="$1"; local l_text="$2"; local r_num="$3"; local r_text="$4"
+  local l_data=$(print_item "$l_num" "$l_text")
+  local l_plain="${l_data%|*}"; local l_color="${l_data#*|}"
+  local pad_l=$(( 37 - ${#l_plain} )); [[ $pad_l -lt 0 ]] && pad_l=0
+
+  local r_plain=""; local r_color=""; local pad_r=37
+  if [[ -n "$r_text" ]]; then
+    local r_data=$(print_item "$r_num" "$r_text")
+    r_plain="${r_data%|*}"; r_color="${r_data#*|}"
+    pad_r=$(( 37 - ${#r_plain} )); [[ $pad_r -lt 0 ]] && pad_r=0
+  fi
+  printf "${MARGIN}${C_CYAN}│${C_RESET} %b%*s  %b%*s ${C_CYAN}│${C_RESET}\n" "$l_color" "$pad_l" "" "$r_color" "$pad_r" ""
+}
+
+print_header() {
+  local text="${1:-TRUNG TÂM QUẢN TRỊ WPTANGTOC OLS}"
+  local inner=78
+  local p_left=$(( (inner - ${#text}) / 2 ))
+  local p_right=$(( inner - ${#text} - p_left ))
+  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_BOLD_WHITE}%s${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
+}
+
+print_spacer() { printf "${MARGIN}${C_CYAN}│%78s│${C_RESET}\n" ""; }
+
+draw_default_grid() {
+  local item_count=1
+  for opt in "${options[@]}"; do
+    if [[ "$opt" == *"───"* ]]; then
+      print_spacer
+      local clean_opt=$(echo "$opt" | sed -e 's/───//g' -e 's/\[//g' -e 's/\]//g' | xargs)
+      print_row "" "$clean_opt" "" ""
+    else
+      print_row "$item_count" "$opt" "" ""
+      ((item_count++))
+    fi
+  done
+}
+
+# ==============================================================================
+# 5. VÒNG LẶP DASHBOARD CHÍNH
+# ==============================================================================
+total_valid_opts=0
+for opt in "${options[@]}"; do [[ "$opt" != *"───"* ]] && ((total_valid_opts++)); done
+
 while true; do
-
-  # Mượn select để in danh sách Menu ra màn hình 1 lần duy nhất rồi tắt
-  select opt in "${options[@]}"; do break; done </dev/null
-
-  # In dòng chữ mời nhập lựa chọn
-  echo -en "$PROMPT_TEXT"
-
-  # Bẫy lỗi EOF (Mất kết nối SSH, rớt mạng)
-  if ! read -r REPLY; then
-    echo -e "\n${C_RED}⚠️ Đã mất kết nối Terminal (EOF). Tự động thoát Menu để bảo vệ hệ thống...${C_RESET}"
-    exit 1
+  calc_margin 
+  clear
+  
+  echo -e "${MARGIN}${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  print_header "$MENU_TITLE"
+  echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  print_spacer
+  
+  if declare -f draw_custom_grid > /dev/null; then
+    draw_custom_grid
+  else
+    draw_default_grid
   fi
 
-  case "$REPLY" in
-  0) # Thoát/Quay lại menu chính
-    echo -e "\nĐang quay lại menu chính..."
-    if command -v wptangtoc &>/dev/null; then
-      exec /usr/bin/wptangtoc 1
-    else
-      echo "Lỗi: Lệnh 'wptangtoc' không tìm thấy để quay lại menu chính."
-    fi
-    break
-    ;;
+  print_spacer
+  echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
+  plain_foot=" Nhập số (1-$total_valid_opts) | [00] Tìm kiếm | [0] $TEXT_BACK "
+  color_foot=" ${C_YELLOW}Nhập số (1-$total_valid_opts)${C_RESET} | ${C_GREEN}[00] Tìm kiếm${C_RESET} | ${C_RED}[0] $TEXT_BACK${C_RESET} "
+  p_l=$(( (78 - ${#plain_foot}) / 2 )); p_r=$(( 78 - ${#plain_foot} - p_l ))
+  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$p_l" "" "$color_foot" "$p_r" ""
+  
+  echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  printf "${MARGIN}${C_CYAN}│${C_RESET}  ${C_GREEN}>>${C_RESET} ${C_BOLD_WHITE}Lựa chọn của bạn: ${C_RESET}%-55s${C_CYAN}│${C_RESET}\n" ""
+  echo -e "${MARGIN}${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-  00) # Gọi FZF (chỉ khi đã cài đặt)
-    if $fzf_installed; then
-      fzf_height=$((${#options[@]} + 4))
-      fzf_prompt="${nhap_lua_chon_cua_ban:-Tìm kiếm lựa chọn} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
+  margin_len=${#MARGIN}
+  cursor_col=$(( margin_len + 25 ))
+  echo -en "\033[2A\033[${cursor_col}G"
+  
+  read -r choice
+  echo -en "\033[2B"
 
-      # Cấu trúc bảng FZF
-      selected_opt=$(printf '%s\n' "${options[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border=rounded --color=border:red --cycle --reverse)
-      fzf_exit_status=$?
-      selected_opt=$(echo "$selected_opt" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-
-      if [[ $fzf_exit_status -eq 0 ]] && [[ -n "$selected_opt" ]]; then
-        selected_index=-1
-        for i in "${!options[@]}"; do
-          if [[ "$(echo -n "${options[$i]}" | sed 's/[[:space:]]*$//')" == "$(echo -n "$selected_opt" | sed 's/[[:space:]]*$//')" ]]; then
-            selected_index=$i
-            break
+  # ĐIỀU HƯỚNG THEO NGỮ CẢNH (CONTEXT-AWARE)
+  if [[ "$choice" == "0" ]]; then
+    echo -e "\n${MARGIN}${C_YELLOW}Đang $TEXT_BACK...${C_RESET}"
+    exec $ROUTE_BACK
+    exit 0
+  
+  elif [[ "$choice" == "00" ]]; then
+    if command -v fzf &>/dev/null; then
+      selected=$(
+        count=1
+        for opt in "${options[@]}"; do
+          if [[ "$opt" != *"───"* ]]; then
+            printf "%2d. %s\n" "$count" "$opt"
+            ((count++))
           fi
-        done
-
-        if [[ $selected_index -ne -1 ]]; then
-          echo -e "\nĐã chọn: ${options[$selected_index]}"
-          run_action "$selected_index"
-        else
-          echo "Lỗi: Không thể khớp lựa chọn FZF '$selected_opt' với danh sách."
-        fi
-      else
-        echo "${vui_long_chon_lai:-Vui lòng chọn lại.}"
-      fi
-    else
-      echo "${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '00'. FZF chưa được cài đặt."
-    fi
-    REPLY=""
-    continue
-    ;;
-
-  *) # Xử lý nhập số, lệnh hoặc chuỗi không hợp lệ
-    # 1. Kiểm tra nếu nhập đúng số thứ tự
-    if [[ "$REPLY" =~ ^[1-9][0-9]*$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#options[@]} ]; then
-      action_index=$((REPLY - 1))
-      echo -e "\nĐã chọn: ${options[$action_index]}"
-      run_action "$action_index"
-    else
-      # 2. Xử lý khi nhập sai (Kiểm tra xem có phải gõ lệnh Linux không)
-      if [[ -n "$REPLY" ]]; then
-
-        # ======================================================================
-        # TỐI ƯU HÓA 2: PURE BASH STRING MANIPULATION (TỐC ĐỘ BÀN THỜ)
-        # Thay vì tốn tài nguyên gọi awk hay echo, dùng trực tiếp lõi Bash
-        # ======================================================================
-        first_word="${REPLY%% *}"
-
-        if command -v "$first_word" >/dev/null 2>&1; then
-          # Chèn trực tiếp biến Cache $cli_menu_num vào thông báo
-          echo -e "\n${C_YELLOW}Có vẻ bạn đang muốn chạy dòng lệnh Linux CLI: ${C_CYAN}$REPLY${C_RESET}"
-          echo -e "Để gõ lệnh, bạn hãy quay lại Menu Chính và chọn ${C_GREEN}[ Mở Terminal / Dòng lệnh CLI - (Menu $cli_menu_num) ]${C_RESET} hoặc ấn Ctrl+C trước nhé!\n"
-        else
-          # Báo lỗi nhập linh tinh
-          echo -e "\n${C_RED}${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
+        done | fzf --prompt="Tìm kiếm > " --height=40% --border=rounded --color=border:cyan --cycle --reverse
+      )
+      
+      if [[ -n "$selected" ]]; then
+        sel_num=$(echo "$selected" | grep -o '^[[:space:]]*[0-9]\+' | tr -d ' ')
+        if [[ -n "$sel_num" ]]; then
+          m_count=1
+          for i in "${!options[@]}"; do
+            if [[ "${options[$i]}" != *"───"* ]]; then
+              if [[ $m_count -eq $sel_num ]]; then
+                echo -e "\n${MARGIN}${C_GREEN}>> Đang khởi chạy: ${options[$i]}${C_RESET}\n"
+                run_action "$i"
+                break 2 
+              fi
+              ((m_count++))
+            fi
+          done
         fi
       fi
+    else
+      echo -e "\n${MARGIN}${C_RED}[!] Lỗi: FZF chưa được cài đặt.${C_RESET}"; sleep 1.5
     fi
-    REPLY=""
-    continue
-    ;;
-  esac
+  
+  elif [[ "$choice" =~ ^[1-9][0-9]*$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$total_valid_opts" ]; then
+    m_count=1
+    for i in "${!options[@]}"; do
+      if [[ "${options[$i]}" != *"───"* ]]; then
+        if [[ $m_count -eq $choice ]]; then
+          echo -e "\n${MARGIN}${C_GREEN}>> Đang khởi chạy: ${options[$i]}${C_RESET}\n"
+          run_action "$i"
+          break 2
+        fi
+        ((m_count++))
+      fi
+    done
+  
+  elif [[ -n "$choice" ]]; then
+    f_word="${choice%% *}"
+    if command -v "$f_word" >/dev/null 2>&1; then
+      echo -e "\n${MARGIN}${C_YELLOW}>> Có vẻ bạn muốn gõ lệnh Linux. Vui lòng ấn Ctrl+C để ra ngoài Terminal!${C_RESET}"
+    else
+      echo -e "\n${MARGIN}${C_RED}[!] Lựa chọn không hợp lệ. Hãy nhập từ 1 đến $total_valid_opts.${C_RESET}"
+    fi
+    sleep 1.5
+  fi
 done
