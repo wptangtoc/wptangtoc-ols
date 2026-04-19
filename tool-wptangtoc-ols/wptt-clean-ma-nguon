@@ -4,164 +4,257 @@
 # @email: giatuan@wptangtoc.com
 # @since: 2026
 
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT & PHỤC HỒI ➜ Clean Mã Nguồn (Reinstall WordPress)${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# LỰA CHỌN TÊN MIỀN
+# ==============================================================================
 NAME=$1
 if [[ -z "$NAME" ]]; then
-  echo -e "\n========================================================================="
-  echo "| Reinstall WordPress Clean mã nguồn                                    |"
-  echo "========================================================================="
-  . /etc/wptt/tenmien
-  echo -e "\nLựa chọn website Clean mã nguồn WordPress: \n"
-  lua_chon_NAME
+  . /etc/wptt/tenmien-only-website-by-wordpress
+  lua_chon_NAME "Clean mã nguồn"
 fi
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && exit 1
+[[ "$NAME" == "0" || -z "$NAME" ]] && { [[ -z "$1" ]] && exec /usr/bin/wptangtoc 1 || exit 1; }
 
 path_conf="/etc/wptt/vhost/.$NAME.conf"
-[[ ! -f "$path_conf" ]] && {
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+if [[ ! -f "$path_conf" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 2
   exit 1
-}
-
-echo "Reinstall WordPress Clean mã nguồn website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-. /etc/wptt/echo-color
-. /etc/wptt/core-functions
-. /etc/wptt/vhost/.$NAME.conf
-
-# 1. Tắt Lock Down an toàn
-if [[ $lock_down ]]; then
-  UI_STRING="$tat lock down website $NAME"
-  _runing "$UI_STRING"
-  . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME off
-  sed -i '/lock_down/d' /etc/wptt/vhost/.$NAME.conf
-  _rundone "$UI_STRING"
 fi
 
 if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
-  echoDo "Lỗi: Domain rỗng. Hủy bỏ lệnh xóa!"
+  echo -e "\n${C_RED}❌ Lỗi: Domain rỗng. Hủy bỏ lệnh!${C_RESET}"
   exit 1
 fi
 
+echo "Reinstall WordPress Clean mã nguồn website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+# ==============================================================================
+# CẢNH BÁO XÁC NHẬN AN TOÀN
+# ==============================================================================
+echo -e "${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}CẢNH BÁO: TẨY RỬA MÃ NGUỒN${C_RESET}"
+echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "  Hành động này sẽ XÓA SẠCH core WordPress và tải lại bản mới." 2
+left_text "  Các Plugin/Theme miễn phí sẽ được tải lại tự động." 2
+left_text "  ${C_YELLOW}Tất cả file lạ nằm ngoài cấu trúc chuẩn sẽ bị tiêu diệt!${C_RESET}" 2
+echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if ! wptt_xac_nhan "Bạn có CHẮC CHẮN muốn Clean mã nguồn website ($NAME) không?" "" "" "Đồng ý Tẩy Rửa" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác. Website vẫn giữ nguyên.${C_RESET}\n"
+  sleep 1
+  exit 0
+fi
+echo ""
+
+. "/etc/wptt/vhost/.$NAME.conf"
 path="/usr/local/lsws/$NAME/html"
 
-# 2. Xóa Core & File Rác
+# ==============================================================================
+# BƯỚC 1: XÓA LOCK DOWN & CÀI ĐẶT MÔI TRƯỜNG
+# ==============================================================================
+if [[ -n "$lock_down" ]]; then
+  _runing "Đang tạm tắt tính năng Lock Down để thao tác file..."
+  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1
+  sed -i '/lock_down/d' "/etc/wptt/vhost/.$NAME.conf"
+  _rundone "Tắt Lock Down thành công"
+fi
+
+# Cài đặt PHP Zip nếu thiếu
+if ! php -m | grep -q 'zip'; then
+  _runing "Đang cài đặt thư viện PHP Zip bổ trợ..."
+  phien_ban_php_cli_hien_tai=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
+  . /etc/wptt/php/install-php-zip "$phien_ban_php_cli_hien_tai" >/dev/null 2>&1
+  _rundone "Cài đặt PHP Zip thành công"
+fi
+
+. /etc/wptt/php/php-cli-domain-config "$NAME"
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+# ==============================================================================
+# BƯỚC 2: XÓA MÃ NGUỒN CORE & FILE RÁC
+# ==============================================================================
+_runing "Đang xóa Core cũ và các file rác gốc..."
 rm -rf "$path/wp-admin" "$path/wp-includes"
 rm -f "$path/php.ini" "$path/user.ini"
 
-# 3. Tẩy rửa thư mục gốc (Bỏ qua wp-config.php)
 if [[ -d "$path/wp-content/plugins/devvn-quick-search" ]]; then
   find "$path" -maxdepth 1 -type f -name "*.php" ! -name "wp-config.php" ! -name "search.php" -delete
 else
   find "$path" -maxdepth 1 -type f -name "*.php" ! -name "wp-config.php" -delete
 fi
+_rundone "Xóa Core và file rác hoàn tất"
 
-# 4. Cài đặt PHP Zip nếu thiếu
-if ! php -m | grep -q 'zip'; then
-  phien_ban_php_cli_hien_tai=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
-  . /etc/wptt/php/install-php-zip "$phien_ban_php_cli_hien_tai" >/dev/null 2>&1
-fi
-
-if ! php -m | grep -q 'zip'; then
-  echoDo "Thiếu thư viện php extension zip để thực thi câu lệnh"
-  exit 1
-fi
-
-# 5. Cấu hình WP_EXEC
-. /etc/wptt/php/php-cli-domain-config $NAME
-WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
-
-_runing "Đang tải lại mã nguồn Core, Plugin & Theme cho $NAME"
-
-# Tải lại Core & Update DB
+# ==============================================================================
+# BƯỚC 3: TẢI LẠI CORE, THEME & PLUGIN (BÓC TÁCH LỖI BẢN QUYỀN)
+# ==============================================================================
+_runing "Đang tải và cập nhật Core WordPress mới nhất..."
 $WP_EXEC core download --skip-content --force --path="$path" >/dev/null 2>&1
 $WP_EXEC core update-db --path="$path" >/dev/null 2>&1
+_rundone "Phục hồi Core WordPress thành công"
 
-# Tải lại Plugins
+# Khai báo biến lưu các Plugin/Theme không tải được
+FAILED_PLUGINS=""
+FAILED_THEMES=""
+
+_runing "Đang tải lại thư viện Plugins (Có thể mất vài phút)..."
 plugins_list=$($WP_EXEC plugin list --field=name --path="$path" 2>/dev/null)
-[[ -n "$plugins_list" ]] && $WP_EXEC plugin install $plugins_list --force --path="$path" >/dev/null 2>&1
+if [[ -n "$plugins_list" ]]; then
+  for plugin in $plugins_list; do
+    # Tải từng cái để bóc tách lỗi
+    if ! $WP_EXEC plugin install "$plugin" --force --path="$path" >/dev/null 2>&1; then
+      FAILED_PLUGINS+="$plugin, "
+    fi
+  done
+fi
+_rundone "Xử lý tải lại Plugins hoàn tất"
 
-# Tải lại Themes
+_runing "Đang tải lại giao diện Themes (Có thể mất vài phút)..."
 themes_list=$($WP_EXEC theme list --field=name --path="$path" 2>/dev/null)
-[[ -n "$themes_list" ]] && $WP_EXEC theme install $themes_list --force --path="$path" >/dev/null 2>&1
+if [[ -n "$themes_list" ]]; then
+  for theme in $themes_list; do
+    if ! $WP_EXEC theme install "$theme" --force --path="$path" >/dev/null 2>&1; then
+      FAILED_THEMES+="$theme, "
+    fi
+  done
+fi
+_rundone "Xử lý tải lại Themes hoàn tất"
 
-_rundone "Đang tải lại mã nguồn Core, Plugin & Theme cho $NAME"
+# Lọc bỏ dấu phẩy cuối chuỗi
+FAILED_PLUGINS=${FAILED_PLUGINS%, }
+FAILED_THEMES=${FAILED_THEMES%, }
 
-# 6. Dọn dẹp Cache, Cron rác & Drop-ins
-_runing "Dọn dẹp rác, Cron và Drop-ins bảo mật"
-rm -rf "$path/wp-content/cache"
-rm -rf "/usr/local/lsws/$NAME/luucache"
+# ==============================================================================
+# BƯỚC 4: DỌN DẸP CACHE, CRON RÁC & DROP-INS
+# ==============================================================================
+_runing "Đang dọn dẹp Cache ảo, Cronjob lạ và Drop-ins..."
+rm -rf "$path/wp-content/cache" "/usr/local/lsws/$NAME/luucache"
 
 $WP_EXEC cron event list --path="$path" 2>/dev/null | grep 'vtpost_login_daily' | awk '{ print $1 }' | xargs -I % $WP_EXEC cron event delete % --path="$path" >/dev/null 2>&1
 
-# Dọn dẹp Drop-ins
-rm -f "$path/wp-content/advanced-cache.php"
-rm -f "$path/wp-content/object-cache.php"
+rm -f "$path/wp-content/advanced-cache.php" "$path/wp-content/object-cache.php"
 
-# Bypass SQLite cho db.php
 if [[ -f "$path/wp-content/db.php" ]]; then
   if ! grep -qi "sqlite" "$path/wp-content/db.php"; then
     rm -f "$path/wp-content/db.php"
   fi
 fi
 
-# Dọn dẹp mu-plugins (nếu có)
 if [[ -d "$path/wp-content/mu-plugins" ]]; then
   find "$path/wp-content/mu-plugins" -type f -name "*.php" -delete
 fi
-_rundone "Dọn dẹp rác, Cron và Drop-ins bảo mật"
 
-# 7. Xóa index.php của Theme cha
+# Xóa index.php của Theme cha
 checkchild=$($WP_EXEC theme list --path="$path" 2>/dev/null | grep -c 'parent')
 if [[ "$checkchild" != "1" ]]; then
   name_theme=$($WP_EXEC theme status --path="$path" 2>/dev/null | grep 'A' | head -1 | awk '{print $2}')
   rm -f "$path/wp-content/themes/$name_theme/index.php"
 fi
+_rundone "Dọn dẹp tệp tin rác bảo mật thành công"
 
-# 8. Quét mã độc & Rải index.php chống Directory Listing
-_runing "Quét mã độc và tối ưu bảo mật thư mục Uploads"
-
-# Quét sạch toàn bộ script thực thi trong thư mục Uploads
+# ==============================================================================
+# BƯỚC 5: QUÉT MÃ ĐỘC VÀ RẢI INDEX BẢO VỆ
+# ==============================================================================
+_runing "Đang quét mã độc và rải index.php bảo vệ thư mục Uploads..."
 find "$path/wp-content/uploads" -type f \( -name "*.php" -o -name "*.php[34578]" -o -name "*.phtml" -o -name "*.phps" -o -name "*.sh" -o -name "*.cgi" -o -name "*.pl" -o -name "*.shtml" \) -delete
-
-# Xóa .htaccess rác
 find "$path/wp-content" -type f -name ".htaccess" -delete
 
-# Rải index.php rỗng vào các thư mục gốc
 echo '<?php' >"$path/wp-content/uploads/index.php"
 echo '<?php' >"$path/wp-content/index.php"
 echo '<?php' >"$path/wp-content/themes/index.php"
 echo '<?php' >"$path/wp-content/plugins/index.php"
 
-# Rải index.php vào TẤT CẢ thư mục con của Uploads
 find "$path/wp-content/uploads" -type d -print0 | while IFS= read -r -d '' dir; do
   [[ ! -f "$dir/index.php" ]] && echo '<?php' >"$dir/index.php"
 done
+_rundone "Quét mã độc Uploads và rải khiên bảo vệ hoàn tất"
 
-_rundone "Quét mã độc và tối ưu bảo mật thư mục Uploads"
-
-# 9. Kiểm tra nội soi wp-config.php
+# ==============================================================================
+# BƯỚC 6: KIỂM TRA WP-CONFIG.PHP
+# ==============================================================================
 check_config_malware=$(grep -Ei "eval\(|base64_decode|gzinflate|str_rot13" "$path/wp-config.php" 2>/dev/null)
 if [[ -n "$check_config_malware" ]]; then
-  echo -e "\n\033[1;31m⚠️ CẢNH BÁO ĐỎ: Phát hiện chuỗi nghi ngờ bị mã hóa trong wp-config.php!\033[0m"
-  echo "Vui lòng mở file /usr/local/lsws/$NAME/html/wp-config.php để kiểm tra và xóa thủ công các dòng mã độc."
-  sleep 3
+  echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}BÁO ĐỘNG ĐỎ: NGHI NGỜ MÃ ĐỘC TRONG WP-CONFIG.PHP${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Hệ thống phát hiện các hàm nhạy cảm (eval, base64) bị nhúng" 2
+  left_text "  vào file cấu hình lõi của WordPress." 2
+  left_text "  Bạn PHẢI MỞ FILE: ${C_YELLOW}$path/wp-config.php${C_RESET}" 2
+  left_text "  để kiểm tra và xóa thủ công các đoạn code mã hóa lạ." 2
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  sleep 4
 fi
 
-# 10. Reset cấu hình phụ
+# ==============================================================================
+# BƯỚC 7: RESET CẤU HÌNH PHỤ
+# ==============================================================================
+_runing "Đang làm mới cấu hình Salt, Cache và Htaccess..."
 (/etc/wptt/wordpress/thay-salt "$NAME" >/dev/null 2>&1)
 (/etc/wptt/wptt-htaccess-reset "$NAME" >/dev/null 2>&1)
-
-_runing "Xoá cache website $NAME"
 (/etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1)
-_rundone "Xoá cache website $NAME"
+_rundone "Làm mới cấu hình lõi thành công"
 
-echoDone "Hoàn tất clean mã nguồn cho website $NAME"
+# ==============================================================================
+# BÁO CÁO KẾT QUẢ VÀ TÀI KHOẢN ADMIN
+# ==============================================================================
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT TẨY RỬA MÃ NGUỒN (CLEAN CORE)${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "  Website xử lý : ${C_YELLOW}$NAME${C_RESET}" 2
+left_text "  Trạng thái    : ${C_GREEN}Đã bóc tách mã độc & Tải lại file chuẩn${C_RESET}" 2
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-# 11. Báo cáo Tài khoản Administrator (Rogue Admins)
-echo -e "\n========================================================"
-echo -e "\033[1;33mDANH SÁCH TÀI KHOẢN ADMINISTRATOR HIỆN TẠI:\033[0m"
-$WP_EXEC user list --role=administrator --fields=ID,user_login,user_email,user_registered --path="$path" 2>/dev/null
-echo "========================================================"
-echo "Hãy kiểm tra danh sách trên, nếu có tài khoản lạ, vui lòng xóa ngay lập tức!"
-echo ""
+# ==============================================================================
+# CẢNH BÁO PLUGIN/THEME BẢN QUYỀN KHÔNG THỂ TẢI LẠI
+# ==============================================================================
+if [[ -n "$FAILED_PLUGINS" || -n "$FAILED_THEMES" ]]; then
+  echo -e "\n${C_YELLOW}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}CHÚ Ý: YÊU CẦU CAN THIỆP THỦ CÔNG${C_RESET}"
+  echo -e "${C_YELLOW}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Các tiện ích sau là hàng Bản quyền (Premium) hoặc đã bị xóa" 2
+  left_text "  khỏi kho WordPress, nên hệ thống KHÔNG THỂ tải lại tự động:" 2
+  echo -e "${C_YELLOW}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  if [[ -n "$FAILED_PLUGINS" ]]; then
+    left_text "  ${C_RED}❌ Plugins lỗi :${C_RESET} ${C_BOLD_WHITE}$FAILED_PLUGINS${C_RESET}" 2
+  fi
+  if [[ -n "$FAILED_THEMES" ]]; then
+    left_text "  ${C_RED}❌ Themes lỗi  :${C_RESET} ${C_BOLD_WHITE}$FAILED_THEMES${C_RESET}" 2
+  fi
+
+  echo -e "${C_YELLOW}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  ${C_CYAN}Giải pháp:${C_RESET} Bạn vui lòng tải file .zip chính chủ của các" 2
+  left_text "  mục trên, giải nén và upload thủ công vào thư mục wp-content." 2
+  echo -e "${C_YELLOW}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+fi
+
+# ==============================================================================
+# DANH SÁCH ADMINISTRATOR (PHÒNG HACKER TẠO USER ẨN)
+# ==============================================================================
+echo -e "\n${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}DANH SÁCH QUẢN TRỊ VIÊN (ADMINISTRATOR)${C_RESET}"
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "  Hãy kiểm tra thật kỹ bảng dưới đây. Nếu thấy User lạ," 2
+left_text "  hacker đã cài cắm lại. Vui lòng truy cập WP-Admin và xóa ngay!" 2
+echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+# Render list Admin có format cột
+$WP_EXEC user list --role=administrator --fields=ID,user_login,user_email --path="$path" 2>/dev/null | awk -F'\t' '
+  NR==1 { printf "  \033[1;36m%-5s | %-20s | %-30s\033[0m\n", "ID", "USERNAME", "EMAIL"; print "  ------------------------------------------------------------" }
+  NR>1  { printf "  %-5s | %-20s | %-30s\n", $1, $2, $3 }
+'
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
