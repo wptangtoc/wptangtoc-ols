@@ -2,43 +2,88 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2022
-echo ""
-echo ""
+# @since: 2026
 
+# Ép hệ thống dùng chuẩn UTF-8 để đếm chính xác ký tự Tiếng Việt
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt-user/echo-color 2>/dev/null
+
+# ==============================================================================
+# HÀM TRỢ GIÚP VẼ KHUNG 78 
+# ==============================================================================
+box_inner_width=78
+
+get_clean_len() {
+  local clean=$(echo -en "$1" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+  local len=$(LC_ALL=C.UTF-8 printf "%s" "$clean" | wc -m | tr -d ' ' 2>/dev/null)
+  [[ -z "$len" || "$len" == "0" ]] && len=${#clean}
+  echo "$len"
+}
+
+center_text() {
+  local text="$1"
+  local border_color="${2:-$C_CYAN}"
+  text=$(echo -en "$text" | sed 's/[[:space:]]*$//' | tr -d '\r\n')
+  local clean_len=$(get_clean_len "$text")
+  
+  if ((clean_len >= box_inner_width)); then
+    printf "${border_color}│${C_RESET} %b ${border_color}│${C_RESET}\n" "$text"
+    return
+  fi
+  local pad_left=$(((box_inner_width - clean_len) / 2))
+  local pad_right=$((box_inner_width - clean_len - pad_left))
+  printf "${border_color}│${C_RESET}%*s%b%*s${border_color}│${C_RESET}\n" "$pad_left" "" "$text" "$pad_right" ""
+}
+
+# ==============================================================================
+# XỬ LÝ ĐẦU VÀO VÀ GIAO DIỆN CHỌN TÊN MIỀN
+# ==============================================================================
 NAME=$1
-if [[ $NAME = "98" ]];then
-NAME=""
+[[ "$NAME" == "98" ]] && NAME=""
+
+if [[ -z "$NAME" ]]; then
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}QUẢN LÝ WORDPRESS ➜ RESET FILE .HTACCESS${C_RESET}"
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  
+  . /etc/wptt-user/tenmien
+  lua_chon_NAME "Reset .htaccess"
 fi
 
-if [[ $NAME = "" ]];then
-echo "========================================================================="
-echo "|Quản lý WordPress => Reset htaccess                                    |"
-echo "========================================================================="
-echo "========================================================================="
-. /etc/wptt-user/tenmien
-lua_chon_NAME
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  exec wptangtoc-user 1
 fi
 
-. /etc/wptt-user/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
- wptangtoc-user 1
-fi
-
-
+# ==============================================================================
+# KIỂM TRA ĐIỀU KIỆN (BẮT BUỘC LÀ WORDPRESS)
+# ==============================================================================
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}TỪ CHỐI THỰC THI${C_RESET}" "$C_RED"
+  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  center_text "Hệ thống xác nhận tên miền này ${C_YELLOW}KHÔNG SỬ DỤNG WORDPRESS${C_RESET}" "$C_RED"
+  center_text "Tính năng này chỉ hoạt động trên mã nguồn WordPress." "$C_RED"
+  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   sleep 3
- wptangtoc-user 1
+  exec wptangtoc-user 1
   exit
 fi
 
+# ==============================================================================
+# TIẾN HÀNH RESET VÀ KHÔI PHỤC CẤU HÌNH LIÊN QUAN
+# ==============================================================================
+echo ""
+_runing "Đang thiết lập lại file .htaccess mặc định cho website $NAME..."
 
-_runing "reset htaccess cho website $NAME"
-. /etc/wptt/vhost/."$NAME".conf
+# Nạp cấu hình vhost để lấy biến $tuong_lua_7g và $User_name_vhost
+. /etc/wptt/vhost/."$NAME".conf 2>/dev/null
+
 echo '# BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
@@ -49,31 +94,56 @@ RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.php [L]
 </IfModule>
-# END WordPress' > /usr/local/lsws/"$NAME"/html/.htaccess
-_rundone "reset htaccess cho website $NAME"
+# END WordPress' > "/usr/local/lsws/$NAME/html/.htaccess"
 
-if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" || -d /usr/local/lsws/$NAME/ssl ]]; then
-_runing "renew chuyển hướng"
-. /etc/wptt-user/ssl/wptt-renew-chuyen-huong $NAME >/dev/null 2>&1
-_rundone "renew chuyển hướng"
+_rundone "Đã khôi phục file .htaccess gốc của WordPress."
+
+# ------------------------------------------------------------------------------
+# 1. Khôi phục luật chuyển hướng SSL
+# ------------------------------------------------------------------------------
+if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" || -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  _runing "Đang cấu hình lại luật chuyển hướng SSL..."
+  . /etc/wptt-user/ssl/wptt-renew-chuyen-huong "$NAME" >/dev/null 2>&1
+  _rundone "Đã cập nhật cấu hình HTTPS."
 fi
 
-
-. /etc/wptt/vhost/.$NAME.conf
-if [[ $tuong_lua_7g ]];then
-. /etc/wptt-user/bao-mat/wptt-firewall-7g $NAME
+# ------------------------------------------------------------------------------
+# 2. Khôi phục Tường lửa 7G (Nếu trước đó đã bật)
+# ------------------------------------------------------------------------------
+if [[ -n "$tuong_lua_7g" ]]; then
+  _runing "Đang áp dụng lại cấu hình tường lửa 7G Firewall..."
+  . /etc/wptt-user/bao-mat/wptt-firewall-7g "$NAME" >/dev/null 2>&1
+  _rundone "Đã khôi phục quy tắc bảo mật 7G."
 fi
 
-_runing "Phân quyền website $NAME"
-chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html
-if [[ $2 = '' ]];then
-find /usr/local/lsws/"$NAME"/html -type d -exec chmod 755 {} \;
-find /usr/local/lsws/"$NAME"/html -type f -exec chmod 644 {} \;
+# ------------------------------------------------------------------------------
+# 3. Đặt lại phân quyền (Permissions) an toàn
+# ------------------------------------------------------------------------------
+_runing "Đang tối ưu hóa phân quyền File/Folder cho $NAME..."
+chown -R "$User_name_vhost":"$User_name_vhost" "/usr/local/lsws/$NAME/html"
+
+if [[ -z "$2" ]]; then
+  find "/usr/local/lsws/$NAME/html" -type d -exec chmod 755 {} \;
+  find "/usr/local/lsws/$NAME/html" -type f -exec chmod 644 {} \;
 fi
-chmod 444 /usr/local/lsws/"$NAME"/html/index.php
-chmod 600 /usr/local/lsws/"$NAME"/html/wp-config.php
-_rundone "Phân quyền website $NAME"
-wp rewrite flush --allow-root --path=/usr/local/lsws/"$NAME"/html >/dev/null 2>&1
-echo "==================================================================="
-echo "               Hoàn tất reset htaccess website $NAME              "
-echo "==================================================================="
+
+# Ép quyền đọc cho các file lõi quan trọng
+chmod 444 "/usr/local/lsws/$NAME/html/index.php"
+chmod 600 "/usr/local/lsws/$NAME/html/wp-config.php"
+_rundone "Đã thiết lập phân quyền an toàn."
+
+# ------------------------------------------------------------------------------
+# Flush Rewrite Rules (Làm mới Permalinks)
+# ------------------------------------------------------------------------------
+. /etc/wptt/php/php-cli-domain-config $NAME
+# . /etc/wptt/vhost/.$NAME.conf
+# WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+_runing "Đang làm mới cấu trúc đường dẫn (Flush Rewrite)..."
+wp rewrite flush --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+_rundone "Làm mới quy tắc thành công."
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT RESET .HTACCESS CHO WEBSITE $NAME${C_RESET}" "$C_GREEN"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+exec wptangtoc-user 1
