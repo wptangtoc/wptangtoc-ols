@@ -17,16 +17,16 @@ function huong_dan() {
   Lưu ý quan trọng: LUÔN LUÔN SAO LƯU [BACKUP] TRƯỚC KHI XÓA: Hãy chắc chắn bạn có một bản sao lưu đầy đủ và còn tốt của database trước khi quyết định xóa.
 }
 
-. /etc/wptt/.wptt.conf
-[[ $ngon_ngu == '' ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_database ➜ Xoá Database${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null
 
-. /etc/wptt/.wptt.conf
-. /etc/wptt/core-functions
+# ==============================================================================
+# NẠP TÀI NGUYÊN & THƯ VIỆN HỆ THỐNG
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ $ngon_ngu == '' ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null     
+. /etc/wptt/core-functions 2>/dev/null 
 
 if [[ "${1:-}" == '98' ]]; then
   WPTT_IN_MENU="yes"
@@ -35,9 +35,9 @@ fi
 
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối cho phép xoá database."
 
-. /etc/wptt/echo-color
-
-# --- KHỞI TẠO FILE BẢO MẬT & BẪY TRAP (CHỐNG LỘ PASSWORD) ---
+# ==============================================================================
+# KHỞI TẠO FILE BẢO MẬT & BẪY TRAP (CHỐNG LỘ PASSWORD)
+# ==============================================================================
 TEMP_CNF_ROOT=$(mktemp)
 chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
@@ -53,52 +53,143 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
-# Luật Thép: Phải có trap để hệ thống tự xóa file temp khi kết thúc/thoát script
 trap "rm -f $TEMP_CNF_ROOT" EXIT
 
-# --- QUÉT DANH SÁCH DATABASE ---
-selects=()
-for entry in $(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "show databases where \`database\` not in('information_schema', 'test', 'sys', 'mysql', 'performance_schema')" | grep '_dbname'); do
-  selects+=("$entry")
+# ==============================================================================
+# HÀM TRỢ GIÚP VẼ MENU UX (DÒNG CHÍNH VÀ DÒNG PHỤ)
+# ==============================================================================
+print_full_row() {
+  local index="$1"
+  local text="$2"
+  local formatted_index=$(printf "%2s" "$index")
+  local raw_text="  [${formatted_index}] ${text}"
+  local clean_text=$(echo -en "$raw_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+  local text_len=$(LC_ALL=C.UTF-8 printf "%s" "$clean_text" | wc -m | tr -d ' ' 2>/dev/null)
+  [[ -z "$text_len" || "$text_len" == "0" ]] && text_len=${#clean_text}
+  local pad=$((78 - text_len - 1))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}[${formatted_index}]${C_RESET} ${text}$(printf '%*s' "$pad" "") ${C_CYAN}│${C_RESET}"
+}
+
+print_sub_row() {
+  local text="$1"
+  # Lùi vào 7 khoảng trắng để thẳng hàng chính xác với chữ cái đầu tiên của dòng trên
+  local raw_text="       $text"
+  local clean_text=$(echo -en "$raw_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+  local text_len=$(LC_ALL=C.UTF-8 printf "%s" "$clean_text" | wc -m | tr -d ' ' 2>/dev/null)
+  [[ -z "$text_len" || "$text_len" == "0" ]] && text_len=${#clean_text}
+  local pad=$((78 - text_len - 1))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_CYAN}│${C_RESET}${raw_text}$(printf '%*s' "$pad" "") ${C_CYAN}│${C_RESET}"
+}
+
+# ==============================================================================
+# QUÉT VÀ PHÂN TÍCH DATABASE "MỒ CÔI"
+# ==============================================================================
+echo -e "${C_YELLOW}Đang quét và phân tích sở hữu Database, vui lòng chờ...${C_RESET}"
+
+# 1. Quét toàn bộ wp-config.php để tạo bản đồ ánh xạ (Mapping)
+declare -A db_map
+for config_file in /usr/local/lsws/*/html/wp-config.php; do
+  if [[ -f "$config_file" ]]; then
+    domain=$(echo "$config_file" | awk -F'/' '{print $5}')
+    db_name=$(grep -oP "define\(\s*'DB_NAME',\s*'\K[^']+" "$config_file" | head -n 1)
+    [[ -n "$db_name" ]] && db_map["$db_name"]="$domain"
+  fi
 done
 
-if [[ ${#selects[@]} -eq 0 ]]; then
-  echoDo "Không tìm thấy Database nào (thuộc hệ sinh thái WPTangToc) trên hệ thống!"
+# 2. Quét danh sách Database thực tế từ MariaDB
+db_list=()
+for entry in $(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "show databases where \`database\` not in('information_schema', 'test', 'sys', 'mysql', 'performance_schema')" | grep '_dbname'); do
+  db_list+=("$entry")
+done
+
+if [[ ${#db_list[@]} -eq 0 ]]; then
+  echo -e "\n${C_RED}❌ Không tìm thấy Database nào (thuộc hệ sinh thái WPTangToc) trên hệ thống!${C_RESET}"
   sleep 2
   exec /etc/wptt/wptt-db-main 1
 fi
 
-echo "Danh sách Database: "
-PS3="$(tput setab 0)-//- Nhập lựa chọn database bạn cần xóa [0=Thoát]: $(tput sgr0)"
-select opt in "${selects[@]}"; do
-  databaseclear=$opt
-  break
+# ==============================================================================
+# RENDER GIAO DIỆN TƯƠNG TÁC
+# ==============================================================================
+total_db=${#db_list[@]}
+box_inner_width=78
+
+while true; do
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ XOÁ DATABASE${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
+  # Vẽ từng cụm 2 dòng (Tên DB và Trạng thái)
+  for i in "${!db_list[@]}"; do
+    db_name="${db_list[$i]}"
+    matched_domain="${db_map[$db_name]}"
+
+    # Dòng 1: Tên Database
+    print_full_row "$((i + 1))" "${C_CYAN}${db_name}${C_RESET}"
+    
+    # Dòng 2: Trạng thái biên chế lùi vào trong
+    if [[ -n "$matched_domain" ]]; then
+      print_sub_row "↳ Thuộc Website : ${C_GREEN}${matched_domain}${C_RESET}"
+    else
+      print_sub_row "↳ Trạng thái    : ${C_RED}MỒ CÔI (Chưa phát hiện thuộc biên chế website nào)${C_RESET}"
+    fi
+  done
+  
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
+  footer_text="Nhập số (1-${total_db}) | [0] Quay lại Menu Quản lý DB"
+  len_footer=$(LC_ALL=C.UTF-8 printf "%s" "$footer_text" | wc -m | tr -d ' ' 2>/dev/null)
+  [[ -z "$len_footer" || "$len_footer" == "0" ]] && len_footer=${#footer_text}
+  pad_footer=$(((78 - len_footer) / 2))
+  echo -e "${C_CYAN}│${C_RESET}$(printf '%*s' "$pad_footer" "")Nhập số (1-${total_db}) | ${C_RED}[0] Quay lại Menu Quản lý DB${C_RESET}$(printf '%*s' "$((78 - len_footer - pad_footer))" "")${C_CYAN}│${C_RESET}"
+  
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  echo -en "${C_YELLOW}>> Lựa chọn database cần xóa: ${C_RESET}"
+  read -r choice
+
+  if [[ "$choice" == "0" || "$choice" == "q" ]]; then
+    exec /etc/wptt/wptt-db-main 1
+    break
+  elif [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$total_db" ]; then
+    
+    # Lấy thông tin DB được chọn
+    selected_db="${db_list[$((choice - 1))]}"
+    selected_domain="${db_map[$selected_db]}"
+    
+    warn_sub_1="Trạng thái: MỒ CÔI (Chưa phát hiện thuộc biên chế website nào)"
+    [[ -n "$selected_domain" ]] && warn_sub_1="Thuộc Website: $selected_domain"
+
+    # ==========================================================================
+    # XÁC NHẬN BẢO MẬT TRƯỚC KHI XÓA
+    # ==========================================================================
+    echo ""
+    if wptt_xac_nhan "Chắc chắn muốn XÓA database: $selected_db?" "$warn_sub_1" "Dữ liệu sẽ bị bốc hơi vĩnh viễn, không thể khôi phục nếu chưa backup!" "Có, XÓA NGAY LẬP TỨC" "Không, Hủy bỏ an toàn"; then
+      
+      UI_STRING="Đang xóa database $selected_db và dọn dẹp User..."
+      _runing "$UI_STRING"
+      echo "Xoá database ${selected_db}: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${selected_db}\`;"
+      
+      base_name="${selected_db%_dbname}"
+      username_to_delete="${base_name}_username"
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${username_to_delete}'@'localhost';"
+
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES;"
+
+      _rundone "Hoàn tất! Database $selected_db đã bị xóa sổ."
+      sleep 2
+      exec /etc/wptt/wptt-db-main 1
+    else
+      echo -e "\n${C_GREEN}Đã hủy lệnh xóa. Dữ liệu của sếp vẫn an toàn!${C_RESET}"
+      sleep 2
+    fi
+  else
+    echo -e "\n${C_RED}[!] Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến ${total_db}.${C_RESET}"
+    sleep 1.5
+  fi
 done
-
-# --- CHỐT CHẶN THOÁT HIỂM ---
-[[ "$databaseclear" == "0" || -z "$databaseclear" ]] && exec /etc/wptt/wptt-db-main 1
-
-read -p "CẢNH BÁO: Xác nhận xóa vĩnh viễn database [$databaseclear]? (y/n): " confirm
-
-if [[ "$confirm" == "y" ]]; then
-  UI_STRING="Xóa database $databaseclear và dọn dẹp User"
-  _runing "$UI_STRING"
-
-  echo "Xoá database ${databaseclear}: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-  # 1. Xóa Database
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${databaseclear}\`;"
-
-  # 2. Xóa User đi kèm (Tách hậu tố _dbname thành _username)
-  base_name="${databaseclear%_dbname}"
-  username_to_delete="${base_name}_username"
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${username_to_delete}'@'localhost';"
-
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES;"
-
-  _rundone "$UI_STRING"
-else
-  exec /etc/wptt/wptt-db-main 1
-fi
-
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-db-main 1
