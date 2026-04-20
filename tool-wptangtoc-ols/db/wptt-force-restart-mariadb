@@ -1,0 +1,99 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+
+function huong_dan() {
+  Tính năng Ép buộc khởi động lại MariaDB [Force Restart] là công cụ xử lý sự cố khẩn cấp.
+  Nó được sử dụng khi dịch vụ MariaDB bị treo cứng, kẹt tiến trình [deadlock] hoặc không thể khởi động lại bằng các lệnh thông thường.
+  
+  Cơ chế hoạt động:
+  1. Gửi tín hiệu SIGKILL [-9] để tiêu diệt ngay lập tức mọi tiến trình liên quan đến mysqld/mariadb.
+  2. Dọn dẹp các file rác [.pid, .sock] bị bỏ lại do tiến trình chết đột ngột.
+  3. Khởi động lại dịch vụ MariaDB một cách sạch sẽ.
+  
+  Lưu ý: Chỉ nên sử dụng khi hệ thống thực sự bị treo, vì việc ép kill tiến trình đang ghi dữ liệu có thể mang rủi ro nhỏ về tính toàn vẹn dữ liệu.
+}
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+clear
+echo ""
+print_border_top "$C_RED"
+center_text "${C_BOLD_WHITE}XỬ LÝ SỰ CỐ: ÉP BUỘC KHỞI ĐỘNG LẠI MARIADB${C_RESET}" "$C_RED"
+print_border_mid "$C_RED"
+left_text "${C_YELLOW}Lưu ý: Tính năng này dùng 'pkill -9' để tiêu diệt các tiến trình${C_RESET}" 2 "$C_RED"
+left_text "${C_YELLOW}MariaDB đang bị treo cứng. Chỉ nên dùng khi restart bình${C_RESET}" 2 "$C_RED"
+left_text "${C_YELLOW}thường bị lỗi (VD: Job for mariadb.service failed).${C_RESET}" 2 "$C_RED"
+print_border_bot "$C_RED"
+echo ""
+
+# ==============================================================================
+# XÁC NHẬN TRƯỚC KHI "RA TAY"
+# ==============================================================================
+if ! wptt_xac_nhan "Sếp có chắc chắn muốn ÉP BUỘC TIÊU DIỆT (Kill) tiến trình MariaDB không?" "" "" "Đồng ý (Diệt và Restart)" "Hủy bỏ"; then
+  echo -e "\n${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+  exec /usr/bin/wptangtoc 1
+  exit 0
+fi
+
+echo ""
+
+# ==============================================================================
+# TIẾN HÀNH TIÊU DIỆT VÀ DỌN DẸP
+# ==============================================================================
+_runing "Đang ngừng dịch vụ MariaDB (để tránh tự mọc lại)..."
+systemctl stop mariadb.service >/dev/null 2>&1
+_rundone "Đang ngừng dịch vụ MariaDB (để tránh tự mọc lại)..."
+
+_runing "Đang tiêu diệt (Kill) bạo lực các tiến trình bị kẹt..."
+# Dùng cả pkill và killall để đảm bảo không sót bất kỳ node nào
+pkill -9 mysqld >/dev/null 2>&1
+pkill -9 mariadb >/dev/null 2>&1
+killall -9 mysqld >/dev/null 2>&1
+killall -9 mariadb >/dev/null 2>&1
+_rundone "Đang tiêu diệt (Kill) bạo lực các tiến trình bị kẹt..."
+
+_runing "Đang dọn dẹp các file rác (.pid, .sock) còn sót lại..."
+# Việc dọn dẹp này cực kỳ quan trọng, nếu file .sock bị kẹt, DB không bao giờ start được
+rm -f /var/run/mysqld/mysqld.pid >/dev/null 2>&1
+rm -f /var/run/mysqld/mysqld.sock >/dev/null 2>&1
+rm -f /var/lib/mysql/mysql.sock >/dev/null 2>&1
+rm -f /tmp/mysql.sock >/dev/null 2>&1
+_rundone "Đang dọn dẹp các file rác (.pid, .sock) còn sót lại..."
+
+# ==============================================================================
+# KHỞI ĐỘNG LẠI
+# ==============================================================================
+_runing "Đang mồi lại dịch vụ MariaDB..."
+systemctl start mariadb.service >/dev/null 2>&1
+
+if systemctl is-active mariadb.service >/dev/null 2>&1; then
+  _rundone "Mồi dịch vụ MariaDB thành công!"
+  print_border_top "$C_GREEN"
+  center_text "${C_BOLD_WHITE}XỬ LÝ SỰ CỐ THÀNH CÔNG${C_RESET}" "$C_GREEN"
+  print_border_mid "$C_GREEN"
+  left_text "Dịch vụ MariaDB đã được hồi sinh và đang hoạt động tốt." 2 "$C_GREEN"
+  print_border_bot "$C_GREEN"
+else
+  _runloi "Mồi dịch vụ MariaDB thất bại!"
+  echo ""
+  print_border_top "$C_RED"
+  center_text "${C_BOLD_WHITE}LỖI NGHIÊM TRỌNG${C_RESET}" "$C_RED"
+  print_border_mid "$C_RED"
+  left_text "Không thể khởi động lại MariaDB. Nguyên nhân thường gặp:" 2 "$C_RED"
+  left_text "1. Cấu hình file my.cnf đang bị lỗi cú pháp." 2 "$C_RED"
+  left_text "2. Dung lượng phân vùng ổ cứng (Disk) đã đầy 100%." 2 "$C_RED"
+  left_text "" 2 "$C_RED"
+  left_text "Vui lòng gõ lệnh: ${C_YELLOW}journalctl -xeu mariadb.service${C_RESET} để xem." 2 "$C_RED"
+  print_border_bot "$C_RED"
+fi
+
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
