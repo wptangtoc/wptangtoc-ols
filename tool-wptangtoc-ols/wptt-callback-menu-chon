@@ -6,7 +6,7 @@
 # ==============================================================================
 # 1. KHỞI TẠO BIẾN & MÀU SẮC
 # ==============================================================================
-. /etc/wptt/echo-color
+. /etc/wptt/echo-color 2>/dev/null
 C_RED='\033[1;31m'
 C_GREEN='\033[1;32m'
 C_YELLOW='\033[1;33m'
@@ -14,17 +14,23 @@ C_CYAN='\033[1;36m'
 C_BOLD_WHITE='\033[1;37m'
 C_RESET='\033[0m'
 
-stty iutf8
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null
+stty iutf8 2>/dev/null
 PS3=""
 
+# ==============================================================================
+# 2. XÁC ĐỊNH MENU CLI VÀ ROUTE ĐIỀU HƯỚNG
+# ==============================================================================
 cli_menu_num=$(awk '/^[[:space:]]*[0-9]+\)/ {num=$1} /terminal-cli/ {print num; exit}' /usr/bin/wptangtoc 2>/dev/null | tr -d ')')
 
-# Nếu tìm thấy thì trừ 1 (vì menu hiển thị thường là n+1 so với index array)
-# Nếu không tìm thấy thì mặc định là 36
+# [ĐÃ FIX LỖI THIẾU FI]
 if [[ -n "$cli_menu_num" ]]; then
-    cli_menu_num=$((cli_menu_num + 1))
-# ==============================================================================
-# Phân biệt đang chạy ở Menu Chính hay Menu Con để Route lệnh thoát (Phím 0) cho đúng
+  cli_menu_num=$((cli_menu_num + 1))
+else
+  cli_menu_num="36"
+fi
+
+# Phân biệt đang chạy ở Menu Chính hay Menu Con
 if [[ "$0" == *"/wptangtoc" || "$0" == *"wptangtoc" || "$MENU_TITLE" == *"WPTANGTOC OLS"* ]]; then
   TEXT_BACK="Quay về Bảng theo dõi trạng thái"
   ROUTE_BACK="/etc/wptt/wptt-status2"
@@ -44,57 +50,60 @@ trap '
 ' SIGINT SIGTERM SIGQUIT
 
 # ==============================================================================
-# 4. CÁC HÀM VẼ GIAO DIỆN (ÉP SÁT LỀ TRÁI THEO YÊU CẦU UX)
+# 4. ENGINE VẼ GIAO DIỆN (NATIVE BASH - SIÊU TỐC ĐỘ, KHÔNG SUBSHELL)
 # ==============================================================================
 MARGIN=""
-calc_margin() {
-  MARGIN="" # Đã vô hiệu hóa tính năng tự động căn giữa để đảm bảo đồng bộ với các tính năng cũ
-}
-
-truncate_text() {
-  local text="$1"
-  local max_len=$2
-  [[ ${#text} -gt $max_len ]] && echo "${text:0:$((max_len-2))}.." || echo "$text"
-}
-
-print_item() {
-  local num="$1"
-  local text="$2"
-  [[ -z "$text" ]] && { echo "|"; return; }
-
-  if [[ -z "$num" ]]; then
-    local plain=$(truncate_text "▶ $text" 36)
-    local colored="${C_YELLOW}▶ ${C_BOLD_WHITE}${plain:2}${C_RESET}"
-    echo "$plain|$colored"
-  else
-    local plain=$(truncate_text "$(printf "[%2s] %s" "$num" "$text")" 36)
-    local item_text="${plain:5}"
-    local colored="${C_GREEN}[$(printf "%2s" "$num")]${C_RESET} ${C_CYAN}${item_text}${C_RESET}"
-    echo "$plain|$colored"
-  fi
-}
+calc_margin() { MARGIN=""; }
 
 print_row() {
-  local l_num="$1"; local l_text="$2"; local r_num="$3"; local r_text="$4"
-  local l_data=$(print_item "$l_num" "$l_text")
-  local l_plain="${l_data%|*}"; local l_color="${l_data#*|}"
-  local pad_l=$(( 37 - ${#l_plain} )); [[ $pad_l -lt 0 ]] && pad_l=0
+  local l_num="$1" l_text="$2" r_num="$3" r_text="$4"
+  local c1_plain="" c1_color="" c2_plain="" c2_color=""
 
-  local r_plain=""; local r_color=""; local pad_r=37
-  if [[ -n "$r_text" ]]; then
-    local r_data=$(print_item "$r_num" "$r_text")
-    r_plain="${r_data%|*}"; r_color="${r_data#*|}"
-    pad_r=$(( 37 - ${#r_plain} )); [[ $pad_r -lt 0 ]] && pad_r=0
+  # --- Cột trái ---
+  if [[ -n "$l_text" ]]; then
+    if [[ -z "$l_num" ]]; then
+      c1_plain="  ▶ ${l_text}"
+      (( ${#c1_plain} > 36 )) && c1_plain="${c1_plain:0:34}.."
+      c1_color="  ${C_YELLOW}▶ ${C_BOLD_WHITE}${c1_plain:4}${C_RESET}"
+    else
+      local num_fmt; printf -v num_fmt "%2s" "$l_num"
+      c1_plain="  [$num_fmt] ${l_text}"
+      (( ${#c1_plain} > 36 )) && c1_plain="${c1_plain:0:34}.."
+      c1_color="  ${C_GREEN}[$num_fmt]${C_RESET} ${C_CYAN}${c1_plain:7}${C_RESET}"
+    fi
   fi
-  printf "${MARGIN}${C_CYAN}│${C_RESET} %b%*s  %b%*s ${C_CYAN}│${C_RESET}\n" "$l_color" "$pad_l" "" "$r_color" "$pad_r" ""
+
+  # --- Cột phải ---
+  if [[ -n "$r_text" ]]; then
+    if [[ -z "$r_num" ]]; then
+      c2_plain="  ▶ ${r_text}"
+      (( ${#c2_plain} > 36 )) && c2_plain="${c2_plain:0:34}.."
+      c2_color="  ${C_YELLOW}▶ ${C_BOLD_WHITE}${c2_plain:4}${C_RESET}"
+    else
+      local num_fmt; printf -v num_fmt "%2s" "$r_num"
+      c2_plain="  [$num_fmt] ${r_text}"
+      (( ${#c2_plain} > 36 )) && c2_plain="${c2_plain:0:34}.."
+      c2_color="  ${C_GREEN}[$num_fmt]${C_RESET} ${C_CYAN}${c2_plain:7}${C_RESET}"
+    fi
+  fi
+
+  # Tính toán đệm (Padding) chính xác
+  local pad_l=$(( 37 - ${#c1_plain} )); [[ $pad_l -lt 0 ]] && pad_l=0
+  local pad_r=$(( 37 - ${#c2_plain} )); [[ $pad_r -lt 0 ]] && pad_r=0
+
+  printf "${MARGIN}${C_CYAN}│${C_RESET} %b%*s  %b%*s ${C_CYAN}│${C_RESET}\n" "$c1_color" "$pad_l" "" "$c2_color" "$pad_r" ""
 }
 
 print_header() {
   local text="${1:-TRUNG TÂM QUẢN TRỊ WPTANGTOC OLS}"
-  local inner=78
-  local p_left=$(( (inner - ${#text}) / 2 ))
-  local p_right=$(( inner - ${#text} - p_left ))
-  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_BOLD_WHITE}%s${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
+  # Đo UTF-8 an toàn bằng parameter expansion
+  local clean_text=$(echo -en "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=$(LC_ALL=C.UTF-8 printf "%s" "$clean_text" | wc -m | tr -d ' ' 2>/dev/null)
+  [[ -z "$len" || "$len" == "0" ]] && len=${#clean_text}
+  
+  local p_left=$(( (78 - len) / 2 ))
+  local p_right=$(( 78 - len - p_left ))
+  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_BOLD_WHITE}%b${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
 }
 
 print_spacer() { printf "${MARGIN}${C_CYAN}│%78s│${C_RESET}\n" ""; }
@@ -121,10 +130,10 @@ for opt in "${options[@]}"; do [[ "$opt" != *"───"* ]] && ((total_valid_op
 
 while true; do
   calc_margin 
-  # clear
+  clear # Đã mở lại clear để UI không bị trôi
   
   echo -e "${MARGIN}${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  print_header "$MENU_TITLE"
+  print_header "${MENU_TITLE:-TRUNG TÂM QUẢN TRỊ WPTANGTOC OLS}"
   echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   print_spacer
   
@@ -139,7 +148,12 @@ while true; do
   
   plain_foot=" Nhập số (1-$total_valid_opts) | [00] Tìm kiếm | [0] $TEXT_BACK "
   color_foot=" ${C_YELLOW}Nhập số (1-$total_valid_opts)${C_RESET} | ${C_GREEN}[00] Tìm kiếm${C_RESET} | ${C_RED}[0] $TEXT_BACK${C_RESET} "
-  p_l=$(( (78 - ${#plain_foot}) / 2 )); p_r=$(( 78 - ${#plain_foot} - p_l ))
+  
+  # Đếm UTF-8 cho dòng footer để căn giữa chuẩn tuyệt đối
+  len_foot=$(LC_ALL=C.UTF-8 printf "%s" "$plain_foot" | wc -m | tr -d ' ' 2>/dev/null)
+  [[ -z "$len_foot" || "$len_foot" == "0" ]] && len_foot=${#plain_foot}
+  
+  p_l=$(( (78 - len_foot) / 2 )); p_r=$(( 78 - len_foot - p_l ))
   printf "${MARGIN}${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$p_l" "" "$color_foot" "$p_r" ""
   
   echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -153,10 +167,12 @@ while true; do
   read -r choice
   echo -en "\033[2B"
 
-  # ĐIỀU HƯỚNG THEO NGỮ CẢNH (CONTEXT-AWARE)
+  # ============================================================================
+  # ĐIỀU HƯỚNG THEO NGỮ CẢNH
+  # ============================================================================
   if [[ "$choice" == "0" ]]; then
     echo -e "\n${MARGIN}${C_YELLOW}Đang $TEXT_BACK...${C_RESET}"
-    exec $ROUTE_BACK
+    exec "$ROUTE_BACK" 1
     exit 0
   
   elif [[ "$choice" == "00" ]]; then
@@ -207,25 +223,34 @@ while true; do
   elif [[ -n "$choice" ]]; then
     f_word="${choice%% *}"
     if command -v "$f_word" >/dev/null 2>&1; then
-# ==============================================================================
-# BOX CẢNH BÁO: KHI NGƯỜI DÙNG GÕ LỆNH TRỰC TIẾP
-# ==============================================================================
-echo -e "${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-# Dòng 1: Nhận diện hành động
-text_nhan_dien="Sếp đang muốn chạy lệnh CLI: $choice"
-left_text "${C_YELLOW}${text_nhan_dien}${C_RESET}"
-text_huong_dan="Để gõ lệnh CLI, vui lòng vào Menu chính ➜ $cli_menu_num (Terminal) hoặc nhấn Ctrl + C"
-left_text "${C_YELLOW}${text_huong_dan}${C_RESET}"
-
-echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-
-# Nút bấm quay lại tinh tế hơn
-echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Menu...${C_RESET}"
-read -r dummy
-
+      
+      # [ĐÃ FIX LỖI KHÔNG TÌM THẤY HÀM LEFT_TEXT BẰNG UI MỚI]
+      echo -e "\n${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      
+      text_nhan_dien="Sếp đang muốn chạy lệnh CLI: $choice"
+      pad1=$(( 76 - ${#text_nhan_dien} )); [[ $pad1 -lt 0 ]] && pad1=0
+      echo -e "${C_YELLOW}│${C_RESET}  ${C_BOLD_WHITE}${text_nhan_dien}${C_RESET}$(printf '%*s' "$pad1" "")${C_YELLOW}│${C_RESET}"
+      
+      text_huong_dan="Để gõ lệnh CLI, vào Menu ➜ $cli_menu_num (Terminal) hoặc nhấn Ctrl + C"
+      # Xử lý UTF-8 cho dòng này để không bị lồi viền
+      len_hd=$(LC_ALL=C.UTF-8 printf "%s" "$text_huong_dan" | wc -m | tr -d ' ' 2>/dev/null)
+      [[ -z "$len_hd" || "$len_hd" == "0" ]] && len_hd=${#text_huong_dan}
+      pad2=$(( 76 - len_hd )); [[ $pad2 -lt 0 ]] && pad2=0
+      echo -e "${C_YELLOW}│${C_RESET}  ${C_CYAN}${text_huong_dan}${C_RESET}$(printf '%*s' "$pad2" "")${C_YELLOW}│${C_RESET}"
+      
+      echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      
+      echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Menu...${C_RESET}"
+      read -r dummy
     else
-      echo -e "\n${MARGIN}${C_RED}[!] Lựa chọn không hợp lệ. Hãy nhập từ 1 đến $total_valid_opts.${C_RESET}"
-    sleep 1.5
+      echo -e "\n${MARGIN}${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      err_msg="[!] Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến ${total_valid_opts}."
+      len_err=$(LC_ALL=C.UTF-8 printf "%s" "$err_msg" | wc -m | tr -d ' ' 2>/dev/null)
+      [[ -z "$len_err" || "$len_err" == "0" ]] && len_err=${#err_msg}
+      pad_err=$(((78 - len_err) / 2))
+      echo -e "${MARGIN}${C_RED}│${C_RESET}$(printf '%*s' "$pad_err" "")${C_BOLD_WHITE}${err_msg}${C_RESET}$(printf '%*s' "$((78 - len_err - pad_err))" "")${C_RED}│${C_RESET}"
+      echo -e "${MARGIN}${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      sleep 1.5
     fi
   fi
 done
