@@ -14,45 +14,125 @@ function huong_dan() {
 . /etc/wptt/core-functions 2>/dev/null
 
 clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ DOMAIN ➜ THIẾT LẬP PARKED / ALIAS DOMAIN${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+print_border_top "$C_CYAN"
+center_text "${C_YELLOW}QUẢN LÝ DOMAIN ➜ THIẾT LẬP PARKED / ALIAS DOMAIN${C_RESET}" "$C_CYAN"
+print_border_bot "$C_CYAN"
 
 . /etc/wptt/tenmien
-lua_chon_NAME "Gốc muốn alias vào"
+lua_chon_NAME "Gốc muốn gán Alias vào"
 domain="$NAME"
 path_conf="/etc/wptt/vhost/.$domain.conf"
 
-if [[ ! -f "$path_conf" || "$NAME" == "0" ]]; then
+if [[ ! -f "$path_conf" || "$NAME" == "0" || -z "$NAME" ]]; then
   echo -e "\n${C_RED}❌ Lỗi: Website không tồn tại trên hệ thống hoặc sếp chưa chọn.${C_RESET}"
   sleep 2
   [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
   exit
 fi
 
-# ==============================================================================
-# 3. NHẬP DOMAIN ALIAS MỚI
-# ==============================================================================
-echo -e "\n${C_CYAN}➜ Nhập tên miền mới sếp muốn thêm Alias (Ví dụ: alias.com):${C_RESET}"
-read -p "   Lựa chọn [0 để thoát]: " NAME2
-
-if [[ "$NAME2" == "0" || -z "$NAME2" ]]; then
+vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+if [[ ! -f "$vhost_conf" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: File cấu hình Virtual Host của $domain không tồn tại!${C_RESET}"
+  sleep 2
   [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
   exit
 fi
 
-# Kiểm tra định dạng domain
-if [[ "$NAME2" != *.* ]]; then
-  echo -e "${C_RED}❌ Lỗi: Tên miền '$NAME2' không đúng định dạng.${C_RESET}"
+# ==============================================================================
+# 2. HIỂN THỊ DANH SÁCH ALIAS HIỆN TẠI (NẾU CÓ)
+# ==============================================================================
+current_aliases=$(grep -E "^[[:space:]]*vhAliases" "$vhost_conf" | awk '{$1=""; print $0}' | sed 's/^[[:space:]]*//' | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')
+
+echo ""
+if [[ -n "$current_aliases" ]]; then
+  print_border_top "$C_YELLOW"
+  center_text "${C_BOLD_WHITE}CÁC ALIAS ĐANG HOẠT ĐỘNG TRÊN: $domain${C_RESET}" "$C_YELLOW"
+  print_border_mid "$C_YELLOW"
+  while read -r alias_name; do
+    left_text "➜ ${C_CYAN}$alias_name${C_RESET}" 4 "$C_YELLOW"
+  done <<<"$current_aliases"
+  print_border_bot "$C_YELLOW"
+else
+  print_border_top "$C_YELLOW"
+  center_text "Website $domain hiện chưa có Alias nào." "$C_YELLOW"
+  print_border_bot "$C_YELLOW"
+fi
+
+# ==============================================================================
+# 3. NHẬP VÀ KIỂM TRA DOMAIN ALIAS MỚI (CHỐNG RỦI RO)
+# ==============================================================================
+echo -e "\n${C_CYAN}➜ Nhập tên miền sếp muốn gán làm Alias (Ví dụ: alias.com):${C_RESET}"
+read -p " Lựa chọn [0 = thoát]: " NAME2
+
+if [[ "$NAME2" == "0" || -z "$NAME2" ]]; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+  sleep 1.5
+  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit
+fi
+
+# Chuyển về chữ thường và xóa khoảng trắng thừa
+NAME2=$(echo "$NAME2" | tr '[:upper:]' '[:lower:]' | xargs)
+
+# Rủi ro 1: Sai định dạng domain
+if [[ "$NAME2" != *.* || "$NAME2" == *" "* ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền '$NAME2' không hợp lệ (sai định dạng hoặc chứa khoảng trắng).${C_RESET}"
   sleep 2
   exec "$0" "$1"
 fi
 
-# Kiểm tra xem domain alias đã tồn tại chưa
-if [[ -f "/etc/wptt/vhost/.$NAME2.conf" ]]; then
-  echo -e "${C_RED}❌ Lỗi: Tên miền '$NAME2' đã tồn tại như một website chính thức trên VPS.${C_RESET}"
-  echo -e "${C_YELLOW}Vui lòng xóa website '$NAME2' trước khi gán nó làm Alias.${C_RESET}"
+# Rủi ro 2: Trùng với Domain gốc
+if [[ "$NAME2" == "$domain" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền Alias không được trùng với tên miền gốc ($domain)!${C_RESET}"
+  sleep 2
+  exec "$0" "$1"
+fi
+
+# Rủi ro 3: Trùng với Alias đã có trên chính domain này
+if echo "$current_aliases" | grep -qw "$NAME2"; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền '$NAME2' ĐÃ TỒN TẠI trong danh sách Alias của $domain rồi!${C_RESET}"
+  sleep 2
+  exec "$0" "$1"
+fi
+
+# Rủi ro 4: Domain Alias đã được cài như một Website độc lập (Main Domain)
+if [[ -f "/etc/wptt/vhost/.$NAME2.conf" || -d "/usr/local/lsws/conf/vhosts/$NAME2" ]]; then
+  echo ""
+  print_border_top "$C_RED"
+  center_text "${C_BOLD_WHITE}XUNG ĐỘT HỆ THỐNG${C_RESET}" "$C_RED"
+  print_border_mid "$C_RED"
+  left_text "${C_YELLOW}Tên miền ${C_BOLD_WHITE}$NAME2${C_RESET}${C_YELLOW} đã tồn tại như một Website độc lập.${C_RESET}" 2 "$C_RED"
+  left_text "Không thể gán một website chính làm Alias cho website khác." 2 "$C_RED"
+  left_text "➜ Hướng giải quyết: Vui lòng xóa website '$NAME2' trước." 2 "$C_RED"
+  print_border_bot "$C_RED"
   sleep 3
+  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit
+fi
+
+# Rủi ro 5: Domain Alias đang bị gán (ăn cắp) cho một Website khác trên Server
+_runing "Đang kiểm tra xung đột Alias trên toàn bộ Server..."
+conflict_domain=""
+for vh_file in /usr/local/lsws/conf/vhosts/*/*.conf; do
+  if [[ -f "$vh_file" && "$vh_file" != "$vhost_conf" ]]; then
+    if grep -E "^[[:space:]]*vhAliases" "$vh_file" | grep -qw "$NAME2"; then
+      conflict_domain=$(basename $(dirname "$vh_file"))
+      break
+    fi
+  fi
+done
+_rundone "Đang kiểm tra xung đột Alias trên toàn bộ Server..."
+
+if [[ -n "$conflict_domain" ]]; then
+  echo ""
+  print_border_top "$C_RED"
+  center_text "${C_BOLD_WHITE}XUNG ĐỘT ALIAS XUYÊN VHOST${C_RESET}" "$C_RED"
+  print_border_mid "$C_RED"
+  left_text "${C_YELLOW}Tên miền ${C_BOLD_WHITE}$NAME2${C_RESET}${C_YELLOW} đang là Alias của website: ${C_BOLD_WHITE}$conflict_domain${C_RESET}" 2 "$C_RED"
+  left_text "Một Alias không thể phục vụ cùng lúc 2 ông chủ (2 website)." 2 "$C_RED"
+  left_text "➜ Hướng giải quyết: Hãy xóa Alias này bên website '$conflict_domain' trước." 2 "$C_RED"
+  print_border_bot "$C_RED"
+  sleep 4
   [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
   exit
 fi
@@ -62,22 +142,28 @@ fi
 # ==============================================================================
 xacnhan_da_tro_dns='0'
 if [[ -f "/etc/letsencrypt/live/$domain/cert.pem" ]]; then
-  if wptt_xac_nhan "Sếp có muốn tự động cài đặt SSL cho Alias Domain này không?" "Website gốc đã có SSL." "Sếp cần trỏ IP trước khi thực hiện." "Có, cài đặt luôn" "Không, để sau"; then
-    
+  echo ""
+  if wptt_xac_nhan "Sếp có muốn tự động cài đặt SSL cho Alias Domain này không?" "Website gốc đã có SSL." "Sếp cần trỏ IP bản ghi A cho Alias trước khi thực hiện." "Có, cài đặt luôn" "Không, để sau"; then
+
     # Kiểm tra IP
     checkdns=$(host "$NAME2" | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
     [[ -z "$checkdns" ]] && checkdns=$(nslookup "$NAME2" 2>/dev/null | grep Address | tail -n1 | awk '{print $2}')
-    
+
     ip_vps=$(curl -s --connect-timeout 5 ipv4.icanhazip.com)
-    
+
     if [[ "$checkdns" != "$ip_vps" ]]; then
-      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}DNS CHƯA TRỎ VỀ VPS${C_RESET}"
-      center_text "Domain: ${C_YELLOW}$NAME2${C_RESET} | IP Hiện tại: ${C_RED}${checkdns:-Không có}${C_RESET}"
-      center_text "Vui lòng trỏ về IP VPS: ${C_GREEN}$ip_vps${C_RESET}"
-      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-      echo -e "\n${C_YELLOW}Cài đặt SSL sẽ bị bỏ qua. Sếp có thể cài lại sau khi trỏ DNS.${C_RESET}"
-      sleep 5
+      echo ""
+      print_border_top "$C_RED"
+      center_text "${C_BOLD_WHITE}DNS CHƯA TRỎ VỀ VPS${C_RESET}" "$C_RED"
+      print_border_mid "$C_RED"
+      left_text "Alias mới     : ${C_YELLOW}$NAME2${C_RESET}" 2 "$C_RED"
+      left_text "IP Hiện tại   : ${C_RED}${checkdns:-Không xác định}${C_RESET}" 2 "$C_RED"
+      left_text "IP Yêu cầu    : ${C_GREEN}$ip_vps${C_RESET} (IP của VPS này)" 2 "$C_RED"
+      print_border_mid "$C_RED"
+      left_text "${C_YELLOW}Cài đặt SSL sẽ bị bỏ qua. Sếp có thể chạy lại lệnh SSL sau${C_RESET}" 2 "$C_RED"
+      left_text "${C_YELLOW}khi đã trỏ DNS thành công.${C_RESET}" 2 "$C_RED"
+      print_border_bot "$C_RED"
+      sleep 4
     else
       xacnhan_da_tro_dns='1'
     fi
@@ -87,51 +173,61 @@ fi
 # ==============================================================================
 # 5. THỰC THI CẤU HÌNH OPENLITESPEED
 # ==============================================================================
+echo ""
 _runing "Đang cấu hình Alias Domain $NAME2 trỏ về $domain..."
 
-# 1. Cấu hình Listener toàn cục
-sed -i "s/$domain $domain/&, $NAME2/g" /usr/local/lsws/conf/httpd_config.conf
+# 1. Cấu hình Listener toàn cục (An toàn hóa bằng regex map đúng tên miền)
+# Thay vì thay thế bừa bãi, ta chỉ tiêm Alias vào dòng chứa đúng Domain gốc
+sed -i -E "s/(map[[:space:]]+$domain[[:space:]]+$domain)/\1, $NAME2/g" /usr/local/lsws/conf/httpd_config.conf
 
 # 2. Cấu hình Virtual Host
-vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
-if grep -q "vhAliases" "$vhost_conf"; then
-  sed -i "/^ *vhAliases/ s/$/, $NAME2/" "$vhost_conf"
+if grep -E -q "^[[:space:]]*vhAliases" "$vhost_conf"; then
+  # Nếu đã có dòng vhAliases thì append thêm vào cuối
+  sed -i -E "/^[[:space:]]*vhAliases/ s/$/, $NAME2/" "$vhost_conf"
 else
+  # Nếu chưa có thì tạo mới ngay dưới vhDomain
   sed -i "/vhDomain/a vhAliases                     $NAME2" "$vhost_conf"
 fi
 
-# 3. Restart OLS
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-
 # 4. Cài đặt SSL nếu DNS đã trỏ
 if [[ "$xacnhan_da_tro_dns" == "1" ]]; then
+  # 3. Restart OLS để chuẩn bị cài ssl để xác thực
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  sleep 1
+
   domain_alias_list="$domain,"
-  domain_alias_list+=$(grep "vhAliases" "$vhost_conf" | awk '{$1=""; print $0}' | sed 's/ //g')
-  
+  domain_alias_list+=$(grep -E "^[[:space:]]*vhAliases" "$vhost_conf" | awk '{$1=""; print $0}' | sed 's/ //g')
+
   _runing "Đang tiến hành cấp chứng chỉ SSL mở rộng: $domain_alias_list"
   docroot=$(grep 'docRoot' "$vhost_conf" | awk '{print $2}')
-  
+
   certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --webroot -w "${docroot}" --force-renewal --expand -d "$domain_alias_list" >/dev/null 2>&1
   _rundone "Hoàn tất cài đặt SSL."
 fi
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+_rundone "Đang cấu hình Alias Domain $NAME2 trỏ về $domain..."
 
 # ==============================================================================
 # 6. THÔNG BÁO KẾT QUẢ
 # ==============================================================================
-echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}THIẾT LẬP HOÀN TẤT!${C_RESET}"
-center_text "Domain Alias: ${C_YELLOW}$NAME2${C_RESET} ➜ Trỏ về: ${C_GREEN}$domain${C_RESET}"
-echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+print_border_top "$C_GREEN"
+center_text "${C_BOLD_WHITE}THIẾT LẬP ALIAS HOÀN TẤT!${C_RESET}" "$C_GREEN"
+print_border_mid "$C_GREEN"
+left_text "Tên miền bí danh : ${C_YELLOW}$NAME2${C_RESET}" 2 "$C_GREEN"
+left_text "Website gốc      : ${C_GREEN}$domain${C_RESET}" 2 "$C_GREEN"
+print_border_bot "$C_GREEN"
 
 # Kiểm tra lại DNS một lần nữa để nhắc nhở người dùng
 final_check=$(host "$NAME2" | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 vps_ip=$(curl -s --connect-timeout 5 ipv4.icanhazip.com)
 
 if [[ "$final_check" != "$vps_ip" ]]; then
-  echo -e "${C_YELLOW}Lưu ý: Domain $NAME2 chưa được trỏ IP.${C_RESET}"
-  echo -e "   Vui lòng trỏ DNS bản ghi ${C_CYAN}A${C_RESET} về: ${C_BOLD_WHITE}$vps_ip${C_RESET} để website hoạt động."
+  print_border_top "$C_YELLOW"
+  left_text "${C_BOLD_WHITE}Lưu ý: Domain $NAME2 hiện chưa trỏ đúng IP!${C_RESET}" 2 "$C_YELLOW"
+  left_text "Vui lòng đăng nhập vào trang quản lý DNS của tên miền," 2 "$C_YELLOW"
+  left_text "tạo bản ghi ${C_CYAN}A${C_RESET} trỏ về IP: ${C_BOLD_WHITE}$vps_ip${C_RESET} để website hoạt động." 2 "$C_YELLOW"
+  print_border_bot "$C_YELLOW"
 fi
 
 [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
