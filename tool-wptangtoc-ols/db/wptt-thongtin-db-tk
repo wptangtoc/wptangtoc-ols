@@ -1,4 +1,8 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng Xem thông tin tài khoản username database cho phép bạn xem chi tiết về các tài khoản người dùng [username] đã được tạo để truy cập và tương tác với cơ sở dữ liệu [database] trên máy chủ MariaDB.
@@ -19,19 +23,29 @@ function huong_dan() {
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_database} ➜ ${thong_tin_tai_khoan_database}${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+echo ""
+print_border_top "$C_CYAN"
+center_text "${C_YELLOW}${quan_ly_database} ➜ ${thong_tin_tai_khoan_database}${C_RESET}" "$C_CYAN"
+print_border_bot "$C_CYAN"
+echo ""
+
+if [[ "$1" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
+fi
+
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối xem tài khoản Mariadb."
 
 # ==============================================================================
-# HÀM MENU LỌC TÊN MIỀN & TÀI KHOẢN ROOT (UX BO CONG)
+# HÀM MENU LỌC TÊN MIỀN & TÀI KHOẢN ROOT (ĐÃ UPGRADE CHUẨN 78 KÝ TỰ)
 # ==============================================================================
 function lua_chon_NAME() {
   unset NAME selects
   selects=("root|[Tài khoản quản trị cao nhất]")
-  local box_inner_width=${box_inner_width:-71}
+  local box_inner_width=78
 
   if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
@@ -52,12 +66,7 @@ function lua_chon_NAME() {
   local pad_r=$((box_inner_width - len - 2))
   [[ $pad_r -lt 0 ]] && pad_r=0
   echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
-
-  local line_len=$((len + 3))
-  local pad_line_r=$((box_inner_width - line_len))
-  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
-  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
-  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
   local i=1
   for item in "${selects[@]}"; do
@@ -134,32 +143,89 @@ lua_chon_NAME
 echo "Xem thông tin tài khoản database $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 # ==============================================================================
+# HÀM KIỂM TRA THỰC TẾ DATABASE TRÊN MARIADB (TRẠM KIỂM LÂM)
+# ==============================================================================
+# Tạo file cấu hình tạm bảo mật để query vào DB mà không lộ pass trên terminal
+TEMP_CNF_ROOT=$(mktemp)
+chmod 600 "$TEMP_CNF_ROOT"
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+host=localhost
+EOF
+trap "rm -f $TEMP_CNF_ROOT" EXIT
+
+check_real_database_status() {
+  local db_name="$1"
+  local db_user="$2"
+  local db_exists='0'
+  local user_exists='0'
+
+  if [[ -n "$db_name" ]]; then
+    db_exists=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -sse "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = '$db_name');" 2>/dev/null)
+  fi
+  if [[ -n "$db_user" ]]; then
+    user_exists=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -sse "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user = '$db_user');" 2>/dev/null)
+  fi
+
+  echo "$db_exists|$user_exists"
+}
+
+# ==============================================================================
 # IN BÁO CÁO THÔNG TIN DATABASE
 # ==============================================================================
 echo ""
 
 if [[ "$NAME" == 'root' ]]; then
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_RED}THÔNG TIN TÀI KHOẢN DATABASE ROOT (CAO NHẤT)${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Root Username : ${C_RED}$database_admin_username${C_RESET}" 2
-  left_text "Root Password : ${C_YELLOW}$database_admin_password${C_RESET}" 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "${C_YELLOW}LƯU Ý: Tuyệt đối không chia sẻ thông tin này cho bất kỳ ai!${C_RESET}" 2
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  print_border_top "$C_RED"
+  center_text "${C_BOLD_WHITE}THÔNG TIN TÀI KHOẢN DATABASE ROOT (CAO NHẤT)${C_RESET}" "$C_RED"
+  print_border_mid "$C_RED"
+  left_text "Root Username : ${C_BOLD_WHITE}$database_admin_username${C_RESET}" 2 "$C_RED"
+  left_text "Root Password : ${C_YELLOW}$database_admin_password${C_RESET}" 2 "$C_RED"
+  print_border_mid "$C_RED"
+  left_text "${C_YELLOW}LƯU Ý: Tuyệt đối không chia sẻ thông tin này cho bất kỳ ai!${C_RESET}" 2 "$C_RED"
+  print_border_bot "$C_RED"
+  echo ""
 else
   unset DB_Password_web DB_User_web DB_Name_web subfolder_su_dung
   . "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null
 
   if [[ -n "$DB_User_web" && -n "$DB_Password_web" ]]; then
-    echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}THÔNG TIN DATABASE WEBSITE${C_RESET}"
-    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Website       : ${C_YELLOW}$NAME${C_RESET}" 2
-    left_text "DatabaseName  : ${C_GREEN}$DB_Name_web${C_RESET}" 2
-    left_text "Username      : ${C_GREEN}$DB_User_web${C_RESET}" 2
-    left_text "Password      : ${C_YELLOW}$DB_Password_web${C_RESET}" 2
-    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    # KIỂM CHỨNG THỰC TẾ
+    status=$(check_real_database_status "$DB_Name_web" "$DB_User_web")
+    db_exists=$(echo "$status" | cut -d'|' -f1)
+    user_exists=$(echo "$status" | cut -d'|' -f2)
+
+    has_error=0
+    st_db="${C_GREEN}[HOẠT ĐỘNG TỐT]${C_RESET}"
+    st_user="${C_GREEN}[HOẠT ĐỘNG TỐT]${C_RESET}"
+    box_color="$C_GREEN"
+    box_title="${C_BOLD_WHITE}THÔNG TIN DATABASE WEBSITE${C_RESET}"
+
+    if [[ "$db_exists" == "0" ]]; then
+      st_db="${C_RED}[CẢNH BÁO: ĐÃ BỊ XÓA LÉN]${C_RESET}"
+      has_error=1
+    fi
+    if [[ "$user_exists" == "0" ]]; then
+      st_user="${C_RED}[CẢNH BÁO: ĐÃ BỊ XÓA LÉN]${C_RESET}"
+      has_error=1
+    fi
+
+    if [[ $has_error -eq 1 ]]; then
+      box_color="$C_RED"
+      box_title="${C_BOLD_WHITE}LỖI ĐỒNG BỘ DATABASE WEBSITE${C_RESET}"
+    fi
+
+    print_border_top "$box_color"
+    center_text "$box_title" "$box_color"
+    print_border_mid "$box_color"
+    left_text "Website       : ${C_YELLOW}$NAME${C_RESET}" 2 "$box_color"
+    left_text "DatabaseName  : ${C_CYAN}$DB_Name_web${C_RESET} $st_db" 2 "$box_color"
+    left_text "Username      : ${C_CYAN}$DB_User_web${C_RESET} $st_user" 2 "$box_color"
+    left_text "Password      : ${C_YELLOW}$DB_Password_web${C_RESET}" 2 "$box_color"
+    print_border_bot "$box_color"
+    echo ""
   fi
 
   # Xử lý thông tin Subfolder (Nếu có)
@@ -169,19 +235,46 @@ else
       unset DB_Password_web DB_User_web DB_Name_web domain thumuc
       . "$sub_file" 2>/dev/null
 
-      echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}THÔNG TIN DATABASE SUB-FOLDER${C_RESET}"
-      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "Website (Sub) : ${C_YELLOW}$domain/$thumuc${C_RESET}" 2
-      left_text "DatabaseName  : ${C_CYAN}$DB_Name_web${C_RESET}" 2
-      left_text "Username      : ${C_CYAN}$DB_User_web${C_RESET}" 2
-      left_text "Password      : ${C_YELLOW}$DB_Password_web${C_RESET}" 2
-      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      # KIỂM CHỨNG THỰC TẾ SUBFOLDER
+      status_sub=$(check_real_database_status "$DB_Name_web" "$DB_User_web")
+      db_exists_sub=$(echo "$status_sub" | cut -d'|' -f1)
+      user_exists_sub=$(echo "$status_sub" | cut -d'|' -f2)
+
+      has_error_sub=0
+      st_db_sub="${C_GREEN}[HOẠT ĐỘNG TỐT]${C_RESET}"
+      st_user_sub="${C_GREEN}[HOẠT ĐỘNG TỐT]${C_RESET}"
+      box_color_sub="$C_CYAN"
+      box_title_sub="${C_BOLD_WHITE}THÔNG TIN DATABASE SUB-FOLDER${C_RESET}"
+
+      if [[ "$db_exists_sub" == "0" ]]; then
+        st_db_sub="${C_RED}[CẢNH BÁO: ĐÃ BỊ XÓA LÉN]${C_RESET}"
+        has_error_sub=1
+      fi
+      if [[ "$user_exists_sub" == "0" ]]; then
+        st_user_sub="${C_RED}[CẢNH BÁO: ĐÃ BỊ XÓA LÉN]${C_RESET}"
+        has_error_sub=1
+      fi
+
+      if [[ $has_error_sub -eq 1 ]]; then
+        box_color_sub="$C_RED"
+        box_title_sub="${C_BOLD_WHITE}LỖI ĐỒNG BỘ DATABASE SUB-FOLDER${C_RESET}"
+      fi
+
+      print_border_top "$box_color_sub"
+      center_text "$box_title_sub" "$box_color_sub"
+      print_border_mid "$box_color_sub"
+      left_text "Website (Sub) : ${C_YELLOW}$domain/$thumuc${C_RESET}" 2 "$box_color_sub"
+      left_text "DatabaseName  : ${C_CYAN}$DB_Name_web${C_RESET} $st_db_sub" 2 "$box_color_sub"
+      left_text "Username      : ${C_CYAN}$DB_User_web${C_RESET} $st_user_sub" 2 "$box_color_sub"
+      left_text "Password      : ${C_YELLOW}$DB_Password_web${C_RESET}" 2 "$box_color_sub"
+      print_border_bot "$box_color_sub"
+      echo ""
     done
   fi
 fi
 
-echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
 read -r dummy
 
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+exec /usr/bin/wptangtoc 1
