@@ -1,10 +1,8 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: WPTangToc Full Automated Mail Server
-
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
+export LANG=en_US.UTF-8 2>/dev/null
+export LC_ALL=en_US.UTF-8 2>/dev/null
 stty iutf8 2>/dev/null
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -18,7 +16,7 @@ DOVECOT_USERS="/etc/dovecot/users"
 POSTFIX_VIRTUAL_DOMAINS="/etc/postfix/virtual_domains"
 POSTFIX_VMAILBOX="/etc/postfix/vmailbox"
 
-# Hàm tự động kiểm tra xem OS hỗ trợ lmdb hay hash
+# Hàm tự động kiểm tra xem OS hỗ trợ lmdb (Alma 9/10) hay hash (Alma 8 / Ubuntu / CentOS)
 get_db_type() {
   if command -v postconf >/dev/null 2>&1; then
     if postconf -m | grep -q "lmdb"; then
@@ -34,7 +32,7 @@ get_db_type() {
 clear
 echo ""
 print_border_top "$C_CYAN"
-center_text "${C_YELLOW}WPTANGTOC OLS ➜ QUẢN LÝ MAIL SERVER${C_RESET}" "$C_CYAN"
+center_text "${C_YELLOW}WPTANGTOC OLS ➜ QUẢN LÝ MAIL SERVER VIP MAX${C_RESET}" "$C_CYAN"
 print_border_bot "$C_CYAN"
 echo ""
 
@@ -45,8 +43,31 @@ configure_system() {
   DB_TYPE=$(get_db_type)
   _runing "Đang cấu hình Postfix & Dovecot (Chuẩn tự động: $DB_TYPE)..."
 
+  # [FIX TẬN GỐC] Xử lý triệt để lỗi hostname thuần số và cập nhật file hosts
+  SYS_HOST=$(hostname -f 2>/dev/null || hostname 2>/dev/null)
+  if [[ -z "$SYS_HOST" || "$SYS_HOST" =~ ^[0-9]+$ || ! "$SYS_HOST" =~ \. ]]; then
+    SYS_HOST="mail.wptangtoc.local"
+
+    # 1. Đổi Hostname bằng lệnh hệ thống
+    hostnamectl set-hostname "$SYS_HOST" 2>/dev/null
+    echo "$SYS_HOST" >/etc/hostname
+
+    # 2. Fix lỗi "sudo: unable to resolve host" bằng cách cập nhật /etc/hosts
+    if grep -q "127.0.1.1" /etc/hosts; then
+      sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$SYS_HOST/g" /etc/hosts
+    else
+      sed -i "s/^127\.0\.0\.1.*/127.0.0.1\tlocalhost $SYS_HOST/g" /etc/hosts
+    fi
+  fi
+
+  # 3. Thiết lập DNS Server Vĩnh Viễn bằng lệnh Khóa (chattr)
+  chattr -i /etc/resolv.conf 2>/dev/null
+  rm -f /etc/resolv.conf 2>/dev/null
+  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" >/etc/resolv.conf
+  chattr +i /etc/resolv.conf 2>/dev/null
+
   postconf -e "inet_interfaces = all"
-  postconf -e "myhostname = $(hostname -f)"
+  postconf -e "myhostname = $SYS_HOST"
   postconf -e "virtual_mailbox_domains = ${DB_TYPE}:$POSTFIX_VIRTUAL_DOMAINS"
   postconf -e "virtual_mailbox_base = $VMAIL_DIR"
   postconf -e "virtual_mailbox_maps = ${DB_TYPE}:$POSTFIX_VMAILBOX"
@@ -84,30 +105,37 @@ namespace inbox {
   inbox = yes
 }
 EOF
+
+  # [FIX LỖI ALMA 9] Cho phép plaintext auth nội bộ cho đường hầm UNIX socket
   cat >/etc/dovecot/conf.d/10-auth.conf <<EOF
-disable_plaintext_auth = yes
+disable_plaintext_auth = no
 auth_mechanisms = plain login
 !include auth-passwdfile.conf.ext
 EOF
+
+  # [FIX LỖI ALMA 9] Lược bỏ các args rườm rà gây lỗi parsing trên bản Dovecot mới
   cat >/etc/dovecot/conf.d/auth-passwdfile.conf.ext <<EOF
 passdb {
   driver = passwd-file
-  args = scheme=SHA512-CRYPT username_format=%u $DOVECOT_USERS
+  args = $DOVECOT_USERS
 }
 userdb {
   driver = static
   args = uid=vmail gid=vmail home=/var/vmail/%d/%n
 }
 EOF
-  cat >/etc/dovecot/conf.d/10-master.conf <<EOF
+
+  # [FIX LỖI ALMA 9] Cấp full quyền 0666 cho socket để Postfix đi vào không bị chặn
+  cat >/etc/dovecot/conf.d/99-wptt-postfix-auth.conf <<EOF
 service auth {
   unix_listener /var/spool/postfix/private/auth {
-    mode = 0660
+    mode = 0666
     user = postfix
     group = postfix
   }
 }
 EOF
+
   systemctl restart postfix dovecot
 }
 
@@ -132,7 +160,7 @@ manage_firewall() {
 echo -e "${C_CYAN}  [1]${C_RESET} CÀI ĐẶT LÕI HỆ THỐNG (Postfix + Dovecot)"
 echo -e "${C_CYAN}  [2]${C_RESET} THÊM DOMAIN & HƯỚNG DẪN CẤU HÌNH DNS"
 echo -e "${C_CYAN}  [3]${C_RESET} LIÊN KẾT SSL LET'S ENCRYPT (Bắt buộc)"
-echo -e "${C_CYAN}  [4]${C_RESET} TẠO TÀI KHOẢN EMAIL và HƯỚNG DẪN OUTLOOK"
+echo -e "${C_CYAN}  [4]${C_RESET} TẠO TÀI KHOẢN EMAIL và HƯỚNG DẪN APP"
 echo -e "${C_CYAN}  [5]${C_RESET} ${C_BOLD_WHITE}KÍCH HOẠT ĐA LUỒNG SMTP RELAY (Mailjet/Brevo/SES)${C_RESET}"
 echo -e "${C_CYAN}  [6]${C_RESET} ${C_RED}GỠ BỎ HOÀN TOÀN MAIL SERVER${C_RESET}"
 echo -e "${C_CYAN}  [0]${C_RESET} Thoát"
@@ -141,11 +169,23 @@ read -p "➜ Lựa chọn của bạn: " choice
 
 case $choice in
 1)
-  _runing "Đang cài đặt các gói cần thiết (Bao gồm thư viện SASL Plain)..."
+  _runing "Đang cài đặt các gói cần thiết (Tự động nhận diện hệ điều hành)..."
+
+  # [FIX SELinux] Tắt SELinux bằng command runtime (Thủ phạm gây lỗi Auth trên RHEL)
+  if command -v setenforce >/dev/null 2>&1; then
+    setenforce 0 2>/dev/null
+    sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config 2>/dev/null
+  fi
+
   if grep -qi "ubuntu\|debian" /etc/os-release; then
     apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y postfix dovecot-core dovecot-imapd opendkim opendkim-tools ssl-cert libsasl2-modules >/dev/null 2>&1
   else
-    dnf install -y postfix dovecot opendkim opendkim-tools cyrus-sasl cyrus-sasl-plain epel-release >/dev/null 2>&1
+    dnf install -y epel-release dnf-plugins-core >/dev/null 2>&1
+    # [FIX ALMA 9] Bật kho CRB bắt buộc để lấy gói OpenDKIM
+    if grep -q 'release 9' /etc/redhat-release 2>/dev/null; then
+      dnf config-manager --set-enabled crb >/dev/null 2>&1
+    fi
+    dnf install -y postfix dovecot opendkim opendkim-tools cyrus-sasl cyrus-sasl-plain >/dev/null 2>&1
   fi
 
   if ! id -u vmail >/dev/null 2>&1; then
@@ -168,10 +208,9 @@ case $choice in
   ;;
 
 2)
-  read -p "➜ Nhập Domain muốn làm Mail (VD: domain.com): " mail_domain
+  read -p "➜ Nhập Domain (Hỗ trợ cấp 1 & cấp 2 như domain.com hay support.domain.com) : " mail_domain
   [[ -z "$mail_domain" ]] && exit 0
 
-  # Khắc phục lỗi Relay access denied bằng cách đảm bảo ghi đè và đóng dấu
   DB_TYPE=$(get_db_type)
   sed -i "/^${mail_domain} /d" "$POSTFIX_VIRTUAL_DOMAINS" 2>/dev/null
   echo "$mail_domain OK" >>"$POSTFIX_VIRTUAL_DOMAINS"
@@ -184,19 +223,30 @@ case $choice in
   mkdir -p "/etc/opendkim/keys/$mail_domain"
   opendkim-genkey -b 2048 -d "$mail_domain" -D "/etc/opendkim/keys/$mail_domain" -s mail
   chown -R opendkim:opendkim /etc/opendkim/keys/$mail_domain
+
+  # [NÂNG CẤP] Tự động nạp định tuyến OpenDKIM cho mọi cấp độ Domain
+  mkdir -p /etc/opendkim
+  touch /etc/opendkim/KeyTable /etc/opendkim/SigningTable /etc/opendkim/TrustedHosts
+  sed -i "/$mail_domain/d" /etc/opendkim/KeyTable /etc/opendkim/SigningTable /etc/opendkim/TrustedHosts 2>/dev/null
+  echo "mail._domainkey.$mail_domain $mail_domain:mail:/etc/opendkim/keys/$mail_domain/mail.private" >>/etc/opendkim/KeyTable
+  echo "*@$mail_domain mail._domainkey.$mail_domain" >>/etc/opendkim/SigningTable
+  echo "$mail_domain" >>/etc/opendkim/TrustedHosts
+  systemctl restart opendkim
+
   dkim_val=$(cat "/etc/opendkim/keys/$mail_domain/mail.txt" | grep -oP '"p=.*"' | tr -d '"')
 
+  # [UX PRO] Bản in DNS dùng Tên miền tuyệt đối (FQDN) để Cloudflare không bị nhầm lẫn
   echo ""
   print_border_top "$C_YELLOW"
   center_text "1. HƯỚNG DẪN TRỎ DNS CHO: $mail_domain" "$C_YELLOW"
   print_border_mid "$C_YELLOW"
-  left_text "Loại | Tên (Host) | Giá trị (Value)" 2 "$C_YELLOW"
+  left_text "Loại | Tên (Host) CẦN COPY | Giá trị (Value)" 2 "$C_YELLOW"
   print_border_mid "$C_YELLOW"
-  left_text "A    | mail       | $vps_ip" 2 "$C_YELLOW"
-  left_text "MX   | @          | mail.$mail_domain (Ưu tiên 10)" 2 "$C_YELLOW"
-  left_text "TXT  | @          | v=spf1 mx a ip4:$vps_ip ~all" 2 "$C_YELLOW"
-  left_text "TXT  | _dmarc     | v=DMARC1; p=none;" 2 "$C_YELLOW"
-  left_text "TXT  | mail._domainkey | [Copy mã ở bên dưới]" 2 "$C_YELLOW"
+  left_text "A    | mail.$mail_domain | $vps_ip" 2 "$C_YELLOW"
+  left_text "MX   | $mail_domain | mail.$mail_domain (Ưu tiên 10)" 2 "$C_YELLOW"
+  left_text "TXT  | $mail_domain | v=spf1 mx a ip4:$vps_ip ~all" 2 "$C_YELLOW"
+  left_text "TXT  | _dmarc.$mail_domain | v=DMARC1; p=none;" 2 "$C_YELLOW"
+  left_text "TXT  | mail._domainkey.$mail_domain | [Copy mã ở bên dưới]" 2 "$C_YELLOW"
   print_border_bot "$C_YELLOW"
 
   echo -e "\n${C_CYAN}➜ MÃ DKIM (Copy dán vào Giá trị của bản ghi TXT số 5):${C_RESET}"
@@ -225,7 +275,7 @@ case $choice in
   ;;
 
 4)
-  echo -e "\n${C_CYAN}➜ Nhập địa chỉ Email muốn tạo (VD: admin@wptangtoc.com):${C_RESET}"
+  echo -e "\n${C_CYAN}➜ Nhập địa chỉ Email muốn tạo (VD: admin@domain.com):${C_RESET}"
   read -p " " new_email
   echo -e "${C_CYAN}➜ Nhập mật khẩu cho email này:${C_RESET}"
   read -p " " new_pass
@@ -245,10 +295,14 @@ case $choice in
   chmod -R 700 "$VMAIL_DIR/$dom_p"
 
   mkdir -p /etc/dovecot && touch "$DOVECOT_USERS"
-  chown dovecot:dovecot "$DOVECOT_USERS" && chmod 600 "$DOVECOT_USERS"
+  chown dovecot:dovecot "$DOVECOT_USERS" && chmod 640 "$DOVECOT_USERS"
+
+  # Lấy hash chuẩn, vứt bỏ lỗi rác
   hash=$(doveadm pw -s SHA512-CRYPT -p "$new_pass" 2>/dev/null)
   sed -i "/^${new_email}:/d" "$DOVECOT_USERS" 2>/dev/null
-  echo "${new_email}:${hash}::::" >>"$DOVECOT_USERS"
+
+  # [FIX LỖI ALMA 9] Ghi file chuẩn định dạng user:hash (Tuyệt đối không thừa dấu :)
+  echo "${new_email}:${hash}" >>"$DOVECOT_USERS"
 
   DB_TYPE=$(get_db_type)
   touch "$POSTFIX_VMAILBOX"
@@ -307,9 +361,9 @@ case $choice in
   sed -i "/^@${vip_domain} /d" /etc/postfix/sasl_passwd 2>/dev/null
   echo "@${vip_domain} $relay_user:$relay_pass" >>/etc/postfix/sasl_passwd
 
-  # Mã hóa dữ liệu
-  postmap ${DB_TYPE}:/etc/postfix/sender_relay
-  postmap ${DB_TYPE}:/etc/postfix/sasl_passwd
+  # Mã hóa dữ liệu (Hỗ trợ cả LMDB và HASH)
+  postmap ${DB_TYPE}:/etc/postfix/sender_relay 2>/dev/null
+  postmap ${DB_TYPE}:/etc/postfix/sasl_passwd 2>/dev/null
   chmod 600 /etc/postfix/sasl_passwd* /etc/postfix/sender_relay*
 
   # Bật tính năng Đa luồng & Xóa Global Relay để chống đụng độ
@@ -339,6 +393,10 @@ case $choice in
       dnf remove -y postfix dovecot opendkim opendkim-tools >/dev/null 2>&1
     fi
     rm -rf /etc/postfix /etc/dovecot /var/vmail /etc/opendkim >/dev/null 2>&1
+
+    # Mở khóa file resolv.conf để hệ thống mạng dọn dẹp (nếu cần thiết)
+    chattr -i /etc/resolv.conf 2>/dev/null
+
     manage_firewall "close"
     _rundone "Đã xóa sạch toàn bộ cấu hình Mail Server!"
   fi
