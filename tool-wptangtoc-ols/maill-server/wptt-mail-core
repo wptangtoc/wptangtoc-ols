@@ -1,0 +1,349 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: WPTangToc Full Automated Mail Server
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 2>/dev/null
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+VMAIL_DIR="/var/vmail"
+DOVECOT_USERS="/etc/dovecot/users"
+POSTFIX_VIRTUAL_DOMAINS="/etc/postfix/virtual_domains"
+POSTFIX_VMAILBOX="/etc/postfix/vmailbox"
+
+# Hàm tự động kiểm tra xem OS hỗ trợ lmdb hay hash
+get_db_type() {
+  if command -v postconf >/dev/null 2>&1; then
+    if postconf -m | grep -q "lmdb"; then
+      echo "lmdb"
+    else
+      echo "hash"
+    fi
+  else
+    echo "hash"
+  fi
+}
+
+clear
+echo ""
+print_border_top "$C_CYAN"
+center_text "${C_YELLOW}WPTANGTOC OLS ➜ QUẢN LÝ MAIL SERVER${C_RESET}" "$C_CYAN"
+print_border_bot "$C_CYAN"
+echo ""
+
+# ==============================================================================
+# HÀM BỔ TRỢ: CẤU HÌNH LÕI HỆ THỐNG
+# ==============================================================================
+configure_system() {
+  DB_TYPE=$(get_db_type)
+  _runing "Đang cấu hình Postfix & Dovecot (Chuẩn tự động: $DB_TYPE)..."
+
+  postconf -e "inet_interfaces = all"
+  postconf -e "myhostname = $(hostname -f)"
+  postconf -e "virtual_mailbox_domains = ${DB_TYPE}:$POSTFIX_VIRTUAL_DOMAINS"
+  postconf -e "virtual_mailbox_base = $VMAIL_DIR"
+  postconf -e "virtual_mailbox_maps = ${DB_TYPE}:$POSTFIX_VMAILBOX"
+  postconf -e "virtual_minimum_uid = 5000"
+  postconf -e "virtual_uid_maps = static:5000"
+  postconf -e "virtual_gid_maps = static:5000"
+
+  postconf -e "smtpd_sasl_type = dovecot"
+  postconf -e "smtpd_sasl_path = private/auth"
+  postconf -e "smtpd_sasl_auth_enable = yes"
+  postconf -e "smtpd_sasl_security_options = noanonymous"
+  postconf -e "smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination"
+  postconf -e "smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject_unauth_destination"
+
+  # Định tuyến Cổng 465 và 587
+  sed -i '/^465/d' /etc/postfix/master.cf
+  sed -i '/^587/d' /etc/postfix/master.cf
+  cat >>/etc/postfix/master.cf <<EOF
+465 inet n - n - - smtpd
+  -o syslog_name=postfix/smtps
+  -o smtpd_tls_wrappermode=yes
+  -o smtpd_sasl_auth_enable=yes
+  -o smtpd_client_restrictions=permit_sasl_authenticated,reject
+587 inet n - n - - smtpd
+  -o syslog_name=postfix/submission
+  -o smtpd_tls_security_level=encrypt
+  -o smtpd_sasl_auth_enable=yes
+  -o smtpd_client_restrictions=permit_sasl_authenticated,reject
+EOF
+
+  # Cấu hình Dovecot
+  cat >/etc/dovecot/conf.d/10-mail.conf <<EOF
+mail_location = maildir:/var/vmail/%d/%n
+namespace inbox {
+  inbox = yes
+}
+EOF
+  cat >/etc/dovecot/conf.d/10-auth.conf <<EOF
+disable_plaintext_auth = yes
+auth_mechanisms = plain login
+!include auth-passwdfile.conf.ext
+EOF
+  cat >/etc/dovecot/conf.d/auth-passwdfile.conf.ext <<EOF
+passdb {
+  driver = passwd-file
+  args = scheme=SHA512-CRYPT username_format=%u $DOVECOT_USERS
+}
+userdb {
+  driver = static
+  args = uid=vmail gid=vmail home=/var/vmail/%d/%n
+}
+EOF
+  cat >/etc/dovecot/conf.d/10-master.conf <<EOF
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+EOF
+  systemctl restart postfix dovecot
+}
+
+manage_firewall() {
+  local action=$1
+  local ports=("25" "587" "465" "143" "993")
+  for port in "${ports[@]}"; do
+    if [[ $(systemctl is-active firewalld) == 'active' ]]; then
+      [[ "$action" == "open" ]] && firewall-cmd --permanent --add-port=${port}/tcp >/dev/null 2>&1 || firewall-cmd --permanent --remove-port=${port}/tcp >/dev/null 2>&1
+    fi
+    if [[ -f /etc/csf/csf.conf ]]; then
+      [[ "$action" == "open" ]] && sed -i "s/TCP_IN = \"/TCP_IN = \"${port},/g" /etc/csf/csf.conf || sed -i "s/,${port}//g" /etc/csf/csf.conf
+    fi
+  done
+  [[ $(systemctl is-active firewalld) == 'active' ]] && firewall-cmd --reload >/dev/null 2>&1
+  [[ -f /etc/csf/csf.conf ]] && csf -r >/dev/null 2>&1
+}
+
+# ==============================================================================
+# MENU TƯƠNG TÁC CHÍNH
+# ==============================================================================
+echo -e "${C_CYAN}  [1]${C_RESET} CÀI ĐẶT LÕI HỆ THỐNG (Postfix + Dovecot)"
+echo -e "${C_CYAN}  [2]${C_RESET} THÊM DOMAIN & HƯỚNG DẪN CẤU HÌNH DNS"
+echo -e "${C_CYAN}  [3]${C_RESET} LIÊN KẾT SSL LET'S ENCRYPT (Bắt buộc)"
+echo -e "${C_CYAN}  [4]${C_RESET} TẠO TÀI KHOẢN EMAIL và HƯỚNG DẪN OUTLOOK"
+echo -e "${C_CYAN}  [5]${C_RESET} ${C_BOLD_WHITE}KÍCH HOẠT ĐA LUỒNG SMTP RELAY (Mailjet/Brevo/SES)${C_RESET}"
+echo -e "${C_CYAN}  [6]${C_RESET} ${C_RED}GỠ BỎ HOÀN TOÀN MAIL SERVER${C_RESET}"
+echo -e "${C_CYAN}  [0]${C_RESET} Thoát"
+echo ""
+read -p "➜ Lựa chọn của bạn: " choice
+
+case $choice in
+1)
+  _runing "Đang cài đặt các gói cần thiết (Bao gồm thư viện SASL Plain)..."
+  if grep -qi "ubuntu\|debian" /etc/os-release; then
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y postfix dovecot-core dovecot-imapd opendkim opendkim-tools ssl-cert libsasl2-modules >/dev/null 2>&1
+  else
+    dnf install -y postfix dovecot opendkim opendkim-tools cyrus-sasl cyrus-sasl-plain epel-release >/dev/null 2>&1
+  fi
+
+  if ! id -u vmail >/dev/null 2>&1; then
+    groupadd -g 5000 vmail && useradd -g vmail -u 5000 vmail -d "$VMAIL_DIR" -s /sbin/nologin
+  fi
+  mkdir -p "$VMAIL_DIR" && chown -R vmail:vmail "$VMAIL_DIR"
+
+  touch "$POSTFIX_VIRTUAL_DOMAINS" "$POSTFIX_VMAILBOX"
+  chmod 644 "$POSTFIX_VIRTUAL_DOMAINS" "$POSTFIX_VMAILBOX"
+
+  configure_system
+  manage_firewall "open"
+  systemctl enable --now opendkim >/dev/null 2>&1
+
+  DB_TYPE=$(get_db_type)
+  postmap ${DB_TYPE}:"$POSTFIX_VIRTUAL_DOMAINS" 2>/dev/null
+  postmap ${DB_TYPE}:"$POSTFIX_VMAILBOX" 2>/dev/null
+
+  _rundone "Cài đặt Lõi thành công! Vui lòng chuyển sang Bước 2."
+  ;;
+
+2)
+  read -p "➜ Nhập Domain muốn làm Mail (VD: domain.com): " mail_domain
+  [[ -z "$mail_domain" ]] && exit 0
+
+  # Khắc phục lỗi Relay access denied bằng cách đảm bảo ghi đè và đóng dấu
+  DB_TYPE=$(get_db_type)
+  sed -i "/^${mail_domain} /d" "$POSTFIX_VIRTUAL_DOMAINS" 2>/dev/null
+  echo "$mail_domain OK" >>"$POSTFIX_VIRTUAL_DOMAINS"
+  postmap ${DB_TYPE}:"$POSTFIX_VIRTUAL_DOMAINS"
+  systemctl reload postfix
+
+  vps_ip=$(curl -s --connect-timeout 5 ipv4.icanhazip.com)
+
+  _runing "Đang khởi tạo bảo mật DKIM..."
+  mkdir -p "/etc/opendkim/keys/$mail_domain"
+  opendkim-genkey -b 2048 -d "$mail_domain" -D "/etc/opendkim/keys/$mail_domain" -s mail
+  chown -R opendkim:opendkim /etc/opendkim/keys/$mail_domain
+  dkim_val=$(cat "/etc/opendkim/keys/$mail_domain/mail.txt" | grep -oP '"p=.*"' | tr -d '"')
+
+  echo ""
+  print_border_top "$C_YELLOW"
+  center_text "1. HƯỚNG DẪN TRỎ DNS CHO: $mail_domain" "$C_YELLOW"
+  print_border_mid "$C_YELLOW"
+  left_text "Loại | Tên (Host) | Giá trị (Value)" 2 "$C_YELLOW"
+  print_border_mid "$C_YELLOW"
+  left_text "A    | mail       | $vps_ip" 2 "$C_YELLOW"
+  left_text "MX   | @          | mail.$mail_domain (Ưu tiên 10)" 2 "$C_YELLOW"
+  left_text "TXT  | @          | v=spf1 mx a ip4:$vps_ip ~all" 2 "$C_YELLOW"
+  left_text "TXT  | _dmarc     | v=DMARC1; p=none;" 2 "$C_YELLOW"
+  left_text "TXT  | mail._domainkey | [Copy mã ở bên dưới]" 2 "$C_YELLOW"
+  print_border_bot "$C_YELLOW"
+
+  echo -e "\n${C_CYAN}➜ MÃ DKIM (Copy dán vào Giá trị của bản ghi TXT số 5):${C_RESET}"
+  echo -e "${C_BOLD_WHITE}v=DKIM1; h=sha256; k=rsa; p=$dkim_val${C_RESET}\n"
+  ;;
+
+3)
+  echo -e "\n${C_CYAN}➜ Subdomain đã Cài SSL WPTangToc (VD: mail.domain.com):${C_RESET}"
+  read -p " " sub_mail
+  [[ -z "$sub_mail" ]] && exit 0
+
+  SSL_CERT="/etc/letsencrypt/live/$sub_mail/fullchain.pem"
+  SSL_KEY="/etc/letsencrypt/live/$sub_mail/privkey.pem"
+
+  if [[ -f "$SSL_CERT" ]]; then
+    _runing "Đang đồng bộ SSL..."
+    postconf -e "smtpd_tls_cert_file = $SSL_CERT"
+    postconf -e "smtpd_tls_key_file = $SSL_KEY"
+    echo "ssl_cert = <$SSL_CERT" >/etc/dovecot/conf.d/10-ssl.conf
+    echo "ssl_key = <$SSL_KEY" >>/etc/dovecot/conf.d/10-ssl.conf
+    systemctl restart postfix dovecot
+    _rundone "Liên kết SSL Let's Encrypt thành công!"
+  else
+    echo -e "\n${C_RED}❌ Không tìm thấy SSL. Hãy tạo website $sub_mail và cài SSL trước!${C_RESET}"
+  fi
+  ;;
+
+4)
+  echo -e "\n${C_CYAN}➜ Nhập địa chỉ Email muốn tạo (VD: admin@wptangtoc.com):${C_RESET}"
+  read -p " " new_email
+  echo -e "${C_CYAN}➜ Nhập mật khẩu cho email này:${C_RESET}"
+  read -p " " new_pass
+
+  if [[ ! "$new_email" == *?@?*.?* ]]; then
+    echo -e "${C_RED}❌ Sai định dạng Email! Thao tác đã hủy.${C_RESET}"
+    sleep 2
+    exit 0
+  fi
+
+  user_p=$(echo "$new_email" | cut -d'@' -f1)
+  dom_p=$(echo "$new_email" | cut -d'@' -f2)
+
+  _runing "Đang khởi tạo hộp thư vật lý..."
+  mkdir -p "$VMAIL_DIR/$dom_p/$user_p"
+  chown -R vmail:vmail "$VMAIL_DIR/$dom_p"
+  chmod -R 700 "$VMAIL_DIR/$dom_p"
+
+  mkdir -p /etc/dovecot && touch "$DOVECOT_USERS"
+  chown dovecot:dovecot "$DOVECOT_USERS" && chmod 600 "$DOVECOT_USERS"
+  hash=$(doveadm pw -s SHA512-CRYPT -p "$new_pass" 2>/dev/null)
+  sed -i "/^${new_email}:/d" "$DOVECOT_USERS" 2>/dev/null
+  echo "${new_email}:${hash}::::" >>"$DOVECOT_USERS"
+
+  DB_TYPE=$(get_db_type)
+  touch "$POSTFIX_VMAILBOX"
+  sed -i "/^${new_email} /d" "$POSTFIX_VMAILBOX" 2>/dev/null
+  echo "${new_email} ${dom_p}/${user_p}/" >>"$POSTFIX_VMAILBOX"
+  postmap ${DB_TYPE}:"$POSTFIX_VMAILBOX"
+
+  systemctl reload dovecot postfix
+
+  echo ""
+  _rundone "TÀI KHOẢN $new_email ĐÃ SẴN SÀNG!"
+  echo ""
+  print_border_top "$C_GREEN"
+  center_text "${C_BOLD_WHITE}CẤU HÌNH TRÊN OUTLOOK / SMARTPHONE / THUNDERBIRD${C_RESET}" "$C_GREEN"
+  print_border_mid "$C_GREEN"
+  left_text "Server Name : mail.$dom_p" 2 "$C_GREEN"
+  left_text "IMAP Port   : 993 (SSL/TLS)" 2 "$C_GREEN"
+  left_text "SMTP Port   : 465 (SSL/TLS)" 2 "$C_GREEN"
+  print_border_bot "$C_GREEN"
+  echo ""
+  ;;
+
+5)
+  clear
+  print_border_top "$C_YELLOW"
+  center_text "KÍCH HOẠT TRẠM TRUNG CHUYỂN (ĐA LUỒNG MULTI-RELAY)" "$C_YELLOW"
+  print_border_bot "$C_YELLOW"
+  echo -e "${C_GREEN}Chế độ này cho phép mỗi tên miền dùng 1 Trạm SMTP VIP khác nhau.${C_RESET}"
+  echo -e "${C_GREEN}Các tên miền chưa cấu hình tại đây sẽ tự động tự gửi trực tiếp.${C_RESET}\n"
+
+  read -p "➜ Nhập Tên miền cần gắn VIP (VD: domain.com): " vip_domain
+  [[ -z "$vip_domain" ]] && echo -e "${C_RED}❌ Chưa nhập Domain!${C_RESET}" && exit 0
+
+  read -p "➜ Nhập SMTP Server (VD: in-v3.mailjet.com): " relay_server
+  relay_server=${relay_server:-in-v3.mailjet.com}
+
+  read -p "➜ Nhập Port (VD: 587): " relay_port
+  relay_port=${relay_port:-587}
+
+  read -p "➜ Nhập Username (API Key): " relay_user
+  [[ -z "$relay_user" ]] && echo -e "${C_RED}❌ Lỗi: Chưa nhập Username!${C_RESET}" && exit 0
+
+  read -p "➜ Nhập Password (Secret Key): " relay_pass
+  [[ -z "$relay_pass" ]] && echo -e "${C_RED}❌ Lỗi: Chưa nhập Password!${C_RESET}" && exit 0
+
+  _runing "Đang thiết lập luồng riêng cho @$vip_domain qua trạm $relay_server..."
+
+  DB_TYPE=$(get_db_type)
+  touch /etc/postfix/sender_relay /etc/postfix/sasl_passwd
+
+  # Ghi đè vào Sổ Điều Phối
+  sed -i "/^@${vip_domain} /d" /etc/postfix/sender_relay 2>/dev/null
+  echo "@${vip_domain} [$relay_server]:$relay_port" >>/etc/postfix/sender_relay
+
+  # Ghi đè vào Sổ Mật Khẩu
+  sed -i "/^@${vip_domain} /d" /etc/postfix/sasl_passwd 2>/dev/null
+  echo "@${vip_domain} $relay_user:$relay_pass" >>/etc/postfix/sasl_passwd
+
+  # Mã hóa dữ liệu
+  postmap ${DB_TYPE}:/etc/postfix/sender_relay
+  postmap ${DB_TYPE}:/etc/postfix/sasl_passwd
+  chmod 600 /etc/postfix/sasl_passwd* /etc/postfix/sender_relay*
+
+  # Bật tính năng Đa luồng & Xóa Global Relay để chống đụng độ
+  postconf -X "relayhost" 2>/dev/null
+  postconf -e "smtp_sender_dependent_authentication = yes"
+  postconf -e "sender_dependent_relayhost_maps = ${DB_TYPE}:/etc/postfix/sender_relay"
+  postconf -e "smtp_sasl_auth_enable = yes"
+  postconf -e "smtp_sasl_password_maps = ${DB_TYPE}:/etc/postfix/sasl_passwd"
+  postconf -e "smtp_sasl_security_options = noanonymous"
+  postconf -e "smtp_tls_security_level = encrypt"
+
+  systemctl restart postfix
+  postqueue -f >/dev/null 2>&1
+
+  echo ""
+  _rundone "ĐÃ PHÂN LUỒNG THÀNH CÔNG!"
+  echo -e "${C_CYAN}➜ Từ nay, toàn bộ thư gửi từ @$vip_domain sẽ đi qua $relay_server.${C_RESET}\n"
+  ;;
+
+6)
+  if wptt_xac_nhan "CẢNH BÁO: Xóa toàn bộ Mail Server?" "" "" "Đồng ý" "Hủy"; then
+    _runing "Đang dọn dẹp hệ thống..."
+    systemctl stop postfix dovecot opendkim >/dev/null 2>&1
+    if grep -qi "ubuntu\|debian" /etc/os-release; then
+      apt-get purge -y postfix dovecot-core dovecot-imapd opendkim opendkim-tools >/dev/null 2>&1
+    else
+      dnf remove -y postfix dovecot opendkim opendkim-tools >/dev/null 2>&1
+    fi
+    rm -rf /etc/postfix /etc/dovecot /var/vmail /etc/opendkim >/dev/null 2>&1
+    manage_firewall "close"
+    _rundone "Đã xóa sạch toàn bộ cấu hình Mail Server!"
+  fi
+  ;;
+*)
+  exit 0
+  ;;
+esac
