@@ -30,6 +30,7 @@ echo "Tải file backup từ lưu trữ đám mây: $(date '+%d-%m-%Y %H:%M')" >
 # ==============================================================================
 if ! grep -q 'wptangtoc' /root/.config/rclone/rclone.conf 2>/dev/null; then
   echo -e "${C_RED}❌ Lỗi: Bạn chưa kích hoạt Rclone trên hệ thống này!${C_RESET}"
+  echo -e "Vui lòng cấu hình Rclone trước khi sử dụng tính năng tải backup."
   sleep 3
   exec /etc/wptt/wptt-backup-restore-main 1
   exit 1
@@ -57,15 +58,16 @@ if [[ ! -f "$pathcheck" ]]; then
   return 2>/dev/null || exit
 fi
 
-# ==============================================================================
-# BƯỚC 1: TRUY XUẤT VÀ TẢI FILE LẦN 1
-# ==============================================================================
 echo ""
 _runing "Đang tải danh sách file từ $cloud_service..."
 
-# Lấy danh sách thô từ Rclone và giữ lại để dùng cho vòng lặp sau
-rclone_output=$(rclone lsf "wptangtoc:wptangtoc_ols_backup/$NAME" 2>/dev/null)
-mapfile -t selects < <(echo "$rclone_output" | grep -E "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$")
+rclone_raw=$(rclone lsl "wptangtoc:wptangtoc_ols_backup/$NAME" 2>/dev/null | tr -d '\r')
+rclone_output=$(echo "$rclone_raw" | sort -k2,3r | sed -E 's/^[ \t]*[0-9]+[ \t]+[0-9-]+[ \t]+[0-9:\.]+[ \t]+//' | grep -E "\.(zip|tar\.gz|tar\.zst|sql|sql\.gz|sql\.zst)$")
+
+selects=()
+if [[ -n "$rclone_output" ]]; then
+  mapfile -t selects < <(echo "$rclone_output")
+fi
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   _runloi "Truy xuất danh sách thất bại"
@@ -75,7 +77,7 @@ if [[ ${#selects[@]} -eq 0 ]]; then
 fi
 _rundone "Tải danh sách từ $cloud_service thành công"
 
-box_inner_width=${box_inner_width:-71}
+box_inner_width=${box_inner_width:-78}
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}DANH SÁCH FILE BACKUP ĐANG LƯU TRÊN CLOUD${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -113,10 +115,26 @@ dongy_taifile1="n"
 if wptt_xac_nhan "Xác nhận để tải File này về máy chủ?" "${C_BOLD_WHITE}Tên file:${C_RESET} ${C_YELLOW}$file1${C_RESET}" "" "Đồng ý Tải" "Hủy bỏ"; then
   dongy_taifile1="y"
   echo ""
-  _runing "Đang tải $file1 từ $cloud_service..."
+  
   mkdir -p "/usr/local/backup-website/$NAME"
   rm -f "/usr/local/backup-website/$NAME/$file1"
-  rclone copy "wptangtoc:wptangtoc_ols_backup/$NAME/$file1" "/usr/local/backup-website/$NAME" 2>/dev/null
+  
+  echo -e "${C_CYAN}➜ Đang tải xuống: ${C_YELLOW}$file1${C_RESET}"
+  
+  # [TUYỆT KỸ HỨNG LUỒNG] Ống dẫn Pipe chặn bắt Output của Rclone
+  rclone copyto "wptangtoc:wptangtoc_ols_backup/$NAME/$file1" "/usr/local/backup-website/$NAME/$file1" \
+    --stats-one-line --stats=1s --log-level INFO 2>&1 | while IFS= read -r line; do
+    
+    # Chỉ hiển thị dòng Stats có % và chặn đứng dòng chứa "0 B /" rác
+    if [[ "$line" == *"%"* && "$line" == *"/"* && "$line" != *"0 B /"* ]]; then
+      # Tẩy rác "Transferred:" nếu rclone vô tình in ra
+      clean_stat=$(echo "$line" | sed -E 's/.*Transferred:[ \t]*//Ig' | sed 's/^[ \t]*//')
+      # In đè lên dòng hiện tại (dùng \r và \033[K)
+      printf "\r\033[K   ${C_GREEN}⬇ Tiến độ:${C_RESET} %s" "$clean_stat"
+    fi
+  done
+  
+  echo "" # Xả dòng mới khi vòng lặp rclone kết thúc
   _rundone "Đã tải thành công $file1"
 fi
 
@@ -127,21 +145,20 @@ echo ""
 dongy_taifile2="n"
 file2=""
 
-# Lọc bỏ file1 (vừa tải) ra khỏi mảng selects để tránh tải trùng lặp
 filtered_selects=()
 for f in "${selects[@]}"; do
   [[ "$f" != "$file1" ]] && filtered_selects+=("$f")
 done
-selects=("${filtered_selects[@]}") # Ghi đè lại mảng selects bằng mảng đã lọc
+selects=("${filtered_selects[@]}")
 
-# Chỉ hiển thị gợi ý nếu mảng selects (sau khi lọc) vẫn còn file để tải
 if [[ ${#selects[@]} -gt 0 ]]; then
-  if echo "$file1" | grep -q "\.zip$\|\.tar\.gz$\|\.tar\.zst$"; then
-    echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Mã nguồn. Nên tải thêm Database (.sql) để khôi phục đồng bộ."
-    ggdrthem="File Database (.sql)"
-  elif echo "$file1" | grep -q "\.sql$\|\.sql\.gz$\|\.sql\.zst$"; then
-    echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Database. Nên tải thêm Mã nguồn (.zip/.tar) để khôi phục đồng bộ."
-    ggdrthem="File Mã nguồn (.zip/.tar)"
+  
+  if echo "$file1" | grep -Eq "\.(zip|tar\.gz|tar\.zst)$"; then
+    echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Mã nguồn. Nên tải thêm Database để khôi phục đồng bộ."
+    ggdrthem="File Database (.sql / .gz / .zst)"
+  elif echo "$file1" | grep -Eq "\.(sql|sql\.gz|sql\.zst)$"; then
+    echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Database. Nên tải thêm Mã nguồn để khôi phục đồng bộ."
+    ggdrthem="File Mã nguồn (.zip / .tar\.gz / .tar\.zst)"
   fi
 
   if [[ -n "$ggdrthem" ]]; then
@@ -179,9 +196,20 @@ if [[ ${#selects[@]} -gt 0 ]]; then
       if [[ -n "$file2" ]]; then
         dongy_taifile2="y"
         echo ""
-        _runing "Đang tải file bổ sung $file2 từ $cloud_service..."
         rm -f "/usr/local/backup-website/$NAME/$file2"
-        rclone copy "wptangtoc:wptangtoc_ols_backup/$NAME/$file2" "/usr/local/backup-website/$NAME" 2>/dev/null
+        
+        echo -e "${C_CYAN}➜ Đang tải xuống: ${C_YELLOW}$file2${C_RESET}"
+        
+        # [TUYỆT KỸ HỨNG LUỒNG] Áp dụng tương tự cho file thứ 2
+        rclone copyto "wptangtoc:wptangtoc_ols_backup/$NAME/$file2" "/usr/local/backup-website/$NAME/$file2" \
+          --stats-one-line --stats=1s --log-level INFO 2>&1 | while IFS= read -r line; do
+          if [[ "$line" == *"%"* && "$line" == *"/"* && "$line" != *"0 B /"* ]]; then
+            clean_stat=$(echo "$line" | sed -E 's/.*Transferred:[ \t]*//Ig' | sed 's/^[ \t]*//')
+            printf "\r\033[K   ${C_GREEN}⬇ Tiến độ:${C_RESET} %s" "$clean_stat"
+          fi
+        done
+        
+        echo "" # Xả dòng mới
         _rundone "Đã tải thành công $file2"
       fi
     fi
@@ -191,7 +219,7 @@ fi
 # ==============================================================================
 # BẢNG BÁO CÁO TỔNG HỢP (UX BO CONG)
 # ==============================================================================
-echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}TIẾN TRÌNH DOWNLOAD HOÀN TẤT${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
