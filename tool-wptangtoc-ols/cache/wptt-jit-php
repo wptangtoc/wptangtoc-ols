@@ -1,0 +1,272 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+function huong_dan() {
+  Tính Năng Thiết Lập Bật và Tắt JIT Compiler [PHP 8.0+]
+
+  JIT [Just-In-Time] là một bộ biên dịch nâng cao được tích hợp từ PHP 8.0.
+  Nó sẽ lấy mã Bytecode từ OPcache và biên dịch thẳng ra mã máy [Machine Code] để CPU xử lý trực tiếp.
+
+  Cảnh báo quan trọng:
+  * JIT chỉ hoạt động khi bạn ĐÃ BẬT OPcache. Nếu OPcache tắt, JIT sẽ vô tác dụng.
+  * JIT cực kỳ mạnh mẽ cho các tác vụ tính toán thuật toán, xử lý ảnh nặng [CPU-bound].
+  * Hệ thống WPTangToc OLS sẽ tự động tính toán cấp phát RAM cho JIT dựa trên cấu hình phần cứng thực tế của bạn để đảm bảo an toàn tuyệt đối.
+}
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+clear
+print_border_top
+center_text "${C_YELLOW}${quan_ly_cache} ➜ Bật / Tắt PHP JIT Compiler${C_RESET}"
+print_border_bot
+echo ""
+
+# Kiểm tra OS một lần duy nhất
+OS_UBUNTU=0
+grep -qi "ubuntu" /etc/os-release 2>/dev/null && OS_UBUNTU=1
+
+function lua_chon_PHP_JIT() {
+  unset LSPHP selects
+  selects=()
+
+  for dir in /usr/local/lsws/lsphp*/; do
+    [[ ! -d "$dir" ]] && continue
+
+    local php_name=$(basename "$dir")
+    # Bỏ qua PHP 7.x
+    [[ "$php_name" == "lsphp73" || "$php_name" == "lsphp74" ]] && continue
+
+    local num_ver=${php_name#lsphp}
+    local ver_len=${#num_ver}
+    local phien_ban_php_co_cham="${num_ver:0:$ver_len-1}.${num_ver: -1}"
+
+    local duong_dan_php_ini=""
+    if [[ "$OS_UBUNTU" == 1 ]]; then
+      duong_dan_php_ini="$dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
+    else
+      duong_dan_php_ini="$dir/etc/php.ini"
+    fi
+
+    if [[ -f "$duong_dan_php_ini" ]]; then
+      local has_opcache="0"
+      "$dir/bin/php" -v 2>/dev/null | grep -qi "OPcache" && has_opcache="1"
+
+      local jit_stt="0"
+      grep -qE '^opcache.jit_buffer_size[ \t]*=[ \t]*[1-9]' "$duong_dan_php_ini" 2>/dev/null && jit_stt="1"
+
+      selects+=("$php_name|PHP $phien_ban_php_co_cham|$jit_stt|$duong_dan_php_ini|$has_opcache")
+    fi
+  done
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "${C_YELLOW}Không tìm thấy phiên bản PHP 8.0+ nào trên hệ thống!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-cache-main 1
+  fi
+
+  print_border_top
+  center_text "${C_YELLOW}Trạng thái JIT hiện tại & Chọn phiên bản PHP:${C_RESET}"
+  print_border_mid
+
+  local i=1
+  for item in "${selects[@]}"; do
+    local p_name=$(echo "$item" | cut -d'|' -f1)
+    local p_ver=$(echo "$item" | cut -d'|' -f2)
+    local p_stt=$(echo "$item" | cut -d'|' -f3)
+    local p_opc=$(echo "$item" | cut -d'|' -f5)
+
+    local color_stt="${C_GREEN}[Đang BẬT]${C_RESET}"
+    local clean_stt="[Đang BẬT]"
+
+    if [[ "$p_stt" == "0" ]]; then
+      color_stt="${C_RED}[Đang TẮT]${C_RESET}"
+      clean_stt="[Đang TẮT]"
+    elif [[ "$p_opc" == "0" ]]; then
+      color_stt="${C_YELLOW}[BẬT nhưng LỖI (OPcache tắt)]${C_RESET}"
+      clean_stt="[BẬT nhưng LỖI (OPcache tắt)]"
+    fi
+
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-25s${C_RESET} %s" "$i" "$p_ver" "$color_stt")
+    local clean_text=$(printf "  %3d) %-25s %s" "$i" "$p_ver" "$clean_stt")
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+
+    printf "${C_CYAN}│${C_RESET}%b%*s${C_CYAN}│${C_RESET}\n" "$item_text" "$pad" ""
+    ((i++))
+  done
+  print_border_bot
+
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+
+  local PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+  $fzf_installed && PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      LSPHP="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm PHP >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local extracted_data=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+        if [[ -n "$extracted_data" ]]; then
+          LSPHP=$(echo "$extracted_data" | cut -d'|' -f1)
+          PHP_VER_DISPLAY=$(echo "$extracted_data" | cut -d'|' -f2)
+          PHP_CURRENT_STT=$(echo "$extracted_data" | cut -d'|' -f3)
+          PHP_INI_PATH=$(echo "$extracted_data" | cut -d'|' -f4)
+          PHP_OPCACHE_STT=$(echo "$extracted_data" | cut -d'|' -f5)
+          return 0
+        else
+          echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+        fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        local extracted_data="${selects[$action_index]}"
+        LSPHP=$(echo "$extracted_data" | cut -d'|' -f1)
+        PHP_VER_DISPLAY=$(echo "$extracted_data" | cut -d'|' -f2)
+        PHP_CURRENT_STT=$(echo "$extracted_data" | cut -d'|' -f3)
+        PHP_INI_PATH=$(echo "$extracted_data" | cut -d'|' -f4)
+        PHP_OPCACHE_STT=$(echo "$extracted_data" | cut -d'|' -f5)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
+}
+
+lua_chon_PHP_JIT
+
+# Chốt chặn thoát
+if [[ "$LSPHP" == "0" || -z "$LSPHP" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+  exit 0
+fi
+
+# ==============================================================================
+# 2. AUTO-CALCULATE RAM ĐỂ CẤP PHÁT JIT_BUFFER_SIZE CHUẨN XÁC
+# ==============================================================================
+while read -r name value unit; do
+  if [[ "$name" == "MemTotal:" ]]; then
+    TOTAL_RAM_MB=$((value / 1024))
+    break
+  fi
+done </proc/meminfo
+
+if [ "$TOTAL_RAM_MB" -le 1200 ]; then
+  JIT_BUFFER="0M" # Tắt JIT cho máy siêu yếu (1GB)
+elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
+  JIT_BUFFER="64M" # VPS 2GB
+elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
+  JIT_BUFFER="128M" # VPS 4GB
+else
+  JIT_BUFFER="256M" # VPS to >= 8GB
+fi
+
+# ==============================================================================
+# 3. XỬ LÝ LOGIC ĐẢO TRẠNG THÁI (TOGGLE JIT)
+# ==============================================================================
+echo ""
+action_msg=""
+
+# ĐANG BẬT (1) -> HỎI TẮT
+if [[ "$PHP_CURRENT_STT" == "1" ]]; then
+  if wptt_xac_nhan "Tính năng JIT của phiên bản này đang BẬT. Bạn có muốn TẮT không?" "${C_BOLD_WHITE}Phiên bản:${C_RESET} $PHP_VER_DISPLAY" "" "Đồng ý TẮT" "Hủy bỏ"; then
+    _runing "Đang tắt JIT Compiler (jit_buffer_size=0) cho $PHP_VER_DISPLAY..."
+
+    sed -i '/opcache.jit_buffer_size/d' "$PHP_INI_PATH"
+    sed -i '/opcache.jit/d' "$PHP_INI_PATH"
+    echo 'opcache.jit_buffer_size=0' >>"$PHP_INI_PATH"
+
+    action_msg="Đã TẮT JIT Compiler. Hệ thống trở về OPcache tiêu chuẩn."
+    action_color="${C_YELLOW}"
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+    _rundone "Đã tắt JIT Compiler cho $PHP_VER_DISPLAY thành công"
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+    exit 0
+  fi
+
+# ĐANG TẮT (0) -> HỎI BẬT
+else
+  # [BẢO VỆ MÁY CHỦ] Chặn đứng thao tác nếu VPS quá yếu (RAM <= 1GB)
+  if [[ "$JIT_BUFFER" == "0M" ]]; then
+    print_border_top "$C_RED"
+    center_text "${C_RED}TỪ CHỐI KÍCH HOẠT JIT COMPILER${C_RESET}"
+    print_spacer
+    left_text "Hệ thống phát hiện máy chủ của bạn chỉ có ${C_YELLOW}${TOTAL_RAM_MB}MB RAM${C_RESET}." 2
+    left_text "Việc bật JIT trên máy chủ RAM <= 1GB sẽ gây thiếu hụt bộ nhớ trầm" 2
+    left_text "trọng, có thể dẫn đến việc MariaDB (Database) bị sập tự động." 2
+    print_spacer
+    left_text "${C_YELLOW}Lý do an toàn:${C_RESET} Tính năng này đã bị khóa trên hệ thống của bạn." 2
+    print_border_bot "$C_RED"
+    echo ""
+    read -rp "Nhấn phím Enter để quay lại menu..."
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+    exit 0
+  fi
+
+  # Cảnh báo nếu OPcache chưa bật
+  if [[ "$PHP_OPCACHE_STT" == "0" ]]; then
+    print_border_top "$C_RED"
+    center_text "${C_RED}CẢNH BÁO: OPCACHE ĐANG TẮT${C_RESET}"
+    print_spacer
+    left_text "Phát hiện tính năng OPcache của ${PHP_VER_DISPLAY} đang bị TẮT!" 2
+    left_text "Nếu bạn bật JIT bây giờ, nó sẽ ${C_YELLOW}KHÔNG CÓ TÁC DỤNG${C_RESET}." 2
+    left_text "Hãy vào menu Quản lý OPcache để BẬT trước khi dùng JIT." 2
+    print_border_bot "$C_RED"
+    echo ""
+  fi
+
+  if wptt_xac_nhan "BẬT JIT Compiler (Hệ thống tự động cấp phát: ${C_YELLOW}${JIT_BUFFER}${C_RESET} RAM)?" "${C_BOLD_WHITE}Phiên bản:${C_RESET} $PHP_VER_DISPLAY" "" "Đồng ý BẬT" "Hủy bỏ"; then
+    _runing "Đang bật JIT (jit_buffer_size=${JIT_BUFFER}, jit=tracing) cho $PHP_VER_DISPLAY..."
+
+    sed -i '/opcache.jit_buffer_size/d' "$PHP_INI_PATH"
+    sed -i '/opcache.jit/d' "$PHP_INI_PATH"
+
+    echo "opcache.jit_buffer_size=${JIT_BUFFER}" >>"$PHP_INI_PATH"
+    echo 'opcache.jit=tracing' >>"$PHP_INI_PATH"
+
+    action_msg="Đã BẬT JIT Compiler. Tự động tối ưu cấp phát ${JIT_BUFFER} RAM."
+    action_color="${C_GREEN}"
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+    _rundone "Đã bật JIT Compiler cho $PHP_VER_DISPLAY thành công"
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+    exit 0
+  fi
+fi
+
+echo ""
+print_border_top "$C_GREEN"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI CẤU HÌNH JIT COMPILER${C_RESET}"
+print_border_mid "$C_GREEN"
+left_text "Phiên bản      : ${C_YELLOW}$PHP_VER_DISPLAY${C_RESET}" 2
+left_text "Cấu hình RAM   : Tự động optimize theo hệ thống (${TOTAL_RAM_MB}MB RAM)" 2
+left_text "Trạng thái mới : ${action_color}${action_msg}${C_RESET}" 2
+print_border_bot "$C_GREEN"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
