@@ -2,9 +2,6 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# ==========================================
-# AUTO-TUNE PHP OPCACHE & JIT
-# ==========================================
 
 # 1. Lấy tổng RAM (Tối ưu Zero-forking đọc thẳng từ /proc/meminfo)
 while read -r name value unit; do
@@ -14,48 +11,43 @@ while read -r name value unit; do
   fi
 done </proc/meminfo
 
+# BẢNG PHÂN BỔ TÀI NGUYÊN (Ưu tiên hiệu suất tối đa)
 if [ "$TOTAL_RAM_MB" -le 1200 ]; then
   OPCACHE_MEM="64"
-  JIT_BUFFER="0M"      # Tắt JIT cho máy siêu yếu (1GB) để tiết kiệm RAM
-  REALPATH_SIZE="512K" # VPS 1GB: 512K là quá đủ cho 1000+ file
+  JIT_BUFFER="0M" # BẮT BUỘC TẮT JIT cho máy siêu yếu (1GB) để giữ mạng sống cho Database
+  REALPATH_SIZE="512K"
 elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
   OPCACHE_MEM="128"
-  JIT_BUFFER="64M"      # VPS 2GB: OPcache 128MB (JIT ăn 64MB, còn 64MB lưu file)
-  REALPATH_SIZE="1024K" # VPS 2GB: 1MB
+  JIT_BUFFER="64M" # VPS 2GB: Bật JIT 64MB
+  REALPATH_SIZE="1024K"
 elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
   OPCACHE_MEM="256"
-  JIT_BUFFER="128M"     # VPS 4GB
-  REALPATH_SIZE="2048K" # VPS to: 2MB (Mức trần thực tế, 4M là hơi quá tay)
+  JIT_BUFFER="128M" # VPS 4GB: Bật JIT 128MB
+  REALPATH_SIZE="2048K"
 else
   OPCACHE_MEM="512"
-  JIT_BUFFER="256M"     # Mức trần cho VPS >= 8GB
-  REALPATH_SIZE="2048K" # VPS to: 2MB (Mức trần thực tế)
+  JIT_BUFFER="256M" # VPS >= 8GB: Bật JIT 256MB (Max Speed)
+  REALPATH_SIZE="2048K"
 fi
 
-# 2. KIỂM TRA OS MỘT LẦN DUY NHẤT Ở NGOÀI VÒNG LẶP
+# 2. KIỂM TRA OS MỘT LẦN DUY NHẤT
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   OS_UBUNTU=1
 else
   OS_UBUNTU=0
 fi
 
-# 3. QUÉT VÀ CẤU HÌNH (Sử dụng Globbing siêu tốc)
+# 3. QUÉT VÀ BƠM CẤU HÌNH
 shopt -s nullglob
 for dir in /usr/local/lsws/lsphp*/; do
   [[ ! -d "$dir" ]] && continue
 
-  # Cắt tên thư mục thuần Bash (VD: lsphp81)
   php_dir="${dir%/}"
   php_dir="${php_dir##*/}"
-
-  # Lấy phần số của phiên bản (VD: 81)
   version_num="${php_dir#lsphp}"
-
-  # Tạo chuỗi có dấu chấm cho Ubuntu (VD: 8.1)
   ver_len=${#version_num}
   phien_ban_php_co_cham="${version_num:0:$ver_len-1}.${version_num: -1}"
 
-  # Đường dẫn chuẩn xác tới file php.ini
   if [[ "$OS_UBUNTU" == 1 ]]; then
     php_ini_path="/usr/local/lsws/$php_dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
   else
@@ -65,51 +57,51 @@ for dir in /usr/local/lsws/lsphp*/; do
   if [[ -f "$php_ini_path" ]]; then
 
     # ==============================================================
-    # [TÍNH NĂNG MỚI] ĐỌC Ý ĐỊNH NGƯỜI DÙNG TRƯỚC KHI XÓA CẤU HÌNH
+    # TRẠM KIỂM SOÁT QUYỀN PHỦ QUYẾT CỦA NGƯỜI DÙNG
     # ==============================================================
     USER_DISABLED_JIT=0
-    # Nếu file php.ini ĐÃ TỒN TẠI dòng opcache.jit_buffer_size=0 (Tức là người dùng chủ động tắt)
+    # Quét xem khách có DÙNG MENU wptt-jit ép JIT về 0 không?
     if grep -qE '^opcache\.jit_buffer_size[ \t]*=[ \t]*0' "$php_ini_path" 2>/dev/null; then
       USER_DISABLED_JIT=1
     fi
 
-    # Gom 7 lệnh SED cũ thành 1 lệnh duy nhất (Tối ưu I/O ổ cứng cực mạnh)
+    # Dọn dẹp cấu hình rác cũ bằng 1 đường kiếm
     sed -i -E '/^(opcache\.memory_consumption|opcache\.interned_strings_buffer|opcache\.max_accelerated_files|realpath_cache_size|realpath_cache_ttl|opcache\.jit|opcache\.jit_buffer_size)=/d' "$php_ini_path"
 
-    # Chuẩn bị khối cấu hình chung (Không đụng chạm tới opcache.revalidate_freq của chế độ Dev Mode)
+    # Lõi cấu hình "Bê tông cốt thép"
     CONFIG_BLOCK="opcache.memory_consumption=$OPCACHE_MEM
 opcache.interned_strings_buffer=16
 opcache.max_accelerated_files=16229
 realpath_cache_size=${REALPATH_SIZE}
 realpath_cache_ttl=7200"
 
-    # Xử lý JIT (Chỉ cho PHP >= 8.0)
+    # XỬ LÝ JIT COMPILER (Từ PHP 8.0 trở lên)
     if ((version_num >= 80)); then
       if [[ "$USER_DISABLED_JIT" == "1" ]]; then
-        # Người dùng không muốn dùng JIT -> Giữ nguyên trạng thái tắt
+        # KHÁCH GHÉT JIT: Tôn trọng quyền của khách, khóa JIT lại
         CONFIG_BLOCK="$CONFIG_BLOCK
 opcache.jit_buffer_size=0"
-        echo "Đã Tune OPcache=${OPCACHE_MEM}M (TÔN TRỌNG NGƯỜI DÙNG: Giữ trạng thái TẮT JIT) cho $php_dir" >>/var/log/wptangtoc-ols.log
+        echo "Đã Tune OPcache=${OPCACHE_MEM}M (Tôn trọng User: Giữ TẮT JIT) cho $php_dir" >>/var/log/wptangtoc-ols.log
 
       elif [[ "$JIT_BUFFER" != "0M" ]]; then
-        # Người dùng muốn dùng hoặc server mới cài -> Auto Scale JIT theo RAM
+        # BẬT MẶC ĐỊNH (DEFAULT ON): Đẩy max tốc độ
         CONFIG_BLOCK="$CONFIG_BLOCK
 opcache.jit=tracing
 opcache.jit_buffer_size=$JIT_BUFFER"
-        echo "Đã Tune OPcache=${OPCACHE_MEM}M & JIT=${JIT_BUFFER} cho $php_dir" >>/var/log/wptangtoc-ols.log
+        echo "Đã Tune OPcache=${OPCACHE_MEM}M & JIT=${JIT_BUFFER} (Mặc định BẬT) cho $php_dir" >>/var/log/wptangtoc-ols.log
 
       else
-        # VPS quá yếu (RAM <= 1GB) -> Ép tắt JIT bảo vệ server
+        # VPS 1GB: Bất khả kháng, phải tắt để bảo vệ Server
         CONFIG_BLOCK="$CONFIG_BLOCK
 opcache.jit_buffer_size=0"
-        echo "Đã Tune OPcache=${OPCACHE_MEM}M (Ép tắt JIT vì RAM VPS quá yếu) cho $php_dir" >>/var/log/wptangtoc-ols.log
+        echo "Đã Tune OPcache=${OPCACHE_MEM}M (Ép tắt JIT vì VPS <= 1GB RAM) cho $php_dir" >>/var/log/wptangtoc-ols.log
       fi
     else
       # PHP 7.x
-      echo "Đã Tune OPcache=${OPCACHE_MEM}M (Bỏ qua JIT vì bản PHP quá cũ) cho $php_dir" >>/var/log/wptangtoc-ols.log
+      echo "Đã Tune OPcache=${OPCACHE_MEM}M (Bỏ qua JIT do PHP cũ) cho $php_dir" >>/var/log/wptangtoc-ols.log
     fi
 
-    # Nối toàn bộ cấu hình vào file 1 lần duy nhất
+    # Ghi toàn bộ vào file
     echo "$CONFIG_BLOCK" >>"$php_ini_path"
   fi
 done
