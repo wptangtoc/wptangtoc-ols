@@ -1,0 +1,248 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+function huong_dan() {
+  Tính năng Kiểm Toán Bảo Mật Server [dựa theo CIS Benchmark - 15 Tiêu Chuẩn]
+
+  Hệ thống sẽ rà soát 15 tiêu chuẩn quốc tế ở tầng OS &
+  Kernel:
+  * File System: Quyền truy cập file nhạy cảm [/etc/passwd, /etc/shadow].
+  * Kernel Network: Chống DDoS SYN, Spoofing, Smurf Attack, MITM, Source Route.
+  * Kernel Memory: Khóa Core Dumps [Chống lộ RAM], Bật ASLR [Chống Buffer Overflow].
+  * SSH Hardening: Khóa X11, Siết số lần thử Pass, Khóa mật khẩu rỗng.
+
+  Sử dụng Auto-Fix để hệ thống tự động đổ bê tông Server của bạn trong 1 nốt nhạc.
+}
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+
+# ==============================================================================
+# HÀM KIỂM TOÁN (15 TIÊU CHÍ)
+# ==============================================================================
+run_audit() {
+  SCORE=0
+  TOTAL=15
+  unset AUDIT_RESULTS
+  AUDIT_RESULTS=()
+
+  # 1. /etc/passwd (644)
+  if [[ "$(stat -c %a /etc/passwd 2>/dev/null)" == "644" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Quyền file /etc/passwd an toàn (644)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Lỗ hổng quyền truy cập /etc/passwd")
+  fi
+
+  # 2. /etc/shadow (0, 000, 400 - Fix lỗi hiển thị stat)
+  perm_shadow=$(stat -c %a /etc/shadow 2>/dev/null)
+  if [[ "$perm_shadow" == "0" || "$perm_shadow" == "000" || "$perm_shadow" == "400" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Mật khẩu hệ thống /etc/shadow đã khóa chặt")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} File /etc/shadow đang bị lộ quyền ($perm_shadow)")
+  fi
+
+  # 3. TCP SYN Cookies
+  if [[ "$(sysctl -n net.ipv4.tcp_syncookies 2>/dev/null)" == "1" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Tường lửa chống TCP SYN Flood đã BẬT")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Thiếu cấu hình chống DDoS TCP SYN")
+  fi
+
+  # 4. RP Filter (IP Spoofing)
+  rp_filter=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null)
+  if [[ "$rp_filter" == "1" || "$rp_filter" == "2" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Bộ lọc IP giả mạo (Spoofing) đã BẬT")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Chưa bật bộ lọc giả mạo IP (RP Filter)")
+  fi
+
+  # 5. ICMP Redirects (Nhận)
+  if [[ "$(sysctl -n net.ipv4.conf.all.accept_redirects 2>/dev/null)" == "0" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Đã vô hiệu hóa nhận ICMP Redirects (Chống MITM)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Nguy cơ nghe lén: Đang nhận ICMP Redirects")
+  fi
+
+  # 6. ICMP Redirects (Gửi)
+  if [[ "$(sysctl -n net.ipv4.conf.all.send_redirects 2>/dev/null)" == "0" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Đã vô hiệu hóa phát ICMP Redirects")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Server đang phát ICMP Redirects sai quy chuẩn")
+  fi
+
+  # 7. Smurf Attacks (ICMP Broadcast)
+  if [[ "$(sysctl -n net.ipv4.icmp_echo_ignore_broadcasts 2>/dev/null)" == "1" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Hệ thống đã miễn nhiễm với Smurf Attacks")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Nguy cơ bị lợi dụng tấn công Smurf Attack")
+  fi
+
+  # 8. Log Martians
+  if [[ "$(sysctl -n net.ipv4.conf.all.log_martians 2>/dev/null)" == "1" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Radar theo dõi gói tin dị thường đã BẬT")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Thiếu Radar theo dõi IP rác (Log Martians)")
+  fi
+
+  # 9. IP Forwarding
+  if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" == "0" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Đã khóa định tuyến chéo (IP Forwarding)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Định tuyến chéo đang mở (Nguy hiểm)")
+  fi
+
+  # 10. SSH X11 Forwarding
+  if grep -qE '^X11Forwarding[ \t]+no' /etc/ssh/sshd_config 2>/dev/null; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Giao diện đồ họa SSH (X11) đã khóa an toàn")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} SSH X11 Forwarding đang mở -> Rủi ro By-pass")
+  fi
+
+  # 11. Core Dumps (Chống lộ mật khẩu khi ứng dụng crash)
+  if [[ "$(sysctl -n fs.suid_dumpable 2>/dev/null)" == "0" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Khóa lưu trữ Core Dumps (Bảo vệ RAM)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Nguy cơ rò rỉ dữ liệu nhạy cảm qua Core Dumps")
+  fi
+
+  # 12. ASLR (Randomize Address Space - Chống Buffer Overflow)
+  if [[ "$(sysctl -n kernel.randomize_va_space 2>/dev/null)" == "2" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} ASLR Kernel đã kích hoạt (Chống Buffer Overflow)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Thiếu xáo trộn bộ nhớ Kernel (ASLR đang tắt)")
+  fi
+
+  # 13. Source Routed Packets
+  if [[ "$(sysctl -n net.ipv4.conf.all.accept_source_route 2>/dev/null)" == "0" ]]; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Đã chặn các gói tin Source Routed (An toàn)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Đang chấp nhận gói tin định tuyến từ xa")
+  fi
+
+  # 14. SSH MaxAuthTries (Giới hạn Brute-force)
+  if grep -qE '^MaxAuthTries[ \t]+[1-4]' /etc/ssh/sshd_config 2>/dev/null; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Đã giới hạn số lần thử mật khẩu SSH sai")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Chưa giới hạn số lần thử SSH (Dễ bị Brute-force)")
+  fi
+
+  # 15. SSH PermitEmptyPasswords
+  if grep -qE '^PermitEmptyPasswords[ \t]+no' /etc/ssh/sshd_config 2>/dev/null; then
+    AUDIT_RESULTS+=("${C_GREEN}[PASS]${C_RESET} Cấm triệt để tài khoản có mật khẩu rỗng (SSH)")
+    ((SCORE++))
+  else
+    AUDIT_RESULTS+=("${C_RED}[FAIL]${C_RESET} Có thể đăng nhập SSH không cần mật khẩu (Cực kỳ rủi ro)")
+  fi
+}
+
+# ==============================================================================
+# HÀM AUTO-FIX (VÁ 15 LỖ HỔNG TỰ ĐỘNG)
+# ==============================================================================
+auto_fix_security() {
+  echo -e "\n${C_YELLOW}Đang tiến hành vá 15 lỗ hổng theo chuẩn CIS Enterprise...${C_RESET}"
+
+  # 1. Fix File Permissions
+  chmod 644 /etc/passwd
+  chmod 000 /etc/shadow
+
+  # 2. Fix Kernel Parameters
+  cat <<EOF >/etc/sysctl.d/99-wptt-security.conf
+# WPTangToc OLS - CIS Benchmark Security Settings
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+net.ipv4.ip_forward = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+fs.suid_dumpable = 0
+kernel.randomize_va_space = 2
+EOF
+  sysctl -p /etc/sysctl.d/99-wptt-security.conf >/dev/null 2>&1
+
+  # 3. Fix SSH Config
+  sed -i -E 's/^#?X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
+  sed -i -E 's/^#?MaxAuthTries.*/MaxAuthTries 4/' /etc/ssh/sshd_config
+  sed -i -E 's/^#?PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+  systemctl restart sshd >/dev/null 2>&1
+
+  echo -e "${C_GREEN}Vá lỗi hoàn tất! 15/15 Hạng mục đã được Đổ Bê Tông Cốt Thép.${C_RESET}"
+  sleep 2
+}
+
+# ==============================================================================
+# VÒNG LẶP GIAO DIỆN CHÍNH
+# ==============================================================================
+while true; do
+  clear
+  run_audit
+
+  print_border_top
+  center_text "${C_YELLOW}HỆ THỐNG KIỂM TOÁN BẢO MẬT (Dựa theo CIS BENCHMARK)${C_RESET}"
+  print_border_mid
+  print_spacer
+
+  for result in "${AUDIT_RESULTS[@]}"; do
+    left_text "$result" 2
+  done
+
+  print_spacer
+  print_border_mid
+
+  if [[ "$SCORE" == "$TOTAL" ]]; then
+    center_text "${C_GREEN}★ TỔNG ĐIỂM: $SCORE/$TOTAL (MÁY CHỦ ĐẠT CHUẨN QUỐC TẾ) ★${C_RESET}"
+  elif ((SCORE >= 10)); then
+    center_text "${C_YELLOW}⚠ TỔNG ĐIỂM: $SCORE/$TOTAL (TẠM ỔN - CẦN VÁ THÊM) ⚠${C_RESET}"
+  else
+    center_text "${C_RED}☠ TỔNG ĐIỂM: $SCORE/$TOTAL (NGUY HIỂM TỘT ĐỘ) ☠${C_RESET}"
+  fi
+  print_border_bot
+
+  echo -e "\n${C_CYAN}CÁC TÙY CHỌN:${C_RESET}"
+  echo -e "  ${C_CYAN}1)${C_RESET} ${C_BOLD_WHITE}Tự động vá lỗi (Auto-Fix 15/15)${C_RESET}"
+  echo -e "  ${C_CYAN}2)${C_RESET} ${C_BOLD_WHITE}Quét lại hệ thống (Rescan)${C_RESET}"
+  echo -e "  ${C_CYAN}0)${C_RESET} ${C_YELLOW}Thoát${C_RESET}"
+
+  echo -en "\n${C_CYAN}Nhập lựa chọn: ${C_RESET}"
+  read -r choice
+
+  case "$choice" in
+  1) auto_fix_security ;;
+  2)
+    echo -e "${C_GREEN}Đang quét lại...${C_RESET}"
+    sleep 1
+    ;;
+  0)
+    echo -e "${C_GREEN}Thoát Kiểm toán bảo mật.${C_RESET}"
+    exec /etc/wptt/wptt-bao-mat-main 1
+    ;;
+  *)
+    echo -e "${C_RED}Lựa chọn không hợp lệ!${C_RESET}"
+    sleep 1
+    ;;
+  esac
+done
