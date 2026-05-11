@@ -131,7 +131,7 @@ gia_han_thu_cong_ssl_letencrypt="Gia hạn thủ công chứng chỉ SSL FREE Le
 thiet_lap_ssl_tra_phi="Thiết lập chứng chỉ SSL trả phí"
 xoa_chung_chi_ssl_tra_phi="Xóa chứng chỉ SSL trả phí thương mại"
 kiem_tra_chung_chi_ssl_dang_su_dung="Kiểm tra chứng chỉ SSL đang sử dụng"
-renew_thiet_lap_chuyen_huong_http_sang_https="Renew [HTTP to HTTPS]"
+renew_thiet_lap_chuyen_huong_http_sang_https="Renew thiết lập lại [HTTP to HTTPS]"
 
 #ssl ben trong
 chung_chi="chứng chỉ"
