@@ -1,0 +1,110 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+clear
+print_border_top
+center_text "${C_YELLOW}AUTO MASS DEPLOY - TRIỂN KHAI WEBSITE HÀNG LOẠT${C_RESET}"
+print_border_bot
+echo ""
+
+if [[ $# -lt 2 ]]; then
+  echo -e "${C_RED}Lỗi: Bạn phải nhập ít nhất 1 Website Nguồn và 1 Website Đích!${C_RESET}"
+  exit 1
+fi
+
+SOURCE_DOMAIN=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+
+# Hàm check chuẩn Regex Domain
+check_domain_valid() {
+  local domain=$1
+  if [[ "$domain" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then
+    return 0 # Hợp lệ
+  else
+    return 1 # Không hợp lệ
+  fi
+}
+
+if ! check_domain_valid "$SOURCE_DOMAIN"; then
+  echo -e "${C_RED}Lỗi: Tên miền NGUỒN ($SOURCE_DOMAIN) sai định dạng!${C_RESET}"
+  exit 1
+fi
+
+# ==============================================================================
+# BƯỚC 1: XỬ LÝ WEBSITE NGUỒN (BASE TEMPLATE)
+# ==============================================================================
+_runing "Đang chuẩn bị Website Nguồn: $SOURCE_DOMAIN ..."
+
+if [[ -d "/usr/local/lsws/$SOURCE_DOMAIN/html" ]]; then
+  # Xóa web cũ nếu tồn tại
+  (/etc/wptt/domain/wptt-xoa-website "$SOURCE_DOMAIN" 'nhan-ban' >/dev/null 2>&1)
+fi
+
+# Chạy import website nguồn
+(/etc/wptt/domain/wptt-themwebsite $SOURCE_DOMAIN >/dev/null 2>&1)
+(/etc/wptt/chuyen-web/wptt-chuyen-website "$SOURCE_DOMAIN" 1 >/dev/null 2>&1)
+
+# Dọn dẹp rác tạm
+rm -f /usr/local/lsws/*/html/wptt
+
+_rundone "Khởi tạo Website Nguồn ($SOURCE_DOMAIN) thành công!"
+echo ""
+
+# ==============================================================================
+# BƯỚC 2: VÒNG LẶP TRIỂN KHAI HÀNG LOẠT (MASS CLONING)
+# ==============================================================================
+# Dùng lệnh shift để đẩy đối số $1 (Nguồn) ra khỏi danh sách.
+# Các đối số còn lại ($@) bây giờ chỉ toàn là Website Đích.
+shift 1
+
+TOTAL_TARGETS=$#
+CURRENT=0
+SUCCESS_COUNT=0
+
+echo -e "${C_CYAN}Bắt đầu tiến trình Clone dữ liệu ra $TOTAL_TARGETS website đích...${C_RESET}"
+print_border_mid
+
+for TARGET_DOMAIN in "$@"; do
+  ((CURRENT++))
+  TARGET_DOMAIN=$(echo "$TARGET_DOMAIN" | tr '[:upper:]' '[:lower:]')
+  
+  echo -e "${C_YELLOW}[Tiến độ $CURRENT/$TOTAL_TARGETS]${C_RESET} Đang xử lý: ${C_BOLD_WHITE}$TARGET_DOMAIN${C_RESET}"
+
+  # 1. Kiểm duyệt Domain Đích
+  if ! check_domain_valid "$TARGET_DOMAIN"; then
+    echo -e "   ➜ ${C_RED}Bỏ qua: Tên miền sai định dạng.${C_RESET}"
+    continue
+  fi
+
+  # Lưu ý: Chặn output rác để màn hình Terminal giữ độ sạch sẽ
+  echo "Nhân bản: $SOURCE_DOMAIN sang $TARGET_DOMAIN"
+  (/etc/wptt/wptt-sao-chep-website "$SOURCE_DOMAIN" "$TARGET_DOMAIN" "no-config")
+  
+  # 3. Kiểm tra kết quả (check xem thư mục web đích đã được đẻ ra chưa)
+  if [[ -d "/usr/local/lsws/$TARGET_DOMAIN/html" ]]; then
+    echo -e "   ➜ ${C_GREEN}Thành công! Đã lên sóng.$TARGET_DOMAIN${C_RESET}"
+    ((SUCCESS_COUNT++))
+  else
+    echo -e "   ➜ ${C_RED}Thất bại trong quá trình Clone!${C_RESET}"
+  fi
+
+done
+
+echo ""
+(/etc/wptt/domain/wptt-xoa-website "$SOURCE_DOMAIN" 'nhan-ban' >/dev/null 2>&1)
+
+print_border_top
+center_text "${C_YELLOW}BÁO CÁO MASS DEPLOY HOÀN TẤT${C_RESET}"
+print_border_bot
+left_text "Website Nguồn : $SOURCE_DOMAIN" 2
+left_text "Triển khai    : $SUCCESS_COUNT / $TOTAL_TARGETS thành công" 2
+print_spacer
+
+
+# Reload lại LiteSpeed cho chắc cú để nhận đủ vHost mới
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+
