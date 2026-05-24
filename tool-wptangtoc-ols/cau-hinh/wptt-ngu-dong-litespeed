@@ -1,0 +1,257 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Tính năng Ngủ Đông Website (Zero-RAM Idle Mode)
+# @since: 2026
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp bộ thư viện UX 78 Columns
+
+
+# ==============================================================================
+# 1. HỖ TRỢ ĐỐI SỐ CLI (CHẠY NGẦM KHÔNG CẦN MENU)
+# Cú pháp: wptt-ngu-dong-litespeed <on|off> <all|domain.com>
+# Ví dụ: /etc/wptt/cau-hinh/wptt-ngu-dong-litespeed on all
+# Ví dụ: /etc/wptt/cau-hinh/wptt-ngu-dong-litespeed on webvetinh.com
+#        /etc/wptt/cau-hinh/wptt-ngu-dong-litespeed off webvetinh.com
+# ==============================================================================
+
+print_full_row() {
+  local index="$1"
+  local text="$2"
+  local box_inner_width=78
+
+  if [[ -z "$index" ]]; then
+    local raw_title="   ▶ ${text}"
+    local clean_len=$(echo -en "$raw_title" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | wc -m)
+    local pad=$((box_inner_width - clean_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_YELLOW}▶${C_RESET} ${C_BOLD_WHITE}${text^^}${C_RESET}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+  else
+    local formatted_index=$(printf "%2s" "$index")
+    local raw_text="   [${formatted_index}] ${text}"
+    local clean_len=$(echo -en "$raw_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | wc -m)
+    local pad=$((box_inner_width - clean_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${text}${C_RESET}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+  fi
+}
+
+# ==============================================================================
+# HÀM DỌN DẸP & BƠM CẤU HÌNH LSAPI ĐỘNG TÙY SỐ LƯỢNG WEB
+# ==============================================================================
+apply_lsapi_config() {
+  local vfile="$1"
+  local mode="$2"
+  local total_webs="$3"
+
+  # 1. Dọn sạch rác cũ (Đề phòng cấu hình bị trùng lặp)
+  sed -i '/maxIdleTime/d' "$vfile" 2>/dev/null
+  sed -i '/env[[:space:]]*PHP_LSAPI_CHILDREN/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_AVOID_FORK/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_MAX_IDLE/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_PGRP_MAX_IDLE/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_MAX_IDLE_CHILDREN/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_MAX_PROCESS_TIME/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_ACCEPT_NOTIFY/d' "$vfile"
+  sed -i '/env[[:space:]]*LSAPI_MAX_CMD_SCRIPT_PATH_LEN/d' "$vfile"
+
+  if [[ "$mode" == "on" ]]; then
+    # BẬT NGỦ ĐÔNG (Ép runOnStartUp về 0 và bơm cấu hình khóa RAM)
+    sed -i -E 's/runOnStartUp[[:space:]]+[0-9]+/runOnStartUp            0/g' "$vfile"
+    
+    sed -i '/runOnStartUp[[:space:]]*0/a \
+  env                     PHP_LSAPI_CHILDREN=2\
+  env                     LSAPI_AVOID_FORK=0\
+  env                     LSAPI_MAX_IDLE=60\
+  env                     LSAPI_PGRP_MAX_IDLE=60\
+  env                     LSAPI_MAX_IDLE_CHILDREN=0\
+  env                     LSAPI_MAX_PROCESS_TIME=120\
+  env                     LSAPI_ACCEPT_NOTIFY=1' "$vfile"
+  else
+    # TẮT NGỦ ĐÔNG (Khôi phục runOnStartUp về 2)
+    sed -i -E 's/runOnStartUp[[:space:]]+[0-9]+/runOnStartUp            2/g' "$vfile"
+
+    # Tính toán CPU Cấp phát Worker
+    local cpucore=$(grep -c ^processor /proc/cpuinfo)
+    local core_tien_lsphp_child=$((cpucore * 2))
+
+    if [[ "$total_webs" -ge 5 ]]; then
+      # Kịch bản >= 5 Website
+      sed -i '/runOnStartUp[[:space:]]*2/a \
+  env                     PHP_LSAPI_CHILDREN='"$core_tien_lsphp_child"'\
+  env                     LSAPI_AVOID_FORK=0\
+  env                     LSAPI_MAX_IDLE=30\
+  env                     LSAPI_MAX_IDLE_CHILDREN=1\
+  env                     LSAPI_MAX_PROCESS_TIME=120\
+  env                     LSAPI_PGRP_MAX_IDLE=30\
+  env                     LSAPI_ACCEPT_NOTIFY=1\
+  env                     LSAPI_MAX_CMD_SCRIPT_PATH_LEN=200' "$vfile"
+    else
+      # Kịch bản < 5 Website
+      sed -i '/runOnStartUp[[:space:]]*2/a \
+  env                     PHP_LSAPI_CHILDREN='"$core_tien_lsphp_child"'\
+  env                     LSAPI_ACCEPT_NOTIFY=1\
+  env                     LSAPI_MAX_CMD_SCRIPT_PATH_LEN=200\
+  env                     LSAPI_AVOID_FORK=300M' "$vfile"
+    fi
+  fi
+}
+
+# ==============================================================================
+# ĐẾM TỔNG SỐ LƯỢNG WEBSITE ĐANG CÓ TRÊN SERVER
+# ==============================================================================
+TOTAL_SITES=0
+if [ "$(ls -A /usr/local/lsws/conf/vhosts 2>/dev/null)" ]; then
+  for dom in $(ls /usr/local/lsws/conf/vhosts); do
+    [[ -f "/usr/local/lsws/conf/vhosts/$dom/$dom.conf" && "$dom" != "Example" ]] && ((TOTAL_SITES++))
+  done
+fi
+
+# ==============================================================================
+# 1. HỖ TRỢ ĐỐI SỐ CLI (CHẠY NGẦM KHÔNG CẦN MENU)
+# ==============================================================================
+if [[ "$1" == "on" || "$1" == "off" ]]; then
+  MODE="$1"
+  TARGET="$2"
+  
+  [[ -z "$TARGET" ]] && { echo -e "${C_RED}Lỗi: Thiếu đối số domain (VD: all hoặc domain.com)${C_RESET}"; exit 1; }
+
+  DOMAINS_CLI=()
+  if [[ "$TARGET" == "all" ]]; then
+    for dom in $(ls /usr/local/lsws/conf/vhosts 2>/dev/null); do
+      [[ -f "/usr/local/lsws/conf/vhosts/$dom/$dom.conf" && "$dom" != "Example" ]] && DOMAINS_CLI+=("$dom")
+    done
+  else
+    [[ -f "/usr/local/lsws/conf/vhosts/$TARGET/$TARGET.conf" ]] && DOMAINS_CLI+=("$TARGET") || { echo -e "${C_RED}Lỗi: Domain $TARGET không tồn tại!${C_RESET}"; exit 1; }
+  fi
+
+  for domain in "${DOMAINS_CLI[@]}"; do
+    vhost_file="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+    
+    if [[ "$MODE" == "on" ]]; then
+      apply_lsapi_config "$vhost_file" "on" "$TOTAL_SITES"
+      echo -e "${C_GREEN}➜ Đã BẬT ngủ đông (Full LSAPI Optimized) cho: $domain${C_RESET}"
+    else
+      apply_lsapi_config "$vhost_file" "off" "$TOTAL_SITES"
+      echo -e "${C_YELLOW}➜ Đã TẮT ngủ đông (Cấu hình tự động theo $TOTAL_SITES web) cho: $domain${C_RESET}"
+    fi
+  done
+  
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  exit 0
+fi
+
+# ==============================================================================
+# 2. GIAO DIỆN MENU TƯƠNG TÁC (KHI KHÔNG CÓ ĐỐI SỐ)
+# ==============================================================================
+clear
+print_border_top
+center_text "${C_YELLOW}TỐI ƯU HÓA ➜ Chế Độ Ngủ Đông Website (Zero-RAM Idle)${C_RESET}"
+print_border_bot
+echo ""
+left_text "${C_CYAN}Cơ chế hoạt động:${C_RESET}" 0
+left_text "  - Ép PHP tự tắt sau 60s rảnh rỗi, để xả 100% RAM. Tiết kiệm ra hết cỡ" 0
+left_text "  - Khi TẮT, hệ thống tự động cấp phát tài nguyên theo CPU và tổng số" 0
+left_text "    website hiện có ($TOTAL_SITES web)." 0
+echo ""
+
+unset DOMAINS
+DOMAINS=()
+if [ "$(ls -A /usr/local/lsws/conf/vhosts 2>/dev/null)" ]; then
+  for dom in $(ls /usr/local/lsws/conf/vhosts); do
+    if [[ -f "/usr/local/lsws/conf/vhosts/$dom/$dom.conf" && "$dom" != "Example" ]]; then
+      DOMAINS+=("$dom")
+    fi
+  done
+fi
+
+if [[ ${#DOMAINS[@]} -eq 0 ]]; then
+  echo -e "${C_RED}Không tìm thấy website nào trên hệ thống!${C_RESET}"
+  sleep 2
+  exit 1
+fi
+
+print_border_top
+center_text "${C_YELLOW}BẠN MUỐN ÁP DỤNG NGỦ ĐÔNG CHO:${C_RESET}"
+print_border_mid
+print_full_row "1" "Bật NGỦ ĐÔNG cho 1 Website cụ thể"
+print_full_row "2" "${C_GREEN}Bật NGỦ ĐÔNG HÀNG LOẠT cho TẤT CẢ Website${C_RESET}"
+print_full_row "3" "${C_YELLOW}TẮT Ngủ Đông (Khôi phục PHP luôn chạy 24/24)${C_RESET}"
+print_border_bot
+
+echo -en "\n${C_CYAN}Nhập lựa chọn (1-3) [0=Thoát]: ${C_RESET}"
+read -r ACTION
+
+case "$ACTION" in
+  0) exit 0 ;;
+  1) 
+    . /etc/wptt/tenmien
+    lua_chon_NAME "Chọn Website bạn muốn BẬT Ngủ đông"
+    [[ "$NAME" == "0" || -z "$NAME" ]] && exit 0
+    TARGETS=("$NAME")
+    IS_IDLE=1
+    ;;
+  2) 
+    if wptt_xac_nhan "BẠN MUỐN BẬT NGỦ ĐÔNG CHO TẤT CẢ ${#DOMAINS[@]} WEBSITE?" "Lưu ý: Chỉ áp dụng cho web vệ tinh/PBN. Web bán hàng" "cần tốc độ nạp trang tức thời thì không nên dùng." "Đồng ý BẬT HÀNG LOẠT" "Hủy bỏ"; then
+      TARGETS=("${DOMAINS[@]}")
+      IS_IDLE=1
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+      exit 0
+    fi
+    ;;
+  3)
+    . /etc/wptt/tenmien
+    lua_chon_NAME "Chọn Website bạn muốn TẮT Ngủ đông (Luôn chạy)"
+    [[ "$NAME" == "0" || -z "$NAME" ]] && exit 0
+    TARGETS=("$NAME")
+    IS_IDLE=0
+    ;;
+  *)
+    echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
+    sleep 2
+    exit 1
+    ;;
+esac
+
+echo ""
+_runing "Đang xử lý cấu hình LiteSpeed LSAPI..."
+
+SUCCESS_COUNT=0
+
+for domain in "${TARGETS[@]}"; do
+  vhost_file="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+  
+  if [[ -f "$vhost_file" ]]; then
+    if [[ "$IS_IDLE" == 1 ]]; then
+      apply_lsapi_config "$vhost_file" "on" "$TOTAL_SITES"
+    else
+      apply_lsapi_config "$vhost_file" "off" "$TOTAL_SITES"
+    fi
+    ((SUCCESS_COUNT++))
+  fi
+done
+
+/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+_rundone "Cấu hình thành công $SUCCESS_COUNT website!"
+
+echo ""
+print_border_top "$C_GREEN"
+if [[ "$IS_IDLE" == 1 ]]; then
+  center_text "${C_BOLD_WHITE}KÍCH HOẠT NGỦ ĐÔNG THÀNH CÔNG${C_RESET}"
+  print_border_mid "$C_GREEN"
+  left_text "Tiến trình PHP của $SUCCESS_COUNT web chế độ tiết kiệm ram hết cỡ," 2
+  left_text "và tự động Kill để xả RAM sau 60 giây rảnh rỗi." 2
+else
+  center_text "${C_BOLD_WHITE}ĐÃ KHÔI PHỤC TRẠNG THÁI LUÔN CHẠY${C_RESET}"
+  print_border_mid "$C_GREEN"
+  left_text "Tiến trình PHP của $SUCCESS_COUNT web đã được khôi phục" 2
+  left_text "chạy 24/24. Tự động tính toán cấp phát $core_tien_lsphp_child Workers/Web." 2
+fi
+print_border_bot "$C_GREEN"
+
+exit 0
