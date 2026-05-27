@@ -184,38 +184,56 @@ kiemtra
 
 echo ""
 
-# ==============================================================================
-# NETWORK ROUTING (SỬ DỤNG LEFT_TEXT CỦA THƯ VIỆN)
-# ==============================================================================
 speed_internet_test() {
-  local url=$1
+  local dl_url=$1
   local nodeName=$2
+  
+  # Tự động bóc tách link Download để suy ra link Upload
+  local ul_url="${dl_url/random4000x4000.jpg/upload.php}"
 
   # Bóc tách Domain từ URL để đo Ping
-  local domain=$(echo "$url" | awk -F/ '{print $3}')
+  local domain=$(echo "$dl_url" | awk -F/ '{print $3}')
 
   # Đo Ping (Gửi 2 gói, timeout 2 giây)
   local ping_time=$(ping -c 2 -W 2 "$domain" 2>/dev/null | tail -1 | awk -F '/' '{print $5}')
   local ping_str=""
 
-  # Phân loại độ trễ bằng màu sắc
+  # Phân loại độ trễ & CĂN LỀ PING (Dành đúng 7 ký tự cho số Ping)
   if [[ "$ping_time" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    local p_val=${ping_time%.*} # Cắt bỏ phần thập phân để so sánh
+    local p_val=${ping_time%.*} 
+    local ping_pad=$(printf "%7s" "$ping_time") # Ép độ dài luôn bằng 7
     if [[ "$p_val" -lt 60 ]]; then
-      ping_str="${C_GREEN}(Ping: ${ping_time} ms)${C_RESET}"
+      ping_str="${C_GREEN}${ping_pad} ms${C_RESET}"
     elif [[ "$p_val" -lt 150 ]]; then
-      ping_str="${C_YELLOW}(Ping: ${ping_time} ms)${C_RESET}"
+      ping_str="${C_YELLOW}${ping_pad} ms${C_RESET}"
     else
-      ping_str="${C_RED}(Ping: ${ping_time} ms)${C_RESET}"
+      ping_str="${C_RED}${ping_pad} ms${C_RESET}"
     fi
   else
-    ping_str="${C_YELLOW}(Ping: N/A)${C_RESET}"
+    local ping_pad=$(printf "%10s" "N/A") # Nếu lỗi thì in chữ N/A thẳng hàng
+    ping_str="${C_YELLOW}${ping_pad}${C_RESET}"
   fi
 
-  # Đo tốc độ Download
-  local speedtest=$(wget -4O /dev/null -T15 "$url" 2>&1 | awk '/\/dev\/null/ {speed=$3 $4} END {gsub(/\(|\)/,"",speed); print speed}')
+  # Đo Download và Upload bằng cURL
+  local dl_bps=$(curl -s -w "%{speed_download}" -o /dev/null -m 10 "$dl_url")
+  local ul_bps=$(curl -s -w "%{speed_upload}" -o /dev/null -m 10 -F "file=@/tmp/wptt_upload_test.dat" "$ul_url")
 
-  # Format UI chuẩn vào khung (Căn lề tự động)
+  # Convert tốc độ từ Bytes/sec sang MB/s
+  local dl_mb=$(echo "scale=1; ${dl_bps:-0} / 1048576" | bc 2>/dev/null | awk '{printf "%.1f", $0}')
+  local ul_mb=$(echo "scale=1; ${ul_bps:-0} / 1048576" | bc 2>/dev/null | awk '{printf "%.1f", $0}')
+
+  # CĂN LỀ TỐC ĐỘ CHO THẲNG CỘT (Dành đúng 5 ký tự, VD: " 17.8" và "190.3")
+  local dl_pad=$(printf "%5s" "$dl_mb")
+  local ul_pad=$(printf "%5s" "$ul_mb")
+
+  # Xử lý hiển thị UI tốc độ
+  local dl_str="${C_CYAN}${dl_pad} MB/s${C_RESET}"
+  [[ "$dl_mb" == "0.0" ]] && dl_str="${C_RED}$(printf "%10s" "Lỗi DL")${C_RESET}" # Căn 10 khoảng trắng cho báo lỗi
+
+  local ul_str="${C_GREEN}${ul_pad} MB/s${C_RESET}"
+  [[ "$ul_mb" == "0.0" ]] && ul_str="${C_RED}$(printf "%10s" "Lỗi UL")${C_RESET}"
+
+  # Format tên nhà mạng (Căn lề chuẩn của WPTangToc)
   local clean_node=$(echo -en "$nodeName" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
   local node_len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_node") 2>/dev/null | wc -m | tr -d ' ' )
   [[ -z "$node_len" || "$node_len" == "0" ]] && node_len=${#clean_node}
@@ -223,15 +241,8 @@ speed_internet_test() {
   local pad_node=$((18 - node_len))
   [[ $pad_node -lt 0 ]] && pad_node=0
   
-  local result_str=""
-  if [[ -z "$speedtest" ]]; then
-    result_str=$(printf "${C_RED}%-12s${C_RESET} %b" "Lỗi kết nối" "$ping_str")
-  else
-    result_str=$(printf "${C_CYAN}%-12s${C_RESET} %b" "$speedtest" "$ping_str")
-  fi
-
-  # Đẩy thẳng vào hàm left_text của echo-color
-  left_text "  ${nodeName}$(printf '%*s' "$pad_node" "") : ${result_str}" 0
+  # Đẩy vào left_text, thêm khoảng trắng ở thanh | để nhìn thông thoáng
+  left_text "  ${nodeName}$(printf '%*s' "$pad_node" "") > Down: ${dl_str} | UP: ${ul_str} | Ping: ${ping_str}" 0
 }
 
 speed() {
@@ -239,15 +250,24 @@ speed() {
   center_text "${C_YELLOW}KIỂM TRA BĂNG THÔNG & ĐỘ TRỄ MẠNG (NETWORK ROUTING)${C_RESET}"
   print_border_mid
   left_text "${C_GREEN}[ Mạng - Việt Nam ]${C_RESET}" 1
+  
+  # Tạo file rác 10MB mồi Test Upload
+  dd if=/dev/zero of=/tmp/wptt_upload_test.dat bs=1M count=10 2>/dev/null
+  
   speed_internet_test 'http://speedtest1.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Hà Nội'
   speed_internet_test 'http://speedtest5.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Đà Nẵng'
   speed_internet_test 'http://speedtest3.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Hồ Chí Minh'
   speed_internet_test 'http://speedtestkv1a.viettel.vn/speedtest/random4000x4000.jpg' 'Viettel, Hà Nội'
   speed_internet_test 'http://speedtestkv2a.viettel.vn/speedtest/random4000x4000.jpg' 'Viettel, Đà Nẵng'
+  
+  # Xóa file rác hoàn trả RAM/I-O
+  rm -f /tmp/wptt_upload_test.dat
+  
   print_border_bot
 }
 
 speed
+
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
 echo ''
