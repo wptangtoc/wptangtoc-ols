@@ -174,7 +174,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Sao lưu website tự động</li>
 <li>Sao lưu database</li>
 <li>Giao thức QUIC HTTP/3</li>
-<li>Hỗ trợ Google Drive và Onedrive, Telegram lưu trữ đám mây backup website</li>
+<li>Hỗ trợ Google Drive và Onedrive, Telegram, S3 amazon, S3 Cloudflare R2... lưu trữ đám mây backup website</li>
 <li>Preload Cache</li>
 <li>Thêm Không giới hạn domain & subdomain</li>
 <li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
@@ -212,7 +212,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Tường lửa 8G for WordPress</li>
 <li>Tối ưu Object Cache tầng Socket</li>
 <li>Tường lửa firewalld (Tường lửa CSF, NFtables tuỳ chọn)</li>
-<li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive, Telegram)</li>
+<li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive, Telegram, s3 amazon, s3 cloudflare r2, s3 DigitalOcean, s3 vietnix, s3 contabo...)</li>
 <li>Quản lý Wordpress</li>
 <li>LockDown Wordpress bảo mật</li>
 <li>Hỗ trợ update WPTangToc OLS, WordPress, máy chủ...</li>
