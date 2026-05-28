@@ -1,55 +1,77 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Auto Delete Cronjob Cloud (Drive, OneDrive, S3)
+# @since: 2026
+
 NAME=$1
 ngay=$2
-checkactivate=$(grep -rnw '/root/.config/rclone/rclone.conf' -e "wptangtoc" >>/dev/null 2>&1 && echo 2)
-if [[ "$checkactivate" = "2" ]]; then
-  google=4
-else
-  echo "Bạn chưa kích hoạt rclone Drive"
-  exit
+RCLONE_CONF="/root/.config/rclone/rclone.conf"
+
+# Kiểm tra trạng thái kích hoạt Cloud
+if ! grep -q 'wptangtoc' "$RCLONE_CONF" 2>/dev/null; then
+  echo "Bạn chưa kích hoạt Rclone Cloud"
+  exit 1
 fi
 
-if [[ "$google" = "4" ]]; then
-  if [[ $NAME = 'Tất cả website' ]]; then
-    selects=()
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')       #all website
-      if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        danh_sach_file_het_han=($(rclone ls wptangtoc:wptangtoc_ols_backup/$NAME --min-age ${ngay}d | awk '{print $2}' | grep '.zip\|.sql\|.sql.gz|\.tar.gz|\.tar.zst|.sql.zst'))
-        for file in ${danh_sach_file_het_han[@]}; do
-          if [[ $file ]]; then
+# ==============================================================================
+# NHẬN DIỆN CLOUD VÀ THƯ MỤC LƯU TRỮ
+# ==============================================================================
+CLOUD_DIR="wptangtoc_ols_backup"
+DELETE_FLAGS=()
 
-            #--drive-use-trash=false	xoá trên google drive không cần phải vào thùng rác
-            #--onedrive-hard-delete	là trên onedriver Business hoặc SharePoint, còn Personal thì không có
-            if [[ $(cat ~/.config/rclone/rclone.conf | grep 'onedrive') ]]; then
-              if [[ $(cat ~/.config/rclone/rclone.conf | grep 'drive_type' | grep 'personal') ]]; then #Personal onedrive
-                rclone -v delete wptangtoc:wptangtoc_ols_backup/$NAME/$file
-              else
-                rclone -v --onedrive-hard-delete delete wptangtoc:wptangtoc_ols_backup/$NAME/$file #onedriver Business hoặc SharePoint
-              fi
-            else #google drive
-              rclone -v --drive-use-trash=false delete wptangtoc:wptangtoc_ols_backup/$NAME/$file
-            fi
-
-          fi
-        done
-      fi
-    done
-    exit
+# Bắt buộc quét đúng tham số "type =" để tránh nhận diện nhầm
+if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$RCLONE_CONF" 2>/dev/null; then
+  if grep -q 'personal' "$RCLONE_CONF" 2>/dev/null; then
+    DELETE_FLAGS=() # Personal OneDrive không hỗ trợ hard-delete cờ phụ
+  else
+    DELETE_FLAGS=("--onedrive-hard-delete") # OneDrive Business hoặc SharePoint
   fi
+elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$RCLONE_CONF" 2>/dev/null; then
+  CLOUD_DIR="wptangtoc-ols-backup" # S3 bắt buộc dùng dấu gạch ngang
+  DELETE_FLAGS=() # S3 tự động hard-delete, không cần cờ phụ
+else
+  # Mặc định là Google Drive
+  DELETE_FLAGS=("--drive-use-trash=false") # Xóa vĩnh viễn không vào thùng rác Drive
+fi
 
-  danh_sach_file_het_han=($(rclone ls wptangtoc:wptangtoc_ols_backup/$NAME --min-age ${ngay}d | awk '{print $2}' | grep '.zip\|.sql\|.sql.gz|\.tar.gz|\.tar.zst|.sql.zst')) #onyly website
-  for file in ${danh_sach_file_het_han[@]}; do
-    if [[ $file ]]; then
-      if [[ $(cat ~/.config/rclone/rclone.conf | grep 'onedrive') ]]; then
-        if [[ $(cat ~/.config/rclone/rclone.conf | grep 'drive_type' | grep 'personal') ]]; then #Personal onedrive
-          rclone -v delete wptangtoc:wptangtoc_ols_backup/$NAME/$file
-        else
-          rclone -v --onedrive-hard-delete delete wptangtoc:wptangtoc_ols_backup/$NAME/$file #onedriver Business hoặc SharePoint
-        fi
-      else #google drive
-        rclone -v --drive-use-trash=false delete wptangtoc:wptangtoc_ols_backup/$NAME/$file
+# Fallback: Tránh trường hợp dùng Drive/OneDrive nhưng đã lỡ tạo Bucket gạch ngang trước đó
+if rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+  CLOUD_DIR="wptangtoc-ols-backup"
+fi
+
+# ==============================================================================
+# HÀM XÓA FILE (TÁI SỬ DỤNG CHO 1 HOẶC NHIỀU WEBSITE)
+# ==============================================================================
+xoa_backup_cu() {
+  local domain="$1"
+  # Quét danh sách file quá hạn (Fix Regex chuẩn hóa tất cả các đuôi mở rộng)
+  danh_sach_file_het_han=($(rclone ls "wptangtoc:$CLOUD_DIR/$domain" --min-age "${ngay}d" 2>/dev/null | awk '{print $2}' | grep -E '\.(zip|sql|sql\.gz|tar\.gz|tar\.zst|sql\.zst)$'))
+  
+  for file in "${danh_sach_file_het_han[@]}"; do
+    if [[ -n "$file" ]]; then
+      # Truyền linh hoạt các cờ xóa (flags) tùy thuộc vào từng nền tảng Cloud
+      if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
+        rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain/$file"
+      else
+        rclone -v delete "wptangtoc:$CLOUD_DIR/$domain/$file"
       fi
     fi
   done
+}
+
+# ==============================================================================
+# THỰC THI CHÍNH
+# ==============================================================================
+if [[ "$NAME" == 'Tất cả website' ]]; then
+  # Quét toàn bộ vhost nếu chọn All
+  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+    domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+    if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
+      xoa_backup_cu "$domain"
+    fi
+  done
+else
+  # Chỉ thực thi 1 website cụ thể
+  xoa_backup_cu "$NAME"
 fi

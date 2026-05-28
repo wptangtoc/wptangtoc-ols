@@ -1,0 +1,146 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Thiết lập Rclone Cloud chuyên biệt cho S3 (Cloudflare R2, AWS, MinIO)
+# @since: 2026
+
+function huong_dan() {
+  Thiết lập Lưu trữ Đám mây [Cloud Storage] chuẩn S3 Compatible là giải pháp siêu tốc, chuyên nghiệp và tối ưu chi phí nhất.
+  - Hỗ trợ các nền tảng: Cloudflare R2, Amazon S3, DigitalOcean Spaces, MinIO...
+}
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 # Tương thích với bộ gõ tiếng Việt Telex
+
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+clear
+print_border_top
+center_text "${C_YELLOW}SAO LƯU ĐÁM MÂY ➜ Cấu Hình S3 Compatible (R2, AWS)${C_RESET}"
+print_border_bot
+echo ""
+
+# ==============================================================================
+# KIỂM TRA TRẠNG THÁI CÀI ĐẶT TRƯỚC ĐÓ
+# ==============================================================================
+mkdir -p /root/.config/rclone
+chmod 751 /root/.config
+
+duong_dan_rclone="/root/.config/rclone/rclone.conf"
+if [[ -f "$duong_dan_rclone" && -s "$duong_dan_rclone" ]]; then
+  echo -e "${C_YELLOW}➜ Hệ thống phát hiện VPS đã được kết nối Cloud từ trước!${C_RESET}"
+  hien_tai=$(awk -F "[][]" '/\[wptangtoc\]/{getline; print $0}' "$duong_dan_rclone" | cut -d'=' -f2 | tr -d ' ')
+  echo -e "Trạng thái hiện tại: Đang kết nối nền tảng [ ${C_GREEN}${hien_tai^^}${C_RESET} ]"
+  echo ""
+  
+  if ! wptt_xac_nhan "BẠN CÓ MUỐN KẾT NỐI LẠI CLOUD MỚI KHÔNG?" "Thao tác này sẽ ghi đè cấu hình cũ, dữ liệu trên Cloud cũ vẫn được giữ nguyên." "" "Đồng ý Xóa và Cài Mới" "Giữ nguyên (Thoát)"; then
+    exec /etc/wptt/wptt-backup-restore-main 1
+    exit
+  fi
+  rm -f "$duong_dan_rclone"
+  clear
+fi
+
+# ==============================================================================
+# CÀI ĐẶT BINARY RCLONE (TỰ ĐỘNG KÉO PHIÊN BẢN MỚI NHẤT)
+# ==============================================================================
+_runing "Đang cài đặt và đồng bộ hóa Rclone Engine (Bản mới nhất)..."
+rm -rf /usr/sbin/rclone /usr/bin/rclone
+cd /tmp || exit
+
+# Tự động lấy phiên bản mới nhất từ máy chủ Rclone
+phienban=$(curl -s -m 5 https://downloads.rclone.org/version.txt | awk '{print $2}' | tr -d 'v')
+[[ -z "$phienban" ]] && phienban="1.74.2" # Phương án dự phòng nếu rớt mạng
+
+if [[ $(uname -m | grep 'aarch64') ]]; then
+  cpu_dong_="linux-arm64"
+else
+  cpu_dong_="linux-amd64"
+fi
+
+wget -q "https://downloads.rclone.org/v${phienban}/rclone-v${phienban}-${cpu_dong_}.zip"
+if [[ ! -f "rclone-v${phienban}-${cpu_dong_}.zip" ]]; then
+  wget -q "https://github.com/rclone/rclone/releases/download/v${phienban}/rclone-v${phienban}-${cpu_dong_}.zip" --no-check-certificate
+fi
+
+unzip -oq "rclone-v${phienban}-${cpu_dong_}.zip"
+cp -r "rclone-v${phienban}-${cpu_dong_}/rclone" /usr/sbin/
+chmod 755 /usr/sbin/rclone
+rm -rf "/tmp/rclone-v${phienban}-${cpu_dong_}" "rclone-v${phienban}-${cpu_dong_}.zip"
+
+# Kiểm tra lại phiên bản sau khi cài
+ver_check=$(rclone --version | head -n1 | awk '{print $2}')
+_rundone "Cài đặt nền tảng Rclone thành công (Phiên bản: $ver_check)"
+
+# ==============================================================================
+# NHẬP THÔNG SỐ S3
+# ==============================================================================
+echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}KHAI BÁO API S3 COMPATIBLE${C_RESET}"
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Hãy cung cấp các thông tin Endpoint từ nhà cung cấp dịch vụ của bạn." 2
+left_text "Lưu ý: Endpoint bắt buộc phải có tiền tố https://" 2
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+echo -en "${C_GREEN} 1. Nhập Access Key ID: ${C_RESET}"; read -r s3_ak
+echo -en "${C_GREEN} 2. Nhập Secret Access Key: ${C_RESET}"; read -r s3_sk
+echo -en "${C_GREEN} 3. Nhập Endpoint URL: ${C_RESET}"; read -r s3_ep
+
+if [[ -z "$s3_ak" || -z "$s3_sk" || -z "$s3_ep" ]]; then
+  echo -e "\n${C_RED}❌ Thông tin không được để trống! Đã hủy thiết lập.${C_RESET}"
+  sleep 1; exec /etc/wptt/wptt-backup-restore-main 1; exit
+fi
+
+# ==============================================================================
+# GHI CẤU HÌNH TRỰC TIẾP QUA CLI (Bỏ qua expect)
+# ==============================================================================
+_runing "Đang khởi tạo cấu hình S3 Storage..."
+rclone config create wptangtoc s3 provider "Other" env_auth "false" access_key_id "$s3_ak" secret_access_key "$s3_sk" endpoint "$s3_ep" acl "private" >/dev/null 2>&1
+NEN_TANG="S3 Storage"
+
+# ==============================================================================
+# KHỞI TẠO BUCKET TỰ ĐỘNG
+# ==============================================================================
+if grep -q 'wptangtoc' "$duong_dan_rclone" 2>/dev/null; then
+  # Dùng dấu gạch ngang (-) vì S3 cấm dấu gạch dưới (_) cho tên Bucket
+  check_tao_thu_muc=$(rclone lsd wptangtoc: 2>/dev/null | grep 'wptangtoc-ols-backup')
+  if [[ -z "$check_tao_thu_muc" ]]; then
+	  #thằng s3 nó không supporrt thư mục tạo kiểu _ mà chỉ dùng - mà thôi
+    rclone mkdir wptangtoc:wptangtoc-ols-backup >/dev/null 2>&1
+  fi
+fi
+
+# ==============================================================================
+# BÁO CÁO KẾT QUẢ VÀ TỔNG KẾT
+# ==============================================================================
+if rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+  _rundone "Thiết lập kết nối thành công tới [ $NEN_TANG ]"
+
+  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT KẾT NỐI CLOUD${C_RESET}"
+  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Nền tảng    : ${C_YELLOW}$NEN_TANG${C_RESET}"
+  left_text "Endpoint    : $s3_ep"
+  left_text "Trạng thái  : ${C_GREEN}Kết nối API S3 hợp lệ.${C_RESET}"
+  left_text "Thư mục lưu : Đã sẵn sàng tại Bucket [ wptangtoc-ols-backup/ ]"
+  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  if ls /etc/cron.d/backup*.cron 1>/dev/null 2>&1; then
+    echo -e "${C_YELLOW}Ghi chú:${C_RESET} Bạn đang có các tiến trình Auto Backup đã được bật."
+    echo -e "Hệ thống sẽ tự động sử dụng S3 làm kho lưu trữ chính trong chu kỳ tới."
+  fi
+else
+  _runloi "Thiết lập API tới nền tảng S3 thất bại!"
+  echo -e "${C_RED}❌ Lỗi: Sai Access/Secret Key hoặc máy chủ không thể phân giải Endpoint.${C_RESET}"
+  rm -f "$duong_dan_rclone" # Dọn sạch config lỗi để không bị kẹt ở lần sau
+fi
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
