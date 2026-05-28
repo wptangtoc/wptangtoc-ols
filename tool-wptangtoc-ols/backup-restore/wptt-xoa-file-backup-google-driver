@@ -1,32 +1,46 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Xóa file backup thủ công trên Cloud (Hỗ trợ Drive, OneDrive, S3)
+# @description: Quản lý & Xóa file backup Cloud
 # @since: 2026
 
 function huong_dan() {
   Tính năng xóa file backup thủ công trên lưu trữ đám mây [OneDrive, Google Drive, S3] đơn giản là việc bạn tự tay lựa chọn và xóa các tệp tin hoặc thư mục sao lưu [backup] không còn cần thiết nữa.
 
   Khi nào cần dùng:
+  * Khi bạn cần giải phóng dung lượng lưu trữ ngay lập tức. Tiết kiệm chi phí lưu trữ đám mây.
+  * Dọn dẹp đột xuất ngoài lịch trình tự động.
 
-  * Khi bạn cần giải phóng dung lượng lưu trữ ngay lập tức. Tiết kiệm dung lượng lưu trữ chiếm hết không gian đĩa Các dịch vụ đám mây thường tính phí dựa trên dung lượng sử dụng. xóa bản sao lưu giúp bạn không bị tốn tiền cho việc lưu trữ những bản backup không còn cần thiết.
-
-  Lưu ý quan trọng: Việc xóa thủ công cần cẩn trọng để tránh vô tình xóa nhầm những bản sao lưu quan trọng mà bạn có thể cần đến sau này.
+  Lưu ý quan trọng: Việc xóa thủ công cần cẩn trọng để tránh vô tình xóa nhầm những bản sao lưu quan trọng.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Xóa thủ công File Backup trên Cloud${C_RESET}"
+center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Quản lý và Xóa file Backup trên Cloud${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# KIỂM TRA RCLONE VÀ NHẬN DIỆN CLOUD (CHUẨN XÁC THEO TYPE)
+# HÀM ĐỊNH DẠNG DUNG LƯỢNG (BYTES SANG KB/MB/GB)
+# ==============================================================================
+function bytesToHuman() {
+  local size=$1
+  if [[ -z "$size" || ! "$size" =~ ^[0-9]+$ ]]; then echo "0B"; return; fi
+  if [ $size -ge 1073741824 ]; then awk "BEGIN {printf \"%.1fG\", $size/1073741824}";
+  elif [ $size -ge 1048576 ]; then awk "BEGIN {printf \"%.1fM\", $size/1048576}";
+  elif [ $size -ge 1024 ]; then awk "BEGIN {printf \"%.1fK\", $size/1024}";
+  else echo "${size}B"; fi
+}
+
+# ==============================================================================
+# KIỂM TRA RCLONE VÀ NHẬN DIỆN CLOUD
 # ==============================================================================
 RCLONE_CONF="/root/.config/rclone/rclone.conf"
 
@@ -40,12 +54,11 @@ fi
 CLOUD_DIR="wptangtoc_ols_backup"
 cloud_name="Google Drive"
 
-# Bắt buộc quét đúng tham số "type =" để tránh nhận diện nhầm
 if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$RCLONE_CONF" 2>/dev/null; then
   cloud_name="OneDrive"
 elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$RCLONE_CONF" 2>/dev/null; then
   cloud_name="S3 Storage"
-  CLOUD_DIR="wptangtoc-ols-backup" # S3 bắt buộc dùng dấu gạch ngang
+  CLOUD_DIR="wptangtoc-ols-backup"
 elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
   CLOUD_DIR="wptangtoc-ols-backup"
 fi
@@ -56,7 +69,6 @@ fi
 function lua_chon_NAME() {
   unset NAME selects
   selects=()
-  local box_inner_width=${box_inner_width:-78}
 
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -161,100 +173,137 @@ if [[ ! -f "$pathcheck" ]]; then
 fi
 
 # ==============================================================================
-# VÒNG LẶP CHÍNH: HIỂN THỊ VÀ XÓA FILE
+# VÒNG LẶP CHÍNH: HIỂN THỊ DASHBOARD VÀ XÓA FILE
 # ==============================================================================
 while true; do
   echo ""
-  _runing "Đang truy xuất dữ liệu từ $cloud_name..."
+  _runing "Đang truy xuất và phân tích dữ liệu từ $cloud_name..."
 
-  # Lọc ra các file backup hợp lệ, dùng biến động $CLOUD_DIR
-  mapfile -t list_files < <(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -E "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$")
+  # Dùng format "tps" (Time-Path-Size) để ép Rclone trả về thời gian thực tế, sau đó dùng 'sort' 
+  # Mặc định sort sẽ xếp thời gian từ Cũ nhất (Xưa) -> Mới nhất (Hiện tại)
+  rclone_output=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME" --format "tps" --separator "|" 2>/dev/null | grep -E "\.zip|\.sql|\.tar|\.zst" | sort)
 
-  if [[ ${#list_files[@]} -eq 0 ]]; then
-    _runloi "Truy xuất dữ liệu hoàn tất"
+  if [[ -z "$rclone_output" ]]; then
+    _runloi "Thư mục trống"
     echo -e "${C_YELLOW}⚠️ Không có file backup nào của website $NAME đang lưu trên $cloud_name!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-backup-restore-main 1
     exit
   fi
+
+  total_bytes=0
+  db_files=0
+  zip_files=0
+  selects=()
+
+  # Đọc từng dòng: Thời gian | Tên file | Byte
+  while IFS="|" read -r ftime fname fbytes; do
+    [[ -z "$fname" ]] && continue
+    total_bytes=$((total_bytes + fbytes))
+    fsize=$(bytesToHuman "$fbytes")
+    selects+=("$fname|$fsize")
+    
+    if [[ "$fname" == *.sql* ]]; then ((db_files++)); fi
+    if [[ "$fname" == *.zip* || "$fname" == *.tar* || "$fname" == *.zst* ]]; then ((zip_files++)); fi
+  done <<< "$rclone_output"
+
+  total_size_human=$(bytesToHuman "$total_bytes")
+
   _rundone "Truy xuất dữ liệu thành công từ $cloud_name"
 
-  # RENDER BẢNG CHỌN FILE BO CONG
-  box_inner_width=${box_inner_width:-78}
-  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}DANH SÁCH FILE BACKUP ĐANG LƯU TRÊN CLOUD${C_RESET}"
+  # ==============================================================================
+  # RENDER DASHBOARD TỔNG QUAN
+  # ==============================================================================
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}QUẢN LÝ DUNG LƯỢNG CLOUD ➜ ${C_BOLD_WHITE}$NAME${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
+  colored_stat="  ${C_BOLD_WHITE}Tổng dung lượng:${C_RESET} ${C_GREEN}${total_size_human}${C_RESET}  |  ${C_BOLD_WHITE}Mã nguồn:${C_RESET} ${C_YELLOW}${zip_files} file${C_RESET}  |  ${C_BOLD_WHITE}Database:${C_RESET} ${C_YELLOW}${db_files} file${C_RESET}"
+  raw_stat="  Tổng dung lượng: ${total_size_human}  |  Mã nguồn: ${zip_files} file  |  Database: ${db_files} file"
+  pad_stat=$((box_inner_width - ${#raw_stat}))
+  [[ $pad_stat -lt 0 ]] && pad_stat=0
+  echo -e "${C_CYAN}│${C_RESET}${colored_stat}$(printf '%*s' "$pad_stat" "")${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  title_text="Chọn file cần xóa (Cũ nhất xếp trên cùng):"
+  len=${#title_text}
+  pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  # IN DANH SÁCH FILE VỚI KÍCH THƯỚC ĐÍNH KÈM
   i=1
-  for file in "${list_files[@]}"; do
-    item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$file")
-    clean_text=$(printf "  %3d) %s" "$i" "$file")
-    item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    pad=$((box_inner_width - item_len))
+  for item in "${selects[@]}"; do
+    f_name="${item%|*}"
+    f_size="${item#*|}"
+
+    clean_row=$(printf "  %3d) [%-7s] %s" "$i" "$f_size" "$f_name")
+    item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} [${C_GREEN}%-7s${C_RESET}] ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$f_size" "$f_name")
+    pad=$((box_inner_width - ${#clean_row}))
     [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+
+    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
   done
+
+  # TUỲ CHỌN XÓA TẤT CẢ (999)
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  clean_row_999="  999) [XÓA HẾT] Dọn dẹp sạch sẽ toàn bộ thư mục Backup này trên Cloud"
+  item_row_999="  ${C_RED}999)${C_RESET} [${C_RED}XÓA HẾT${C_RESET}] Dọn dẹp sạch sẽ toàn bộ thư mục Backup này trên Cloud"
+  pad_999=$((box_inner_width - ${#clean_row_999}))
+  [[ $pad_999 -lt 0 ]] && pad_999=0
+  echo -e "${C_CYAN}│${C_RESET}${item_row_999}$(printf '%*s' "$pad_999" "")${C_CYAN}│${C_RESET}"
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
   # LỰA CHỌN FILE
-  file_to_delete=""
-  while true; do
-    echo -en "${C_CYAN}Nhập số thứ tự file bạn muốn xóa (1-${#list_files[@]}) [0=Thoát]: ${C_RESET}"
-    read -r REPLY
-    if [[ "$REPLY" == "0" ]]; then
-      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
-      exit 0
-    elif [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#list_files[@]} ]; then
-      action_index=$((REPLY - 1))
-      file_to_delete="${list_files[$action_index]}"
+  echo -en "${C_CYAN}Nhập số thứ tự file cần xóa (1-${#selects[@]}) [999=Xóa Tất Cả] [0=Thoát]: ${C_RESET}"
+  read -r REPLY
+
+  [[ "$REPLY" == "0" || -z "$REPLY" ]] && break
+
+  # XỬ LÝ: XÓA TẤT CẢ (Lệnh 999)
+  if [[ "$REPLY" == "999" ]]; then
+    echo ""
+    if wptt_xac_nhan "Xác nhận xóa TẤT CẢ bản sao lưu của $NAME trên Cloud!" "Hành động này không thể hoàn tác. Toàn bộ ($total_size_human) sẽ bị xóa sạch khỏi $cloud_name." "" "Đồng ý XÓA SẠCH" "Hủy thao tác"; then
+      _runing "Đang xóa toàn bộ dữ liệu Backup trên Cloud..."
+      
+      rclone -v delete "wptangtoc:$CLOUD_DIR/$NAME" >/dev/null 2>&1
+      echo "Xóa TẤT CẢ file backup website $NAME trên Cloud: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+      
+      _rundone "Đã dọn dẹp sạch sẽ toàn bộ thư mục Cloud ($total_size_human)!"
+      sleep 2
       break
     else
-      echo -e "${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      echo -e "${C_YELLOW}Đã hủy thao tác xóa tất cả.${C_RESET}"
+      sleep 1
     fi
-  done
 
-  # XÁC NHẬN XÓA
-  echo ""
-  if wptt_xac_nhan "Bạn có chắc chắn muốn XÓA VĨNH VIỄN file backup này trên $cloud_name?" "${C_BOLD_WHITE}File:${C_RESET} ${C_YELLOW}$file_to_delete${C_RESET}" "" "Đồng ý XÓA (Mất dữ liệu)" "Hủy bỏ"; then
+  # XỬ LÝ: XÓA TỪNG FILE (Lệnh 1 đến N)
+  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+    idx=$((REPLY - 1))
+    val="${selects[$idx]}"
+    target_file="${val%|*}"
+    target_size="${val#*|}"
+
     echo ""
-
-    # Lấy dung lượng TỐI ƯU (chỉ quét đúng thư mục của domain)
-    _runing "Đang tính toán dung lượng..."
-    before_delete=$(rclone size "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -i 'size' | cut -d':' -f2 | cut -d'(' -f1 | xargs)
-    _rundone "Đã lấy dung lượng thư mục hiện tại"
-
-    _runing "Đang tiến hành xóa file $file_to_delete khỏi $cloud_name..."
-    rclone -v delete "wptangtoc:$CLOUD_DIR/$NAME/$file_to_delete" >/dev/null 2>&1
-    echo "Xóa file backup trên $cloud_name $file_to_delete của website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "Đã xóa thành công file $file_to_delete"
-
-    _runing "Đang cập nhật dung lượng mới..."
-    after_delete=$(rclone size "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -i 'size' | cut -d':' -f2 | cut -d'(' -f1 | xargs)
-    _rundone "Cập nhật dữ liệu thành công"
-
-    # BẢNG TÓM TẮT DUNG LƯỢNG
-    echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}ĐÃ XÓA FILE THÀNH CÔNG${C_RESET}"
-    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Dung lượng thư mục trước khi xóa : ${C_YELLOW}${before_delete:-Không xác định}${C_RESET}"
-    left_text "Dung lượng thư mục sau khi xóa   : ${C_GREEN}${after_delete:-Không xác định}${C_RESET}"
-    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  else
-    echo -e "${C_YELLOW}Đã hủy thao tác xóa file.${C_RESET}"
-  fi
-
-  # HỎI TIẾP TỤC XÓA (Nếu thư mục vẫn còn file)
-  if rclone lsf "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -qE "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$"; then
-    echo ""
-    if ! wptt_xac_nhan "Bạn có muốn TIẾP TỤC dọn dẹp các file backup khác không?" "" "" "Có (Tiếp tục dọn dẹp)" "Thoát (Quay lại Menu)"; then
-      break
+    if wptt_xac_nhan "Bạn có chắc chắn muốn XÓA VĨNH VIỄN file backup này trên Cloud?" "File: $target_file" "Giải phóng: $target_size" "Đồng ý XÓA" "Hủy bỏ"; then
+      _runing "Đang tiến hành xóa file khỏi $cloud_name..."
+      
+      rclone -v delete "wptangtoc:$CLOUD_DIR/$NAME/$target_file" >/dev/null 2>&1
+      echo "Xóa file backup trên $cloud_name $target_file của website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+      
+      _rundone "Đã xóa thành công file: $target_file ($target_size)"
+      sleep 1.5
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác xóa file.${C_RESET}"
+      sleep 1
     fi
   else
-    echo -e "\n${C_YELLOW}Thư mục backup của $NAME trên $cloud_name hiện đã trống.${C_RESET}"
-    break
+    echo -e "${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+    sleep 1
   fi
-
 done
 
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
