@@ -1,11 +1,11 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
+# @description: Xóa file backup thủ công trên Cloud (Hỗ trợ Drive, OneDrive, S3)
 # @since: 2026
 
 function huong_dan() {
-  Tính năng xóa file backup thủ công trên lưu trữ đám mây drive [OneDrive, Google Drive] đơn giản là việc bạn tự tay lựa chọn và xóa các tệp tin hoặc thư mục sao lưu [backup] không còn cần thiết nữa.
+  Tính năng xóa file backup thủ công trên lưu trữ đám mây [OneDrive, Google Drive, S3] đơn giản là việc bạn tự tay lựa chọn và xóa các tệp tin hoặc thư mục sao lưu [backup] không còn cần thiết nữa.
 
   Khi nào cần dùng:
 
@@ -26,17 +26,29 @@ center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Xóa thủ công File Backup
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# KIỂM TRA RCLONE VÀ NHẬN DIỆN CLOUD
+# KIỂM TRA RCLONE VÀ NHẬN DIỆN CLOUD (CHUẨN XÁC THEO TYPE)
 # ==============================================================================
-if ! grep -q 'wptangtoc' /root/.config/rclone/rclone.conf 2>/dev/null; then
+RCLONE_CONF="/root/.config/rclone/rclone.conf"
+
+if ! grep -q 'wptangtoc' "$RCLONE_CONF" 2>/dev/null; then
   echo -e "${C_RED}❌ Lỗi: Bạn chưa kích hoạt và kết nối Rclone trên hệ thống này!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-backup-restore-main 1
   exit 1
 fi
 
+CLOUD_DIR="wptangtoc_ols_backup"
 cloud_name="Google Drive"
-grep -q 'onedrive' ~/.config/rclone/rclone.conf 2>/dev/null && cloud_name="OneDrive"
+
+# Bắt buộc quét đúng tham số "type =" để tránh nhận diện nhầm
+if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$RCLONE_CONF" 2>/dev/null; then
+  cloud_name="OneDrive"
+elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$RCLONE_CONF" 2>/dev/null; then
+  cloud_name="S3 Storage"
+  CLOUD_DIR="wptangtoc-ols-backup" # S3 bắt buộc dùng dấu gạch ngang
+elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+  CLOUD_DIR="wptangtoc-ols-backup"
+fi
 
 # ==============================================================================
 # HÀM MENU CHỌN DOMAIN (CHỈ HIỂN THỊ DOMAIN HỢP LỆ)
@@ -44,7 +56,7 @@ grep -q 'onedrive' ~/.config/rclone/rclone.conf 2>/dev/null && cloud_name="OneDr
 function lua_chon_NAME() {
   unset NAME selects
   selects=()
-  local box_inner_width=${box_inner_width:-71}
+  local box_inner_width=${box_inner_width:-78}
 
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -155,8 +167,8 @@ while true; do
   echo ""
   _runing "Đang truy xuất dữ liệu từ $cloud_name..."
 
-  # Lọc ra các file backup hợp lệ, bỏ qua các thư mục con
-  mapfile -t list_files < <(rclone lsf "wptangtoc:wptangtoc_ols_backup/$NAME" 2>/dev/null | grep -E "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$")
+  # Lọc ra các file backup hợp lệ, dùng biến động $CLOUD_DIR
+  mapfile -t list_files < <(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -E "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$")
 
   if [[ ${#list_files[@]} -eq 0 ]]; then
     _runloi "Truy xuất dữ liệu hoàn tất"
@@ -168,17 +180,17 @@ while true; do
   _rundone "Truy xuất dữ liệu thành công từ $cloud_name"
 
   # RENDER BẢNG CHỌN FILE BO CONG
-  box_inner_width=${box_inner_width:-71}
+  box_inner_width=${box_inner_width:-78}
   echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_YELLOW}DANH SÁCH FILE BACKUP ĐANG LƯU TRÊN CLOUD${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  local i=1
+  i=1
   for file in "${list_files[@]}"; do
-    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$file")
-    local clean_text=$(printf "  %3d) %s" "$i" "$file")
-    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    local pad=$((box_inner_width - item_len))
+    item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$file")
+    clean_text=$(printf "  %3d) %s" "$i" "$file")
+    item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    pad=$((box_inner_width - item_len))
     [[ $pad -lt 0 ]] && pad=0
     echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
@@ -209,16 +221,16 @@ while true; do
 
     # Lấy dung lượng TỐI ƯU (chỉ quét đúng thư mục của domain)
     _runing "Đang tính toán dung lượng..."
-    before_delete=$(rclone size "wptangtoc:wptangtoc_ols_backup/$NAME" 2>/dev/null | grep -i 'size' | cut -d':' -f2 | cut -d'(' -f1 | xargs)
+    before_delete=$(rclone size "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -i 'size' | cut -d':' -f2 | cut -d'(' -f1 | xargs)
     _rundone "Đã lấy dung lượng thư mục hiện tại"
 
     _runing "Đang tiến hành xóa file $file_to_delete khỏi $cloud_name..."
-    rclone -v delete "wptangtoc:wptangtoc_ols_backup/$NAME/$file_to_delete" >/dev/null 2>&1
+    rclone -v delete "wptangtoc:$CLOUD_DIR/$NAME/$file_to_delete" >/dev/null 2>&1
     echo "Xóa file backup trên $cloud_name $file_to_delete của website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
     _rundone "Đã xóa thành công file $file_to_delete"
 
     _runing "Đang cập nhật dung lượng mới..."
-    after_delete=$(rclone size "wptangtoc:wptangtoc_ols_backup/$NAME" 2>/dev/null | grep -i 'size' | cut -d':' -f2 | cut -d'(' -f1 | xargs)
+    after_delete=$(rclone size "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -i 'size' | cut -d':' -f2 | cut -d'(' -f1 | xargs)
     _rundone "Cập nhật dữ liệu thành công"
 
     # BẢNG TÓM TẮT DUNG LƯỢNG
@@ -233,7 +245,7 @@ while true; do
   fi
 
   # HỎI TIẾP TỤC XÓA (Nếu thư mục vẫn còn file)
-  if rclone lsf "wptangtoc:wptangtoc_ols_backup/$NAME" 2>/dev/null | grep -qE "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$"; then
+  if rclone lsf "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -qE "\.zip$|\.sql$|\.sql\.gz$|\.tar\.gz$|\.tar\.zst$"; then
     echo ""
     if ! wptt_xac_nhan "Bạn có muốn TIẾP TỤC dọn dẹp các file backup khác không?" "" "" "Có (Tiếp tục dọn dẹp)" "Thoát (Quay lại Menu)"; then
       break
