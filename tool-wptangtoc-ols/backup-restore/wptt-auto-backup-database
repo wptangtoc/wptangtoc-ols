@@ -1,8 +1,8 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
-# @since: 2025
+# @description: Thiết lập tự động sao lưu Database
+# @since: 2026
 
 function huong_dan() {
   Tính năng tự động sao lưu database là một cơ chế được thiết lập để hệ thống tự động tạo ra các bản sao [backup] của cơ sở dữ liệu [database] website của bạn theo một lịch trình định sẵn mà không cần sự can thiệp thủ công.
@@ -10,7 +10,6 @@ function huong_dan() {
   Nói đơn giản, thay vì bạn phải nhớ và tự mình chạy lệnh để sao lưu database mỗi ngày hoặc mỗi tuần tận chí là mỗi tháng, hệ thống sẽ tự động làm điều đó. Ví dụ, nó có thể tự động xuất toàn bộ dữ liệu từ MySQL, của bạn ra một tệp tin vào lúc 2 giờ sáng mỗi ngày.
 
   Tại sao nó cực kỳ quan trọng:
-
   * Bảo vệ dữ liệu cốt lõi: Database chứa các thông tin quan trọng như nội dung website, thông tin người dùng, đơn hàng, v.v. Mất database có thể đồng nghĩa với mất trắng website.
   * Khôi phục nhanh khi có sự cố: Nếu website gặp lỗi, bị tấn công, hoặc dữ liệu bị hỏng, bản sao lưu database tự động gần nhất giúp bạn khôi phục lại trạng thái ổn định một cách nhanh chóng.
   * Giảm thiểu rủi ro do con người: Tránh trường hợp quên sao lưu hoặc sao lưu không đúng cách.
@@ -24,13 +23,44 @@ function huong_dan() {
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 
+# Ép UX chuẩn 78 ký tự
+export box_inner_width=78
+
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ $tu_dong_sao_luu_database${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-box_inner_width=${box_inner_width:-71}
+# ==============================================================================
+# HÀM PHỤ TRỢ: NHẬN DIỆN CLOUD HIỆN TẠI
+# ==============================================================================
+get_cloud_name() {
+  local conf="/root/.config/rclone/rclone.conf"
+  if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$conf" 2>/dev/null; then
+    echo "OneDrive"
+  elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$conf" 2>/dev/null; then
+    echo "S3 Storage"
+  else
+    echo "Google Drive"
+  fi
+}
+
+get_cloud_dir() {
+  local conf="/root/.config/rclone/rclone.conf"
+  if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$conf" 2>/dev/null; then
+    echo "wptangtoc-ols-backup"
+  elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+    echo "wptangtoc-ols-backup"
+  else
+    echo "wptangtoc_ols_backup"
+  fi
+}
+
+# ==============================================================================
+# BẢNG THỐNG KÊ CÁC DOMAIN ĐANG KÍCH HOẠT AUTO BACKUP DATABASE
+# ==============================================================================
 active_list=()
+cloud_detected=$(get_cloud_name)
 
 if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
   for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
@@ -38,7 +68,7 @@ if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ];
     path="/etc/cron.d/backup-database$domain.cron"
 
     if [[ -f "$path" ]]; then
-      cron_line=$(cat "$path" | grep -v "^#")
+      cron_line=$(grep -v "^#" "$path" 2>/dev/null)
       checkauto1=$(echo "$cron_line" | awk '{print $2}')
       check_dom=$(echo "$cron_line" | awk '{print $3}')
       checkauto2=$(echo "$cron_line" | awk '{print $5}')
@@ -47,9 +77,9 @@ if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ];
       tinhnang=""
 
       if [[ "$kiemtra_doi_so" == "1" ]]; then
-        if grep -q 'onedrive' ~/.config/rclone/rclone.conf 2>/dev/null; then tinhnang=" (OneDrive)"; else tinhnang=" (GDrive)"; fi
+        tinhnang=" ($cloud_detected)"
       elif [[ "$kiemtra_doi_so" == "2" ]]; then
-        if grep -q 'onedrive' ~/.config/rclone/rclone.conf 2>/dev/null; then tinhnang=" (OneDrive + Xóa Local)"; else tinhnang=" (GDrive + Xóa Local)"; fi
+        tinhnang=" ($cloud_detected + Xóa Local)"
       fi
 
       if [[ "$check_dom" != "*" && -n "$check_dom" ]]; then
@@ -76,14 +106,14 @@ fi
 
 # Check ALL WEBSITE
 if [[ -f /etc/cron.d/backup-all-database-wptt-ols.cron ]]; then
-  cron_line_all=$(cat /etc/cron.d/backup-all-database-wptt-ols.cron | grep -v "^#")
+  cron_line_all=$(grep -v "^#" /etc/cron.d/backup-all-database-wptt-ols.cron 2>/dev/null)
   checkauto1=$(echo "$cron_line_all" | awk '{print $2}')
   check_dom_all=$(echo "$cron_line_all" | awk '{print $3}')
   checkauto2=$(echo "$cron_line_all" | awk '{print $5}')
 
   kiemtra_doi_so=$(grep -c "1998" /etc/wptt-auto/all-database-wptt-ols-auto-backup 2>/dev/null)
   tinhnang=""
-  if [[ "$kiemtra_doi_so" == "1" ]]; then tinhnang=" (Cloud)"; elif [[ "$kiemtra_doi_so" == "2" ]]; then tinhnang=" (Cloud + Xóa Local)"; fi
+  if [[ "$kiemtra_doi_so" == "1" ]]; then tinhnang=" ($cloud_detected)"; elif [[ "$kiemtra_doi_so" == "2" ]]; then tinhnang=" ($cloud_detected + Xóa Local)"; fi
 
   if [[ "$check_dom_all" != "*" && -n "$check_dom_all" ]]; then
     thu123="Lúc $checkauto1 giờ - Ngày $check_dom_all hàng tháng"
@@ -181,7 +211,7 @@ function lua_chon_NAME() {
   fi
 
   while true; do
-    echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
     if ! read -r REPLY; then exit 1; fi
     REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
@@ -238,7 +268,7 @@ fi
 # ==============================================================================
 echo ""
 while true; do
-  echo -en "${C_CYAN}👉 Nhập Giờ muốn chạy Backup DB (0-23) [Enter=1h sáng]: ${C_RESET}"
+  echo -en "${C_CYAN}Nhập Giờ muốn chạy Backup DB (0-23) [Enter=1h sáng]: ${C_RESET}"
   read gio
   [[ -z "$gio" ]] && gio="1"
   if [[ ! "$gio" =~ ^[0-9]+$ ]] || ((gio < 0 || gio > 23)); then
@@ -280,11 +310,9 @@ if wptt_xac_nhan "$msg_xacnhan" "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$N
   delete="n"
   tuan1="12345"
   tuan2="12345"
-  cloud_name="Google Drive"
 
-  if grep -rnw '/root/.config/rclone/rclone.conf' -e "wptangtoc" >/dev/null 2>&1; then
-    grep -q 'onedrive' ~/.config/rclone/rclone.conf 2>/dev/null && cloud_name="OneDrive"
-
+  if grep -q '\[wptangtoc\]' /root/.config/rclone/rclone.conf 2>/dev/null; then
+    cloud_name=$(get_cloud_name)
     echo ""
     if wptt_xac_nhan "Bạn có muốn Tự động Upload file lên đám mây $cloud_name không?" "" "" "Có (Tự động Upload)" "Không cần"; then
       uploads="y"
@@ -358,15 +386,16 @@ END
   fi
 
   if [[ "$uploads" == "y" ]]; then
+    final_cloud_dir=$(get_cloud_dir)
     if [[ "$NAME" == 'Tất cả website' ]]; then
-      left_text "Lưu tại Cloud  : $cloud_name -> wptangtoc_ols_backup/"
+      left_text "Lưu tại Cloud  : $cloud_name -> $final_cloud_dir/"
     else
-      left_text "Lưu tại Cloud  : $cloud_name -> wptangtoc_ols_backup/$NAME/"
+      left_text "Lưu tại Cloud  : $cloud_name -> $final_cloud_dir/$NAME/"
     fi
   fi
 
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  echo -e "${C_CYAN}Ghi chú:${C_RESET} Nếu cần khôi phục, hãy sử dụng tính năng [Khôi phục website] trong menu WPTangToc."
+  echo -e "${C_CYAN}Ghi chú:${C_RESET} Nếu cần khôi phục, hãy sử dụng tính năng [Khôi phục website] trong menu."
 
 else
   echo -e "${C_YELLOW}Đã hủy thao tác thiết lập Auto Backup Database.${C_RESET}"
