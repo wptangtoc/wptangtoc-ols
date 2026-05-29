@@ -71,6 +71,13 @@ fi
 ggdriver=$2
 ggdriver2=$3
 
+
+if [[ $2 = '12345' ]] || [[ $2 = '1998' ]];then
+ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup="ionice -c 3 nice -n 19"
+else #đây là không auto backup mà chạy trực tiếp trên terminal, không cần hạ thấp ưu tiên
+ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup=""
+fi
+
 # ==============================================================================
 # HÀM PHỤ TRỢ: NHẬN DIỆN CLOUD HIỆN TẠI
 # ==============================================================================
@@ -308,11 +315,11 @@ echo ""
 # ==================================================================
 
 if [[ $sql_gz = '1' ]]; then
-  ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | ionice -c 3 nice -n 19 gzip >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz"
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz"
 elif [[ $sql_gz = '2' ]]; then
-  ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | ionice -c 3 nice -n 19 zstd >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst"
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst"
 else
-  ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | ionice -c 3 nice -n 19 bash -c "$PV_CMD" >"/usr/local/backup-website/$NAME/$NAME$timedate.sql"
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" >"/usr/local/backup-website/$NAME/$NAME$timedate.sql"
 fi
 
 echo -ne "\033[1A\r\033[K"
@@ -328,7 +335,7 @@ if [[ $sql_gz = '1' ]]; then
   check_file_error=$(du -c /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz | awk '{print $1}' | sed '1d')
   if ((${check_file_error:-0} < 3)); then
     _runloi "$sao_luu_database website $NAME"
-    rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
+    $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
     return 2>/dev/null
     exit
   fi
@@ -336,7 +343,7 @@ elif [[ $sql_gz = '2' ]]; then
   check_file_error=$(du -c /usr/local/backup-website/$NAME/$NAME$timedate.sql.zst | awk '{print $1}' | sed '1d')
   if ((${check_file_error:-0} < 3)); then
     _runloi "$sao_luu_database website $NAME"
-    rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
+    $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
     return 2>/dev/null
     exit
   fi
@@ -344,7 +351,7 @@ else
   check_file_error=$(du -c /usr/local/backup-website/$NAME/$NAME$timedate.sql | awk '{print $1}' | sed '1d')
   if ((${check_file_error:-0} < 3)); then
     _runloi "$sao_luu_database website $NAME"
-    rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql
+    $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql
     return 2>/dev/null
     exit
   fi
@@ -375,12 +382,47 @@ if [[ $checkdathietlap ]]; then
   if [[ "$uploads" = "y" || "$ggdriver" = "1998" ]]; then
     _runing "File backup database uploads $drive_name"
 
-    if [[ $sql_gz = '1' ]]; then
-      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.gz wptangtoc:$CLOUD_DIR/$NAME
-    elif [[ $sql_gz = '2' ]]; then
-      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.zst wptangtoc:$CLOUD_DIR/$NAME
+
+	# -------------------------------------------------------------
+    # BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE)
+    # -------------------------------------------------------------
+    TOTAL_CORES=$(nproc 2>/dev/null || echo 1)
+    TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+
+    # 1. Cấu hình cơ bản dựa trên sức mạnh phần cứng (Phân loại yếu/khỏe)
+    if (( TOTAL_CORES <= 2 )) || (( TOTAL_RAM_MB <= 2048 )); then
+      OPT_TRANSFERS=2
+      OPT_CHUNK="32M"
     else
-      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql wptangtoc:$CLOUD_DIR/$NAME
+      OPT_TRANSFERS=4
+      OPT_CHUNK="64M"
+    fi
+
+    # 2. Điều tốc theo ngữ cảnh: Cronjob (Nền) vs Thủ công (User)
+    if [[ "$ggdriver" == "1998" ]]; then
+	# TÍNH NĂNG VÀNG: "Đồng hồ sinh học" cho Rclone
+    # - Ban ngày (07:00 - 23:00): Bóp về 10MB/s (Tránh kẹt web nếu file quá to chạy lố sang ban ngày)
+    # - Ban đêm (23:00 - 07:00): OFF (Bung Max 100% sức mạnh đường truyền của mọi VPS)
+        OPT_BWLIMIT="--bwlimit 07:00,10M 23:00,off"
+      if (( TOTAL_CORES == 1 )); then
+        # Máy siêu yếu, giảm kịch sàn để không đơ I/O
+        OPT_TRANSFERS=1
+      fi
+    else
+      # Chạy Thủ công: Khách đang đợi, thả băng thông (Không set limit)
+      OPT_BWLIMIT=""
+    fi
+
+    # 3. Gói gọn thành tham số tối ưu hoàn chỉnh
+    RCLONE_OPTS="--transfers=$OPT_TRANSFERS --checkers=$OPT_TRANSFERS --drive-chunk-size=$OPT_CHUNK --s3-upload-concurrency=$OPT_TRANSFERS $OPT_BWLIMIT"
+
+
+    if [[ $sql_gz = '1' ]]; then
+      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.gz wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS
+    elif [[ $sql_gz = '2' ]]; then
+      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.zst wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS
+    else
+      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS
     fi
 
     _rundone "File backup database uploads $drive_name hoàn tất"
@@ -403,11 +445,11 @@ if [[ $checkdathietlap ]]; then
     if [[ "$clearfile" = "y" || "$ggdriver2" = "1998" ]]; then
       _runing "$xoa file backup database tại local"
       if [[ $sql_gz = '1' ]]; then
-        rm -f /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.gz
+        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.gz
       elif [[ $sql_gz = '2' ]]; then
-        rm -f /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.zst
+        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.zst
       else
-        rm -f /usr/local/backup-website/"$NAME"/$NAME$timedate.sql
+        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/"$NAME"/$NAME$timedate.sql
       fi
       _rundone "$xoa file backup database tại local"
     fi
