@@ -67,31 +67,65 @@ else
 fi
 
 # ==============================================================================
-# TẢI VÀ GIẢI NÉN PHPMYADMIN
+# TẢI VÀ GIẢI NÉN PHPMYADMIN (UX ĐỘNG CƠ TÀNG HÌNH)
 # ==============================================================================
-_runing "Đang tải và cài đặt PhpMyadmin $phpmyadmin_version..."
+_runing "Đang tải PhpMyadmin $phpmyadmin_version..."
 cd "/usr/local/lsws/$Website_chinh/html" || exit 1
 
-wget -q -P "/usr/local/lsws/$Website_chinh/html" "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
 
-if [[ ! -f "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages.zip" ]]; then
-  wget -q -P "/usr/local/lsws/$Website_chinh/html" "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" --no-check-certificate
+pma_zip="/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+
+function wptt_download_pma_ux() {
+  local url="$1"
+  local dest_file="$2"
+  local extra_args="$3" # Nhận các cờ mở rộng như --no-check-certificate
+  
+  # Lấy kích thước file từ Header để mớm cho PV tính %
+  local fsize=$(curl -sI --max-time 5 $extra_args "$url" 2>/dev/null | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+  
+  if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+    # Dùng wget lấy luồng đổ vào pv vẽ biểu đồ, rồi xuất ra file zip
+    wget -qO- --timeout=15 --tries=3 $extra_args "$url" | pv -s "$fsize" -N "Tải PhpMyAdmin" -p -t -e -r -b -w 90 > "$dest_file"
+    # Tàng hình: lùi lên 1 dòng, xóa sạch tiến trình
+    echo -en "\033[1A\033[2K\r"
+  else
+    # Phương án dự phòng
+    wget -q --show-progress --timeout=15 --tries=3 $extra_args -O "$dest_file" "$url"
+    echo -en "\033[1A\033[2K\r"
+  fi
+}
+
+# 1. Thử tải từ nguồn chính
+wptt_download_pma_ux "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" "$pma_zip" ""
+
+# 2. Dự phòng: Tải bỏ qua SSL
+if [[ ! -s "$pma_zip" ]]; then
+  rm -f "$pma_zip"
+  wptt_download_pma_ux "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" "$pma_zip" "--no-check-certificate"
 fi
 
-if [[ ! -f "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages.zip" ]]; then
+# 3. Dự phòng: Tải từ Github nếu trang chủ sập
+if [[ ! -s "$pma_zip" ]]; then
+  rm -f "$pma_zip"
   git_version="${phpmyadmin_version//./_}"
-  wget -q -O "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-${phpmyadmin_version}-all-languages.zip" "https://github.com/phpmyadmin/phpmyadmin/archive/refs/tags/RELEASE_${git_version}.zip"
+  wptt_download_pma_ux "https://github.com/phpmyadmin/phpmyadmin/archive/refs/tags/RELEASE_${git_version}.zip" "$pma_zip" ""
 fi
 
-unzip -oq "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+# ==============================================================================
+# BẮT ĐẦU XỬ LÝ FILE VÀ CẤU HÌNH
+# ==============================================================================
+unzip -oq "$pma_zip"
 mv "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages" "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
+echo -en "\033[1A\033[2K\r"
 
 if [[ ! -d "/usr/local/lsws/$Website_chinh/html/phpmyadmin" ]]; then
-  _runloi "Cài đặt PhpMyadmin $phpmyadmin_version thất bại!"
+_runloi "Đang tải PhpMyadmin $phpmyadmin_version..."
   exec /etc/wptt/wptt-phpmyadmin-main 1
 fi
+_rundone "Đang tải PhpMyadmin $phpmyadmin_version..."
 
-rm -f "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+rm -f "$pma_zip"
 
 cp -f "/usr/local/lsws/$Website_chinh/html/phpmyadmin/config.sample.inc.php" "/usr/local/lsws/$Website_chinh/html/phpmyadmin/config.inc.php"
 mkdir -p /usr/local/lsws/phpmyadmin
@@ -172,6 +206,8 @@ fi
 # ==============================================================================
 _runing "Đang nạp lại cấu hình OpenLiteSpeed..."
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+# Em gom 2 cái _rundone lại thành 1 để tiết kiệm dòng, hiển thị gọn gàng hơn
 _rundone "Cài đặt và kích hoạt PhpMyadmin $phpmyadmin_version"
 echo "Kích hoạt PhpMyAdmin: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
