@@ -14,69 +14,123 @@ function huong_dan() {
   Tóm lại, tính năng hủy cài đặt CSF trong WPTangToc OLS giúp bạn gỡ bỏ CSF một cách tương đối dễ dàng và sạch sẽ. Tuy nhiên, đây là một hành động cần cân nhắc kỹ lưỡng về mặt an ninh.
 }
 
-echo "========================================================================="
-echo "|Quản lý bảo mật => CSF => Hủy Cài Đặt                                  |"
-echo "========================================================================="
+# ==============================================================================
+# NẠP CẤU HÌNH & GIAO DIỆN
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-if [[ -f /etc/csf/csf.conf ]]; then
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ BẢO MẬT ➜ Hủy Cài Đặt CSF Firewall${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-  echo "Huỷ cài đặt CSF : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-  systemctl stop csf
-  systemctl stop lfd
-  systemctl disable csf
-  systemctl stop lfd
-  . /etc/csf/uninstall.sh
-  yum install remove perl-libwww-perl.noarch perl-Time-HiRes -y
-  rm -rf /etc/csf
-  systemctl unmask firewalld
-  systemctl start firewalld
-  systemctl enable firewalld
-  firewall-cmd --zone=public --add-service=http --add-service=https --permanent
-  firewall-cmd --zone=public --add-port=443/udp --permanent
-  port_ssh=$(grep -E '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
-  port_ssh=${port_ssh:-22} # Trả về 22 nếu kết quả rỗng
-
-  firewall-cmd --zone=public --add-port=${port_ssh}/tcp --permanent
-
-  path_webgui="/usr/local/lsws/conf/disablewebconsole"
-  if [[ ! -f $path_webgui ]]; then
-    port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | grep -o '[0-9]\+$')
-    firewall-cmd --zone=public --add-port=${port_webgui_openlitespeed}/tcp --permanent
-  fi
-
-  #remote mariadb
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
-    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
-  else
-    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
-  fi
-
-  port_mariadb_remote=$(cat $duong_dan_cau_hinh_mariadb | grep 'port=' | grep -o '[0-9]\+$')
-  if [[ $port_mariadb_remote ]]; then
-    firewall-cmd --zone=public --add-port=${port_mariadb_remote}/tcp --permanent
-  fi
-
-  firewall-cmd --reload >/dev/null 2>&1
-
-  #tuong thich csf iptable với fail2ban
-  # sed -i 's/action = iptables-multiport\[name=wordpress, port="http,https", protocol=tcp\]/action = firewallcmd-allports/g' /etc/fail2ban/jail.local
-  # sed -i "s/banaction = iptables-multiport/banaction = firewallcmd-multiport/g" /etc/fail2ban/jail.local
-  # sed -i 's/banaction_allports = iptables-allports/banaction_allports = firewallcmd-allports/g' /etc/fail2ban/jail.local
-
-  sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
-  sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
-  sed -i "s/^banaction_allports = .*/banaction_allports = firewallcmd-allports/" /etc/fail2ban/jail.local
-
-  systemctl restart fail2ban
-
-  fail2ban-client reload >/dev/null 2>&1
-
-  echo "Hoàn tất Xóa cài đặt CSF và đồng thời bật lại firewalld"
-else
-  echo "Bạn chưa đã cài đặt CSF"
+# ==============================================================================
+# KIỂM TRA & XÁC NHẬN
+# ==============================================================================
+if [[ ! -f /etc/csf/csf.conf ]]; then
+  echo -e "${C_YELLOW}⚠️ CSF Firewall chưa được cài đặt hoặc đã bị gỡ bỏ trước đó!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/bao-mat/csf-main 1
+  exit
 fi
+
+if ! wptt_xac_nhan "Xác nhận gỡ cài đặt CSF Firewall?" "Việc gỡ cài đặt sẽ làm giảm mức độ bảo mật của máy chủ. Firewalld mặc định sẽ được bật lại." "" "Đồng ý (Gỡ cài đặt)" "Hủy bỏ"; then
+  echo -e "\n${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+  sleep 1.5
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/bao-mat/csf-main 1
+  exit
+fi
+
+echo "Huỷ cài đặt CSF : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+echo ""
+
+# ==============================================================================
+# QUÁ TRÌNH GỠ CÀI ĐẶT
+# ==============================================================================
+_runing "Đang dừng các dịch vụ CSF & LFD..."
+systemctl stop csf >/dev/null 2>&1
+systemctl stop lfd >/dev/null 2>&1
+systemctl disable csf >/dev/null 2>&1
+systemctl disable lfd >/dev/null 2>&1
+_rundone "Dừng các dịch vụ CSF & LFD"
+
+_runing "Đang gỡ bỏ mã nguồn và Dependencies của CSF..."
+sh /etc/csf/uninstall.sh >/dev/null 2>&1
+# Sửa lỗi cú pháp yum của file cũ (yum install remove -> yum remove)
+yum remove perl-libwww-perl.noarch perl-Time-HiRes -y -q >/dev/null 2>&1
+rm -rf /etc/csf
+_rundone "Gỡ bỏ mã nguồn và Dependencies của CSF"
+
+_runing "Đang khôi phục và cấu hình Firewalld mặc định..."
+systemctl unmask firewalld >/dev/null 2>&1
+systemctl start firewalld >/dev/null 2>&1
+systemctl enable firewalld >/dev/null 2>&1
+
+firewall-cmd --zone=public --add-service=http --add-service=https --permanent >/dev/null 2>&1
+firewall-cmd --zone=public --add-port=443/udp --permanent >/dev/null 2>&1
+
+# Mở Port SSH
+port_ssh=$(grep -E '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
+port_ssh=${port_ssh:-22} # Trả về 22 nếu kết quả rỗng
+firewall-cmd --zone=public --add-port=${port_ssh}/tcp --permanent >/dev/null 2>&1
+
+# Mở Port Web Admin OLS
+path_webgui="/usr/local/lsws/conf/disablewebconsole"
+if [[ ! -f $path_webgui ]]; then
+  port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | grep -o '[0-9]\+$')
+  firewall-cmd --zone=public --add-port=${port_webgui_openlitespeed}/tcp --permanent >/dev/null 2>&1
+fi
+
+# Mở Port Remote MariaDB
+if $(cat /etc/*release | grep -q "Ubuntu"); then
+  duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+else
+  duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+fi
+port_mariadb_remote=$(cat $duong_dan_cau_hinh_mariadb 2>/dev/null | grep 'port=' | grep -o '[0-9]\+$')
+if [[ -n "$port_mariadb_remote" ]]; then
+  firewall-cmd --zone=public --add-port=${port_mariadb_remote}/tcp --permanent >/dev/null 2>&1
+fi
+
+firewall-cmd --reload >/dev/null 2>&1
+_rundone "Khôi phục và cấu hình Firewalld mặc định"
+
+_runing "Đồng bộ lại cấu hình Fail2ban với Firewalld..."
+sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
+sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
+sed -i "s/^banaction_allports = .*/banaction_allports = firewallcmd-allports/" /etc/fail2ban/jail.local
+
+systemctl restart fail2ban >/dev/null 2>&1
+fail2ban-client reload >/dev/null 2>&1
+_rundone "Đồng bộ lại cấu hình Fail2ban với Firewalld"
+
+# ==============================================================================
+# BẢNG TÓM TẮT CUỐI CÙNG (KHUNG 78PX)
+# ==============================================================================
+box_inner_width=${box_inner_width:-78}
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HỦY CÀI ĐẶT CSF THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+function in_dong() {
+  local raw_text="$1"
+  local colored_text="$2"
+  local len=$(echo -n "$raw_text" | awk '{print length($0)}')
+  local pad=$((box_inner_width - len))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_GREEN}│${C_RESET}${colored_text}$(printf '%*s' "$pad" "")${C_GREEN}│${C_RESET}"
+}
+
+in_dong "  Trạng thái CSF     : Đã gỡ bỏ hoàn toàn" "  ${C_BOLD_WHITE}Trạng thái CSF     :${C_RESET} ${C_RED}Đã gỡ bỏ hoàn toàn${C_RESET}"
+in_dong "  Trạng thái Firewall: Đã kích hoạt Firewalld (Mặc định)" "  ${C_BOLD_WHITE}Trạng thái Firewall:${C_RESET} ${C_GREEN}Đã kích hoạt Firewalld (Mặc định)${C_RESET}"
+in_dong "  Trạng thái Fail2ban: Đã liên kết lại với Firewalld" "  ${C_BOLD_WHITE}Trạng thái Fail2ban:${C_RESET} ${C_GREEN}Đã liên kết lại với Firewalld${C_RESET}"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r
   exec /etc/wptt/bao-mat/csf-main 1
 fi
