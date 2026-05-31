@@ -21,62 +21,97 @@ function huong_dan() {
 
 }
 
-echo "========================================================================="
-echo "|Quản lý bảo mật => CSF => Cài Đặt                                      |"
-echo "========================================================================="
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ BẢO MẬT ➜ Cài Đặt CSF Firewall${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 echo "Cài đặt CSF : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 if [[ ! -f /etc/csf/csf.conf ]]; then
-  yum install perl-libwww-perl.noarch perl-Time-HiRes -y
-  cd /usr/src/
-  if [[ -f /usr/src/csf.tgz ]]; then
-    rm -f /usr/src/csf.tgz
+  _runing "Đang chuẩn bị môi trường (Perl)..."
+  yum install perl-libwww-perl.noarch perl-Time-HiRes -y >/dev/null 2>&1
+  _rundone "Chuẩn bị môi trường (Perl)"
+
+  cd /usr/src/ || exit
+  rm -f csf.tgz
+
+  # ==============================================================================
+  # ĐỘNG CƠ TẢI FILE TÍCH HỢP UX (PV TÀNG HÌNH)
+  # ==============================================================================
+  function wptt_download_csf_ux() {
+    local url="$1"
+    local dest_file="$2"
+    local extra_args="$3"
+    
+    echo "" # Dòng trống để thanh PV chạy mượt
+    local fsize=$(curl -sI --max-time 5 $extra_args "$url" 2>/dev/null | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+    
+    if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+      wget -qO- --timeout=15 --tries=3 $extra_args "$url" | pv -s "$fsize" -N "Tải CSF Firewall" -p -t -e -r -b -w 90 > "$dest_file"
+      echo -en "\033[1A\033[2K\r"
+    else
+      wget -q --show-progress --timeout=15 --tries=3 $extra_args -O "$dest_file" "$url"
+      echo -en "\033[1A\033[2K\r"
+    fi
+  }
+
+  _runing "Đang tải CSF Firewall từ Github (Aetherinox)..."
+  wptt_download_csf_ux "https://github.com/Aetherinox/csf-firewall/releases/download/15.10/csf-firewall-v15.10.tgz" "csf.tgz" ""
+
+  if [[ ! -s csf.tgz ]]; then
+    rm -f csf.tgz
+    wptt_download_csf_ux "https://github.com/Aetherinox/csf-firewall/releases/download/15.10/csf-firewall-v15.10.tgz" "csf.tgz" "--no-check-certificate"
   fi
 
-  # wget https://download.configserver.com/csf.tgz
-  #link https://github.com/Aetherinox/csf-firewall/releases/tag/15.07
-  wget https://github.com/Aetherinox/csf-firewall/releases/download/15.07/csf-firewall-v15.07.tgz -O csf.tgz
-  if [[ ! -f csf.tgz ]]; then
-    wget https://github.com/Aetherinox/csf-firewall/releases/download/15.07/csf-firewall-v15.07.tgz -O csf.tgz --no-check-certificate
-    # wget https://download.configserver.com/csf.tgz --no-check-certificate
-  fi
-
-  if [[ ! -f csf.tgz ]]; then
+  echo -en "\033[1A\033[2K\r"
+  if [[ ! -s csf.tgz ]]; then
+    _runloi "Tải CSF Firewall thất bại!"
     check_menu_wptangtoc_active=$1
     if [[ $check_menu_wptangtoc_active = "98" ]]; then
       exec /etc/wptt/bao-mat/csf-main 1
     fi
     exit
   fi
+  _rundone "Tải CSF Firewall từ Github (Aetherinox)"
 
+  # ==============================================================================
+  # CÀI ĐẶT CSF CORE
+  # ==============================================================================
+  _runing "Đang biên dịch và cài đặt CSF Core..."
   ip_wptangtoc=$(host wptangtoc.com | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 
   tar -xzf csf.tgz
-  cd csf
-  sh install.sh
-  cd /usr/local/csf/bin/
-  perl /usr/local/csf/bin/csftest.pl
+  cd csf || exit
+  sh install.sh >/dev/null 2>&1
+  cd /usr/local/csf/bin/ || exit
+  perl /usr/local/csf/bin/csftest.pl >/dev/null 2>&1
 
-  systemctl stop firewalld
-  systemctl disable firewalld
-  systemctl mask firewalld
+  systemctl stop firewalld >/dev/null 2>&1
+  systemctl disable firewalld >/dev/null 2>&1
+  systemctl mask firewalld >/dev/null 2>&1
+  _rundone "Biên dịch và cài đặt CSF Core"
 
+  # ==============================================================================
+  # CẤU HÌNH RULES & BẢO MẬT
+  # ==============================================================================
+  _runing "Đang tối ưu cấu hình Firewall cho OpenLiteSpeed..."
   sed -i 's/TESTING = "1"/TESTING = "0"/g' /etc/csf/csf.conf
 
   #bat quic http/3
   if [[ $(cat /etc/csf/csf.conf | grep '^UDP_OUT' | grep "$port_ols,") = '' ]]; then
     sed -i "s/^UDP_OUT = \"/UDP_OUT = \"443,/g" /etc/csf/csf.conf
   fi
-
   if [[ $(cat /etc/csf/csf.conf | grep '^UDP_IN' | grep "$port_ols,") = '' ]]; then
     sed -i "s/^UDP_IN = \"/UDP_IN = \"443,/g" /etc/csf/csf.conf
   fi
-
   if [[ $(cat /etc/csf/csf.conf | grep '^TCP_IN' | grep "$port_ols,") = '' ]]; then
     sed -i "s/^TCP_IN = \"/TCP_IN = \"443,/g" /etc/csf/csf.conf
   fi
-
   if [[ $(cat /etc/csf/csf.conf | grep '^TCP_OUT' | grep "$port_ols,") = '' ]]; then
     sed -i "s/^TCP_OUT = \"/TCP_OUT = \"443,/g" /etc/csf/csf.conf
   fi
@@ -88,18 +123,9 @@ if [[ ! -f /etc/csf/csf.conf ]]; then
 
   #tắt giao diện csf
   sed -i "/^RESTRICT_UI/s/\"[^\"]*\"/\"2\"/1" /etc/csf/csf.conf
+  _rundone "Tối ưu cấu hình Firewall cho OpenLiteSpeed"
 
-  # sed -i 's/# .googlebot.com/.googlebot.com/g' /etc/csf/csf.rignore
-  # sed -i 's/# .crawl.yahoo.net/.crawl.yahoo.net/g' /etc/csf/csf.rignore
-  # sed -i 's/# .search.msn.com/.search.msn.com/g' /etc/csf/csf.rignore
-  # echo ".lscache_runner" >> /etc/csf/csf.rignore
-  # echo ".letsencrypt.org" >> /etc/csf/csf.rignore
-  # echo ".bing.com" >> /etc/csf/csf.rignore
-  # echo ".wptangtoc.com" >> /etc/csf/csf.rignore
-  # echo ".google.com" >> /etc/csf/csf.rignore
-  # echo ".facebook.com" >> /etc/csf/csf.rignore
-  # sed -i '/.googlebot.com and /d' /etc/csf/csf.rignore
-
+  _runing "Thiết lập Whitelist cho Google Bot & Search Engines..."
   echo '###############################################################################
 # Copyright 2006-2018, Way to the Web Limited
 # URL: http://www.configserver.com
@@ -1116,40 +1142,47 @@ if [[ ! -f /etc/csf/csf.conf ]]; then
 2a03:2880:f274::/48
 2a03:83e0::/32" >>/etc/csf/csf.allow
 
-  for i in $(curl https://www.cloudflare.com/ips-v4); do echo $i >>/etc/csf/csf.ignore; done
-  for i in $(curl https://www.cloudflare.com/ips-v6); do echo $i >>/etc/csf/csf.ignore; done
+  _runing "Nạp danh sách IP Cloudflare vào Whitelist..."
+  for i in $(curl -s https://www.cloudflare.com/ips-v4); do echo $i >>/etc/csf/csf.ignore; done
+  for i in $(curl -s https://www.cloudflare.com/ips-v6); do echo $i >>/etc/csf/csf.ignore; done
+  _rundone "Nạp danh sách IP Cloudflare vào Whitelist"
 
-  # sed -i '/TESTING = /d' /etc/csf/csf.conf
-  # sed -i '/while this is enable/a TESTING = "0"' /etc/csf/csf.conf
-  systemctl start csf
-  systemctl start lfd
-  systemctl enable csf
-  systemctl enable lfd
+  _runing "Khởi động CSF & LFD service..."
+  systemctl start csf >/dev/null 2>&1
+  systemctl start lfd >/dev/null 2>&1
+  systemctl enable csf >/dev/null 2>&1
+  systemctl enable lfd >/dev/null 2>&1
 
   csf -e >/dev/null 2>&1
   #add ip wptangtoc vao danh sách trắng
   csf -a $ip_wptangtoc >/dev/null 2>&1
 
   csf -r >/dev/null 2>&1
+  _rundone "Khởi động CSF & LFD service"
 
-  #tuong thich csf iptable với fail2ban
-  # sed -i "s/banaction = firewallcmd-multiport/banaction = iptables-multiport/g" /etc/fail2ban/jail.local
-  # sed -i 's/banaction_allports = firewallcmd-allports/banaction_allports = iptables-allports/g' /etc/fail2ban/jail.local
-  # sed -i 's/action = firewallcmd-allports/action = iptables-multiport\[name=wordpress, port="http,https", protocol=tcp\]/g' /etc/fail2ban/jail.local
-
+  # ==============================================================================
+  # CẤU HÌNH FAIL2BAN
+  # ==============================================================================
+  _runing "Đồng bộ cấu hình Fail2ban với CSF Iptables..."
   sed -i '/%(action_)s/!s/^action = .*/action = iptables-allports/' /etc/fail2ban/jail.local
   sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = iptables-allports/' /etc/fail2ban/jail.local
   sed -i "s/^banaction_allports = .*/banaction_allports = iptables-allports/" /etc/fail2ban/jail.local
-  systemctl restart fail2ban
-
+  
+  systemctl restart fail2ban >/dev/null 2>&1
   fail2ban-client reload >/dev/null 2>&1
+  _rundone "Đồng bộ cấu hình Fail2ban với CSF Iptables"
 
-  echo "Hoàn tất cài đặt CSF"
 else
-  echo "Bạn đã cài đặt trước đó rồi"
+  echo -e "\n${C_YELLOW}⚠️ CSF đã được cài đặt trên hệ thống từ trước!${C_RESET}"
 fi
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}CÀI ĐẶT VÀ KÍCH HOẠT CSF THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r
   exec /etc/wptt/bao-mat/csf-main 1
 fi
