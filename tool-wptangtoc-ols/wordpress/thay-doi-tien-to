@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Đây là tính năng thay đổi tiền tố database
@@ -11,6 +14,7 @@ function huong_dan() {
 . /etc/wptt/lang/$ngon_ngu.sh
 
 . /etc/wptt/echo-color
+. /etc/wptt/core-functions 2>/dev/null
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}$quan_ly_wordpress ➜ $thay_doi $tien_to database${C_RESET}"
@@ -48,97 +52,80 @@ if [[ "$check_multisite" == 'true' ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
 
-# Kiểm tra và cài đặt Package bằng lệnh WP-CLI chuẩn
-if ! /usr/local/bin/wp package list --allow-root 2>/dev/null | grep -qi 'wp-cli-rename-db-prefix'; then
-  _runing "Cài đặt WP CLI package rename database"
-  /usr/local/bin/wp package install iandunn/wp-cli-rename-db-prefix --allow-root >/dev/null 2>&1
-  unset config_download_package_rename_cli && config_download_package_rename_cli='yes'
-fi
-
-if [[ $config_download_package_rename_cli = 'yes' ]]; then
-  if /usr/local/bin/wp package list --allow-root 2>/dev/null | grep -qi 'wp-cli-rename-db-prefix'; then
-    _rundone "Cài đặt WP CLI package rename database"
-  else
-    _runloi "Cài đặt WP CLI package rename database"
-    echo "Chưa cài đặt được WP CLI package rename database"
-    echo "Nên không thể sử dụng được tính năng này"
-    sleep 3
-    [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
-    exit
-  fi
-fi
-
 . "$path_conf"
 . /etc/wptt/php/php-cli-domain-config $NAME
 
 # Khai báo WP_EXEC chuẩn quyền User
 WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
-unset ramdom_db tien_to_cu dongy
-ramdom_db=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 5)
+unset NEW_PREFIX OLD_PREFIX dongy
+
+# Sinh tiền tố mới (Sử dụng chữ thường a-z và số để an toàn tuyệt đối với mọi hệ điều hành MySQL)
+ramdom_db=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 5)
+NEW_PREFIX="${ramdom_db}_"
 
 # Lấy tiền tố cũ
-tien_to_cu=$($WP_EXEC db prefix --allow-root --path="$path" 2>/dev/null)
+OLD_PREFIX=$($WP_EXEC db prefix --allow-root --path="$path" 2>/dev/null)
+tien_to_cu="$OLD_PREFIX"
 
-echo "Lưu ý: Hãy backup website trước khi sử dụng tính năng này!"
-echo -e "$xac_nhan $thay_doi $tien_to website $NAME từ $tien_to_cu thành ${ramdom_db}_ ?"
-prompt="$nhap_lua_chon_cua_ban [1-2]: "
-dongy="n"
-options=("$dong_y" "$khong_dong_y")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-  case "$REPLY" in
-  1)
-    dongy="y"
-    break
-    ;;
-  2)
-    dongy="n"
-    break
-    ;;
-  *)
-    printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-    break
-    ;;
-  esac
-done
+# ==============================================================================
+# SỬ DỤNG HÀM XÁC NHẬN CHUẨN UX WPTANGTOC OLS
+# ==============================================================================
+echo ""
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn thay đổi tiền tố DB cho $NAME không?" "Tiền tố sẽ được đổi từ ${C_YELLOW}$tien_to_cu${C_RESET} thành ${C_GREEN}${NEW_PREFIX}${C_RESET}" "Lưu ý: Hãy BACKUP website trước khi sử dụng tính năng này! " "Đồng ý (Thay đổi)" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  exit 0
+fi
 
-if [[ "$dongy" == 'y' ]]; then
-  wp_config_path="$path/wp-config.php"
+echo ""
+wp_config_path="$path/wp-config.php"
 
-  # Mở khóa chattr
-  [[ $lock_down ]] && chattr -i "$wp_config_path"
+# Mở khóa chattr
+[[ $lock_down ]] && chattr -i "$wp_config_path"
 
-  UI_STRING="$thay_doi $tien_to website $NAME từ $tien_to_cu thành ${ramdom_db}_"
-  _runing "$UI_STRING"
+UI_STRING="$thay_doi $tien_to website $NAME từ $tien_to_cu thành ${NEW_PREFIX}"
+_runing "$UI_STRING"
 
-  # Thực thi đổi prefix
-  $WP_EXEC rename-db-prefix "${ramdom_db}_" --allow-root --path="$path" --no-confirm >/dev/null 2>&1
+# 1. Lấy danh sách các bảng hiện tại với tiền tố cũ
+TABLES=$($WP_EXEC db query "SHOW TABLES LIKE '${OLD_PREFIX}%'" --skip-column-names --allow-root --path="$path" 2>/dev/null)
 
-  # Xóa cache OPcache
+if [[ -n "$TABLES" ]]; then
+  # 2. Đổi tên từng bảng một cách mượt mà (Bịt kín Output)
+  for TABLE in $TABLES; do
+    NEW_TABLE="${NEW_PREFIX}${TABLE#$OLD_PREFIX}"
+    $WP_EXEC db query "RENAME TABLE \`$TABLE\` TO \`$NEW_TABLE\`;" --allow-root --path="$path" >/dev/null 2>&1
+  done
+
+  # 3. Cập nhật bảng Options và Usermeta bằng logic SQL chuẩn xác (Bịt kín Output chống rác màn hình)
+  $WP_EXEC db query "UPDATE \`${NEW_PREFIX}options\` SET option_name = CONCAT('${NEW_PREFIX}', SUBSTRING(option_name, CHAR_LENGTH('${OLD_PREFIX}') + 1)) WHERE option_name LIKE '${OLD_PREFIX}%';" --allow-root --path="$path" >/dev/null 2>&1
+  $WP_EXEC db query "UPDATE \`${NEW_PREFIX}usermeta\` SET meta_key = CONCAT('${NEW_PREFIX}', SUBSTRING(meta_key, CHAR_LENGTH('${OLD_PREFIX}') + 1)) WHERE meta_key LIKE '${OLD_PREFIX}%';" --allow-root --path="$path" >/dev/null 2>&1
+
+  # 4. Sửa file wp-config.php cực an toàn bằng Regex
+  sed -i -e "s/\$table_prefix[[:space:]]*=[[:space:]]*['\"][^'\"]*['\"]/\$table_prefix = '${NEW_PREFIX}'/" "$wp_config_path"
+
+  # ================== XÓA CACHE TOÀN DIỆN ==================
   $WP_EXEC eval 'opcache_reset();' --path="$path" --allow-root >/dev/null 2>&1
-
-  #xoa cache object cache
   (/etc/wptt/cache/wptt-xoa-cache-redis-valkey-keydb >/dev/null 2>&1)
-
-  #memcached xoá cache
   if [ "$(systemctl is-active memcached.service)" == "active" ]; then
     echo "flush_all" | socat - UNIX-CONNECT:/var/run/memcached/memcached.sock >/dev/null 2>&1
   fi
 
-  # Xác thực lại tiền tố mới
+  # Xác thực lại kết quả
   tien_to_moi=$($WP_EXEC db prefix --allow-root --path="$path" 2>/dev/null)
 
-  if [[ "$tien_to_moi" == "$tien_to_cu" ]]; then
+  if [[ "$tien_to_moi" == "$tien_to_cu" || -z "$tien_to_moi" ]]; then
     _runloi "$UI_STRING"
   else
     _rundone "$UI_STRING"
   fi
-
-  echo "Thay đổi tiền tố website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-  # Đóng khóa chattr
-  [[ $lock_down ]] && chattr +i "$wp_config_path"
+else
+  _runloi "$UI_STRING (Không tìm thấy Table)"
 fi
+
+echo "Thay đổi tiền tố website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+# Đóng khóa chattr
+[[ $lock_down ]] && chattr +i "$wp_config_path"
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
