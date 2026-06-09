@@ -1,73 +1,81 @@
 #!/bin/bash
-. /etc/wptt/.wptt.conf
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+. /etc/wptt/.wptt.conf 2>/dev/null
 if [[ $ngon_ngu = '' ]]; then
   ngon_ngu='vi'
 fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 
-. /etc/wptt/echo-color
-echo ""
-echo ""
-echo ""
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-. /etc/wptt/echo-color
+clear
 tinh_nang_ten="$cap_nhat WordPress ALL"
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-echo "update tất cả core WordPress + plugin + themes cho tất cả các website tại hệ thống này?"
-prompt="$nhap_lua_chon_cua_ban [1-2]: "
-dongy="n"
-options=("$dong_y" "$khong_dong_y")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-  case "$REPLY" in
-  1)
-    dongy="y"
-    break
-    ;;
+# ==============================================================================
+# GIAO DIỆN XÁC NHẬN CHUẨN UX
+# ==============================================================================
+echo ""
+if ! wptt_xac_nhan "Cập nhật tất cả Core, Plugin, Theme cho TOÀN BỘ website trên hệ thống?" "Lưu ý: Lệnh được trang bị Anti-Freeze, tự động bỏ qua nếu kết nối mạng lỗi để chống treo VPS." "" "Đồng ý (Cập nhật)" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  exit 0
+fi
 
-  2)
-    dongy="n"
-    break
-    ;;
+echo ""
+LOG_FILE="/var/log/wptangtoc-ols.log"
+echo "--- BẮT ĐẦU CẬP NHẬT WordPress: $(date) ---" >>"$LOG_FILE"
 
-  $((${#options[@]} + 1)))
-    printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-    break
-    ;;
-  *)
-    printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-    break
-    ;;
-  esac
+# ==============================================================================
+# XỬ LÝ CẬP NHẬT VỚI TIMEOUT CHỐNG TREO VPS
+# ==============================================================================
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+
+  NAME="${filepath##*/}"
+  NAME="${NAME%.conf}"
+  NAME="${NAME#.}"
+
+  if [[ "$NAME" == ?*.?* ]]; then
+    path="/usr/local/lsws/$NAME/html"
+    if [[ -f "$path/wp-load.php" ]]; then
+
+      UI_STRING="Đang cập nhật toàn diện website: ${C_YELLOW}$NAME${C_RESET}"
+      _runing "$UI_STRING"
+
+      unset User_name_vhost phien_ban_php_domain_thuc_thi
+      . "$filepath"
+      . /etc/wptt/php/php-cli-domain-config $NAME
+
+      WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+      # Thêm "timeout" để chống kẹt tiến trình nếu API của WordPress.org bị đứt
+      # Mọi output dư thừa được giấu nhẹm vào LOG_FILE để giữ sạch UI
+      timeout 120 $WP_EXEC plugin update --all --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 120 $WP_EXEC theme update --all --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 60 $WP_EXEC language core update --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 120 $WP_EXEC language plugin update --all --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 120 $WP_EXEC language theme update --all --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 180 $WP_EXEC core update --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 60 $WP_EXEC core update-db --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 30 $WP_EXEC cache flush --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+      timeout 30 $WP_EXEC rewrite flush --path="$path" --allow-root >>"$LOG_FILE" 2>&1
+
+      _rundone "$UI_STRING"
+    fi
+  fi
 done
 
-if [[ "$dongy" = 'y' ]]; then
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
-    i=1
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      path="/usr/local/lsws/$NAME/html"
-      if [[ -f $path/wp-load.php ]]; then
-        echo "Đang tiến hành cập nhật cho $NAME"
-        unset User_name_vhost phien_ban_php_domain_thuc_thi
-        . /etc/wptt/vhost/.$NAME.conf
-        . /etc/wptt/php/php-cli-domain-config $NAME
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp plugin update --all --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp theme update --all --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp language core update --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp language plugin update --all --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp language theme update --all --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp core update --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp core update-db --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp cache flush --path="$path" --allow-root
-        sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp rewrite flush --path="$path" --allow-root
-      fi
-    done
-  fi
-fi
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT CẬP NHẬT TOÀN BỘ WEBSITE TRÊN HỆ THỐNG${C_RESET}"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
