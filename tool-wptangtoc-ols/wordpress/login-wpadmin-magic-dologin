@@ -1,16 +1,25 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @email: giatuan@wptangtoc.com
+
 function huong_dan() {
-  Tính năng này đăng nhập nhanh vào tài khoản dashboard WP-admin không cần biết tài khoản admin WordPress
+  Tính năng này đăng nhập nhanh vào tài khoản dashboard WP-admin không cần biết tài khoản admin WordPress.
 }
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý WordPress => Đăng nhập Login wp-admin magic link               |"
-echo "========================================================================="
-echo ""
-echo ""
+. /etc/wptt/.wptt.conf 2>/dev/null
+if [[ $ngon_ngu = '' ]]; then
+  ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}Quản lý WordPress ➜ Magic Link Đăng Nhập (Dologin)${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
 NAME=$1
 
 if [[ $NAME = "98" ]]; then
@@ -18,24 +27,18 @@ if [[ $NAME = "98" ]]; then
 fi
 
 if [[ "$NAME" = "" ]]; then
-  . /etc/wptt/tenmien
-  echo ""
-  echo ""
-  echo "Lựa chọn website muốn đăng nhập Login wp-admin magic link: "
-  echo ""
-  lua_chon_NAME
+  . /etc/wptt/tenmien-only-website-by-wordpress 2>/dev/null
+  lua_chon_NAME "Magic Link dự phòng (Dologin)"
 fi
 
 if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
 
-. /etc/wptt/echo-color
-
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   clear
-  echoDo "Domain khong ton tai tren VPS."
+  _runloi "Domain không tồn tại trên VPS."
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
   exit
@@ -44,49 +47,170 @@ fi
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
-
+  _runloi "Hệ thống xác nhận bạn không sử dụng WordPress"
+  echo "Tính năng này chỉ có thể hoạt động trên WordPress"
   sleep 3
   exec /etc/wptt/wptt-wordpress-main 1
   exit
 fi
 
-echo "Magic link login website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+echo "Magic link login dự phòng (Dologin) website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
+unset lock_down
 . /etc/wptt/vhost/.$NAME.conf
+
+if [[ -n "$lock_down" ]]; then
+	echo "Vui lòng tắt tính năng lockdown bảo mật cho website $NAME thì mới đuợc phép dùng tính năng này"
+	check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu quản lý WordPress...${C_RESET}"
+  read -r
+  exec /etc/wptt/wptt-wordpress-main 1
+fi
+exit;
+fi
+
+
 . /etc/wptt/php/php-cli-domain-config $NAME
+
 path="/usr/local/lsws/$NAME/html"
 pathlogin="/usr/local/lsws/$NAME/html/wp-content/plugins/dologin"
+WP_ROOT="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
 if [[ ! -d "$pathlogin" ]]; then
-  _runing "Download plugin WP CLI dologin"
-  sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp plugin install dologin --activate --path=$path --allow-root >/dev/null 2>&1
-  _rundone "Download plugin WP CLI dologin"
+  _runing "Đang cài đặt plugin dự phòng Dologin"
+  sudo -u "$User_name_vhost" $WP_ROOT plugin install dologin --activate --path="$path" --allow-root >/dev/null 2>&1
+  _rundone "Cài đặt plugin Dologin thành công"
 fi
+
+# ==============================================================================
+# TUYỆT KỸ MU-PLUGIN: SÁT THỦ LỌC SẠCH DOLOGIN + BẺ LÁI CHỐNG LỖI 403
+# ==============================================================================
+MU_DIR="${path}/wp-content/mu-plugins"
+mkdir -p "$MU_DIR"
+MU_FILE="${MU_DIR}/wptt-dologin-destruct.php"
+
+cat << 'EOF' > "$MU_FILE"
+<?php
+/**
+ * Plugin Name: WPTangToc Dologin Destruct Pro
+ * Description: Tự động dọn dẹp hệ thống, Database và thư mục mu-plugins sau khi đăng nhập qua Dologin.
+ */
+add_action('admin_init', 'wptt_dologin_cleanup_pro', 1);
+function wptt_dologin_cleanup_pro() {
+    if (defined('DOING_AJAX') && DOING_AJAX) return;
+    
+    if (!function_exists('is_user_logged_in') || !is_user_logged_in()) return;
+    if (!current_user_can('manage_options')) return;
+
+    $need_redirect = false;
+    
+    // Nếu thằng Dologin ngoan cố bẻ lái về trang cài đặt của nó -> Chuẩn bị chặn lại
+    if (isset($_GET['page']) && strpos($_GET['page'], 'dologin') !== false) {
+        $need_redirect = true;
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    global $wpdb;
+    
+    $plugin_slug = 'dologin/dologin.php';
+    $plugin_dir = WP_PLUGIN_DIR . '/dologin';
+
+    // Chỉ thực thi dọn dẹp nếu plugin vẫn còn tồn tại
+    if (is_plugin_active($plugin_slug) || file_exists($plugin_dir)) {
+        $need_redirect = true; // Chắc chắn phải bẻ lái sau khi xóa để chống lỗi
+
+        // 1. Tắt và xóa plugin
+        if (is_plugin_active($plugin_slug)) {
+            deactivate_plugins($plugin_slug, true);
+        }
+        
+        if (file_exists($plugin_dir)) {
+            WP_Filesystem();
+            global $wp_filesystem;
+            if (is_object($wp_filesystem)) {
+                $wp_filesystem->delete($plugin_dir, true);
+            } else {
+                array_map('unlink', glob("$plugin_dir/*.*"));
+                @rmdir($plugin_dir);
+            }
+        }
+        
+        // 2. DỌN SẠCH DATABASE Tables
+        $tables = $wpdb->get_col("SHOW TABLES LIKE '%_dologin_%'");
+        if (!empty($tables)) {
+            foreach ($tables as $table) {
+                $wpdb->query("DROP TABLE `{$table}`");
+            }
+        }
+        
+        // 3. DỌN SẠCH DATABASE Options
+        $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE 'dologin.%'");
+        
+        // 4. Tự sát file mu-plugin
+        $current_file = __FILE__;
+        $mu_dir = dirname($current_file);
+        @unlink($current_file);
+        
+        // 5. Xóa thư mục mu-plugins nếu rỗng
+        if (file_exists($mu_dir) && is_dir($mu_dir)) {
+            $remaining_files = array_diff(scandir($mu_dir), array('.', '..'));
+            if (empty($remaining_files)) {
+                @rmdir($mu_dir);
+            }
+        }
+    }
+
+    // 6. CHỐT HẠ BẺ LÁI: Ném sếp thẳng vào Dashboard an toàn
+    if ($need_redirect) {
+        wp_safe_redirect(admin_url());
+        exit;
+    }
+}
+EOF
+
+# Trả lại quyền sở hữu chuẩn xác cho user vhost
+chown -R $User_name_vhost:$User_name_vhost "$MU_DIR"
+
 clear
-_runing "Tạo link đăng nhập"
+_runing "Đang tạo mã Magic Link mã hóa qua Dologin"
+tuan=$(sudo -u "$User_name_vhost" $WP_ROOT user list --role=administrator --field=user_login --path="$path" --allow-root 2>/dev/null | head -n 1)
 
-tuan=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp user list --role=administrator --field=user_login --path="$path" --allow-root 2>/dev/null | head -n 1)
-
-if [[ -z $tuan ]]; then #điều kiện check xem có xác định được tài khoản administrator không
-  echo "Không xác định được tài khoản administrator của website $NAME"
+if [[ -z $tuan ]]; then
+  _runloi "Lấy tài khoản Administrator"
+  echo -e "\n${C_RED}❌ Lỗi: Không xác định được tài khoản administrator của website $NAME${C_RESET}"
   sleep 3
   [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
   return 2>/dev/null || exit
 fi
 
-giatuandzdz=$(sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp dologin gen "$tuan" --path=$path --allow-root 2>/dev/null | cut -f2 -d '?')
-if [[ "$giatuandzdz" ]]; then
-  _rundone "Tạo link đăng nhập"
-  C_blue='\033[1;34m'
-  C_RESET='\033[0m'
+giatuandzdz=$(sudo -u "$User_name_vhost" $WP_ROOT dologin gen "$tuan" --path="$path" --allow-root 2>/dev/null | cut -f2 -d '?' | tr -d '\r\n ')
 
-  echo -e "Truy cập vào đường dẫn link để login wp-admin: ${C_blue}https://$NAME/wp-admin/?${giatuandzdz}${C_RESET}"
-  echo "Link login magic này chỉ có thể sử dụng một lần duy nhất"
+if [[ -n "$giatuandzdz" ]]; then
+  _rundone "Tạo mã Magic Link Dologin thành công "
+
+  magic_url="https://$NAME/wp-admin/?${giatuandzdz}"
+
+  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}MAGIC LINK LOGIN DỰ PHÒNG (SIÊU CẤP BẢO MẬT)${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  center_text "${C_GREEN}Tài khoản truy cập: ${C_BOLD_WHITE}$tuan${C_RESET}"
+  center_text ""
+  center_text "Hãy bôi đen và COPY đường dẫn bên dưới dán vào trình duyệt:"
+  center_text "${C_CYAN}$magic_url${C_RESET}"
+  center_text ""
+  center_text "${C_YELLOW}[!] Lưu ý: Link này chỉ sử dụng 1 lần duy nhất!${C_RESET}"
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
 else
   _runloi "Tạo link đăng nhập"
-  echoDo "Không thiết lập được magic link login"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể thiết lập được magic link login.${C_RESET}"
 fi
 
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+check_menu_wptangtoc_active=$1
+if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu quản lý WordPress...${C_RESET}"
+  read -r
+  exec /etc/wptt/wptt-wordpress-main 1
+fi
