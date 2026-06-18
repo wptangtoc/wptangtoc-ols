@@ -2,30 +2,190 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2023
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
 echo "|Quản lý Cache => Thêm rewite htaccess cache WPTangTOC|"
-echo "========================================================================="
-
 NAME=$1
 if [[ $NAME = "98" ]]; then
   NAME=""
 fi
 
-if [[ "$NAME" = "" ]]; then
-  . /etc/wptt/tenmien
-  echo ""
-  echo ""
-  echo "Lựa chọn website bạn muốn rewite htaccess cache WPTangTOC: "
-  echo ""
-  lua_chon_NAME
+function lua_chon_NAME() {
+  local action_desc="$1" # Nhận thông điệp từ file gọi (nếu có)
+  unset NAME
+  local selects=()
+  local i=1
+  # Mặc định chuẩn khung 78
+  local box_inner_width=${box_inner_width:-78}
 
-  if [[ ! -f /usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/Cache.php ]]; then
-    echo "Chưa được cài đặt page cache HTML"
+  # 1. Quét file siêu tốc trên RAM (LỌC NGHIÊM NGẶT CÁC DOMAIN CÓ CÀI WORDPRESS)
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
+      # ĐIỀU KIỆN LÕI CỦA FILE NÀY: Phải có 2 file wp-load và wp-config
+      if [[ -f /usr/local/lsws/$domain/html/wp-load.php && -f /usr/local/lsws/$domain/html/wp-config.php ]]; then
+		if [[ -f /usr/local/lsws/$domain/html/wp-content/plugins/wptangtoc/class/Cache.php ]]; then
+        selects+=("$domain")
+		fi
+      fi
+    fi
+  done
+
+  # 2. Kiểm tra nếu VPS chưa có website nào thỏa mãn
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    clear
+    echo -e "\n${C_RED}❌ Lỗi: Không có website WordPress nào tồn tại trên hệ thống.${C_RESET}"
     exit
   fi
+
+  # 3. Sắp xếp mảng chuẩn Version (Tự nhiên)
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # ============================================================================
+  # 4. RENDER KHỐI BO CONG (ĐƯỜNG KẺ GẠCH CHÂN BÁM LỀ TRÁI)
+  # ============================================================================
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+
+  # Tiêu đề hành động (Lệch trái)
+  if [[ -n "$action_desc" ]]; then
+    local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website của bạn muốn} $action_desc:"
+    local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+
+    # Tính số ký tự thực tế (Chống lỗi UTF-8)
+    local len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_text") 2>/dev/null | wc -m | tr -d ' ')
+    [[ -z "$len" || "$len" == "0" ]] && len=${#clean_title}
+
+    # Căn lề trái (cách 2 khoảng trắng), tính khoảng trắng bù bên phải
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+
+    # In ra Tiêu đề
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    # Vẽ đường gạch chân, sử dụng sed thay cho tr để không bị lỗi UTF-8
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+
+    # In đường phân cách (bám từ lề trái, tàng hình phần bên phải)
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+  fi
+
+  # Vòng lặp in danh sách tên miền vào trong khung
+  for domain in "${selects[@]}"; do
+    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+
+    # Tính toán khoảng trắng bù trừ chống UTF-8
+    local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+    local len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_text") 2>/dev/null | wc -m | tr -d ' ')
+    [[ -z "$len" || "$len" == "0" ]] && len=${#clean_text}
+
+    local pad=$((box_inner_width - len))
+    [[ $pad -lt 0 ]] && pad=0
+
+    # In dòng dữ liệu
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  # ============================================================================
+  # 5. TỐI ƯU UX DÒNG NHẮC LỆNH (PROMPT) THÔNG MINH
+  # ============================================================================
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+  fi
+
+  local prompt_quick_select=""
+  # CHỈ hiển thị Chọn Nhanh khi có FZF và CÓ TỪ 2 WEBSITE TRỞ LÊN
+  if [[ "$fzf_installed" == true && ${#selects[@]} -gt 1 ]]; then
+    prompt_quick_select=" [00=${chon_nhanh:-Chọn nhanh}]"
+  fi
+
+  PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]})${prompt_quick_select} [0=${exit_thoat:-Thoát}]: "
+
+  # ============================================================================
+  # 6. ĐỘNG CƠ NHẬN PHÍM AN TOÀN
+  # ==============================================================================
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+
+    if ! read -r REPLY; then
+      echo -e "\n${C_RED}⚠️ Đã mất kết nối Terminal (EOF). Tự động thoát Menu để bảo vệ hệ thống...${C_RESET}"
+      exit 1
+    fi
+
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+
+    00)
+      # Chỉ cho phép chạy 00 nếu có nhiều hơn 1 website
+      if [[ "$fzf_installed" == true && ${#selects[@]} -gt 1 ]]; then
+        local fzf_height=$((${#selects[@]} + 4))
+        local fzf_prompt="${nhap_lua_chon_website_cua_ban:-Tìm kiếm website} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
+
+        local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border=rounded --color=border:red --cycle --reverse)
+        local fzf_exit_status=$?
+
+        selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+
+        if [[ $fzf_exit_status -eq 0 ]] && [[ -n "$selected_name" ]]; then
+          NAME="$selected_name"
+          return 0
+        else
+          echo -e "\n${C_YELLOW}Đã hủy chọn. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
+          continue
+        fi
+      else
+        echo -e "\n${C_RED}❌ Lỗi: ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ} '00'. Tính năng chọn nhanh không khả dụng lúc này.${C_RESET}"
+        continue
+      fi
+      ;;
+
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME="${selects[$action_index]}"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]] && [[ "$REPLY" != "." ]]; then
+        local found=false
+        for valid_domain in "${selects[@]}"; do
+          if [[ "$valid_domain" == "$REPLY" ]]; then
+            NAME="$valid_domain"
+            found=true
+            break
+          fi
+        done
+
+        if $found; then
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lỗi: Tên miền '$REPLY' không tồn tại hoặc không phải là WordPress.${C_RESET}"
+          continue
+        fi
+      else
+        echo -e "\n${C_RED}❌ ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
+        continue
+      fi
+      ;;
+    esac
+  done
+}
+
+
+if [[ "$NAME" = "" ]]; then
+  lua_chon_NAME "Cache WPTangTOC"
 fi
 
 # if [[ $(cat /usr/local/lsws/$NAME/html/.htaccess | grep 'cache/wptangtoc') ]];then
