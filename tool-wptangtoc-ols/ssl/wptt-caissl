@@ -17,10 +17,6 @@ function huong_dan() {
   * Tăng uy tín: Người dùng cảm thấy an tâm hơn khi truy cập website có HTTPS.
 
   Tính năng cài đặt SSL Lets Encrypt giúp việc bảo mật website trở nên dễ dàng, miễn phí và tự động, góp phần làm cho Internet an toàn hơn.
-
-  * Tự động gia hạn: Chứng chỉ SSL Lets Encrypt có thời hạn nhất định [thường là 90 ngày]. WPTangToc OLS sẽ tự động thực hiện quá trình gia hạn này, đảm bảo website của bạn luôn được bảo vệ bằng HTTPS mà không cần can thiệp thủ công.
-  * Hỗ trợ cho nhiều tên miền: Bạn có thể quản lý và cài đặt SSL cho nhiều tên miền và tên miền phụ trên cùng một máy chủ.
-  * Tự động chuyển hướng HTTP sang HTTPS: Sau khi cài đặt SSL thành công, WPTangToc OLS thường sẽ hỗ trợ cấu hình tự động chuyển hướng truy cập từ HTTP sang HTTPS, giúp đảm bảo an toàn và cải thiện SEO.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -195,10 +191,6 @@ if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
   return 2>/dev/null || exit
 fi
 
-# (Đã lược bỏ hàm curl HTTP check theo yêu cầu để tối ưu hệ thống)
-
-
-#sử lý tình huống nguời dùng sử dụng OLS nhưng mà lại đi lại NGINX hay apache vào cướp port 80 không thể xin cấp SSL đuợc
 # ==============================================================================
 # KIỂM TRA XUNG ĐỘT PORT 80 (NGINX / APACHE CƯỚP PORT)
 # ==============================================================================
@@ -207,7 +199,7 @@ if [[ -z "$conflict_process" ]]; then
   conflict_process=$(netstat -tlnp 2>/dev/null | grep -E '\b:80\b' | awk '{print $7}' | cut -d'/' -f2 | grep -v -iE "litespeed|openlite|lsws|lshttpd|-" | head -n 1)
 fi
 
-if [[ -n "$conflict_process" ]]; then #vì dùng grep -v đi tìm biến: nếu port 80 mà bị cướp bới nginx hay apache thì nó sẽ đi vào true
+if [[ -n "$conflict_process" ]]; then
   echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_RED}CẢNH BÁO: XUNG ĐỘT PORT 80 (HTTP) của OpenLiteSpeed${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -217,7 +209,6 @@ if [[ -n "$conflict_process" ]]; then #vì dùng grep -v đi tìm biến: nếu 
   center_text "Để tiếp tục gia hạn, bạn cần tắt dịch vụ xung đột này đi bằng lệnh:"
   center_text "${C_GREEN}systemctl stop $conflict_process${C_RESET}"
   center_text "${C_GREEN}systemctl disable $conflict_process${C_RESET}"
-  center_text "${C_GREEN}systemctl mask $conflict_process${C_RESET}"
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL${C_RESET}"
   read -r dummy
@@ -225,28 +216,61 @@ if [[ -n "$conflict_process" ]]; then #vì dùng grep -v đi tìm biến: nếu 
   exit 1
 fi
 
-
 # ==============================================================================
-# KIỂM TRA DNS (IPV4 & IPV6) (ĐÃ FIX LỖI GREP CHUỖI RỖNG)
+# KIỂM TRA DNS VÀ BẮT LỖI XUNG ĐỘT BẢN GHI IPV6 (AAAA)
 # ==============================================================================
 echo ""
 _runing "Đang kiểm tra phân giải DNS cho tên miền $NAME..."
 
 error_ssl_ipv4="1"
-error_ssl_ipv6="1"
 
-# Lấy danh sách IP của Máy chủ hiện tại
+# 1. Thu thập IP của Máy chủ hiện tại
 server_ips=$(ip a | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sed '/127.0.0.1/d' | sed '/192.168/d' | sort -u)
 public_ip=$(curl -sf --connect-timeout 5 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 server_ips="$server_ips $public_ip"
+server_ipv6=$(curl -s --connect-timeout 5 https://ipv6.icanhazip.com 2>/dev/null)
 
-# Lấy kết quả phân giải DNS của tên miền
+# 2. KIỂM TRA BẪY LETS ENCRYPT (BẢN GHI AAAA) TRƯỚC
+checkdns_v6=$(host -t AAAA "$NAME" 2>/dev/null | grep "has IPv6 address" | awk '{print $5}' | head -1)
+
+if [[ -n "$checkdns_v6" ]]; then
+  # Tồn tại bản ghi AAAA. Kiểm tra xem VPS có IPv6 không, và có khớp nhau không?
+  if [[ -z "$server_ipv6" ]] || ! echo "$server_ipv6" | grep -qiw "$checkdns_v6"; then
+    _runloi "Phát hiện xung đột DNS IPv6 (Bản ghi AAAA)"
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_RED}❌ CẢNH BÁO TỬ HUYỆT: TÊN MIỀN ĐANG TRỎ SAI BẢN GHI IPV6 (AAAA)${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ${C_YELLOW}Tại sao hệ thống chặn bạn cài SSL lúc này?${C_RESET}" 2
+    left_text " Let's Encrypt luôn ${C_RED}ƯU TIÊN TUYỆT ĐỐI${C_RESET} xác thực qua IPv6 nếu tên miền có" 2
+    left_text " tồn tại bản ghi AAAA. Dù IPv4 của bạn trỏ chuẩn đến đâu, nhưng" 2
+    left_text " IPv6 trỏ sai thì Let's Encrypt vẫn sẽ báo lỗi và từ chối cấp SSL." 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ${C_YELLOW}Tình trạng hiện tại:${C_RESET}" 2
+    left_text " - IPv6 (AAAA) đang trỏ : ${C_RED}$checkdns_v6${C_RESET}" 2
+    if [[ -z "$server_ipv6" ]]; then
+        left_text " - Máy chủ (VPS) này    : ${C_YELLOW}Chưa được cấu hình / Không hỗ trợ mạng IPv6${C_RESET}" 2
+    else
+        left_text " - Máy chủ (VPS) này    : ${C_GREEN}$server_ipv6${C_RESET}" 2
+    fi
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ${C_GREEN}CÁCH GIẢI QUYẾT TRIỆT ĐỂ NHẤT (Chỉ 1 phút):${C_RESET}" 2
+    left_text " 1. Truy cập trang quản lý DNS (Cloudflare, Namecheap, v.v.)" 2
+    left_text " 2. Tìm và ${C_RED}XÓA BỎ HOÀN TOÀN${C_RESET} bản ghi Loại AAAA của tên miền này." 2
+    left_text " 3. Chờ 2-3 phút để DNS xóa bộ nhớ đệm rồi tiến hành cài lại SSL." 2
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+    read -r dummy
+    [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+    exit 1
+  fi
+fi
+
+# 3. NẾU VƯỢT QUA BẪY IPV6, TIẾP TỤC KIỂM TRA BẢN GHI IPV4 (A)
 checkdns=$(host "$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 checkdns2=$(nslookup "$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 checkdns3=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
 checkdns4=$(curl -s --connect-timeout 5 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
 
-# KIỂM TRA ĐỐI CHIẾU IP AN TOÀN (Ngăn lỗi chuỗi rỗng)
 for resolved_ip in "$checkdns" "$checkdns2" "$checkdns3" "$checkdns4"; do
   if [[ -n "$resolved_ip" ]] && echo "$server_ips" | grep -q "\b$resolved_ip\b"; then
     error_ssl_ipv4="0"
@@ -254,18 +278,8 @@ for resolved_ip in "$checkdns" "$checkdns2" "$checkdns3" "$checkdns4"; do
   fi
 done
 
-# Kiểm tra IPv6 (Chỉ kiểm tra nếu Litespeed đang cấu hình lắng nghe IPv6)
-if grep -q 'address.*\[ANY\]' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
-  server_ipv6=$(curl -s --connect-timeout 5 https://ipv6.icanhazip.com 2>/dev/null)
-  checkdns_v6=$(host "$NAME" 2>/dev/null | grep IPv6 | grep -Eio '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|...' | head -1)
-
-  if [[ -n "$checkdns_v6" && -n "$server_ipv6" ]] && echo "$server_ipv6" | grep -qiw "$checkdns_v6"; then
-    error_ssl_ipv6="0"
-  fi
-fi
-
-# XỬ LÝ NẾU TÊN MIỀN CHƯA TRỎ IP HOẶC ĐANG BẬT PROXY CLOUDFLARE
-if [[ "$error_ssl_ipv4" == "1" && "$error_ssl_ipv6" == "1" ]]; then
+# XỬ LÝ NẾU BẢN GHI IPV4 KHÔNG KHỚP HOẶC ĐANG BẬT PROXY CLOUDFLARE
+if [[ "$error_ssl_ipv4" == "1" ]]; then
   _runloi "Kiểm tra phân giải DNS thất bại"
 
   # Kiểm tra nhanh có phải đang cắm qua proxy Cloudflare hay không
@@ -286,8 +300,8 @@ if [[ "$error_ssl_ipv4" == "1" && "$error_ssl_ipv6" == "1" ]]; then
     exec /etc/wptt/wptt-ssl-main 1
   fi
 
-  # Báo lỗi tên miền không tồn tại hoặc trỏ sai IP (Trường hợp beta2 của sếp)
-  echo -e "\n${C_RED}❌ LỖI: TÊN MIỀN CHƯA ĐƯỢC TRỎ IP VỀ MÁY CHỦ!${C_RESET}"
+  # Báo lỗi tên miền không tồn tại hoặc trỏ sai IP
+  echo -e "\n${C_RED}❌ LỖI: TÊN MIỀN CHƯA ĐƯỢC TRỎ BẢN GHI IPV4 VỀ MÁY CHỦ!${C_RESET}"
   echo -e "Tên miền ${C_YELLOW}$NAME${C_RESET} hiện đang trỏ tới: ${C_YELLOW}${checkdns:-Không xác định (Name or service not known)}${C_RESET}"
   echo -e "Vui lòng truy cập trang quản lý Tên miền, trỏ bản ghi A về IP máy chủ hiện tại: ${C_GREEN}$public_ip${C_RESET}"
   echo -e "Sau khi lưu DNS, hãy chờ vài phút và thử cài lại SSL."
@@ -295,7 +309,7 @@ if [[ "$error_ssl_ipv4" == "1" && "$error_ssl_ipv6" == "1" ]]; then
   read -r dummy
   exec /etc/wptt/wptt-ssl-main 1
 fi
-_rundone "Kiểm tra DNS thành công (IP khớp với máy chủ)"
+_rundone "Kiểm tra DNS thành công (Hệ thống đã trỏ đúng IP)"
 
 # ==============================================================================
 # KIỂM TRA CHỨNG CHỈ TỒN TẠI VÀ THU HỒI
@@ -368,9 +382,9 @@ if [[ "$NAME" == "$Website_chinh" && -f "/usr/local/lsws/conf/httpd_config.conf"
   sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
 
-  sed -i "/https/a   keyFile                \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a   certFile               \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a   CACertFile             \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   keyFile                 \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   certFile                \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   CACertFile              \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
 fi
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
