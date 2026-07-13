@@ -18,18 +18,25 @@ function huong_dan() {
   Tóm lại, đây là một tính năng tiện ích để dọn dẹp nhanh chóng, nhưng cần được sử dụng một cách cẩn trọng để tránh mất dữ liệu quan trọng.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-clear
+# Kiểm tra xem có phải đang chạy ngầm bằng Cronjob hay không
+CHAY_NGAM=0
+[[ "${1:-}" == "cron" ]] && CHAY_NGAM=1
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ LOGS ➜ $xoa logs ALL${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+if [[ $CHAY_NGAM -eq 0 ]]; then
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}QUẢN LÝ LOGS ➜ $xoa logs ALL${C_RESET}"
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  echo -e "\033[1;36m[+] Đang tiến hành dọn dẹp Log của các website (Vhosts)...\033[0m"
+fi
 
-# Nhận diện OS để cấp quyền chính xác
+# Nhận diện OS để cấp quyền chính xác cho OpenLiteSpeed
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   tuong_thich_nhom_litespeed="nogroup"
 else
@@ -37,11 +44,8 @@ else
 fi
 
 # ==============================================================================
-# 1. DỌN DẸP LOG CỦA TỪNG WEBSITE (VHOSTS)
+# 1. DỌN DẸP LOG CỦA TỪNG WEBSITE (VHOSTS) + XÓA ĐUÔI .GZ TỰ ĐỘNG NÉN
 # ==============================================================================
-echo -e "\033[1;36m[+] Đang tiến hành dọn dẹp Log của các website...\033[0m"
-
-# Sử dụng Bash Globbing an toàn thay vì parse lệnh 'ls'
 for conf_file in /etc/wptt/vhost/.*.conf; do
   [[ -e "$conf_file" ]] || continue # Bỏ qua nếu không có file nào khớp
 
@@ -52,30 +56,35 @@ for conf_file in /etc/wptt/vhost/.*.conf; do
     path="/usr/local/lsws/$domain/logs"
 
     if [[ -d "$path" ]]; then
-      # Xóa rỗng error.log
+      # Xóa rỗng file error.log thô
       if [[ -f "$path/error.log" ]]; then
         truncate -s 0 "$path/error.log" >/dev/null 2>&1
         chown nobody:$tuong_thich_nhom_litespeed "$path/error.log"
       fi
 
-      # Xóa rỗng access.log và các file nén .gz
+      # Xóa rỗng file access.log thô
       if [[ -f "$path/access.log" ]]; then
         truncate -s 0 "$path/access.log" >/dev/null 2>&1
         chown nobody:$tuong_thich_nhom_litespeed "$path/access.log"
-        rm -f "$path"/*.gz
       fi
 
-      echo " -> Hoàn tất xóa logs website: $domain"
+      rm -f "$path"/*.gz "$path"/*.zip "$path"/*.bak "$path"/error.log.* "$path"/access.log.* 2>/dev/null
+
+      if [[ $CHAY_NGAM -eq 0 ]]; then
+        echo " ➜ Hoàn tất xóa logs và tệp nén website: $domain"
+      fi
     fi
   fi
 done
 
-echo ""
-UI_STRING="Dọn dẹp Log máy chủ OLS và Hệ thống Linux"
-_runing "$UI_STRING"
+if [[ $CHAY_NGAM -eq 0 ]]; then
+  echo ""
+  UI_STRING="Dọn dẹp Log máy chủ OLS và Hệ thống Linux"
+  _runing "$UI_STRING"
+fi
 
 # ==============================================================================
-# 2. DỌN DẸP LOG CỦA MÁY CHỦ OPENLITESPEED
+# 2. DỌN DẸP LOG CỦA LÕI MÁY CHỦ OPENLITESPEED (OLS SYSTEM)
 # ==============================================================================
 ols_log_dir="/usr/local/lsws/logs"
 
@@ -86,15 +95,19 @@ if [[ ! -d "$ols_log_dir" ]]; then
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 fi
 
-# Dọn dẹp các file log chính của OLS
+# Dọn dẹp các file log hệ thống chính của OLS
 for log_file in error.log access.log stderr.log; do
   if [[ -f "$ols_log_dir/$log_file" ]]; then
     truncate -s 0 "$ols_log_dir/$log_file" >/dev/null 2>&1
-    rm -f "$ols_log_dir/$log_file".* # Xóa log cũ đã rotate
   fi
 done
 
+rm -f "$ols_log_dir"/*.gz "$ols_log_dir"/*.zip "$ols_log_dir"/error.log.* "$ols_log_dir"/access.log.* "$ols_log_dir"/stderr.log.* 2>/dev/null
+
+# Bảo toàn phân quyền tối cao cho OLS đọc ghi
 [[ -f "$ols_log_dir/error.log" ]] && chown nobody:$tuong_thich_nhom_litespeed "$ols_log_dir/error.log"
+[[ -f "$ols_log_dir/access.log" ]] && chown nobody:$tuong_thich_nhom_litespeed "$ols_log_dir/access.log"
+[[ -f "$ols_log_dir/stderr.log" ]] && chown nobody:$tuong_thich_nhom_litespeed "$ols_log_dir/stderr.log"
 
 # ==============================================================================
 # 3. DỌN DẸP LOG HỆ THỐNG LINUX & WPTANGTOC
@@ -102,23 +115,97 @@ done
 # Xóa log của WPTangToc
 [[ -f /var/log/wptangtoc-ols.log ]] && truncate -s 0 /var/log/wptangtoc-ols.log
 
-# Dọn dẹp Journalctl (Giữ lại log trong vòng 1 ngày)
+# Dọn dẹp triệt để Journalctl (Chỉ giữ lại log trong vòng 1 ngày để cứu bộ nhớ đệm hệ thống)
 journalctl --vacuum-time=1d >/dev/null 2>&1
 
-# Xóa rỗng các file log hệ thống phổ biến
-for syslog in /var/log/syslog /var/log/messages /var/log/auth.log /var/log/secure; do
+# Xóa rỗng các file log hệ thống cồng kềnh phổ biến
+for syslog in /var/log/syslog /var/log/messages /var/log/auth.log /var/log/secure /var/log/cron /var/log/maillog /var/log/fail2ban.log; do
   [[ -f "$syslog" ]] && truncate -s 0 "$syslog" >/dev/null 2>&1
 done
 
-_rundone "$UI_STRING"
 
-# Lưu lại hành động xóa log (Bắt đầu ghi log mới)
-echo "Xóa Log ALL (Vhosts, OLS, System): $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+# DỌN DẸP LOG TRÌNH QUẢN LÝ GÓI (Hỗ trợ cả AlmaLinux DNF & Ubuntu APT)
+for pkglog in /var/log/dnf.log /var/log/dnf.rpm.log /var/log/dnf.librepo.log /var/log/hawkey.log /var/log/dpkg.log /var/log/apt/history.log /var/log/apt/term.log; do
+  [[ -f "$pkglog" ]] && truncate -s 0 "$pkglog" >/dev/null 2>&1
+done
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-left_text "Hệ thống đã giải phóng toàn bộ dung lượng Log"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if [[ "${1:-}" == "98" ]]; then
-  exec /etc/wptt/wptt-logs-main 1
+
+#begin xoá logs mariadb DB
+if [[ -d /var/log/mysql ]]; then
+
+  # 1. XÓA VẬT LÝ VÀ TÁI TẠO FILE TEXT LOG MỚI TRƯỚC (Trị dứt điểm Ghost Inode)
+  for dblog in /var/log/mysql/mysql.log /var/log/mysql/mysql-slow.log /var/log/mysql/mysql-error.log; do
+    if [[ -f "$dblog" ]]; then
+      rm -f "$dblog"
+      touch "$dblog"
+      chown mysql:mysql "$dblog" >/dev/null 2>&1
+      chmod 640 "$dblog" >/dev/null 2>&1
+    fi
+  done
+
+  # Quét sạch các file nén rác của MariaDB do hệ thống tự xoay vòng (Logrotate)
+  rm -f /var/log/mysql/*.gz /var/log/mysql/*.1 /var/log/mysql/*.2 /var/log/mysql/*.3 2>/dev/null
+
+  # 2. QUÉT FILE CẤU HÌNH ĐỂ XỬ LÝ BINLOG
+  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+    CONF_DB="/etc/mysql/my.cnf"
+  else
+    CONF_DB="/etc/my.cnf.d/server.cnf"
+  fi
+
+  # CHỈ THỰC THI khi file cấu hình tồn tại và KHÔNG CÓ cờ tắt log (skip-log-bin)
+  if [[ -f "$CONF_DB" ]] && ! grep -q "skip-log-bin" "$CONF_DB" 2>/dev/null; then
+
+    # Nhận diện công cụ thực thi (Tránh cảnh báo Deprecated)
+    DB_CMD="mysql"
+    if command -v mariadb >/dev/null 2>&1; then
+      DB_CMD="mariadb"
+    fi
+
+    if systemctl is-active --quiet mariadb || systemctl is-active --quiet mysql; then
+      . /etc/wptt/.wptt.conf 2>/dev/null
+
+      # 3. ĐÒN COMBO CHỐT HẠ: ÉP NHẬN FILE TEXT LOG MỚI VÀ RESET SẠCH BINLOG
+      if [[ -n "$database_admin_username" && -n "$database_admin_password" ]]; then
+        # TẠO FILE CẤU HÌNH PHỤ BẢO MẬT (SecOps)
+        TEMP_MY_CNF=$(mktemp)
+        cat <<EOF > "$TEMP_MY_CNF"
+[client]
+user="${database_admin_username}"
+password="${database_admin_password}"
+EOF
+        chmod 600 "$TEMP_MY_CNF"
+        
+        # Thực thi an toàn qua file phụ
+        $DB_CMD --defaults-extra-file="$TEMP_MY_CNF" -e "FLUSH LOGS; RESET MASTER;" >/dev/null 2>&1
+        rm -f "$TEMP_MY_CNF"
+      else
+        # Nhánh Cứu Cánh: Nếu không cấu hình user/pass riêng, gọi trực tiếp qua Unix Socket root
+        $DB_CMD -e "FLUSH LOGS; RESET MASTER;" >/dev/null 2>&1
+      fi
+    fi
+  fi
+fi
+#end xoá logs mariadb DB
+
+rm -f /var/log/*.gz /var/log/*.1 /var/log/*.2 /var/log/*.3 /var/log/*.4 2>/dev/null
+
+if [[ $CHAY_NGAM -eq 0 ]]; then
+  _rundone "$UI_STRING"
+fi
+
+# ==============================================================================
+# GHI NHẬT KÝ HOẠT ĐỘNG (AUDIT LOG)
+# ==============================================================================
+if [[ $CHAY_NGAM -eq 1 ]]; then
+  echo "Xóa Log ALL [TỰ ĐỘNG BẰNG CRON] (Bao gồm file nén .gz): $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+else
+  echo "Xóa Log ALL [THỦ CÔNG CỦA USER] (Bao gồm file nén .gz): $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+fi
+
+if [[ $CHAY_NGAM -eq 0 ]]; then
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-logs-main 1
+  fi
 fi
