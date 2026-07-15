@@ -3,28 +3,30 @@
 # @website: https://wptangtoc.com
 
 function huong_dan() {
-  Giới thiệu ngắn gọn tính năng Xóa Cache Object Cache trong WPTangToc OLS
+  Tính năng xóa Object Cache là công cụ dọn dẹp bộ nhớ đệm RAM [Redis/Valkey/KeyDB] của website.
 
-  Object Cache [Redis/Valkey/KeyDB] là hệ thống lưu trữ key-value trong bộ nhớ [in-memory data structure store] tốc độ cao, thường được sử dụng để làm cơ chế caching cho website nhằm tăng tốc độ tải trang và giảm tải cho máy chủ Database.
-
-  Tại sao cần xóa cache?
-  * Cập nhật nội dung: Khi thay đổi quan trọng trên website, cache có thể vẫn giữ bản cũ. Xóa cache buộc tải lại dữ liệu mới nhất.
-  * Gỡ lỗi: Giải quyết sự cố hiển thị do dữ liệu cache bị kẹt hoặc lỗi đồng bộ.
-  * Giải phóng RAM: Làm sạch bộ nhớ đệm rác tích tụ lâu ngày.
-
-  Tính năng này tự động nhận diện Engine đang chạy [Valkey, KeyDB, Redis], kết nối an toàn qua Unix Socket và dọn sạch dữ liệu mà không làm gián đoạn máy chủ.
+  Giải thích đơn giản:
+  * Object Cache lưu trữ các truy vấn cơ sở dữ liệu [Database] trực tiếp lên RAM, giúp giảm tải cho MariaDB/MySQL và tăng tốc độ xử lý PHP.
+  * Tại sao cần xóa? Khi bạn cập nhật dữ liệu lớn, đổi theme, hoặc website bị kẹt dữ liệu cũ, việc xóa Object Cache sẽ ép hệ thống phải truy vấn lại Database để lấy dữ liệu mới nhất.
 }
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/echo-color
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_cache} ➜ $xoa_cache_redis/ KeyDB / Valkey)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+NAME=$1
+if [[ "$NAME" == "98" ]]; then
+  NAME=""
+fi
 
+. /etc/wptt/.wptt.conf
+
+if [[ -z "$ngon_ngu" ]]; then
+  ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+# ==============================================================================
+# 1. KIỂM TRA TRẠNG THÁI VÀ ĐỊNH DANH ENGINE (REDIS / VALKEY / KEYDB)
+# ==============================================================================
 ACTIVE_CACHE=""
 CLI_TOOL=""
 SOCKET_PATH=""
@@ -44,45 +46,93 @@ elif systemctl is-active --quiet redis 2>/dev/null; then
 fi
 
 if [[ -z "$ACTIVE_CACHE" ]]; then
-  echo "$ban_chua_kich_hoat Object Cache (Valkey/KeyDB/Redis)"
-  sleep 3
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-cache-main 1
-  fi
+  echo -e "\n${C_YELLOW}Hệ thống chưa kích hoạt Object Cache (Valkey/KeyDB/Redis).${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
   return 2>/dev/null || exit 1
 fi
 
+# Thiết lập lệnh Ping và Flush dựa trên Socket hoặc TCP
 if [[ -S "$SOCKET_PATH" ]]; then
   PING_CMD="$CLI_TOOL -s $SOCKET_PATH ping"
   FLUSH_CMD="$CLI_TOOL -s $SOCKET_PATH flushall"
 else
-  # Fallback nếu ai đó lỡ cấu hình TCP thủ công
   PING_CMD="$CLI_TOOL ping"
   FLUSH_CMD="$CLI_TOOL flushall"
 fi
 
-if [ ! "$($PING_CMD 2>/dev/null)" = "PONG" ]; then
-  clear
-  echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  left_text "Dịch vụ $ACTIVE_CACHE $dang_gap_su_co (Không phản hồi PING)"
-  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+# ==============================================================================
+# 2. KHỞI TẠO GIAO DIỆN VÀ MENU LỰA CHỌN
+# ==============================================================================
+if [[ -z "$NAME" ]]; then
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}$quan_ly_cache ➜ Xóa Object Cache ($ACTIVE_CACHE)${C_RESET}"
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
+  lua_chon_NAME "xóa Object Cache"
+fi
+
+# ==============================================================================
+# 3. NHÁNH THỰC THI HÀNG LOẠT (TẤT CẢ WEBSITE) => DÙNG FLUSHALL SIÊU TỐC
+# ==============================================================================
+if [[ "$NAME" == 'Tất cả website' ]]; then
+  # $tong_so_web được gọi từ thư viện tenmien
+
+  print_border_top
+  center_text "${C_YELLOW}DASHBOARD THAO TÁC HÀNG LOẠT${C_RESET}"
+  print_border_mid
+  left_text "▪ Tổng số   : ${C_GREEN}$tong_so_web website (Toàn bộ Server)${C_RESET}" 2
+  left_text "▪ Nhiệm vụ  : ${C_GREEN}Clear All RAM $ACTIVE_CACHE (FlushAll)${C_RESET}" 2
+  print_border_bot
+  echo ""
+
+  # Kiểm tra sống còn trước khi nổ bom
+  if [ "$($PING_CMD 2>/dev/null)" = "PONG" ]; then
+    _runing "$don_dep toàn bộ bộ nhớ Cache $ACTIVE_CACHE"
+    
+    # Kích nổ bom hạt nhân dọn sạch RAM trong 1 nốt nhạc
+    $FLUSH_CMD >/dev/null 2>&1
+    
+    _rundone "$don_dep toàn bộ bộ nhớ Cache $ACTIVE_CACHE"
+  else
+    echo -e "${C_RED}❌ Dịch vụ $ACTIVE_CACHE không phản hồi, không thể dọn dẹp!${C_RESET}"
+    sleep 2
+  fi
+
   check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+  if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
     exec /etc/wptt/wptt-cache-main 1
   fi
   return 2>/dev/null || exit
 fi
 
-. /etc/wptt/echo-color
-_runing "$don_dep cache $ACTIVE_CACHE"
+# Chốt chặn thoát an toàn
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  exec /etc/wptt/wptt-cache-main 1
+fi
 
-# Thực thi lệnh xả RAM
-$FLUSH_CMD >/dev/null 2>&1
+# ==============================================================================
+# 4. NHÁNH THỰC THI ĐỘC LẬP (MỘT WEBSITE) => DÙNG WP-CLI BẮN TỈA
+# ==============================================================================
+# Đảm bảo Engine vẫn sống trước khi gọi WP-CLI
+if [ "$($PING_CMD 2>/dev/null)" != "PONG" ]; then
+  echo -e "\n${C_RED}❌ Dịch vụ $ACTIVE_CACHE không phản hồi. Vui lòng kiểm tra lại.${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+  exit 1
+fi
 
-_rundone "$don_dep cache $ACTIVE_CACHE"
+_runing "$don_dep Object Cache cho $NAME"
+
+. /etc/wptt/vhost/.$NAME.conf 2>/dev/null
+. /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
+WP_PATH="/usr/local/lsws/$NAME/html"
+
+sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp cache flush --path="$WP_PATH" >/dev/null 2>&1
+
+_rundone "$don_dep Object Cache cho $NAME"
 
 check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
   exec /etc/wptt/wptt-cache-main 1
 fi
