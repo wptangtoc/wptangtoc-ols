@@ -4,9 +4,6 @@
 # @email: giatuan@wptangtoc.com
 # @since: 2026
 
-# ==============================================================================
-# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
-# ==============================================================================
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
@@ -18,9 +15,6 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}BẢO MẬT & PHỤC HỒI ➜ Clean Mã Nguồn (Reinstall WordPress)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# ==============================================================================
-# LỰA CHỌN TÊN MIỀN
-# ==============================================================================
 NAME=$1
 if [[ -z "$NAME" ]]; then
   . /etc/wptt/tenmien-only-website-by-wordpress
@@ -31,20 +25,67 @@ fi
 
 path_conf="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$path_conf" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
+  echo -e "\n${C_RED}Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 2
   exit 1
 fi
 
 if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
-  echo -e "\n${C_RED}❌ Lỗi: Domain rỗng. Hủy bỏ lệnh!${C_RESET}"
+  echo -e "\n${C_RED}Lỗi: Domain rỗng. Hủy bỏ lệnh!${C_RESET}"
   exit 1
 fi
 
 echo "Reinstall WordPress Clean mã nguồn website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
+. "/etc/wptt/vhost/.$NAME.conf"
+path="/usr/local/lsws/$NAME/html"
+
 # ==============================================================================
-# CẢNH BÁO XÁC NHẬN AN TOÀN
+# KHỞI TẠO WP-CLI SỚM ĐỂ CHUẨN BỊ QUÉT MÃ ĐỘC
+# ==============================================================================
+. /etc/wptt/php/php-cli-domain-config "$NAME"
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+# ==============================================================================
+# BƯỚC QUÉT SƠ BỘ (PRE-SCAN) TRƯỚC KHI TẨY RỬA
+# ==============================================================================
+echo -e "${C_CYAN}Đang tiến hành trinh sát và phân tích mã độc trước khi dọn dẹp...${C_RESET}"
+
+# 1. Quét file PHP bị sửa đổi trong 7 ngày qua
+MODIFIED_FILES=$(find "$path/wp-content/plugins" "$path/wp-content/themes" -type f -name "*.php" -mtime -7 2>/dev/null)
+
+# 2. Checksum Core Plugins (Lọc lấy thông báo có chữ 'File' để bỏ qua lỗi Premium Plugins)
+CHECKSUM_WARNINGS=$($WP_EXEC plugin verify-checksums --all --path="$path" 2>&1 | grep -i "Warning: File")
+
+if [[ -n "$MODIFIED_FILES" || -n "$CHECKSUM_WARNINGS" ]]; then
+  echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}BÁO CÁO TRINH SÁT: PHÁT HIỆN DẤU HIỆU KHẢ NGHI${C_RESET}"
+  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
+  if [[ -n "$MODIFIED_FILES" ]]; then
+    left_text " ${C_YELLOW}1. File PHP bị sửa đổi trong 7 ngày qua (Thường là Backdoor):${C_RESET}" 2
+    echo "$MODIFIED_FILES" | head -n 8 | while read -r line; do
+      left_text "    - ${line#$path/}" 2
+    done
+    [[ $(echo "$MODIFIED_FILES" | wc -l) -gt 8 ]] && left_text "    ... (và $(($(echo "$MODIFIED_FILES" | wc -l) - 8)) file khác đang bị ẩn)" 2
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  fi
+
+  if [[ -n "$CHECKSUM_WARNINGS" ]]; then
+    left_text " ${C_YELLOW}2. Plugin bị sai lệch mã nguồn so với kho WordPress.org:${C_RESET}" 2
+    echo "$CHECKSUM_WARNINGS" | head -n 8 | while read -r line; do
+      clean_warn=$(echo "$line" | sed 's/Warning: //g')
+      left_text "    - $clean_warn" 2
+    done
+    [[ $(echo "$CHECKSUM_WARNINGS" | wc -l) -gt 8 ]] && left_text "    ... (và $(($(echo "$CHECKSUM_WARNINGS" | wc -l) - 8)) file khác đã bị biến đổi)" 2
+  fi
+  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+else
+  echo -e "${C_GREEN}✔ Trinh sát hoàn tất: Chưa phát hiện file PHP sửa đổi gần đây hoặc sai lệch Checksum!${C_RESET}\n"
+fi
+
+# ==============================================================================
+# CẢNH BÁO XÁC NHẬN AN TOÀN TRƯỚC KHI RA TAY
 # ==============================================================================
 echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}CẢNH BÁO: TẨY RỬA MÃ NGUỒN${C_RESET}"
@@ -54,15 +95,12 @@ left_text "  Các Plugin/Theme miễn phí sẽ được tải lại tự độn
 left_text "  ${C_YELLOW}Tất cả file lạ nằm ngoài cấu trúc chuẩn sẽ bị tiêu diệt!${C_RESET}" 2
 echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if ! wptt_xac_nhan "Bạn có CHẮC CHẮN muốn Clean mã nguồn website ($NAME) không?" "" "" "Đồng ý Tẩy Rửa" "Hủy thao tác"; then
+if ! wptt_xac_nhan "Dựa vào báo cáo trên, bạn có CHẮC CHẮN muốn Clean mã nguồn website ($NAME)?" "" "" "Đồng ý Tẩy Rửa" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác. Website vẫn giữ nguyên.${C_RESET}\n"
   sleep 1
   exit 0
 fi
 echo ""
-
-. "/etc/wptt/vhost/.$NAME.conf"
-path="/usr/local/lsws/$NAME/html"
 
 # ==============================================================================
 # BƯỚC 1: XÓA LOCK DOWN & CÀI ĐẶT MÔI TRƯỜNG
@@ -81,9 +119,6 @@ if ! php -m | grep -q 'zip'; then
   . /etc/wptt/php/install-php-zip "$phien_ban_php_cli_hien_tai" >/dev/null 2>&1
   _rundone "Cài đặt PHP Zip thành công"
 fi
-
-. /etc/wptt/php/php-cli-domain-config "$NAME"
-WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
 # ==============================================================================
 # BƯỚC 2: XÓA MÃ NGUỒN CORE & FILE RÁC
