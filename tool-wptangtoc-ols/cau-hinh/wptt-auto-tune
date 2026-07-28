@@ -2,16 +2,13 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
 
-# Tính năng: Tự động đánh hơi và cấu hình lại hệ thống khi VPS thay đổi RAM
 PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 
 # 1. Đọc tổng RAM hiện tại của VPS (MB)
 TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
 FILE_CACHE="/etc/wptt/.ram_hien_tai"
 
-# Nếu chạy lần đầu (mới cài OLS), lưu mốc RAM gốc và thoát
 if [[ ! -f "$FILE_CACHE" ]]; then
   echo "$TOTAL_RAM" >"$FILE_CACHE"
   return 2>/dev/null || exit 0
@@ -19,25 +16,25 @@ fi
 
 OLD_RAM=$(cat "$FILE_CACHE")
 
-# 2. Tính toán độ chênh lệch (Bash Math siêu tốc)
+# 2. Tính toán độ chênh lệch
 DIFF=$((TOTAL_RAM - OLD_RAM))
-[[ "$DIFF" -lt 0 ]] && DIFF=$((-DIFF)) # Lấy trị tuyệt đối
+[[ "$DIFF" -lt 0 ]] && DIFF=$((-DIFF))
 
 # 3. NẾU ĐỔI PHẦN CỨNG TRÊN 500MB -> KÍCH HOẠT AUTO-TUNING
 if [[ "$DIFF" -gt 500 ]]; then
   echo "$(date '+%d-%m-%Y %H:%M') - Phát hiện đổi phần cứng: RAM từ ${OLD_RAM}MB sang ${TOTAL_RAM}MB. Đang Auto-Tune..." >>/var/log/wptangtoc-ols.log
 
   # ==========================================
-  # A. TÍNH TOÁN THÔNG SỐ (Sử dụng Bash Arithmetic, loại bỏ hoàn toàn expr và bc)
+  # A. TÍNH TOÁN THÔNG SỐ 
   # ==========================================
   work_cpucore=1024
-  cpucore=$(nproc) # Lấy số core CPU chuẩn xác và nhanh hơn
+  cpucore=$(nproc)
 
   max_client=$((work_cpucore * cpucore * 2))
   max_client_max=$((work_cpucore * cpucore * 3))
   max_client_php=$((work_cpucore * cpucore / 8))
 
-  rong_ram_mb=$TOTAL_RAM # Tái sử dụng biến đã có, không cần awk lại
+  rong_ram_mb=$TOTAL_RAM
   [[ -z "$rong_ram_mb" || "$rong_ram_mb" -eq 0 ]] && rong_ram_mb=2048
 
   gioi_han_tien_trinh_bao_loi_503=$((max_client / 8))
@@ -47,7 +44,7 @@ if [[ "$DIFF" -gt 500 ]]; then
   [[ "$tong_ram_mb_db" -eq 0 ]] && tong_ram_mb_db=2048
 
   tong_ram_gb=$((rong_ram_mb / 1024))
-  [[ "$tong_ram_gb" -eq 0 ]] && tong_ram_gb=1 # Tránh nhân với 0
+  [[ "$tong_ram_gb" -eq 0 ]] && tong_ram_gb=1
 
   db_table_size=$((tong_ram_gb * 64))
   buffer_db=$((rong_ram_mb / 6))
@@ -55,11 +52,9 @@ if [[ "$DIFF" -gt 500 ]]; then
   max_connections=$((64 * tong_ram_gb))
 
   # ==========================================
-  # B. CẤU HÌNH MARIADB (Tránh SQLite)
+  # B. CẤU HÌNH MARIADB
   # ==========================================
   HAS_SQLITE=0
-
-  # Quét Vhost bằng Globbing (Sửa lỗi dùng ls)
   shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -74,6 +69,9 @@ if [[ "$DIFF" -gt 500 ]]; then
   done
   shopt -u nullglob
 
+  TEMP_mariadb_config=$(mktemp)
+  TEMP_OLS_config_DIR=$(mktemp -d)
+
   if [[ "$HAS_SQLITE" -eq 0 ]]; then
     if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
       duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
@@ -81,16 +79,9 @@ if [[ "$DIFF" -gt 500 ]]; then
       duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
     fi
 
-    TEMP_mariadb_config=$(mktemp)
-    TEMP_OLS_config_DIR=$(mktemp -d)
-
     cp -f "$duong_dan_cau_hinh_mariadb" "$TEMP_mariadb_config"
-    cp -rf /usr/local/lsws/conf/* "$TEMP_OLS_config_DIR"
-
-    # Dọn dẹp config cũ
     sed -i '/key_buffer_size/d; /innodb_buffer_pool_size/d; /max_connections/d; /tmp_table_size/d; /max_heap_table_size/d; /max_allowed_packet/d; /table_cache/d; /thread_cache_size/d' "$duong_dan_cau_hinh_mariadb"
 
-    # Ghi config mới
     cat <<EOF >>"$duong_dan_cau_hinh_mariadb"
 table_cache = 2000
 thread_cache_size = 81
@@ -102,6 +93,14 @@ max_heap_table_size = ${db_table_size}M
 max_allowed_packet = 64M
 EOF
   fi
+
+  # ---------------------------------------------------------
+  # BACKUP OLS CHỌN LỌC (CHỐNG LỖI MÙ QUÁNG COPY Wildcard)
+  # ---------------------------------------------------------
+
+  #Dấu hoa thị * (Wildcard) kết hợp với Filesystem ảo của Kernel. rất dễ copy mount làm đẩy ổ cứng trong 1 số tình huống đặc biệt
+  cp -f /usr/local/lsws/conf/httpd_config.conf "$TEMP_OLS_config_DIR/" 2>/dev/null
+  cp -rf /usr/local/lsws/conf/vhosts "$TEMP_OLS_config_DIR/" 2>/dev/null
 
   # ==========================================
   # C. CẤU HÌNH OPENLITESPEED (OLS)
@@ -123,13 +122,8 @@ EOF
     MMAP_CACHE_SIZE="80M"
     KA_TIMEOUT="45"
     KA_REQS="5000"
-  elif [ "$TOTAL_RAM" -le 8500 ]; then
-    BUFFER_SIZE="256M"
-    MMAP_CACHE_SIZE="80M"
-    KA_TIMEOUT="60"
-    KA_REQS="10000"
   else
-    BUFFER_SIZE="384M"
+    BUFFER_SIZE="256M"
     MMAP_CACHE_SIZE="80M"
     KA_TIMEOUT="60"
     KA_REQS="10000"
@@ -144,7 +138,6 @@ EOF
   sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections             $max_client_max/g" "$OLS_CONF"
   sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections          $max_client_max/g" "$OLS_CONF"
 
-  # Cập nhật lsphp trong file cấu hình tổng
   sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
   sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
 
@@ -154,22 +147,19 @@ EOF
   shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-
     domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
     VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
 
-    if [[ "$domain" == ?*.?* ]] && [[ -f "$VHOST_CONF" ]]; then
+    if [[ -n "$domain" && "$domain" != "conf" && -f "$VHOST_CONF" ]]; then
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
-
-      if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -qi "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then #ngủ đông mode
-	  ngu_dong_core_tien_lsphp_child="2"
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$ngu_dong_core_tien_lsphp_child/" "$VHOST_CONF"
-	  else
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
-	  fi
-
+      if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -qi "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then
+        ngu_dong_core_tien_lsphp_child="2"
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$ngu_dong_core_tien_lsphp_child/" "$VHOST_CONF"
+      else
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
+      fi
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
@@ -190,15 +180,17 @@ EOF
   echo "$TOTAL_RAM" >"$FILE_CACHE"
 
   # Restart MariaDB
-  if mariadbd --help --verbose >/dev/null 2>&1; then
-    systemctl restart mariadb
-    rm -f "$TEMP_mariadb_config"
-    echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
-  else
-    cp -f "$TEMP_mariadb_config" "$duong_dan_cau_hinh_mariadb"
-    chmod 644 "$duong_dan_cau_hinh_mariadb"
-    chown root:root "$duong_dan_cau_hinh_mariadb"
-    echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại! Đã khôi phục." >>/var/log/wptangtoc-ols.log
+  if [[ "$HAS_SQLITE" -eq 0 ]]; then
+    if mariadbd --help --verbose >/dev/null 2>&1; then
+      systemctl restart mariadb
+      rm -f "$TEMP_mariadb_config"
+      echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
+    else
+      cp -f "$TEMP_mariadb_config" "$duong_dan_cau_hinh_mariadb"
+      chmod 644 "$duong_dan_cau_hinh_mariadb"
+      chown root:root "$duong_dan_cau_hinh_mariadb"
+      echo "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại! Đã khôi phục." >>/var/log/wptangtoc-ols.log
+    fi
   fi
 
   # Restart OLS
@@ -207,8 +199,11 @@ EOF
     rm -rf "$TEMP_OLS_config_DIR"
     echo "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning Thành công!" >>/var/log/wptangtoc-ols.log
   else
-    rm -rf /usr/local/lsws/conf/*
-    cp -rf "$TEMP_OLS_config_DIR"/* /usr/local/lsws/conf/
+    # ---------------------------------------------------------
+    # RESTORE OLS AN TOÀN (KHÔNG DÙNG LỆNH XÓA RM -RF *)
+    # ---------------------------------------------------------
+    cp -f "$TEMP_OLS_config_DIR/httpd_config.conf" /usr/local/lsws/conf/ 2>/dev/null
+    cp -rf "$TEMP_OLS_config_DIR/vhosts" /usr/local/lsws/conf/ 2>/dev/null
 
     if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
       tuong_thich_nhom_litespeed="nogroup"
@@ -219,7 +214,7 @@ EOF
     chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf
     chmod -R 750 /usr/local/lsws/conf
     rm -rf "$TEMP_OLS_config_DIR"
-    echo "$(date '+%d-%m-%Y %H:%M') - Lỗi cú pháp OLS Auto-Tuning! Đã khôi phục." >>/var/log/wptangtoc-ols.log
+    echo "$(date '+%d-%m-%Y %H:%M') - Lỗi cú pháp OLS Auto-Tuning! Đã khôi phục an toàn." >>/var/log/wptangtoc-ols.log
   fi
 
   # ==========================================
