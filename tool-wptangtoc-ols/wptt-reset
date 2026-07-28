@@ -4,25 +4,16 @@
 # @since: 2025
 
 function huong_dan() {
-  Tính năng Factory Reset LiteSpeed Webserver [Khôi phục cài đặt gốc cho LiteSpeed Webserver] trong WPTangToc OLS, nếu có, là một công cụ mạnh mẽ cho phép bạn đưa toàn bộ cấu hình của LiteSpeed Webserver trở về trạng thái mặc định ban đầu, giống như khi mới được cài đặt bởi script WPTangToc OLS.
-
-  🎯 Mục đích chính
-
-  Việc này thường hữu ích khi:
-  * Xử lý sự cố nghiêm trọng: Nếu các tùy chỉnh cấu hình LiteSpeed gây ra lỗi không thể khắc phục, việc reset về mặc định có thể giúp máy chủ hoạt động trở lại.
-  * Làm sạch cấu hình: Loại bỏ tất cả các thay đổi, tùy chỉnh phức tạp đã thực hiện trước đó để bắt đầu lại với một phiên bản sạch.
-  * Loại bỏ thử nghiệm không thành công: Nếu bạn đã thử nghiệm nhiều thiết lập khác nhau và muốn quay lại điểm xuất phát an toàn.
-
-  Tính năng này rất mạnh nó sẽ là một lựa chọn cuối cùng để khắc phục sự cố cấu hình nghiêm trọng.
+  Tính năng Factory Reset LiteSpeed Webserver [Khôi phục cài đặt gốc cho LiteSpeed Webserver]
 }
 
-if [[ $2 = 'premium' ]]; then
+if [[ ${2:-} = 'premium' ]]; then
   unset key_activate
-  . /etc/wptt/.wptt.conf
+  . /etc/wptt/.wptt.conf 2>/dev/null
   if [[ -z $key_activate ]]; then
     echo "Tính năng này là tính năng Premium bạn phải mua Active key mới có thể sử dụng được"
     echo "Bạn hãy activate key thì sẽ được sử dụng tất cả các tính năng trong add ons"
-    check_menu_wptangtoc_active=$1
+    check_menu_wptangtoc_active=${1:-}
     if [[ $check_menu_wptangtoc_active = "98" ]]; then
       exec /etc/wptt/wptt-add-one-main 1
     fi
@@ -30,105 +21,96 @@ if [[ $2 = 'premium' ]]; then
   fi
 fi
 
+# ==============================================================================
+# HỆ THỐNG MÀU SẮC GIAO DIỆN (UX)
+# ==============================================================================
+C_RED='\e[1;31m'
+C_GREEN='\e[1;32m'
+C_YELLOW='\e[1;33m'
+C_CYAN='\e[1;36m'
+C_WHITE='\e[1;37m'
+C_RESET='\e[0m'
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+echo -e "${C_CYAN}│${C_RESET} ${C_YELLOW}              WPTANGTOC OLS ➜ FACTORY RESET LITESPEED               ${C_RESET} ${C_CYAN}│${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+echo ""
+
+# ==============================================================================
+# BƯỚC XÁC NHẬN AN TOÀN (SAFETY PROMPT)
+# ==============================================================================
+echo -e "${C_RED}CẢNH BÁO NGUY HIỂM TỘT ĐỘ ${C_RESET}"
+echo -e "${C_WHITE}Tính năng này sẽ XÓA SẠCH toàn bộ cấu hình máy chủ Webserver hiện tại.${C_RESET}"
+echo -e "${C_WHITE}Máy chủ sẽ được khôi phục về trạng thái nguyên bản lúc mới cài đặt WPTangToc OLS.${C_RESET}\n"
+
+echo -e "\n${C_CYAN}Đang khởi tạo tiến trình Factory Reset...${C_RESET}"
 echo "Reset toàn bộ cấu hình webserver : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 
-RED='\033[0;31m'
-NC='\033[0m'
+# ==============================================================================
+# BƯỚC 1: TÍNH TOÁN TÀI NGUYÊN
+# ==============================================================================
+echo -e "${C_YELLOW}➤ [1/5] Đang phân tích và đo lường tài nguyên phần cứng...${C_RESET}"
 
 work_cpucore='1024'
 cpucore=$(grep -c ^processor /proc/cpuinfo)
-max_client=$(expr $work_cpucore \* $cpucore \* 2)
-max_client_max=$(expr $work_cpucore \* $cpucore \* 3)
-max_client_php=$(expr $work_cpucore \* $cpucore \/ 8)
+max_client=$(( work_cpucore * cpucore * 2 ))
+max_client_max=$(( work_cpucore * cpucore * 3 ))
+max_client_php=$(( work_cpucore * cpucore / 8 ))
+
 tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
 rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-if [[ "$rong_ram_mb" = "" ]]; then
-  rong_ram_mb="2048"
-fi
+[[ -z "$rong_ram_mb" ]] && rong_ram_mb="2048"
 tong_ram_mb_db=$(echo "scale=0;${rong_ram_mb}/4" | bc)
 
-gioi_han_tien_trinh_bao_loi_503=$(expr $max_client \/ 8)
+gioi_han_tien_trinh_bao_loi_503=$(( max_client / 8 ))
+core_tien_lsphp_child=$(( cpucore * 2 ))
 
-#Max LSPHP processes = SuEXEC max connections * number of OLS workers.
-#core_tien_lsphp_child chỉ: (nhân số core x 2)
-core_tien_lsphp_child=$(expr $cpucore \* 2)
-
-#maxConns https://openlitespeed.org/kb/troubleshooting-too-many-lsphp-processes-on-da-when-using-ols/
-
-if [[ $Website_chinh ]]; then #nếu website chính có giá trị
+if [[ -n "${Website_chinh:-}" ]]; then
   NAME="$Website_chinh"
 else
-  #sed '/^\.\.conf$/d' để xoá lỗi ..conf
-  NAME=$(ls -A /etc/wptt/vhost | sed '/^\.\.conf$/d' | sort -uV | sed 's/^.//' | sed 's/.conf//' | head -1) #dự phòng nếu không xác định được website chính, sẽ lấy domain đầu tiên trong giá từ bảng chữ cái
+  NAME=$(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV | sed 's/^.//' | sed 's/.conf//' | head -1)
+fi
+
+if [[ -z "$NAME" ]]; then
+  echo -e "${C_RED}❌ Lỗi nghiêm trọng: Không xác định được tên miền chính hợp lệ.${C_RESET}"
+  exit 1
 fi
 
 USER=${NAME//[-._]/wp}
 NAMEPHP=${NAME//[-._]/}
 USERCLEAN="$USER"
 
-echo -e "${RED}-------------------------------------------------------------------------"
-echo ""
-echo " 0     0 000000  0000000                         0000000 "
-echo " 0  0  0 0     0    0       00    0    0   0000     0      0000    0000 "
-echo " 0  0  0 0     0    0      0  0   00   0  0    0    0     0    0  0    0 "
-echo " 0  0  0 000000     0     0    0  0 0  0  0         0     0    0  0 "
-echo -e "${NC} 0  0  0 0          0     000000  0  0 0  0  000    0     0    0  0 "
-echo " 0  0  0 0          0     0    0  0   00  0    0    0     0    0  0    0 "
-echo "  00 00  0          0     0    0  0    0   0000     0      0000    0000 "
-echo ""
-echo "  00000   0       00000 "
-echo " 0     0  0      0     0 "
-echo " 0     0  0      0 "
-echo -e "${RED} 0     0  0       00000 "
-echo " 0     0  0            0 "
-echo " 0     0  0      0     0 "
-echo "  00000   000000  00000 "
-echo -e "--------------------------------------------------------------------------${NC}"
-echo "Cam on ban da chon WPTangToc OLS ..."
-echo ""
-echo "Cong cu phat trien boi Gia Tuan"
-
-rm -f /usr/local/lsws/conf/httpd_config.conf
-
-#tuong thich ubuntu tuong thich nhom litespeed
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q -i "ubuntu" /etc/os-release 2>/dev/null; then
   tuong_thich_nhom_litespeed="nogroup"
 else
   tuong_thich_nhom_litespeed="nobody"
 fi
 
-#LSAPI_AVOID_FORK=0 Khi được đặt thành 0, trình quản lý quy trình nội bộ sẽ không cố gắng tránh phân nhánh các quy trình mới. Để tiết kiệm tài nguyên hệ thống, nó sẽ dừng các quy trình khi chúng hoàn tất và chỉ khởi động các quy trình con khi cần thiết. Điều này thường được ưu tiên trong lưu trữ chia sẻ.
-
-#LSAPI_AVOID_FORK=1 Khi được đặt thành 1, trình quản lý quy trình nội bộ sẽ cố gắng tránh việc dừng và khởi động các quy trình con thường xuyên. Điều này có thể được ưu tiên trong môi trường lưu trữ chuyên dụng vì có thể nhanh hơn khi tái chế các quy trình hiện có, ngay cả khi đôi khi điều đó có nghĩa là chạy các quy trình không sử dụng., mặc định để 1 là sẽ 1GB hãy set là number 200M
-
-# LSAPI_MAX_IDLE=30 LSAPI_MAX_IDLE kiểm soát thời gian một tiến trình con nhàn rỗi sẽ chờ yêu cầu mới trước khi thoát. Tùy chọn này giúp giải phóng tài nguyên hệ thống do các tiến trình nhàn rỗi chiếm dụng. mặc định nó là 300 giây, nếu máy cấu hình chuyên dung khoẻ thì hãy tăng nó lên tránh tốn thời gian phải khởi tạo lại tiến trình nhưng nhược điểm là tốn ram nhưng cải thiện hiệu suất.
-
-#LSAPI_MAX_IDLE_CHILDREN=1 số lượng tiến trình nhàn rỗi tối đa là 1.
-
-#LSAPI_MAX_PROCESS_TIME: thời gian tối đa của 1 tiếng trình lsphp thực thi mặc định là 3600, chuyển xuống 120
-
-#LSAPI_PGRP_MAX_IDLE=30 = mặc định là mãi mãi biến môi trường kiểm soát thời gian mà tiến trình cha sẽ chờ trước khi thoát khi không có tiến trình con nào đang chạy. Tùy chọn này có thể giúp giải phóng tài nguyên hệ thống do tiến trình cha nhàn rỗi chiếm dụng, hãy xoá nó đi nếu bạn là máy chủ riêng mà ít website đỡ tốn thời gian khởi tạo lại tiến trình cha
-
-#LSAPI_ACCEPT_NOTIFY Theo mặc định, ứng dụng LSAPI sẽ gửi lại một gói thông báo bất cứ khi nào nhận được yêu cầu. Có thể thay đổi để chỉ thông báo cho máy chủ về các kết nối mới được thiết lập bằng cách đặt biến môi trường này thành 1. Điều này được khuyến nghị như một cách để tăng hiệu suất trong LiteSpeed ​​Web Server.
-
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
 if [ "$TOTAL_RAM_MB" -le 1200 ]; then
-  KA_TIMEOUT="15" # Ngắt kết nối rảnh rỗi sau 15 giây
-  KA_REQS="1000"  # Tối đa 1000 file/kết nối
+  KA_TIMEOUT="15"
+  KA_REQS="1000"
 elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
   KA_TIMEOUT="45"
   KA_REQS="5000"
 else
-  KA_TIMEOUT="60" # Máy to giữ 60 giây cho mượt
+  KA_TIMEOUT="60"
   KA_REQS="10000"
 fi
+
+# ==============================================================================
+# BƯỚC 2: TÁI TẠO CẤU HÌNH LÕI HTTPD
+# ==============================================================================
+echo -e "${C_YELLOW}➤ [2/5] Đang khôi phục cấu hình lõi (httpd_config.conf)...${C_RESET}"
+
+rm -f /usr/local/lsws/conf/httpd_config.conf
 
 echo "#
 # PLAIN TEXT CONFIGURATION FILE
 #
-#It not set, will use host name as serverName
 serverName                
 httpdWorkers              $cpucore
 user                      nobody
@@ -153,13 +135,11 @@ errorlog logs/error.log {
   enableStderrLog         0
 }
 
-
 accesslog logs/access.log {
   rollingSize             10M
   keepDays                30
   compressArchive         0
 }
-
 
 indexFiles                index.html, index.php
 
@@ -197,7 +177,6 @@ tuning  {
   brStaticCompressLevel   6
   gzipMaxFileSize         10M
   gzipMinFileSize         300
-
   quicEnable              1
   quicShmDir              /dev/shm
 }
@@ -231,8 +210,8 @@ accessDenyDir  {
   dir                     /
   dir                     /etc/*
   dir                     /dev/*
-  dir                     conf/*
-  dir                     admin/conf/*
+  dir                     /conf/*
+  dir                     /admin/conf/*
 }
 
 bubbleWrap                0
@@ -321,23 +300,21 @@ nodeDefaults  {
 
 module cache {
   internal                1
-checkPrivateCache   1
-checkPublicCache    1
-maxCacheObjSize     10000000
-maxStaleAge         200
-qsCache             1
-reqCookieCache      1
-respCookieCache     1
-ignoreReqCacheCtrl  1
-ignoreRespCacheCtrl 0
-
-enableCache         0
-expireInSeconds     3600
-enablePrivateCache  0
-privateExpireInSeconds 3600
+  checkPrivateCache       1
+  checkPublicCache        1
+  maxCacheObjSize         10000000
+  maxStaleAge             200
+  qsCache                 1
+  reqCookieCache          1
+  respCookieCache         1
+  ignoreReqCacheCtrl      1
+  ignoreRespCacheCtrl     0
+  enableCache             0
+  expireInSeconds         3600
+  enablePrivateCache      0
+  privateExpireInSeconds  3600
   ls_enabled              1
 }
-
 
 listener http {
   address                 [ANY]:80
@@ -360,7 +337,6 @@ listener https {
   map                     $NAME $NAME
 }
 
-
 vhTemplate centralConfigLog {
   templateFile            conf/templates/ccl.conf
   listeners               http
@@ -374,35 +350,27 @@ vhTemplate EasyRailsWithSuEXEC {
 chmod 750 /usr/local/lsws/conf/httpd_config.conf
 chown lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf/httpd_config.conf
 
-if [[ -f /usr/local/lsws/${NAME}/ssl/cert.crt ]]; then #dai dien port ssh trả phí
+if [[ -f /usr/local/lsws/${NAME}/ssl/cert.crt ]]; then
   sed -i "/keyFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
-
   sed -i "/https/a   keyFile              \/usr\/local\/lsws\/${NAME}\/ssl\/${NAME}.key" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/https/a   certFile             \/usr\/local\/lsws\/${NAME}\/ssl\/cert.crt" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/https/a   CACertFile           \/usr\/local\/lsws\/${NAME}\/ssl\/ca_bundle.crt" /usr/local/lsws/conf/httpd_config.conf
-
 fi
 
-if [[ -f /etc/letsencrypt/live/$NAME/cert.pem ]]; then #dai dien port ssl letsencrypt
+if [[ -f /etc/letsencrypt/live/$NAME/cert.pem ]]; then
   sed -i "/keyFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
-
-  # sed -i "/https/a   keyFile              \/usr\/local\/lsws\/${NAME}\/ssl\/${NAME}.key" /usr/local/lsws/conf/httpd_config.conf
-  # sed -i "/https/a   certFile             \/usr\/local\/lsws\/${NAME}\/ssl\/cert.crt" /usr/local/lsws/conf/httpd_config.conf
-  # sed -i "/https/a   CACertFile           \/usr\/local\/lsws\/${NAME}\/ssl\/ca_bundle.crt" /usr/local/lsws/conf/httpd_config.conf
-
   sed -i "/https/a   keyFile              \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/https/a   certFile             \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/https/a   CACertFile           \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
-
 fi
 
 ipv6=$(ip -6 a | grep 'inet6 ' | awk '{print $2}' | sed '/fe80::/d' | sort -u | cut -f1 -d '/' | grep -Eio '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|:(:[0-9a-fA-F]{1,4}){1,7}|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])' | sed '/^::1$/d')
 
-if [[ $ipv6 = '' ]]; then #chỉ support only ipv4
+if [[ -z $ipv6 ]]; then
   sed -i -e '/^listener http /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
   sed -i -e '/^listener https /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
 
@@ -432,24 +400,29 @@ fi
 
 unset ip_block_rules
 ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-if [[ -d /usr/local/lsws/$ip/html ]]; then
-  if [[ $(cat /usr/local/lsws/$ip/html/.htaccess | grep 'blockbot') && $(cat /usr/local/lsws/$ip/html/.htaccess | wc -l) = '5' ]]; then #xac dinh đã tri khai
-    touch /etc/wptt/vhost/.$ip.conf
+
+if [[ -n "$ip" && -d "/usr/local/lsws/$ip/html" ]]; then
+  if grep -q 'blockbot' "/usr/local/lsws/$ip/html/.htaccess" 2>/dev/null && [[ $(wc -l < "/usr/local/lsws/$ip/html/.htaccess") -eq 5 ]]; then
+    touch "/etc/wptt/vhost/.$ip.conf"
     ip_block_rules='1'
   fi
 fi
 
-#chown thư mục ngoài
+# ==============================================================================
+# BƯỚC 3: XÂY LẠI VHOSTS & PHP HÀNG LOẠT
+# ==============================================================================
+echo -e "${C_YELLOW}➤ [3/5] Đang xây dựng lại các tập tin Virtual Hosts...${C_RESET}"
+
 chown root:root /usr/local/lsws
 
-rm -rf /usr/local/lsws/conf/vhosts/$NAME
-mkdir /usr/local/lsws/conf/vhosts/$NAME
-touch /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+rm -rf "/usr/local/lsws/conf/vhosts/$NAME"
+mkdir -p "/usr/local/lsws/conf/vhosts/$NAME"
+touch "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+
 echo "docRoot                   /usr/local/lsws/$NAME/html
 vhDomain                  $NAME
 enableGzip                1
 cgroups                   0
-
 
 index  {
   useServer               0
@@ -509,14 +482,11 @@ X-Powered-By WPTangTocOLS
 permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
   END_extraHeaders
 
-
   rewrite  {
-
   }
   addDefaultCharset       off
 
   phpIniOverride  {
-
   }
 }
 
@@ -539,84 +509,70 @@ vhssl  {
 }
 
 module cache {
-checkPrivateCache   1
-checkPublicCache    1
-maxCacheObjSize     10000000
-maxStaleAge         200
-qsCache             1
-reqCookieCache      1
-respCookieCache     1
-ignoreReqCacheCtrl  1
-ignoreRespCacheCtrl 0
-storagePath /usr/local/lsws/$NAME/luucache
-enableCache         0
-expireInSeconds     3600
-enablePrivateCache  0
-privateExpireInSeconds 3600
-  ls_enabled              1
-}" >/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+  checkPrivateCache   1
+  checkPublicCache    1
+  maxCacheObjSize     10000000
+  maxStaleAge         200
+  qsCache             1
+  reqCookieCache      1
+  respCookieCache     1
+  ignoreReqCacheCtrl  1
+  ignoreRespCacheCtrl 0
+  storagePath /usr/local/lsws/$NAME/luucache
+  enableCache         0
+  expireInSeconds     3600
+  enablePrivateCache  0
+  privateExpireInSeconds 3600
+  ls_enabled          1
+}" >"/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 
-chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf/vhosts/$NAME
-chmod -R 750 /usr/local/lsws/conf/vhosts/$NAME
+chown -R lsadm:$tuong_thich_nhom_litespeed "/usr/local/lsws/conf/vhosts/$NAME"
+chmod -R 750 "/usr/local/lsws/conf/vhosts/$NAME"
 
 phpcheck2223=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+' | head -1 | sed 's/ //g')
 php_ver_chon=${phpcheck2223//[-._]/}
 
 sed -E -i "s/lsphp[0-9]+/lsphp${php_ver_chon}/g" /usr/local/lsws/conf/httpd_config.conf
 sed -E -i "s/lsphp[0-9]+/lsphp${php_ver_chon}/g" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-# sed -E -i "s/ lsphp${php_ver_chon}/lsphp${php_ver_chon}/g" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-# sed -i "s/lsphp${php_ver_chon} /lsphp${php_ver_chon}/g" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-# sed -i "s/lsphp ${php_ver_chon}/lsphp${php_ver_chon}/g" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
 sed -i "/$NAME $NAME/d" /usr/local/lsws/conf/httpd_config.conf
 
-#tuong thich ubuntu tuong thich nhom litespeed
-if $(cat /etc/*release | grep -q "Ubuntu"); then
-  tuong_thich_nhom_litespeed="nogroup"
-else
-  tuong_thich_nhom_litespeed="nobody"
-fi
-
-if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
     path="/usr/local/lsws/$domain/html"
-    i=1
-
+    
     if [[ -d "$path" ]]; then
-      sed -i "/listener http/a map 		$domain $domain" /usr/local/lsws/conf/httpd_config.conf && mkdir -p /usr/local/lsws/conf/vhosts/$domain && \cp -f /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf /usr/local/lsws/conf/vhosts/$domain/$domain.conf 2>/dev/null && sed -i "s/$NAME/$domain/g" /usr/local/lsws/conf/vhosts/$domain/$domain.conf && chown -R lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf/vhosts/$domain && chmod -R 750 /usr/local/lsws/conf/vhosts/$domain
+      sed -i "/listener http/a map \t\t$domain $domain" /usr/local/lsws/conf/httpd_config.conf
+      mkdir -p "/usr/local/lsws/conf/vhosts/$domain"
+      \cp -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" "/usr/local/lsws/conf/vhosts/$domain/$domain.conf" 2>/dev/null
+      sed -i "s/$NAME/$domain/g" "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+      chown -R lsadm:$tuong_thich_nhom_litespeed "/usr/local/lsws/conf/vhosts/$domain"
+      chmod -R 750 "/usr/local/lsws/conf/vhosts/$domain"
     fi
   done
 fi
 
-for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
   domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
   path="/usr/local/lsws/$domain/html"
-  i=1
 
   if [[ -d "$path" ]]; then
-    if [[ -f /etc/wptt/vhost/.$domain.conf ]]; then
-      . /etc/wptt/vhost/.$domain.conf
-    fi
-    if [[ -f /etc/wptt/vhost_bk/.$domain.conf ]]; then
-      . /etc/wptt/vhost_bk/.$domain.conf
-    fi
-    sed -i "s/$USERCLEAN/$User_name_vhost/g" /usr/local/lsws/conf/vhosts/$domain/$domain.conf && NAMEPHP2=${domain//[-._]/} && sed -i "s/$NAMEPHP/$NAMEPHP2/g" /usr/local/lsws/conf/vhosts/$domain/$domain.conf
+    [[ -f "/etc/wptt/vhost/.$domain.conf" ]] && . "/etc/wptt/vhost/.$domain.conf"
+    [[ -f "/etc/wptt/vhost_bk/.$domain.conf" ]] && . "/etc/wptt/vhost_bk/.$domain.conf"
+    
+    sed -i "s/$USERCLEAN/$User_name_vhost/g" "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+    NAMEPHP2=${domain//[-._]/}
+    sed -i "s/$NAMEPHP/$NAMEPHP2/g" "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
   fi
 done
 
-for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
   domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
   path="/usr/local/lsws/$domain/html"
-  i=1
 
   if [[ -d "$path" ]]; then
-    if [[ -f /etc/wptt/vhost/.$domain.conf ]]; then
-      . /etc/wptt/vhost/.$domain.conf
-    fi
-    if [[ -f /etc/wptt/vhost_bk/.$domain.conf ]]; then
-      . /etc/wptt/vhost_bk/.$domain.conf
-    fi
+    [[ -f "/etc/wptt/vhost/.$domain.conf" ]] && . "/etc/wptt/vhost/.$domain.conf"
+    [[ -f "/etc/wptt/vhost_bk/.$domain.conf" ]] && . "/etc/wptt/vhost_bk/.$domain.conf"
 
     echo "virtualhost $domain {
   vhRoot                  /usr/local/lsws/$domain/
@@ -632,62 +588,55 @@ for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2
   fi
 done
 
-#php version php domain đã chọn
 phpcheck=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+' | sort -u | head -1)
 php_version_server_hien_tai=${phpcheck//[-._]/}
-if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  echo
-  echo '--------------------------------------------------'
-  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+
+if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
     path="/usr/local/lsws/$domain/html"
-    i=1
 
     if [[ -d "$path" ]]; then
       unset phien_ban_php_domain
-      if [[ -f /etc/wptt/vhost/.$domain.conf ]]; then
-        . /etc/wptt/vhost/.$domain.conf
-      fi
-      if [[ -f /etc/wptt/vhost_bk/.$domain.conf ]]; then
-        . /etc/wptt/vhost_bk/.$domain.conf
-      fi
+      [[ -f "/etc/wptt/vhost/.$domain.conf" ]] && . "/etc/wptt/vhost/.$domain.conf"
+      [[ -f "/etc/wptt/vhost_bk/.$domain.conf" ]] && . "/etc/wptt/vhost_bk/.$domain.conf"
+      
       if [[ -z $phien_ban_php_domain ]]; then
-        php_version_install=$(echo "$php_version_server_hien_tai")
+        php_version_install="$php_version_server_hien_tai"
       else
         php_version_install=${phien_ban_php_domain//[-._]/}
       fi
 
       php_run=$(echo lsphp${php_version_install} | sed 's/ //g')
-
-      if [[ $(echo $php_run | grep 'lsphplsphp') ]]; then #tương thích ngươcj với thời xưa đặt phiên bản php là lsphp
-        php_run=$(echo $php_run | sed 's/lsphplsphp/lsphp/g')
+      if echo "$php_run" | grep -q 'lsphplsphp'; then 
+        php_run=$(echo "$php_run" | sed 's/lsphplsphp/lsphp/g')
       fi
 
-      sed -E -i "s/\/lsphp[0-9]+/\/$php_run/g" /usr/local/lsws/conf/vhosts/"$domain"/"$domain".conf
+      sed -E -i "s/\/lsphp[0-9]+/\/$php_run/g" "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
     fi
   done
-  echo '--------------------------------------------------'
-  echo
 fi
 
-#khởi tạo ssl tự ký
+# ==============================================================================
+# BƯỚC 4: THIẾT LẬP CHỨNG CHỈ BẢO MẬT (SSL)
+# ==============================================================================
+echo -e "${C_YELLOW}➤ [4/5] Đang tái cấu hình và khôi phục Chứng chỉ SSL...${C_RESET}"
+
 rm -rf /etc/wptt-ssl-tu-ky
-if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
     path="/usr/local/lsws/$domain"
-    i=1
 
     if [[ -d "$path" ]]; then
-      mkdir -p /etc/wptt-ssl-tu-ky/$domain
-      cd /etc/wptt-ssl-tu-ky/$domain
-      openssl req -new -newkey rsa:2048 -nodes -keyout $domain.key -out $domain.csr -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$domain/emailAddress=admin@example.com" >/dev/null 2>&1
-      openssl x509 -req -in $domain.csr -signkey $domain.key -out cert.crt -days 3650 >/dev/null 2>&1
+      mkdir -p "/etc/wptt-ssl-tu-ky/$domain"
+      cd "/etc/wptt-ssl-tu-ky/$domain" || continue
+      openssl req -new -newkey rsa:2048 -nodes -keyout "$domain.key" -out "$domain.csr" -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$domain/emailAddress=admin@example.com" >/dev/null 2>&1
+      openssl x509 -req -in "$domain.csr" -signkey "$domain.key" -out cert.crt -days 3650 >/dev/null 2>&1
     fi
   done
 fi
 
-#config port 443
 if [[ -f /etc/letsencrypt/live/$Website_chinh/cert.pem ]]; then
   sed -i "/wptt-ssl-tu-ky/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/letsencrypt/d" /usr/local/lsws/conf/httpd_config.conf
@@ -696,30 +645,23 @@ if [[ -f /etc/letsencrypt/live/$Website_chinh/cert.pem ]]; then
   sed -i "/https/a   CACertFile           \/etc\/letsencrypt\/live\/${Website_chinh}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
 fi
 
-if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  echo
-  echo '--------------------------------------------------'
-  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
     path="/usr/local/lsws/$domain/ssl"
-    i=1
-
     if [[ -d "$path" ]]; then
-      . /etc/wptt/ssl/wptt-caissl-traphi $domain 1
+      . /etc/wptt/ssl/wptt-caissl-traphi "$domain" 1 >/dev/null 2>&1
     fi
   done
-  echo '--------------------------------------------------'
-  echo
 fi
 
-if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -v '^\.\.conf$' | sort -uV); do
+if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/null | awk '!/:$/ && !/^\.\.?$/' | sed '/^$/d' | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
     path="/etc/letsencrypt/live/$domain/cert.pem"
-    i=1
 
     if [[ -f "$path" ]]; then
-      sed -i -e '/^vhssl /,/^}$/d' /usr/local/lsws/conf/vhosts/$domain/$domain.conf
+      sed -i -e '/^vhssl /,/^}$/d' "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
       echo "vhssl  {
   keyFile                 /etc/letsencrypt/live/$domain/privkey.pem
   certFile                /etc/letsencrypt/live/$domain/cert.pem
@@ -732,19 +674,22 @@ if [ "$(ls -A /etc/wptt/vhost /etc/wptt/vhost_bk /etc/wptt/chuyen-huong 2>/dev/n
   enableSpdy              15
   enableQuic              1
 }
-" >>/usr/local/lsws/conf/vhosts/"$domain"/"$domain".conf
-
+" >>"/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
     fi
   done
 fi
 
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+# ==============================================================================
+# BƯỚC 5: HOÀN TẤT BẢO MẬT CHROOT & TỐI ƯU HÓA CUỐI CÙNG
+# ==============================================================================
+echo -e "${C_YELLOW}➤ [5/5] Đang phân quyền, thiết lập Chroot và tối ưu Auto-Tune...${C_RESET}"
+
+if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    i=1
-    if [[ -d /usr/local/lsws/$domain/logs ]]; then
-      sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$domain"/"$domain".conf
-      sed -i -e '/^accesslog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$domain"/"$domain".conf
+    if [[ -d "/usr/local/lsws/$domain/logs" ]]; then
+      sed -i -e '/^errorlog /,/^}$/d' "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+      sed -i -e '/^accesslog /,/^}$/d' "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
       echo '
 errorlog $VH_ROOT/logs/error.log {
 useServer               1
@@ -757,20 +702,19 @@ useServer               0
 rollingSize             10M
 keepDays                30
 compressArchive         1
-}' >>/usr/local/lsws/conf/vhosts/"$domain"/"$domain".conf
+}' >>"/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
     fi
   done
 fi
 
-#chroot
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    i=1
-    if [[ -d /usr/local/lsws/$domain ]]; then
-      . /etc/wptt/vhost/.$domain.conf
+    if [[ -d "/usr/local/lsws/$domain" ]]; then
+      [[ -f "/etc/wptt/vhost/.$domain.conf" ]] && . "/etc/wptt/vhost/.$domain.conf"
+      
       sed -i -e "/^#begin-WPTT_JAIL_$User_name_vhost/,/^#end-WPTT_JAIL_$User_name_vhost$/d" /etc/ssh/sshd_config 2>/dev/null || true
-      if [[ $(cat /etc/passwd | grep $User_name_vhost | grep '/sbin/nologin') ]]; then #xác định chưa khởi tạo domain user riêng
+      if grep -q "$User_name_vhost" /etc/passwd | grep -q '/sbin/nologin'; then
         cat <<EOF >>/etc/ssh/sshd_config
 #begin-WPTT_JAIL_$User_name_vhost
 Match User $User_name_vhost
@@ -794,85 +738,63 @@ EOF
   done
 fi
 
-#end chroot
-
-if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-  for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV)" ]; then
+  for entry in $(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | sort -uV); do
     domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-    i=1
-    if [[ $(echo $domain | grep '.wptangtoc-ols.com$') ]]; then #đánh noindex cho website giả lập
-      sed -i '/extraHeaders /a X-Robots-Tag noindex' /usr/local/lsws/conf/vhosts/"$domain"/"$domain".conf
+    if echo "$domain" | grep -q '.wptangtoc-ols.com$'; then
+      sed -i '/extraHeaders /a X-Robots-Tag noindex' "/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
     fi
   done
 fi
 
-# đều phòng nếu mất thư mục logs của server sẽ tự động tái tạo lại
 if [[ ! -d /usr/local/lsws/logs ]]; then
   mkdir -p /usr/local/lsws/logs
   chown root:$tuong_thich_nhom_litespeed /usr/local/lsws/logs
 fi
 
-#đếm số lượng website nếu lớn 5 sẽ chuyển sang mode nhiều web
-if (($(ls -A /etc/wptt/vhost | wc -l) > 10)); then
+if (( $(ls -A /etc/wptt/vhost 2>/dev/null | grep -vE '^\.\.?conf$' | wc -l) > 10 )); then
   . /etc/wptt/cau-hinh/wptt-litespeed-config-cau-hinh-optimize-nhieu-web >/dev/null 2>&1
 fi
 
-#bật lại access log domain
-
-. /etc/wptt/.wptt.conf
-if [[ $download_api ]]; then
+. /etc/wptt/.wptt.conf 2>/dev/null
+if [[ -n "${download_api:-}" ]]; then
   if [[ -f /etc/wptt/add-one/check.sh ]]; then
-    if [[ $email_check_downtime && $telegram_id ]]; then
-      . /etc/wptt/add-one/check.sh $telegram_id $telegram_api $email >/dev/null 2>&1
-    fi
-    if [[ -z $email_check_downtime && $telegram_id ]]; then
-      . /etc/wptt/add-one/check.sh $telegram_id $telegram_api >/dev/null 2>&1
-    fi
-    if [[ $email_check_downtime && -z $telegram_id ]]; then
-      . /etc/wptt/add-one/check.sh $email_check_downtime >/dev/null 2>&1
+    if [[ -n "${email_check_downtime:-}" && -n "${telegram_id:-}" ]]; then
+      . /etc/wptt/add-one/check.sh "$telegram_id" "$telegram_api" "$email_check_downtime" >/dev/null 2>&1
+    elif [[ -z "${email_check_downtime:-}" && -n "${telegram_id:-}" ]]; then
+      . /etc/wptt/add-one/check.sh "$telegram_id" "$telegram_api" >/dev/null 2>&1
+    elif [[ -n "${email_check_downtime:-}" && -z "${telegram_id:-}" ]]; then
+      . /etc/wptt/add-one/check.sh "$email_check_downtime" >/dev/null 2>&1
     fi
   fi
 fi
 
-#tune lại cấu hình
-echo '100' >/etc/wptt/.ram_hien_tai #để ép thực thi wptt-auto-tune
+echo '100' >/etc/wptt/.ram_hien_tai
 /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
 
-if [[ $ip_block_rules ]]; then #remove rules menu
-  rm -f /etc/wptt/vhost/.$ip.conf
+if [[ -n "${ip_block_rules:-}" ]]; then
+  rm -f "/etc/wptt/vhost/.$ip.conf"
 fi
 
-RED='\033[0;31m'
-NC='\033[0m'
-
-echo -e "${RED}-------------------------------------------------------------------------"
-echo ""
-echo " 0     0 000000  0000000                         0000000 "
-echo " 0  0  0 0     0    0       00    0    0   0000     0      0000    0000 "
-echo " 0  0  0 0     0    0      0  0   00   0  0    0    0     0    0  0    0 "
-echo " 0  0  0 000000     0     0    0  0 0  0  0         0     0    0  0 "
-echo -e "${NC} 0  0  0 0          0     000000  0  0 0  0  000    0     0    0  0 "
-echo " 0  0  0 0          0     0    0  0   00  0    0    0     0    0  0    0 "
-echo "  00 00  0          0     0    0  0    0   0000     0      0000    0000 "
-echo ""
-echo "  00000   0       00000 "
-echo " 0     0  0      0     0 "
-echo " 0     0  0      0 "
-echo -e "${RED} 0     0  0       00000 "
-echo " 0     0  0            0 "
-echo " 0     0  0      0     0 "
-echo "  00000   000000  00000 "
-echo -e "--------------------------------------------------------------------------${NC}"
-echo "-------------------------------------------------------------------------"
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
-if [[ $2 = 'premium' ]]; then
+# ==============================================================================
+# THÔNG BÁO HOÀN TẤT CHUYÊN NGHIỆP
+# ==============================================================================
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+echo -e "${C_GREEN}│${C_RESET} ${C_WHITE}✔ TÁI TẠO CẤU HÌNH (FACTORY RESET) HOÀN TẤT THÀNH CÔNG!${C_RESET}                    ${C_GREEN}│${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+echo -e "${C_GREEN}│${C_RESET} ${C_CYAN}▪ Trạng thái:${C_RESET} OpenLiteSpeed đã được khôi phục về trạng thái sạch.         ${C_GREEN}│${C_RESET}"
+echo -e "${C_GREEN}│${C_RESET} ${C_CYAN}▪ Dịch vụ:   ${C_RESET} Đã khởi động lại tự động. Webserver đang hoạt động trơn tru. ${C_GREEN}│${C_RESET}"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+if [[ ${2:-} = 'premium' ]]; then
   unset key_activate
-  . /etc/wptt/.wptt.conf
+  . /etc/wptt/.wptt.conf 2>/dev/null
   if [[ -z $key_activate ]]; then
     echo "Tính năng này là tính năng Premium bạn phải mua Active key mới có thể sử dụng được"
     echo "Bạn hãy activate key thì sẽ được sử dụng tất cả các tính năng trong add ons"
-    check_menu_wptangtoc_active=$1
+    check_menu_wptangtoc_active=${1:-}
     if [[ $check_menu_wptangtoc_active = "98" ]]; then
       exec /etc/wptt/wptt-add-one-main 1
     fi
