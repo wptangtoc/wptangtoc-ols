@@ -33,7 +33,7 @@ function lua_chon_NAME() {
   unset NAME
   local selects=()
   local i=1
-  local box_inner_width=${box_inner_width:-71}
+  local box_inner_width=${box_inner_width:-78}
 
   if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
     for filepath in /etc/wptt/vhost/.*.conf; do
@@ -45,19 +45,31 @@ function lua_chon_NAME() {
 
       if [[ "$domain" == ?*.?* ]]; then
         local wp_load="/usr/local/lsws/$domain/html/wp-load.php"
+        local wp_config="/usr/local/lsws/$domain/html/wp-config.php"
         if [[ -f "$wp_load" ]]; then
           local status_text=""
           local status_color=""
           local cron_file="/etc/cron.d/wp-cron-job-$domain.cron"
+          
+          # Biến kiểm tra đồng bộ
+          local has_cron=false
+          [[ -f "$cron_file" ]] && has_cron=true
+          
+          local has_config=false
+          if grep -qiE "define\s*\(\s*['\"]DISABLE_WP_CRON['\"]\s*,\s*true\s*\)" "$wp_config" 2>/dev/null; then
+              has_config=true
+          fi
 
-          # Kiểm tra xem có file cron của domain không
-          if [[ -f "$cron_file" ]]; then
+          if $has_cron && $has_config; then
             local checktuan=$(grep -oE '^\*/[0-9]+' "$cron_file" 2>/dev/null | cut -d'/' -f2 | head -n 1)
             status_text="[Đã TỐI ƯU - ${checktuan:-?} phút/lần]"
             status_color=$C_GREEN
-          else
+          elif ! $has_cron && ! $has_config; then
             status_text="[Chưa Tối Ưu - Mặc định]"
             status_color=$C_YELLOW
+          else
+            status_text="[LỖI - Mất đồng bộ cấu hình WP-Config.php]"
+            status_color=$C_RED
           fi
 
           selects+=("$domain|$status_text|$status_color")
@@ -91,8 +103,8 @@ function lua_chon_NAME() {
 
   for val in "${selects[@]}"; do
     IFS='|' read -r d s c <<<"$val"
-    local clean_row=$(printf "  %3d) %-32s %s" "$i" "$d" "$s")
-    local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-32s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+    local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+    local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
     local pad=$((box_inner_width - ${#clean_row}))
     [[ $pad -lt 0 ]] && pad=0
 
@@ -158,7 +170,7 @@ if [[ ! -f "$pathcheckwp" ]]; then
 fi
 
 # ==============================================================================
-# LÔGIC THỰC THI (BẬT / TẮT)
+# LÔGIC THỰC THI (BẬT / TẮT / FIX LỖI)
 # ==============================================================================
 echo ""
 . /etc/wptt/php/php-cli-domain-config $NAME
@@ -168,8 +180,20 @@ WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_th
 cron_file="/etc/cron.d/wp-cron-job-$NAME.cron"
 ubuntu_cron_file="/etc/cron.d/wp-cron-job-${NAME//[.]/_}_cron"
 
-if [ -f "$cron_file" ]; then
-  # Đã tối ưu -> Hỏi TẮT
+# Dùng WP-CLI để kiểm tra chính xác 100% biến DISABLE_WP_CRON
+has_config=false
+if $WP_EXEC config has DISABLE_WP_CRON --path="/usr/local/lsws/$NAME/html" 2>/dev/null; then
+  val=$($WP_EXEC config get DISABLE_WP_CRON --path="/usr/local/lsws/$NAME/html" 2>/dev/null)
+  [[ "$val" == "1" || "$val" == "true" ]] && has_config=true
+fi
+
+has_cron=false
+[[ -f "$cron_file" ]] && has_cron=true
+
+if $has_cron && $has_config; then
+  # ---------------------------------------------------------
+  # NHÁNH 1: ĐÃ TỐI ƯU CHUẨN -> HỎI TẮT (QUAY VỀ MẶC ĐỊNH)
+  # ---------------------------------------------------------
   if ! wptt_xac_nhan "Xác nhận bạn có muốn HUỶ tối ưu WP-Cron?" "${C_YELLOW}Website ${C_BOLD_WHITE}$NAME${C_YELLOW} đã được tối ưu" "" "Đồng ý (quay về mặc định)" "Không đồng ý (Hủy thao tác)"; then
     exec /etc/wptt/wptt-wordpress-main 1
   fi
@@ -185,8 +209,10 @@ if [ -f "$cron_file" ]; then
   echo "Hủy tối ưu wp-cron website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
   _rundone "Hủy tối ưu WP-Cron cho $NAME"
 
-else
-  # Chưa tối ưu -> Hỏi số phút để BẬT
+elif ! $has_cron && ! $has_config; then
+  # ---------------------------------------------------------
+  # NHÁNH 2: CHƯA TỐI ƯU -> HỎI BẬT TỐI ƯU
+  # ---------------------------------------------------------
   echo -en "${C_CYAN}Nhập khoảng thời gian thực thi Cron (từ 1-59 phút) [Enter = Mặc định 10 phút]: ${C_RESET}"
   read -r phut
 
@@ -226,6 +252,67 @@ END
 
   echo "Tối ưu hoá cron WordPress website $NAME ($phut phut): $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
   _rundone "Tối ưu hóa wp-cron website $NAME ($phut phút/lần)"
+
+else
+  # ---------------------------------------------------------
+  # NHÁNH 3: LỖI ĐỒNG BỘ (SỬ DỤNG HÀM WPTT_XAC_NHAN CHUẨN UI)
+  # ---------------------------------------------------------
+  if $has_cron; then
+    msg_loi1="${C_YELLOW}Cron hệ thống đang chạy nhưng file wp-config.php của bạn${C_RESET}"
+    msg_loi2="${C_YELLOW}lại bị mất hằng số DISABLE_WP_CRON (Có thể do bạn dọn dẹp file).${C_RESET}"
+  else
+    msg_loi1="${C_YELLOW}File wp-config.php đã chặn Cron mặc định, nhưng Cron hệ thống${C_RESET}"
+    msg_loi2="${C_YELLOW}lại không tồn tại. Các tác vụ hẹn giờ của website đang bị tê liệt!${C_RESET}"
+  fi
+
+  # Bọc cảnh báo đỏ và gọi hàm wptt_xac_nhan để lấy giao diện 1 & 2 hoàn hảo
+  if wptt_xac_nhan "${C_RED}PHÁT HIỆN LỖI ĐỒNG BỘ CẤU HÌNH WP-CRON!${C_RESET}" "$msg_loi1" "$msg_loi2" "Tự động Fix lỗi" "Dọn dẹp xóa bỏ hoàn toàn"; then
+    
+    # -----------------------------------
+    # OPTION 1: TỰ ĐỘNG FIX LỖI (TRUE)
+    # -----------------------------------
+    _runing "Đang tự động đồng bộ lại cấu hình WP-Cron cho $NAME"
+    
+    if ! $has_config; then
+      $WP_EXEC config set DISABLE_WP_CRON true --raw --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+    fi
+    
+    if ! $has_cron; then
+      phut="10"
+      giatuanwww=$($WP_EXEC option get home --path="/usr/local/lsws/$NAME/html" --allow-root 2>/dev/null | grep 'www.')
+      if [[ -n "$giatuanwww" ]]; then domain="www.$NAME"; else domain="$NAME"; fi
+      
+      cat >"$cron_file" <<END
+*/$phut * * * * root /usr/bin/flock -n /tmp/wptt_cron_${NAME}.lock wget -q -O - https://127.0.0.1/wp-cron.php?doing_wp_cron --header="Host: $domain" -U "WP Cron Optimize by WPTangToc OLS" --no-check-certificate >/dev/null 2>&1
+END
+      if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+        ln -sf "$cron_file" "$ubuntu_cron_file"
+        systemctl restart cron.service
+      else
+        systemctl restart crond.service
+      fi
+    fi
+    
+    _rundone "Đồng bộ lại cấu hình WP-Cron thành công!"
+    sleep 2
+    exec /etc/wptt/wptt-wordpress-main 1
+    
+  else
+    # -----------------------------------
+    # OPTION 2: DỌN DẸP XÓA BỎ (FALSE)
+    # -----------------------------------
+    _runing "Đang dọn dẹp và hủy hoàn toàn tối ưu WP-Cron cho $NAME"
+    
+    rm -f "$cron_file"
+    [[ -f "$ubuntu_cron_file" ]] && rm -f "$ubuntu_cron_file"
+    $WP_EXEC config delete DISABLE_WP_CRON --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+    if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then systemctl restart cron.service; else systemctl restart crond.service; fi
+    
+    _rundone "Dọn dẹp hoàn tất!"
+    sleep 2
+    exec /etc/wptt/wptt-wordpress-main 1
+    
+  fi
 fi
 
 if [[ ${1:-} == "98" ]]; then
