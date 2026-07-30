@@ -22,6 +22,8 @@ function huong_dan() {
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions
 
+export box_inner_width=78
+
 # ==============================================================================
 # BẮT SỰ KIỆN CHẠY NGẦM (CHỐNG LỖI TTY KHÔNG MÀN HÌNH)
 # ==============================================================================
@@ -46,7 +48,6 @@ function lua_chon_NAME() {
   unset NAME
   local selects=()
   local i=1
-  local box_inner_width=${box_inner_width:-78}
 
   if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
     for filepath in /etc/wptt/vhost/.*.conf; do
@@ -86,7 +87,16 @@ function lua_chon_NAME() {
 
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
+  local num_domains=${#selects[@]}
+  
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # ============================================================================
   # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   local title_text="Nhập lựa chọn website muốn thao tác Lock Down:"
   local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
@@ -103,20 +113,33 @@ function lua_chon_NAME() {
   echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
   for val in "${selects[@]}"; do
-    IFS='|' read -r d s c <<<"$val"
-    local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
-    local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
-    local pad=$((box_inner_width - ${#clean_row}))
-    [[ $pad -lt 0 ]] && pad=0
-
-    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      # Giao diện cắt lớp cho tùy chọn cuối cùng (Đồng loạt)
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt Lockdown cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt Lockdown cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      # Dòng website bình thường
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    fi
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
+  # Dòng nhắc lệnh (Prompt) siêu sạch
   local fzf_installed=false
   command -v fzf &>/dev/null && fzf_installed=true
-  local prompt_msg="${lua_chon_website_ban_muon:-Nhập lựa chọn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
 
   while true; do
     echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
@@ -129,8 +152,10 @@ function lua_chon_NAME() {
       if $fzf_installed; then
         local fzf_list=()
         for val in "${selects[@]}"; do
-          IFS='|' read -r d s c <<<"$val"
-          fzf_list+=("$d $s")
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
         done
         local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
         NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
@@ -140,7 +165,11 @@ function lua_chon_NAME() {
     *)
       if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
         local val="${selects[$((REPLY - 1))]}"
-        NAME="${val%|*|*}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
         return 0
       elif [[ "$REPLY" == ?*.?* ]]; then
         NAME="$REPLY"
@@ -151,135 +180,283 @@ function lua_chon_NAME() {
   done
 }
 
-# Nếu gọi script từ giao diện (Không phải ngầm)
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+
 if [[ $IS_BACKGROUND -eq 0 ]]; then
-  if [[ -n "$1" && "$1" != "98" ]]; then
+  if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+    NAME="all_on"
+    CLI_MODE=1
+  elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+    NAME="all_off"
+    CLI_MODE=1
+  elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
     NAME="$1"
+    # Hỗ trợ truyền đối số cho 1 domain cụ thể: wptt-lock-down domain.com on
+    if [[ "${2:-}" == "on" ]]; then
+      CLI_MODE=1
+      CLI_ACTION="bat"
+    elif [[ "${2:-}" == "off" ]]; then
+      CLI_MODE=1
+      CLI_ACTION="tat"
+    fi
   else
-    lua_chon_NAME "Bật / Tắt Lock Down"
+    lua_chon_NAME
   fi
 fi
 
 # ==============================================================================
-# XỬ LÝ LOGIC BẬT / TẮT LOCK DOWN VÀ AUTO-TIMER
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN 
 # ==============================================================================
-path_conf="/etc/wptt/vhost/.$NAME.conf"
-[[ ! -f "$path_conf" ]] && echo -e "\n${C_RED}Tên miền không tồn tại trên hệ thống này${C_RESET}" && sleep 2 && exit 1
+DOMAIN_LIST=()
+wp_action=""
+action_text=""
+timer_input=0
 
-path="/usr/local/lsws/$NAME/html"
-[[ ! -d "$path" ]] && echo -e "\n${C_RED}Không tìm thấy thư mục chứa mã nguồn của $NAME${C_RESET}" && sleep 2 && exit 1
+if [[ $IS_BACKGROUND -eq 0 ]]; then
+  echo ""
+  if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+    
+    # NẾU NGƯỜI DÙNG DÙNG LỆNH CLI ĐỐI SỐ (VD: wptt-lock-down all on) -> NHẢY QUÁ TRÌNH HỎI ĐÁP
+    if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+      wp_action="bat"
+      action_text="BẬT (Khóa cứng file/thư mục)"
+    elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+      wp_action="tat"
+      action_text="TẮT (Mở khóa file/thư mục)"
+    else
+      # NẾU CHỌN TỪ MENU UI (SỐ 4, SỐ 5) -> MỞ SUB-MENU BOX UI
+      echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH LOCKDOWN${C_RESET}"
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Bạn đang thao tác cấu hình Lockdown cho toàn bộ hệ thống." 2
+      left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) BẬT Lockdown (Khóa cứng đồng loạt)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Lockdown${C_RESET} (Khóa cứng đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) TẮT Lockdown (Mở khóa đồng loạt)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT Lockdown${C_RESET} (Mở khóa đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r mass_choice
+      
+      if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+        wp_action="bat"
+        action_text="BẬT (Khóa cứng file/thư mục)"
+      elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+        wp_action="tat"
+        action_text="TẮT (Mở khóa file/thư mục)"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-bao-mat-main 1
+      fi
+    fi
 
-unset lock_down
-. "$path_conf"
+    # Quét toàn bộ danh sách domain
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+      if [[ "$domain" == ?*.?* && -d "/usr/local/lsws/$domain/html" ]]; then
+        DOMAIN_LIST+=("$domain")
+      fi
+    done
 
-# Phân nhánh theo tham số truyền vào
-if [[ $IS_BACKGROUND -eq 1 ]]; then
+    if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+      echo -e "\n${C_RED}❌ Không có website hợp lệ nào để thao tác!${C_RESET}" && sleep 2 && exit 1
+    fi
+
+  else
+    # BOX UI CHO 1 DOMAIN ĐƠN LẺ
+    path_conf="/etc/wptt/vhost/.$NAME.conf"
+    [[ ! -f "$path_conf" ]] && echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này${C_RESET}" && sleep 2 && exit 1
+    
+    path="/usr/local/lsws/$NAME/html"
+    [[ ! -d "$path" ]] && echo -e "\n${C_RED}❌ Không tìm thấy thư mục chứa mã nguồn của $NAME${C_RESET}" && sleep 2 && exit 1
+
+    DOMAIN_LIST=("$NAME")
+    unset lock_down
+    . "$path_conf" 2>/dev/null
+
+    # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+    if [[ $CLI_MODE -eq 1 ]]; then
+      wp_action="$CLI_ACTION"
+      if [[ "$wp_action" == "bat" ]]; then
+        action_text="BẬT (Khóa cứng file/thư mục)"
+      else
+        action_text="TẮT (Mở khóa file/thư mục)"
+      fi
+    else
+      # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+      echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH LOCKDOWN${C_RESET}"
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      if [[ -z "$lock_down" ]]; then
+        left_text "  Website ${NAME} hiện ĐANG MỞ (Cho phép sửa đổi)." 2
+        echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+        
+        str_opt1="  1) BẬT Lockdown (Khóa cứng bảo vệ)"
+        pad_opt1=$((box_inner_width - ${#str_opt1}))
+        [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+        echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Lockdown${C_RESET} (Khóa cứng bảo vệ)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+        
+        str_opt2="  2) Không làm gì cả (Giữ nguyên)"
+        pad_opt2=$((box_inner_width - ${#str_opt2}))
+        [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+        echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+        
+        echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+        echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+        read -r single_choice
+        
+        if [[ "$single_choice" == "1" ]]; then
+          wp_action="bat"
+          action_text="BẬT (Khóa cứng file/thư mục)"
+        else
+          echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+          exec /etc/wptt/wptt-bao-mat-main 1
+        fi
+      else
+        left_text "  Website ${NAME} hiện ĐANG KHÓA (Đóng băng)." 2
+        echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+        
+        str_opt1="  1) TẮT Lockdown (Mở khóa sửa đổi)"
+        pad_opt1=$((box_inner_width - ${#str_opt1}))
+        [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+        echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT Lockdown${C_RESET} (Mở khóa sửa đổi)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+        
+        str_opt2="  2) Không làm gì cả (Giữ nguyên)"
+        pad_opt2=$((box_inner_width - ${#str_opt2}))
+        [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+        echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+        
+        echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+        echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+        read -r single_choice
+        
+        if [[ "$single_choice" == "1" ]]; then
+          wp_action="tat"
+          action_text="TẮT (Mở khóa file/thư mục)"
+        else
+          echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+          exec /etc/wptt/wptt-bao-mat-main 1
+        fi
+      fi
+    fi
+  fi
+
+  # HỎI HẸN GIỜ TIMER NẾU HÀNH ĐỘNG LÀ TẮT (BỎ QUA NẾU CHẠY BẰNG CLI ĐỐI SỐ)
+  if [[ "$wp_action" == "tat" ]]; then
+    if [[ $CLI_MODE -eq 1 ]]; then
+      timer_input=0 # Chạy qua CLI đối số thì tắt hỏi đáp hẹn giờ, mặc định bằng 0
+    else
+      echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_YELLOW}TÍNH NĂNG THÔNG MINH: TỰ ĐỘNG KHÓA LẠI (AUTO-LOCK)${C_RESET}"
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Để tránh quên bật lại Lock Down sau khi cài đặt Plugin/Theme," 2
+      left_text "  hệ thống sẽ đếm ngược và tự động khóa chặt website giúp bạn." 2
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "➤ Bạn muốn hẹn giờ bao nhiêu phút? (Mặc định: ${C_GREEN}30${C_RESET} | Gõ ${C_RED}0${C_RESET} để tắt hẳn): "
+      read -r timer_input
+      
+      timer_input=${timer_input:-30}
+      if ! [[ "$timer_input" =~ ^[0-9]+$ ]]; then
+        timer_input=30
+      fi
+    fi
+  fi
+  echo ""
+else
+  # Logic nếu script tự chạy ngầm (Background Auto-Timer)
+  DOMAIN_LIST=("$NAME")
   wp_action="bat"
   action_text="TỰ ĐỘNG BẬT (Timer Hẹn Giờ)"
-else
-  if [[ -z "$lock_down" ]]; then
-    action_text="BẬT (Khóa cứng file/thư mục)"
-    wp_action="bat"
-    confirm_msg="Xác nhận BẬT Lockdown (Khóa cứng) cho: $NAME?"
+fi
+
+# ==============================================================================
+# THỰC THI HÀNG LOẠT (HOẶC ĐƠN LẺ)
+# ==============================================================================
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  path_conf="/etc/wptt/vhost/.$DOMAIN.conf"
+  path="/usr/local/lsws/$DOMAIN/html"
+  
+  [[ ! -d "$path" ]] && continue
+  [[ $IS_BACKGROUND -eq 0 ]] && _runing "$action_text cho $DOMAIN"
+
+  if [[ "$wp_action" == "bat" ]]; then
+    # =====================================
+    # THỰC THI BẬT LOCK DOWN
+    # =====================================
+    if [[ $IS_BACKGROUND -eq 0 ]]; then
+      pkill -f "/etc/wptt/bao-mat/wptt-lock-down $DOMAIN auto_on" 2>/dev/null
+    fi
+
+    find "$path" -type f -print0 | xargs -0 -r chmod 404
+    find "$path" -type d -print0 | xargs -0 -r chmod 515
+
+    [[ -f "$path/wp-content/preload-wptangtoc-url.txt" ]] && chmod 644 "$path/wp-content/preload-wptangtoc-url.txt"
+    [[ -f "$path/wp-content/preload-wptangtoc.json" ]] && chmod 644 "$path/wp-content/preload-wptangtoc.json"
+
+    if [[ -d "$path/wp-content/uploads" ]]; then
+      find "$path/wp-content/uploads" -type d -print0 | xargs -0 -r chmod 755
+      find "$path/wp-content/uploads" -type f -name "index.php" -print0 | xargs -0 -r chmod 404
+    fi
+
+    for bypass_dir in "cache" "litespeed"; do
+      if [[ -d "$path/wp-content/$bypass_dir" ]]; then
+        find "$path/wp-content/$bypass_dir" -type d -print0 | xargs -0 -r chmod 755
+        find "$path/wp-content/$bypass_dir" -type f -print0 | xargs -0 -r chmod 644
+      fi
+    done
+
+    if [[ -d "$path/wp-content/database" ]]; then
+      chmod 755 "$path/wp-content/database"
+      find "$path/wp-content/database" -type f -print0 | xargs -0 -r chmod 644
+      find "$path/wp-content/database" -type f -name ".ht.sqlite*" -print0 | xargs -0 -r chmod 644
+    fi
+
+    . /etc/wptt/bao-mat/wptt-chattr-file-lock "$DOMAIN" on >/dev/null 2>&1
+
+    sed -i '/lock_down/d' "$path_conf"
+    echo "lock_down=1" >>"$path_conf"
+
   else
-    action_text="TẮT (Mở khóa file/thư mục)"
-    wp_action="tat"
-    confirm_msg="Xác nhận TẮT Lockdown (Mở khóa) cho: $NAME?"
-  fi
+    # =====================================
+    # THỰC THI TẮT LOCK DOWN
+    # =====================================
+    . /etc/wptt/bao-mat/wptt-chattr-file-lock "$DOMAIN" off >/dev/null 2>&1
+    find "$path" -type f -print0 | xargs -0 -r chmod 644
+    find "$path" -type d -print0 | xargs -0 -r chmod 755
 
-  # Thu gọn độ dài confirm_msg để tránh làm vỡ UI 78px
-  if ! wptt_xac_nhan "$confirm_msg" "" "" "" "Không đồng ý (Hủy thao tác)"; then
-    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1 && exec /etc/wptt/wptt-bao-mat-main 1
-  fi
-
-  # NẾU NGƯỜI DÙNG CHỌN TẮT LOCKDOWN -> HỎI XEM CÓ MUỐN HẸN GIỜ KHÔNG
-  if [[ "$wp_action" == "tat" ]]; then
-    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_YELLOW}TÍNH NĂNG THÔNG MINH: TỰ ĐỘNG KHÓA LẠI (AUTO-LOCK)${C_RESET}"
-    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "  Để tránh quên bật lại Lock Down sau khi cài đặt Plugin/Theme," 2
-    left_text "  hệ thống sẽ đếm ngược và tự động khóa chặt website giúp bạn." 2
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -en "➤ Bạn muốn hẹn giờ bao nhiêu phút? (Mặc định: ${C_GREEN}30${C_RESET} | Gõ ${C_RED}0${C_RESET} để tắt hẳn): "
-    read -r timer_input
+    sed -i '/lock_down/d' "$path_conf"
     
-    timer_input=${timer_input:-30}
-    if ! [[ "$timer_input" =~ ^[0-9]+$ ]]; then
-      timer_input=30
+    if [[ "$timer_input" -gt 0 ]]; then
+      pkill -f "/etc/wptt/bao-mat/wptt-lock-down $DOMAIN auto_on" 2>/dev/null
+      nohup bash -c "sleep $((timer_input * 60)); bash /etc/wptt/bao-mat/wptt-lock-down $DOMAIN auto_on >/dev/null 2>&1" >/dev/null 2>&1 &
+      disown -h $! 2>/dev/null
     fi
   fi
-fi
 
-[[ $IS_BACKGROUND -eq 0 ]] && echo ""
-[[ $IS_BACKGROUND -eq 0 ]] && _runing "$action_text cho $NAME"
-
-if [[ "$wp_action" == "bat" ]]; then
-  # =====================================
-  # THỰC THI BẬT LOCK DOWN
-  # =====================================
-  
-  # Chỉ kill tiến trình đếm ngược cũ nếu thao tác thủ công (Chống bug tự sát)
-  if [[ $IS_BACKGROUND -eq 0 ]]; then
-    pkill -f "/etc/wptt/bao-mat/wptt-lock-down $NAME auto_on" 2>/dev/null
-  fi
-
-  find "$path" -type f -print0 | xargs -0 -r chmod 404
-  find "$path" -type d -print0 | xargs -0 -r chmod 515
-
-  [[ -f "$path/wp-content/preload-wptangtoc-url.txt" ]] && chmod 644 "$path/wp-content/preload-wptangtoc-url.txt"
-  [[ -f "$path/wp-content/preload-wptangtoc.json" ]] && chmod 644 "$path/wp-content/preload-wptangtoc.json"
-
-  if [[ -d "$path/wp-content/uploads" ]]; then
-    find "$path/wp-content/uploads" -type d -print0 | xargs -0 -r chmod 755
-    find "$path/wp-content/uploads" -type f -name "index.php" -print0 | xargs -0 -r chmod 404
-  fi
-
-  for bypass_dir in "cache" "litespeed"; do
-    if [[ -d "$path/wp-content/$bypass_dir" ]]; then
-      find "$path/wp-content/$bypass_dir" -type d -print0 | xargs -0 -r chmod 755
-      find "$path/wp-content/$bypass_dir" -type f -print0 | xargs -0 -r chmod 644
-    fi
-  done
-
-  if [[ -d "$path/wp-content/database" ]]; then
-    chmod 755 "$path/wp-content/database"
-    find "$path/wp-content/database" -type f -print0 | xargs -0 -r chmod 644
-    find "$path/wp-content/database" -type f -name ".ht.sqlite*" -print0 | xargs -0 -r chmod 644
-  fi
-
-  # Chạy module phụ ngầm
-  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on >/dev/null 2>&1
-
-  sed -i '/lock_down/d' "$path_conf"
-  echo "lock_down=1" >>"$path_conf"
-
-else
-  # =====================================
-  # THỰC THI TẮT LOCK DOWN
-  # =====================================
-  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1
-  find "$path" -type f -print0 | xargs -0 -r chmod 644
-  find "$path" -type d -print0 | xargs -0 -r chmod 755
-
-  sed -i '/lock_down/d' "$path_conf"
-  
-  if [[ "$timer_input" -gt 0 ]]; then
-    # 1. Hủy đếm ngược cũ (nếu có)
-    pkill -f "/etc/wptt/bao-mat/wptt-lock-down $NAME auto_on" 2>/dev/null
-    
-    # 2. Ép chạy ngầm với ĐƯỜNG DẪN CHUẨN 100%
-    nohup bash -c "sleep $((timer_input * 60)); bash /etc/wptt/bao-mat/wptt-lock-down $NAME auto_on >/dev/null 2>&1" >/dev/null 2>&1 &
-    disown -h $! 2>/dev/null
-  fi
-fi
-
-echo "$action_text Lock Down website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-[[ $IS_BACKGROUND -eq 0 ]] && _rundone "$action_text cho $NAME"
+  echo "$action_text Lock Down website $DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  [[ $IS_BACKGROUND -eq 0 ]] && _rundone "$action_text cho $DOMAIN"
+done
 
 # ==============================================================================
 # THÔNG BÁO HOÀN TẤT (UX CHUẨN - ẨN NẾU CHẠY NGẦM)
 # ==============================================================================
-if [[ $IS_BACKGROUND -eq 0 ]]; then
+if [[ $IS_BACKGROUND -eq 0 && $CLI_MODE -eq 0 ]]; then
   if [[ "$wp_action" == "bat" ]]; then
     echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_RED}LƯU Ý KHI BẬT LOCKDOWN${C_RESET}"
@@ -291,12 +468,12 @@ if [[ $IS_BACKGROUND -eq 0 ]]; then
     echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_GREEN}HỆ THỐNG ĐÃ KÍCH HOẠT HẸN GIỜ AUTO-LOCK!${C_RESET}"
     echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "  Website sẽ tự động khóa chặt trở lại sau ${C_YELLOW}${timer_input} phút${C_RESET} nữa." 2
+    left_text "  Toàn bộ website sẽ tự động khóa chặt trở lại sau ${C_YELLOW}${timer_input} phút${C_RESET} nữa." 2
     left_text "  Bạn cứ thoải mái cài đặt Plugin/Theme, không cần lo việc quên bật lại!" 2
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   fi
 fi
 
-if [[ ${1:-} == "98" && $IS_BACKGROUND -eq 0 ]]; then
+if [[ ${1:-} == "98" && $IS_BACKGROUND -eq 0 && $CLI_MODE -eq 0 ]]; then
   exec /etc/wptt/wptt-bao-mat-main 1
 fi
