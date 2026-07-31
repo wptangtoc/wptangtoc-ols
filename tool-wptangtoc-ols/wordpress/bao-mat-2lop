@@ -16,158 +16,24 @@ function huong_dan() {
   Bạn có thể dễ dàng Bật/Tắt tính năng này tùy theo nhu cầu vận hành thực tế.
 }
 
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}BẢO MẬT ➜ Bật / Tắt Bảo mật wp-admin 2 lớp (2FA)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CHỈ HIỂN THỊ DOMAIN WP + CÓ TRẠNG THÁI)
-# ==============================================================================
-function lua_chon_NAME() {
-  unset NAME selects
-  selects=()
-  local box_inner_width=${box_inner_width:-78} # 🌟 Đã chỉnh về 78px chuẩn khung WPTangToc
-
-  # Quét vòng lặp siêu tốc
-  for filepath in /etc/wptt/vhost/.*.conf; do
-    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-
-    local domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
-
-    # Chỉ quét các domain có định dạng chuẩn và có nhân WordPress
-    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
-      local check_mk="/usr/local/lsws/$domain/passwd/.mk"
-
-      if [[ -f "$check_mk" ]]; then
-        selects+=("$domain|[Đang BẬT]")
-      else
-        selects+=("$domain|[Đang TẮT]")
-      fi
-    fi
-  done
-
-  if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "${C_YELLOW}⚠️ Hệ thống chưa có Website WordPress nào để cấu hình 2FA!${C_RESET}"
-    sleep 3
-    exec /etc/wptt/wptt-bao-mat-main 1
-  fi
-
-  # Sắp xếp mảng chuẩn Version
-  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
-
-  # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website WP
-  if [[ ${#selects[@]} -ge 2 ]]; then
-    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)|[Hàng Loạt]")
-  fi
-
-  # RENDER KHUNG MENU BO CONG (TÁCH STATUS ĐỂ TÔ MÀU)
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  local title_text="Lựa chọn website WP bạn muốn cấu hình 2FA:"
-  local len=$(echo -n "$title_text" | awk '{print length($0)}')
-  local pad_r=$((box_inner_width - len - 2))
-  [[ $pad_r -lt 0 ]] && pad_r=0
-  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
-
-  local line_len=$((len + 3))
-  local pad_line_r=$((box_inner_width - line_len))
-  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
-  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
-  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
-
-  local i=1
-  for item in "${selects[@]}"; do
-    local dom=$(echo "$item" | cut -d'|' -f1)
-    local stt=$(echo "$item" | cut -d'|' -f2)
-
-    local color_dom="${C_BOLD_WHITE}"
-    local color_stt="${C_YELLOW}"
-
-    if [[ "$stt" == "[Đang BẬT]" ]]; then color_stt="${C_GREEN}"; fi
-    if [[ "$stt" == "[Đang TẮT]" ]]; then color_stt="${C_RED}"; fi
-    if [[ "$dom" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
-      color_dom="${C_YELLOW}"
-      color_stt="${C_CYAN}"
-    fi
-
-    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${color_dom}%-40s${C_RESET} %s" "$i" "$dom" "${color_stt}${stt}${C_RESET}")
-    local clean_text=$(printf "  %3d) %-40s %s" "$i" "$dom" "$stt")
-
-    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    local pad=$((box_inner_width - item_len))
-    [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
-    ((i++))
-  done
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-
-  local fzf_installed=false
-  if command -v fzf &>/dev/null; then
-    fzf_installed=true
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
-  else
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
-  fi
-
-  while true; do
-    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
-    if ! read -r REPLY; then exit 1; fi
-    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-
-    case "$REPLY" in
-    0)
-      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-      NAME="0"
-      return 0
-      ;;
-    00)
-      if $fzf_installed; then
-        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
-        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
-        if [[ -n "$dom" ]]; then
-          NAME="$dom"
-          return 0
-        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
-      else
-        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
-      fi
-      ;;
-    *)
-      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-        local action_index=$((REPLY - 1))
-        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
-        return 0
-      else
-        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
-      fi
-      ;;
-    esac
-  done
-}
-
-# Nếu gọi script kèm tên domain từ command line
-if [[ -n "$1" && "$1" != "98" ]]; then
-  NAME="$1"
-else
-  lua_chon_NAME
-fi
-
-# Tách lấy tên chuẩn (Cắt bỏ râu ria nếu có)
-NAME=$(echo "$NAME" | cut -d'|' -f1 | xargs)
-
-# --- CHỐT CHẶN THOÁT HIỂM ---
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-
-# ==============================================================================
-# HÀM KIỂM TRA PHỤ THUỘC (Lấy PHP_Command & Group Litespeed)
+# BIẾN MÔI TRƯỜNG PHP VÀ QUYỀN LITESPEED
 # ==============================================================================
 if [[ -f "/usr/local/lsws/admin/fcgi-bin/admin_php" ]]; then
   PHP_Command="/usr/local/lsws/admin/fcgi-bin/admin_php"
@@ -181,51 +47,354 @@ else
   tuong_thich_nhom_litespeed="nobody"
 fi
 
-# Mảng toàn cục lưu trữ thông tin tài khoản nếu cấu hình thành công
+# ==============================================================================
+# HÀM CHỌN WEBSITE CÓ HIỂN THỊ TRẠNG THÁI 2FA
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME
+  local selects=()
+  local i=1
+
+  # Quét vòng lặp siêu tốc
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      # Chỉ quét các domain có định dạng chuẩn và có nhân WordPress
+      if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
+        local check_mk="/usr/local/lsws/$domain/passwd/.mk"
+        local status_text=""
+        local status_color=""
+
+        if [[ -f "$check_mk" ]]; then
+          status_text="[Đang BẬT - An toàn]"
+          status_color=$C_GREEN
+        else
+          status_text="[Đang TẮT - Chưa bảo vệ]"
+          status_color=$C_RED
+        fi
+
+        selects+=("$domain|$status_text|$status_color")
+      fi
+    done
+  fi
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: Hệ thống chưa có Website WordPress nào để cấu hình 2FA!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  local num_domains=${#selects[@]}
+  
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Trạng thái hiện tại & Chọn Website muốn thao tác:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt Bảo mật 2 lớp cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt Bảo mật 2 lớp cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    fi
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-bao-mat-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
+}
+
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+  # Hỗ trợ truyền đối số cho 1 domain cụ thể
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
+else
+  lua_chon_NAME
+fi
+
+# ==============================================================================
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
+# ==============================================================================
+DOMAIN_LIST=()
+wp_action=""
+action_text=""
+thao_tac_thanh_cong=false
 CREDENTIALS_LIST=()
 
+echo ""
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+  
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+    wp_action="bat"
+    action_text="BẬT Bảo mật 2 lớp"
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+    wp_action="tat"
+    action_text="TẮT Bảo mật 2 lớp"
+  else
+    # NẾU CHỌN TỪ MENU UI -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH BẢO MẬT 2FA${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình Bảo mật wp-admin 2 lớp cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) BẬT Bảo mật 2 lớp (Bảo vệ an toàn đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Bảo mật 2 lớp${C_RESET} (Bảo vệ an toàn đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) TẮT Bảo mật 2 lớp (Gỡ bỏ bảo vệ đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT Bảo mật 2 lớp${C_RESET} (Gỡ bỏ bảo vệ đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+    
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      wp_action="bat"
+      action_text="BẬT Bảo mật 2 lớp"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      wp_action="tat"
+      action_text="TẮT Bảo mật 2 lớp"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
+  fi
+
+  # Quét toàn bộ danh sách domain để thực thi
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
+      DOMAIN_LIST+=("$domain")
+    fi
+  done
+
+  if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Không có website hợp lệ nào để thao tác!${C_RESET}" && sleep 2 && exit 1
+  fi
+
+else
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
+  pathcheck="/etc/wptt/vhost/.$NAME.conf"
+
+  [[ ! -f "$pathcheck" ]] && echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-bao-mat-main 1
+
+  DOMAIN_LIST=("$NAME")
+  check_mk="/usr/local/lsws/$NAME/passwd/.mk"
+
+  # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+  if [[ $CLI_MODE -eq 1 ]]; then
+    wp_action="$CLI_ACTION"
+    if [[ "$wp_action" == "bat" ]]; then
+      action_text="BẬT Bảo mật 2 lớp"
+    else
+      action_text="TẮT Bảo mật 2 lớp"
+    fi
+  else
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH BẢO MẬT 2FA${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if [[ -f "$check_mk" ]]; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT Bảo mật 2 lớp." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) TẮT Bảo mật 2 lớp (Gỡ bỏ bảo vệ - Kém an toàn)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT Bảo mật 2 lớp${C_RESET} (Gỡ bỏ bảo vệ - Kém an toàn)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Giữ nguyên khóa bảo vệ)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên khóa bảo vệ)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="tat"
+        action_text="TẮT Bảo mật 2 lớp"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-bao-mat-main 1
+      fi
+    else
+      left_text "  Website ${NAME} hiện ĐANG TẮT (Chưa được bảo vệ)." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) BẬT Bảo mật 2 lớp (Kích hoạt khóa bảo vệ wp-admin)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Bảo mật 2 lớp${C_RESET} (Kích hoạt khóa bảo vệ wp-admin)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="bat"
+        action_text="BẬT Bảo mật 2 lớp"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-bao-mat-main 1
+      fi
+    fi
+  fi
+fi
+
 # ==============================================================================
-# HÀM THỰC THI BẬT/TẮT BẢO MẬT 2 LỚP CHO 1 DOMAIN
+# THỰC THI SỬA FILE CẤU HÌNH VÀ SINH PASSWD
 # ==============================================================================
-function process_2fa() {
-  local target_domain=$1
-  local action=$2 # "bat" hoac "tat"
-  local mk_path="/usr/local/lsws/$target_domain/passwd/.mk"
-  local vhost_conf="/usr/local/lsws/conf/vhosts/$target_domain/$target_domain.conf"
-  local wptt_vhost="/etc/wptt/vhost/.$target_domain.conf"
+echo ""
 
-  if [[ "$action" == "bat" ]]; then
-    [[ -f "$mk_path" ]] && return # Đã bật rồi thì bỏ qua
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  mk_path="/usr/local/lsws/$DOMAIN/passwd/.mk"
+  vhost_conf="/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf"
+  wptt_vhost="/etc/wptt/vhost/.$DOMAIN.conf"
+  
+  _runing "$action_text cho website $DOMAIN..."
 
-    UI_STRING="Kích hoạt Bảo mật 2 lớp cho $target_domain"
-    _runing "$UI_STRING"
+  if [[ "$wp_action" == "bat" ]]; then
+    if [[ ! -f "$mk_path" ]]; then
+      # 1. Tạo thư mục và sinh mật khẩu
+      mkdir -p "/usr/local/lsws/$DOMAIN/passwd"
+      Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
+      id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
+      Encrypt_string=$($PHP_Command -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
 
-    # 1. Tạo thư mục và sinh mật khẩu
-    mkdir -p "/usr/local/lsws/$target_domain/passwd"
-    local Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
-    local id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
-    local Encrypt_string=$($PHP_Command -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
+      echo "$id_ols_admin:$Encrypt_string" >"$mk_path"
+      chown nobody:$tuong_thich_nhom_litespeed "$mk_path"
+      chmod 400 "$mk_path"
 
-    echo "$id_ols_admin:$Encrypt_string" >"$mk_path"
-    chown nobody:$tuong_thich_nhom_litespeed "$mk_path"
-    chmod 400 "$mk_path"
+      # 2. Xóa cấu hình cũ (nếu sót) và Tiêm cấu hình Vhost mới bằng EOF
+      sed -i "/^realm ${DOMAIN}wp/,/^}/d" "$vhost_conf" 2>/dev/null
+      sed -i "/^context exp:wp-login\.php/,/^}/d" "$vhost_conf" 2>/dev/null
 
-    # 2. Xóa cấu hình cũ (nếu sót) và Tiêm cấu hình Vhost mới bằng EOF
-    sed -i "/^realm ${target_domain}wp/,/^}/d" "$vhost_conf" 2>/dev/null
-    sed -i "/^context exp:wp-login\.php/,/^}/d" "$vhost_conf" 2>/dev/null
+      cat <<EOF >>"$vhost_conf"
 
-    cat <<EOF >>"$vhost_conf"
-
-realm ${target_domain}wp {
+realm ${DOMAIN}wp {
   userDB  {
-    location              /usr/local/lsws/${target_domain}/passwd/.mk
+    location              /usr/local/lsws/${DOMAIN}/passwd/.mk
   }
 }
 
 context exp:wp-login.php {
   location                \$DOC_ROOT/\$0
   allowBrowse             1
-  realm                   ${target_domain}wp
+  realm                   ${DOMAIN}wp
 
   accessControl  {
     allow                 ALL
@@ -234,125 +403,39 @@ context exp:wp-login.php {
 }
 EOF
 
-    # 3. Lưu mật khẩu vào config của WPTangToc
-    sed -i "/id_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
-    sed -i "/password_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
-    echo "id_dang_nhap_wordpress_2=$id_ols_admin" >>"$wptt_vhost"
-    echo "password_dang_nhap_wordpress_2=$Webadmin_Pass" >>"$wptt_vhost"
+      # 3. Lưu mật khẩu vào config của WPTangToc
+      sed -i "/id_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
+      sed -i "/password_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
+      echo "id_dang_nhap_wordpress_2=$id_ols_admin" >>"$wptt_vhost"
+      echo "password_dang_nhap_wordpress_2=$Webadmin_Pass" >>"$wptt_vhost"
 
-    # 4. Ghi log và tích lũy thông tin vào mảng
-    echo "Bật bảo mật 2 lớp WordPress cho website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    CREDENTIALS_LIST+=("$target_domain|$id_ols_admin|$Webadmin_Pass")
-
-    _rundone "$UI_STRING"
-
-  elif [[ "$action" == "tat" ]]; then
-    [[ ! -f "$mk_path" ]] && return # Chưa bật thì bỏ qua
-
-    UI_STRING="Tắt (Hủy) Bảo mật 2 lớp cho $target_domain"
-    _runing "$UI_STRING"
-
-    # 1. Xóa cấu hình Vhost bằng SED an toàn
-    sed -i "/^realm ${target_domain}wp/,/^}/d" "$vhost_conf" 2>/dev/null
-    sed -i "/^context exp:wp-login\.php/,/^}/d" "$vhost_conf" 2>/dev/null
-
-    # 2. Xóa file passwd và thông tin trong config
-    rm -rf "/usr/local/lsws/$target_domain/passwd/.mk"
-    sed -i "/id_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
-    sed -i "/password_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
-
-    echo "Tắt bảo mật 2 lớp WordPress cho website $target_domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "$UI_STRING"
-  fi
-}
-
-# ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH BẬT / TẮT (CÓ UX XÁC NHẬN)
-# ==============================================================================
-echo ""
-thao_tac_thanh_cong=false
-msg_action=""
-
-if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}Cấu hình HÀNG LOẠT Bảo mật 2 lớp (2FA) cho toàn bộ hệ thống${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  # 🌟 Đã tính toán lại khoảng trắng cho vừa khít 78px
-  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}1)${C_RESET} BẬT đồng loạt cho tất cả                                                 ${C_CYAN}│${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}2)${C_RESET} TẮT đồng loạt cho tất cả                                                 ${C_CYAN}│${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}3)${C_RESET} Hủy bỏ thao tác                                                          ${C_CYAN}│${C_RESET}"
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-
-  mass_action=""
-  while true; do
-    echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-3]: ${C_RESET}"
-    read -r REPLY
-    case "$REPLY" in
-    1)
-      mass_action="bat"
-      msg_action="BẬT Hàng Loạt"
-      break
-      ;;
-    2)
-      mass_action="tat"
-      msg_action="TẮT Hàng Loạt"
-      break
-      ;;
-    3)
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
-      sleep 1
-      exec /etc/wptt/wptt-bao-mat-main 1
-      ;;
-    *) echo -e "${C_RED}❌ Nhập sai, vui lòng nhập từ 1 đến 3.${C_RESET}" ;;
-    esac
-  done
-
-  echo ""
-  for filepath in /etc/wptt/vhost/.*.conf; do
-    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-    domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
-    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
-      process_2fa "$domain" "$mass_action"
-    fi
-  done
-  thao_tac_thanh_cong=true
-
-else
-  pathcheck="/etc/wptt/vhost/.$NAME.conf"
-  [[ ! -f "$pathcheck" ]] && {
-    echo -e "${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
-    sleep 2
-    exec /etc/wptt/wptt-bao-mat-main 1
-  }
-
-  if [[ -f "/usr/local/lsws/$NAME/passwd/.mk" ]]; then
-    if wptt_xac_nhan "Tính năng 2FA đang BẬT. Bạn có muốn TẮT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý TẮT" "Hủy bỏ"; then
-      echo ""
-      msg_action="TẮT Bảo mật 2 lớp"
-      process_2fa "$NAME" "tat"
-      thao_tac_thanh_cong=true
+      CREDENTIALS_LIST+=("$DOMAIN|$id_ols_admin|$Webadmin_Pass")
     fi
   else
-    if wptt_xac_nhan "Tính năng 2FA đang TẮT. Bạn có muốn BẬT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý BẬT" "Hủy bỏ"; then
-      echo ""
-      msg_action="BẬT Bảo mật 2 lớp"
-      process_2fa "$NAME" "bat"
-      thao_tac_thanh_cong=true
+    if [[ -f "$mk_path" ]]; then
+      # 1. Xóa cấu hình Vhost bằng SED an toàn
+      sed -i "/^realm ${DOMAIN}wp/,/^}/d" "$vhost_conf" 2>/dev/null
+      sed -i "/^context exp:wp-login\.php/,/^}/d" "$vhost_conf" 2>/dev/null
+
+      # 2. Xóa file passwd và thông tin trong config
+      rm -rf "/usr/local/lsws/$DOMAIN/passwd/.mk"
+      sed -i "/id_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
+      sed -i "/password_dang_nhap_wordpress_2/d" "$wptt_vhost" 2>/dev/null
     fi
   fi
-fi
+
+  echo "$action_text WordPress cho website $DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "$action_text cho website $DOMAIN"
+  thao_tac_thanh_cong=true
+done
 
 # ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ VÀ IN BÁO CÁO (UX BO CONG)
+# RELOAD LITESPEED VÀ HIỂN THỊ KẾT QUẢ ĐĂNG NHẬP
 # ==============================================================================
 if $thao_tac_thanh_cong; then
-  # _runing "Đang nạp lại cấu hình OpenLiteSpeed..."
   /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-  # _rundone "Cập nhật dịch vụ hệ thống"
 
-  # Nếu có sinh tài khoản mới (BẬT)
+  # NẾU CÓ SINH TÀI KHOẢN MỚI -> IN RA BOX GIAO DIỆN
   if [[ ${#CREDENTIALS_LIST[@]} -gt 0 ]]; then
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT! HÃY LƯU LẠI THÔNG TIN ĐĂNG NHẬP SAU:${C_RESET}"
@@ -363,26 +446,21 @@ if $thao_tac_thanh_cong; then
       usr=$(echo "$item" | cut -d'|' -f2)
       pwd=$(echo "$item" | cut -d'|' -f3)
 
-      left_text "▪ Website  : ${C_GREEN}$dom${C_RESET}" 2
-      left_text "  User     : ${C_YELLOW}$usr${C_RESET}" 2
-      left_text "  Mật khẩu : ${C_YELLOW}$pwd${C_RESET}" 2
-      left_text "-------------------------------------------------" 2
+      left_text "  ▪ Website  : ${C_GREEN}$dom${C_RESET}" 2
+      left_text "    User     : ${C_YELLOW}$usr${C_RESET}" 2
+      left_text "    Mật khẩu : ${C_YELLOW}$pwd${C_RESET}" 2
+      left_text "  ------------------------------------------------------------------------" 2
     done
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -e "${C_CYAN}Mẹo:${C_RESET} Có thể xem lại tài khoản tại menu: Bảo mật => Xem tài khoản 2 lớp\n"
-    echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
-    read -r dummy
-  else
-    # Nếu chỉ TẮT
-    echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}HOÀN TẤT CẤU HÌNH BẢO MẬT${C_RESET}"
-    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}"
-    left_text "Hành động        : ${C_GREEN}$msg_action${C_RESET}"
-    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    echo -e "${C_CYAN}Mẹo:${C_RESET} Sếp có thể xem lại tài khoản bất cứ lúc nào tại menu: Bảo mật => Xem tài khoản 2 lớp\n"
+    
+    if [[ $CLI_MODE -eq 0 ]]; then
+      echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+      read -r dummy
+    fi
   fi
-else
-  echo -e "${C_YELLOW}Đã hủy thao tác cấu hình bảo mật.${C_RESET}"
 fi
 
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+if [[ ${1:-} == "98" && $CLI_MODE -eq 0 ]]; then
+  exec /etc/wptt/wptt-bao-mat-main 1
+fi
