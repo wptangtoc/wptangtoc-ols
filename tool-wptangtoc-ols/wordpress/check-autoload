@@ -1,4 +1,8 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
 function huong_dan {
   Tính năng kiểm tra Autoload trong WordPress là một công cụ chẩn đoán hiệu suất chuyên sâu, giúp đo lường dung lượng dữ liệu tự động tải từ bảng wp_options mỗi khi có người truy cập vào website.
 
@@ -8,113 +12,251 @@ function huong_dan {
 
   Tác hại khi Autoload quá lớn [vượt mốc 900 KB]:
 
-  Làm tăng vọt thời gian chờ phản hồi máy chủ [TTFB].
-
-  Vắt kiệt tài nguyên RAM và làm chậm toàn bộ website.
+  * Làm tăng vọt thời gian chờ phản hồi máy chủ [TTFB].
+  * Vắt kiệt tài nguyên RAM và làm chậm toàn bộ website.
 
   Tính năng này là công cụ thiết yếu giúp bạn phát hiện sớm nút thắt cổ chai Database, từ đó có phương án dọn dẹp để website WordPress luôn giữ được tốc độ phản hồi chớp nhoáng.
 }
 
-. /etc/wptt/.wptt.conf
-[[ $ngon_ngu == '' ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-. /etc/wptt/echo-color
-tinh_nang_ten="Kiểm tra Autoload WP_OPTION"
+export box_inner_width=78
+
+clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
+center_text "${C_YELLOW}$quan_ly_cap_nhat_wordpress ➜ Kiểm tra Autoload WP_OPTIONS${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-. /etc/wptt/tenmien-only-website-by-wordpress
-lua_chon_NAME "$tinh_nang_ten"
+# ==============================================================================
+# HÀM CHỌN WEBSITE ĐỂ KIỂM TRA
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME
+  local selects=()
+  local i=1
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉ có thể hoạt động trên WordPress"
-  sleep 3
-  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
-  exit
-fi
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
 
-path="/usr/local/lsws/$NAME/html"
-
-doctor_installed="yes"
-if [[ ! -d /root/.wp-cli/packages/vendor/wp-cli/doctor-command ]]; then
-  echo "Đang cài đặt công cụ chuẩn đoán WP Doctor (Vui lòng chờ)..."
-  # Dùng HTTPS để chống kẹt SSH Key trên VPS trắng
-  wp package install https://github.com/wp-cli/doctor-command.git --allow-root >/dev/null 2>&1
-
-  # Xác minh lại xem lệnh cài đặt có thực sự thành công hay bị lỗi mạng/hệ thống chặn
-  if [[ ! -d /root/.wp-cli/packages/vendor/wp-cli/doctor-command ]]; then
-    doctor_installed="no"
+      if [[ "$domain" == ?*.?* ]]; then
+        local path_html="/usr/local/lsws/$domain/html"
+        if [[ -f "$path_html/wp-config.php" ]]; then
+          selects+=("$domain")
+        fi
+      fi
+    done
   fi
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
+    exit
+  fi
+
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  local num_domains=${#selects[@]}
+  
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Kiểm tra đồng loạt)")
+  fi
+
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website cần kiểm tra}:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Kiểm tra đồng loạt)" ]]; then
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Kiểm tra Database toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Kiểm tra Database toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      local clean_row=$(printf "  %3d) %-34s [Sẵn sàng]" "$i" "$val")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${C_GREEN}[Sẵn sàng]${C_RESET}" "$i" "$val")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    fi
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-wordpress-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Kiểm tra đồng loạt)" ]]; then
+            fzf_list+=("$val")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        NAME="$val"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
+}
+
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE)
+# ==============================================================================
+if [[ "${1:-}" == "all" ]]; then
+  NAME="TẤT CẢ WEBSITE (Kiểm tra đồng loạt)"
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+else
+  lua_chon_NAME
 fi
 
-echo "-------------------------------------------------------------------------"
-echo "Đang quét kích thước Autoload Options của website: $NAME"
-echo "Lưu ý: Kích thước Autoload lý tưởng nên dưới 900KB."
-echo "-------------------------------------------------------------------------"
+# ==============================================================================
+# LẤY DANH SÁCH DOMAIN ĐỂ KIỂM TRA
+# ==============================================================================
+DOMAIN_LIST=()
+echo ""
 
-. /etc/wptt/vhost/.$NAME.conf
-. /etc/wptt/php/php-cli-domain-config $NAME
-
-WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
-
-if [[ "$doctor_installed" == "yes" ]]; then
-  # -----------------------------------------------------
-  # KỊCH BẢN A: WP Doctor cài đặt thành công
-  # -----------------------------------------------------
-  /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp doctor check autoload-options-size --allow-root --path="$path"
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Kiểm tra đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all" ]]; then
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-config.php" ]]; then
+      DOMAIN_LIST+=("$domain")
+    fi
+  done
+  
+  if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Không có website WordPress nào trên hệ thống!${C_RESET}" && sleep 2 && exit 1
+  fi
 else
-  # -----------------------------------------------------
-  # KỊCH BẢN B (DỰ PHÒNG): Dùng RAW SQL Query (Tiền Tố Động)
-  # -----------------------------------------------------
-  echo "⚠️ Cài đặt WP Doctor thất bại (Do mạng hoặc PHP limits)."
-  echo "👉 Đang kích hoạt phương án dự phòng (Direct DB Query)..."
+  path_html="/usr/local/lsws/$NAME/html"
+  [[ ! -d "$path_html" ]] && echo -e "\n${C_RED}❌ Không tìm thấy thư mục chứa mã nguồn của $NAME${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-wordpress-main 1
+  DOMAIN_LIST=("$NAME")
+fi
+
+# ==============================================================================
+# THỰC THI TRUY VẤN RAW SQL (KHÔNG DÙNG WP DOCTOR)
+# ==============================================================================
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  path_html="/usr/local/lsws/$DOMAIN/html"
+  
+  . /etc/wptt/vhost/.$DOMAIN.conf 2>/dev/null
+  . /etc/wptt/php/php-cli-domain-config $DOMAIN 2>/dev/null
+  
+  WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
   # Lấy tiền tố bảng động từ wp-config.php để chống lỗi khi user đổi tiền tố bảo mật
-  db_prefix=$($WP_EXEC db prefix --allow-root --path="$path" 2>/dev/null)
+  db_prefix=$($WP_EXEC db prefix --allow-root --path="$path_html" 2>/dev/null)
 
   if [[ -z "$db_prefix" ]]; then
-    echo "❌ Lỗi: Không thể lấy được tiền tố Database. Vui lòng kiểm tra lại file wp-config.php"
-  else
-    # Ghép nối tiền tố để ra tên bảng chuẩn xác (vd: wp_options, wptt_options)
-    table_options="${db_prefix}options"
-
-    # Truy vấn tính tổng Bytes bằng tên bảng động
-    autoload_bytes=$($WP_EXEC db query "SELECT SUM(LENGTH(option_value)) FROM ${table_options} WHERE autoload = 'yes' OR autoload = 'on';" --skip-column-names --allow-root --path="$path" 2>/dev/null)
-
-    # Xử lý trường hợp DB rỗng hoặc trả về NULL (Tránh lỗi phép tính bc)
-    if [[ -z "$autoload_bytes" || "$autoload_bytes" == "NULL" ]]; then
-      autoload_bytes=0
-    fi
-
-    # Kiểm tra kết quả trả về có phải là số hợp lệ không
-    if [[ "$autoload_bytes" =~ ^[0-9]+$ ]]; then
-      # Ép kiểu tính toán sang Kilobytes (KB) với 2 số thập phân
-      autoload_kb=$(echo "scale=2; $autoload_bytes / 1024" | bc)
-
-      echo ""
-      echo "Kích thước Autoload hiện tại: ${autoload_kb} KB"
-
-      # Mốc 900KB là tiêu chuẩn cảnh báo gốc của wp-cli/doctor-command
-      if (($(echo "$autoload_kb > 900" | bc -l))); then
-        echo "❌ Cảnh báo [autoload-options-size]: Kích thước Autoload vượt ngưỡng an toàn (900 KB)."
-        echo "💡 Lời khuyên: Hãy vào Database dọn dẹp các table rác của Plugin cũ để tăng tốc TTFB."
-      else
-        echo "✅ Thành công [autoload-options-size]: Kích thước Autoload nằm trong mức lý tưởng."
-      fi
-    else
-      echo "❌ Lỗi: Không thể truy vấn bảng ${table_options}. Vui lòng kiểm tra lại Database."
-    fi
+    echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}❌ LỖI TRUY VẤN CƠ SỞ DỮ LIỆU${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Website : ${C_BOLD_WHITE}$DOMAIN${C_RESET}" 2
+    left_text "  Chi tiết: Không thể lấy được tiền tố Database từ wp-config.php." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    continue
   fi
+
+  table_options="${db_prefix}options"
+
+  # Truy vấn tính tổng Bytes bằng tên bảng động siêu tốc
+  autoload_bytes=$($WP_EXEC db query "SELECT SUM(LENGTH(option_value)) FROM ${table_options} WHERE autoload = 'yes' OR autoload = 'on';" --skip-column-names --allow-root --path="$path_html" 2>/dev/null)
+
+  # Xử lý trường hợp DB rỗng hoặc trả về NULL (Tránh lỗi phép tính bc)
+  if [[ -z "$autoload_bytes" || "$autoload_bytes" == "NULL" ]]; then
+    autoload_bytes=0
+  fi
+
+  # Kiểm tra kết quả trả về có phải là số hợp lệ không
+  if [[ "$autoload_bytes" =~ ^[0-9]+$ ]]; then
+    # Ép kiểu tính toán sang Kilobytes (KB) với 2 số thập phân
+    autoload_kb=$(echo "scale=2; $autoload_bytes / 1024" | bc)
+
+    # Đánh giá cảnh báo (Mốc 900KB là tiêu chuẩn an toàn)
+    if (($(echo "$autoload_kb > 900" | bc -l))); then
+      echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_YELLOW}CẢNH BÁO: KÍCH THƯỚC AUTOLOAD VƯỢT NGƯỠNG AN TOÀN${C_RESET}"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Website : ${C_BOLD_WHITE}$DOMAIN${C_RESET}" 2
+      left_text "  Autoload: ${C_RED}${autoload_kb} KB${C_RESET} (Ngưỡng an toàn: < 900 KB)" 2
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "   Lời khuyên: Hãy vào Database dọn dẹp các table rác của Plugin cũ" 2
+      left_text "  để giải phóng RAM và tăng tốc độ phản hồi máy chủ (TTFB)." 2
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    else
+      echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_GREEN}TỐT: KÍCH THƯỚC AUTOLOAD TRONG MỨC LÝ TƯỞNG${C_RESET}"
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Website : ${C_BOLD_WHITE}$DOMAIN${C_RESET}" 2
+      left_text "  Autoload: ${C_GREEN}${autoload_kb} KB${C_RESET} (Ngưỡng an toàn: < 900 KB)" 2
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    fi
+  else
+    echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}LỖI ĐỌC DỮ LIỆU TỪ BẢNG OPTIONS${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Website : ${C_BOLD_WHITE}$DOMAIN${C_RESET}" 2
+    left_text "  Chi tiết: Bảng ${table_options} không tồn tại hoặc bị lỗi." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  fi
+done
+
+echo -en "${C_CYAN}Bấm phím Enter để quay trở lại menu...${C_RESET}"
+read -r empty_input
+
+if [[ ${1:-} == "98" ]]; then
+  exec /etc/wptt/wptt-wordpress-main 1
 fi
-
-echo "-------------------------------------------------------------------------"
-read -p "Bấm phím bất kỳ để quay trở lại menu quản lý WordPress: " enter
-
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1

@@ -19,6 +19,9 @@ function huong_dan() {
   Ghi chú: Khi kích hoạt tường lửa 8G sẽ làm giảm một phần nhỏ hiệu suất tốc độ của website do máy chủ phải quét qua các quy tắc này.
 }
 
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
@@ -32,6 +35,9 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}$bao_mat ➜ Bật / Tắt Tường Lửa 8G${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
+# ==============================================================================
+# HÀM CHỌN WEBSITE CÓ HIỂN THỊ TRẠNG THÁI 8G
+# ==============================================================================
 function lua_chon_NAME() {
   unset NAME
   local selects=()
@@ -75,8 +81,10 @@ function lua_chon_NAME() {
   # 2. Sắp xếp mảng
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # 3. Thêm tùy chọn "Tất cả website" nếu có từ 2 web trở lên (CHUẨN LOGIC)
-  if [[ ${#selects[@]} -ge 2 ]]; then
+  local num_domains=${#selects[@]}
+  
+  # 3. THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
     selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
   fi
 
@@ -120,10 +128,12 @@ function lua_chon_NAME() {
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-  # 5. Dòng nhắc lệnh (Prompt)
+  # 5. Dòng nhắc lệnh (Prompt) siêu sạch
   local fzf_installed=false
   command -v fzf &>/dev/null && fzf_installed=true
-  local prompt_msg="Nhập lựa chọn của bạn (1-${#selects[@]}) [00=Chọn Nhanh | 0=Thoát]: "
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
 
   while true; do
     echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
@@ -136,9 +146,7 @@ function lua_chon_NAME() {
       if $fzf_installed; then
         local fzf_list=()
         for val in "${selects[@]}"; do
-          if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
-            fzf_list+=("$val")
-          else
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
             IFS='|' read -r d s c <<<"$val"
             fzf_list+=("$d $s")
           fi
@@ -152,7 +160,7 @@ function lua_chon_NAME() {
       if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
         local val="${selects[$((REPLY - 1))]}"
         if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
-          NAME="$val"
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
         else
           NAME="${val%|*|*}"
         fi
@@ -166,9 +174,28 @@ function lua_chon_NAME() {
   done
 }
 
-# Nếu gọi script kèm tên domain từ command line
-if [[ -n "$1" && "$1" != "98" ]]; then
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
   NAME="$1"
+  # Hỗ trợ truyền đối số cho 1 domain cụ thể: wptt-8g domain.com on
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
 else
   lua_chon_NAME
 fi
@@ -249,54 +276,67 @@ function process_firewall_8g() {
 }
 
 # ==============================================================================
-# XỬ LÝ LOGIC UI THỰC THI (THAY THẾ HOÀN TOÀN WPTT_XAC_NHAN)
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
 # ==============================================================================
+DOMAIN_LIST=()
+mass_action=""
+
 echo ""
-if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
   
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: TƯỜNG LỬA 8G${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "  Bạn đang thao tác cấu hình Tường lửa 8G cho toàn bộ hệ thống." 2
-  left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  
-  str_opt1="  1) BẬT Tường lửa 8G (Bảo vệ đồng loạt)"
-  pad_opt1=$((box_inner_width - ${#str_opt1}))
-  [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-  echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Tường lửa 8G${C_RESET} (Bảo vệ đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
-  
-  str_opt2="  2) TẮT Tường lửa 8G (Gỡ bỏ đồng loạt)"
-  pad_opt2=$((box_inner_width - ${#str_opt2}))
-  [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
-  echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT Tường lửa 8G${C_RESET} (Gỡ bỏ đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
-  
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-  
-  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
-  read -r mass_choice
-  
-  if [[ "$mass_choice" == "1" ]]; then
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
     mass_action="bat"
-  elif [[ "$mass_choice" == "2" ]]; then
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
     mass_action="tat"
   else
-    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
-    exec /etc/wptt/wptt-bao-mat-main 1
+    # NẾU CHỌN TỪ MENU UI (SỐ TÙY CHỌN CUỐI CÙNG) -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: TƯỜNG LỬA 8G${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình Tường lửa 8G cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) BẬT Tường lửa 8G (Bảo vệ đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Tường lửa 8G${C_RESET} (Bảo vệ đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) TẮT Tường lửa 8G (Gỡ bỏ đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT Tường lửa 8G${C_RESET} (Gỡ bỏ đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+    
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      mass_action="bat"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      mass_action="tat"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
   fi
 
+  # Quét toàn bộ danh sách domain để thực thi
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
-    if [[ "$domain" == ?*.?* ]]; then
+    if [[ "$domain" == ?*.?* && -d "/usr/local/lsws/$domain/html" ]]; then
       process_firewall_8g "$domain" "$mass_action"
     fi
   done
 
 else
-  # Đảo trạng thái (Toggle) cho 1 website cụ thể bằng Box UI (Bỏ wptt_xac_nhan)
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
     echo -e "\n${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
@@ -304,55 +344,61 @@ else
     exec /etc/wptt/wptt-bao-mat-main 1
   }
 
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH TƯỜNG LỬA 8G${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-
-  if grep -q '#begin-tuong-lua-bao-mat-8g' "/usr/local/lsws/$NAME/html/.htaccess" 2>/dev/null; then
-    left_text "  Website ${NAME} hiện ĐANG BẬT 8G Firewall." 2
-    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    
-    str_opt1="  1) TẮT Tường lửa 8G (Gỡ bỏ bảo vệ)"
-    pad_opt1=$((box_inner_width - ${#str_opt1}))
-    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT Tường lửa 8G${C_RESET} (Gỡ bỏ bảo vệ)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
-    
-    str_opt2="  2) Không làm gì cả (Giữ nguyên)"
-    pad_opt2=$((box_inner_width - ${#str_opt2}))
-    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
-    
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
-    read -r single_choice
-    
-    if [[ "$single_choice" == "1" ]]; then
-      process_firewall_8g "$NAME" "tat"
-    else
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
-    fi
+  # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+  if [[ $CLI_MODE -eq 1 ]]; then
+    process_firewall_8g "$NAME" "$CLI_ACTION"
   else
-    left_text "  Website ${NAME} hiện CHƯA ĐƯỢC BẢO VỆ bởi 8G Firewall." 2
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH TƯỜNG LỬA 8G${C_RESET}"
     echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    
-    str_opt1="  1) BẬT Tường lửa 8G (Kích hoạt bảo vệ)"
-    pad_opt1=$((box_inner_width - ${#str_opt1}))
-    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Tường lửa 8G${C_RESET} (Kích hoạt bảo vệ)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
-    
-    str_opt2="  2) Không làm gì cả (Hủy thao tác)"
-    pad_opt2=$((box_inner_width - ${#str_opt2}))
-    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
-    
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
-    read -r single_choice
-    
-    if [[ "$single_choice" == "1" ]]; then
-      process_firewall_8g "$NAME" "bat"
+
+    if grep -q '#begin-tuong-lua-bao-mat-8g' "/usr/local/lsws/$NAME/html/.htaccess" 2>/dev/null; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT 8G Firewall." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) TẮT Tường lửa 8G (Gỡ bỏ bảo vệ)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT Tường lửa 8G${C_RESET} (Gỡ bỏ bảo vệ)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Giữ nguyên)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        process_firewall_8g "$NAME" "tat"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
     else
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      left_text "  Website ${NAME} hiện CHƯA ĐƯỢC BẢO VỆ bởi 8G Firewall." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) BẬT Tường lửa 8G (Kích hoạt bảo vệ)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Tường lửa 8G${C_RESET} (Kích hoạt bảo vệ)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        process_firewall_8g "$NAME" "bat"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
     fi
   fi
 fi

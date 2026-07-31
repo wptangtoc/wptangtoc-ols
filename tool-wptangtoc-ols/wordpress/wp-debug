@@ -10,7 +10,7 @@ function huong_dan() {
   * Hiển thị/Ghi lại lỗi PHP: Giúp Lập trình viên và người quản trị website thấy được tất cả các lỗi PHP [errors], cảnh báo [warnings], và thông báo [notices] mà website đang gặp phải. Điều này cực kỳ hữu ích để tìm và sửa lỗi trong theme, plugin, hoặc code tùy chỉnh.
   * Phát hiện code lỗi thời: Giúp nhận diện các hàm hoặc cách sử dụng đã lỗi thời trong WordPress.
   * Hỗ trợ gỡ lỗi Màn hình trắng: Khi website bị màn hình trắng chết chóc, bật WP_DEBUG có thể hiển thị lỗi PHP ẩn gây ra vấn đề.
-  Kết quả: Các lỗi và cảnh báo PHP sẽ được hiển thị hoặc ghi lại, giúp bạn chẩn đoán và khắc phục sự cố website.: file log được ghi trong: mã nguồn/wp-content/wp-debug.log
+  Kết quả: Các lỗi và cảnh báo PHP sẽ được hiển thị hoặc ghi lại, giúp bạn chẩn đoán và khắc phục sự cố website.: file log được ghi trong: mã nguồn/wp-content/debug.log
 
   2. Tính Năng Tắt WP_DEBUG WordPress [Disable WP_DEBUG]
   Tắt WP_DEBUG là việc vô hiệu hóa chế độ gỡ lỗi của WordPress, đưa website trở lại trạng thái hoạt động bình thường, không hiển thị thông tin gỡ lỗi.
@@ -30,8 +30,14 @@ function huong_dan() {
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions
+. /etc/wptt/core-functions 2>/dev/null
+. /etc/wptt/cache/lib-opcache-clear 2>/dev/null
 
+export box_inner_width=78
+
+# ==============================================================================
+# BẮT SỰ KIỆN CHẠY NGẦM HOẶC GIAO DIỆN
+# ==============================================================================
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}$quan_ly_wordpress ➜ Cấu hình WP_DEBUG (Gỡ lỗi)${C_RESET}"
@@ -44,7 +50,6 @@ function lua_chon_NAME() {
   unset NAME
   local selects=()
   local i=1
-  local box_inner_width=${box_inner_width:-71}
 
   if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
     for filepath in /etc/wptt/vhost/.*.conf; do
@@ -58,6 +63,8 @@ function lua_chon_NAME() {
         local wp_config="/usr/local/lsws/$domain/html/wp-config.php"
         if [[ -f "$wp_config" ]]; then
           local status_text=""
+          local status_color=""
+
           # Kiểm tra xem WP_DEBUG đang là true hay false
           if grep -iqE "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]WP_DEBUG['\"][[:space:]]*,[[:space:]]*true" "$wp_config" 2>/dev/null; then
             status_text="[Đang Bật - Debugging]"
@@ -66,6 +73,7 @@ function lua_chon_NAME() {
             status_text="[Đang Tắt]"
             status_color=$C_GREEN
           fi
+          
           selects+=("$domain|$status_text|$status_color")
         fi
       fi
@@ -79,36 +87,63 @@ function lua_chon_NAME() {
 
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # RENDER BOX CHỌN DOMAIN
+  local num_domains=${#selects[@]}
+  
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website} WP_DEBUG:"
   local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
   local len=${#clean_title}
   local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
 
   echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
   local line_len=$((len + 3))
   local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
   local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
   echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
   for val in "${selects[@]}"; do
-    IFS='|' read -r d s c <<<"$val"
-    local clean_row=$(printf "  %3d) %-32s %s" "$i" "$d" "$s")
-    local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-32s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
-    local pad=$((box_inner_width - ${#clean_row}))
-    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      # Giao diện cắt lớp cho tùy chọn cuối cùng (Đồng loạt)
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt WP_DEBUG cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt WP_DEBUG cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      # Dòng website bình thường
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    fi
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
+  # Dòng nhắc lệnh (Prompt) siêu sạch
   local fzf_installed=false
   command -v fzf &>/dev/null && fzf_installed=true
-  local prompt_msg="${lua_chon_website_ban_muon:-Nhập lựa chọn} (1-${#selects[@]}) [00=${chon_nhanh:-Chọn nhanh}] [0=${exit_thoat:-Thoát}]: "
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
 
   while true; do
     echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
-    read -r REPLY
+    if ! read -r REPLY; then exit 1; fi
     REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
     case "$REPLY" in
@@ -117,8 +152,10 @@ function lua_chon_NAME() {
       if $fzf_installed; then
         local fzf_list=()
         for val in "${selects[@]}"; do
-          IFS='|' read -r d s c <<<"$val"
-          fzf_list+=("$d $s")
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
         done
         local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
         NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
@@ -128,7 +165,11 @@ function lua_chon_NAME() {
     *)
       if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
         local val="${selects[$((REPLY - 1))]}"
-        NAME="${val%|*|*}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
         return 0
       elif [[ "$REPLY" == ?*.?* ]]; then
         NAME="$REPLY"
@@ -139,60 +180,222 @@ function lua_chon_NAME() {
   done
 }
 
-lua_chon_NAME
-
 # ==============================================================================
-# XỬ LÝ LOGIC BẬT / TẮT
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
 # ==============================================================================
-path_html="/usr/local/lsws/$NAME/html"
-wp_config="$path_html/wp-config.php"
+CLI_MODE=0
+CLI_ACTION=""
 
-[[ ! -f "$wp_config" ]] && echo -e "\n${C_RED}❌ Không tìm thấy wp-config.php cho $NAME${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-wordpress-main 1
-
-# Kiểm tra trạng thái hiện tại để quyết định hành động tiếp theo
-if grep -iqE "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]WP_DEBUG['\"][[:space:]]*,[[:space:]]*true" "$wp_config" 2>/dev/null; then
-  current_mode="on"
-  action_text="TẮT"
-  target_val="false"
-  hanh_dong_thong_bao="Khi bật nó để phục vụ mục đích gỡ lỗi"
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+  # Hỗ trợ truyền đối số cho 1 domain cụ thể: wptt-wp-debug domain.com on
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
 else
-  current_mode="off"
-  action_text="BẬT"
-  target_val="true"
-  hanh_dong_thong_bao="Khi tắt nó để nâng cao bảo mật và tiết kiệm tài nguyên máy chủ"
+  lua_chon_NAME
 fi
 
-if ! wptt_xac_nhan "Xác nhận ${action_text} WP_DEBUG cho website ${NAME}?" "$hanh_dong_thong_bao" "" "" "Không đồng ý (Hủy thao tác)"; then
-  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1 && exec exec /etc/wptt/wptt-wordpress-main 1
-fi
+# ==============================================================================
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
+# ==============================================================================
+DOMAIN_LIST=()
+wp_action=""
+action_text=""
+target_val=""
 
 echo ""
-_runing "$action_text WP_DEBUG cho $NAME"
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+  
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+    wp_action="bat"
+    action_text="BẬT"
+    target_val="true"
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+    wp_action="tat"
+    action_text="TẮT"
+    target_val="false"
+  else
+    # NẾU CHỌN TỪ MENU UI (SỐ TÙY CHỌN CUỐI CÙNG) -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH WP_DEBUG${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình WP_DEBUG cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) BẬT WP_DEBUG (Gỡ lỗi đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT WP_DEBUG${C_RESET} (Gỡ lỗi đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) TẮT WP_DEBUG (Tắt gỡ lỗi đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT WP_DEBUG${C_RESET} (Tắt gỡ lỗi đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+    
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      wp_action="bat"
+      action_text="BẬT"
+      target_val="true"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      wp_action="tat"
+      action_text="TẮT"
+      target_val="false"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-wordpress-main 1
+    fi
+  fi
 
-. /etc/wptt/vhost/.$NAME.conf
-. /etc/wptt/php/php-cli-domain-config $NAME
+  # Quét toàn bộ danh sách domain để thực thi
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-config.php" ]]; then
+      DOMAIN_LIST+=("$domain")
+    fi
+  done
 
-# Thực thi cấu hình bằng WP-CLI (An toàn nhất)
-sudo -u "$User_name_vhost" /usr/local/bin/wp config set WP_DEBUG $target_val --raw --path="$path_html" >/dev/null 2>&1
-sudo -u "$User_name_vhost" /usr/local/bin/wp config set WP_DEBUG_LOG $target_val --raw --path="$path_html" >/dev/null 2>&1
-sudo -u "$User_name_vhost" /usr/local/bin/wp config set WP_DEBUG_DISPLAY $target_val --raw --path="$path_html" >/dev/null 2>&1
+  if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Không có website hợp lệ nào để thao tác!${C_RESET}" && sleep 2 && exit 1
+  fi
 
-# Nếu tắt thì dọn dẹp log cũ
-if [[ "$target_val" == "false" ]]; then
-  [[ -f "$path_html/wp-content/debug.log" ]] && rm -f "$path_html/wp-content/debug.log"
+else
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
+  path_html="/usr/local/lsws/$NAME/html"
+  wp_config="$path_html/wp-config.php"
+
+  [[ ! -f "$wp_config" ]] && echo -e "\n${C_RED}❌ Không tìm thấy wp-config.php cho $NAME${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-wordpress-main 1
+
+  DOMAIN_LIST=("$NAME")
+
+  # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+  if [[ $CLI_MODE -eq 1 ]]; then
+    wp_action="$CLI_ACTION"
+    if [[ "$wp_action" == "bat" ]]; then
+      action_text="BẬT"
+      target_val="true"
+    else
+      action_text="TẮT"
+      target_val="false"
+    fi
+  else
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH WP_DEBUG${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if grep -iqE "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]WP_DEBUG['\"][[:space:]]*,[[:space:]]*true" "$wp_config" 2>/dev/null; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT WP_DEBUG (Chế độ gỡ lỗi)." 2
+      left_text "  Cảnh báo: Việc bật Debug có thể làm lộ thông tin hệ thống." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) TẮT WP_DEBUG (Nâng cao bảo mật, tắt gỡ lỗi)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT WP_DEBUG${C_RESET} (Nâng cao bảo mật, tắt gỡ lỗi)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Giữ nguyên)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="tat"
+        action_text="TẮT"
+        target_val="false"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-wordpress-main 1
+      fi
+    else
+      left_text "  Website ${NAME} hiện ĐANG TẮT WP_DEBUG." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) BẬT WP_DEBUG (Kích hoạt gỡ lỗi, kiểm tra lỗi code)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT WP_DEBUG${C_RESET} (Kích hoạt gỡ lỗi, kiểm tra lỗi code)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="bat"
+        action_text="BẬT"
+        target_val="true"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-wordpress-main 1
+      fi
+    fi
+  fi
 fi
 
-# Reset OPcache để áp dụng ngay lập tức
-. /etc/wptt/cache/lib-opcache-clear
-wptt_xoa_opcache "$NAME"
+# ==============================================================================
+# THỰC THI WP-CLI VÀ XÓA OPCACHE
+# ==============================================================================
+echo ""
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  path_html="/usr/local/lsws/$DOMAIN/html"
+  wp_config="$path_html/wp-config.php"
+  
+  [[ ! -f "$wp_config" ]] && continue
+  _runing "$action_text WP_DEBUG cho $DOMAIN"
 
+  . /etc/wptt/vhost/.$DOMAIN.conf
+  . /etc/wptt/php/php-cli-domain-config $DOMAIN
 
-echo "$action_text WP_DEBUG website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-_rundone "$action_text WP_DEBUG cho $NAME"
+  # Thực thi cấu hình bằng WP-CLI (An toàn nhất)
+  sudo -u "$User_name_vhost" /usr/local/bin/wp config set WP_DEBUG $target_val --raw --path="$path_html" >/dev/null 2>&1
+  sudo -u "$User_name_vhost" /usr/local/bin/wp config set WP_DEBUG_LOG $target_val --raw --path="$path_html" >/dev/null 2>&1
+  sudo -u "$User_name_vhost" /usr/local/bin/wp config set WP_DEBUG_DISPLAY $target_val --raw --path="$path_html" >/dev/null 2>&1
 
-if [[ "$target_val" == "true" ]]; then
-  echo -e "${C_CYAN} File log sẽ được ghi tại: ${C_BOLD_WHITE}$path_html/wp-content/debug.log${C_RESET}"
-fi
+  # Nếu tắt thì dọn dẹp log cũ
+  if [[ "$target_val" == "false" ]]; then
+    [[ -f "$path_html/wp-content/debug.log" ]] && rm -f "$path_html/wp-content/debug.log"
+  fi
+
+  # Reset OPcache để áp dụng ngay lập tức
+  wptt_xoa_opcache "$DOMAIN"
+
+  echo "$action_text WP_DEBUG website $DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "$action_text WP_DEBUG cho $DOMAIN"
+  
+  if [[ "$target_val" == "true" ]]; then
+    echo -e "   ${C_CYAN}➜ File log được ghi tại:${C_RESET} ${C_BOLD_WHITE}$path_html/wp-content/debug.log${C_RESET}"
+  fi
+done
 
 if [[ ${1:-} == "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
