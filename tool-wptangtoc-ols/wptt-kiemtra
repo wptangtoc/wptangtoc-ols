@@ -4,7 +4,7 @@
 # @since: 2026
 
 function huong_dan() {
-  Tính năng Thông tin Webserver trong WPTangToc OLS là một công cụ tiện ích cung cấp cho người quản trị cái nhìn tổng quan và nhanh chóng về các thông số kỹ thuật cũng như trạng thái hiện tại của máy chủ.
+	Tính năng Thông tin Webserver trong WPTangToc OLS là một công cụ tiện ích cung cấp cho người quản trị cái nhìn tổng quan và nhanh chóng về các thông số kỹ thuật cũng như trạng thái hiện tại của máy chủ.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -14,170 +14,239 @@ _runing "Đang quét sâu hệ thống (có thể mất 10-20 giây)..."
 echo "Kiểm tra hệ thống: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 print_kv() {
-  local key="$1"
-  local val="$2"
-  local clean_key=$(echo -en "$key" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
-  local key_len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_key") 2>/dev/null | wc -m | tr -d ' ' )
-  [[ -z "$key_len" || "$key_len" == "0" ]] && key_len=${#clean_key}
-  
-  local pad_key=$((18 - key_len))
-  [[ $pad_key -lt 0 ]] && pad_key=0
-  
-  # Đẩy thẳng vào hàm left_text của echo-color với thụt lề 1 khoảng trắng
-  left_text " ${key}$(printf '%*s' "$pad_key" "") : ${val}" 1
-}
+	local key="$1"
+	local val="$2"
+	local clean_key=$(echo -en "$key" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+	local key_len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_key") 2>/dev/null | wc -m | tr -d ' ' )
+	[[ -z "$key_len" || "$key_len" == "0" ]] && key_len=${#clean_key}
+
+		local pad_key=$((18 - key_len))
+		[[ $pad_key -lt 0 ]] && pad_key=0
+
+		# Đẩy thẳng vào hàm left_text của echo-color với thụt lề 1 khoảng trắng
+		left_text " ${key}$(printf '%*s' "$pad_key" "") : ${val}" 1
+	}
 
 # ==============================================================================
 # HÀM KIỂM TRA MÁY CHỦ
 # ==============================================================================
 kiemtra() {
-  virtua=$(virt-what 2>/dev/null)
-  if [[ -n ${virtua} ]]; then
-    virt=$(echo "$virtua" | tr '\n' ' ')
-  else
-    virt="Dedicated (Máy chủ vật lý)"
-  fi
 
-  # Hàm đo I/O linh hoạt theo Block Size
-  do_io() {
-    local bs=$1
-    local count=$2
-    (
-      LANG=C dd if=/dev/zero of=test_$$ bs=$bs count=$count conv=fdatasync 2>&1
-      rm -f test_$$
-    ) | awk -F, '/copied/ {print $NF}' | sed 's/^[ \t]*//;s/[ \t]*$//'
-  }
+	#kiểm tra ảo hoá
+	# Khởi tạo biến rỗng
+	virt=""
 
-  io_4k=$(do_io 4k 25600)    # Test 100MB cho Database
-  io_128k=$(do_io 128k 2048) # Test 256MB cho File Web
-  io_1m=$(do_io 1M 1024)     # Test 512MB cho Backup
+	# 1. PHƯƠNG ÁN 1: Dùng virt-what (Nếu hệ thống có cài)
+	if command -v virt-what &>/dev/null; then
+		virt_raw=$(virt-what 2>/dev/null)
+		[[ -n "$virt_raw" ]] && virt=$(echo "$virt_raw" | tr '\n' ' ' | xargs)
+	fi
 
-  # Thông tin Network & IP
-  ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com || echo "Không xác định được IP")
-  org="$(wget -q -T5 -O- ipinfo.io/org)"
-  city="$(wget -q -T5 -O- ipinfo.io/city)"
-  country="$(wget -q -T5 -O- ipinfo.io/country)"
+	# 2. PHƯƠNG ÁN DỰ PHÒNG 1: Dùng systemd-detect-virt (Có sẵn mặc định trên Ubuntu/CentOS/AlmaLinux)
+	if [[ -z "$virt" ]] && command -v systemd-detect-virt &>/dev/null; then
+		virt_raw=$(systemd-detect-virt 2>/dev/null)
+		[[ -n "$virt_raw" && "$virt_raw" != "none" ]] && virt="$virt_raw"
+	fi
 
-  # Thông tin Stack WPTangToc
-  phpcheck=$(php -v 2>/dev/null | head -n 1 | awk '{print $2}' | cut -d'-' -f1)
-  mariacheck=$(mariadbd --version 2>/dev/null | awk '{print $3}' | cut -d'-' -f1)
-  olscheck=$(/usr/local/lsws/bin/lshttpd -v 2>/dev/null | grep -o 'LiteSpeed/[0-9.]*' | cut -d'/' -f2)
+	# 3. PHƯƠNG ÁN DỰ PHÒNG 2: Đọc trực tiếp phần cứng từ Kernel Sysfs (Tuyệt đối không cần lệnh/gói phụ trợ)
+	if [[ -z "$virt" && -f /sys/class/dmi/id/product_name ]]; then
+		sys_prod=$(cat /sys/class/dmi/id/product_name 2>/dev/null | tr '[:upper:]' '[:lower:]')
+		case "$sys_prod" in
+			*kvm*|*qemu*|*proxmox*) virt="KVM" ;;
+			*vmware*) virt="VMware" ;;
+			*virtualbox*) virt="VirtualBox" ;;
+			*xen*) virt="Xen" ;;
+			*droplet*) virt="KVM (DigitalOcean)" ;;
+			*openstack*) virt="OpenStack" ;;
+			*alibaba*|*amazon*|*google*) virt="Cloud VPS" ;;
+		esac
+	fi
 
-  sys_vendor=$(dmidecode -s system-manufacturer 2>/dev/null | head -n 1 | sed 's/^[ \t]*//')
-  sys_product=$(dmidecode -s system-product-name 2>/dev/null | head -n 1 | sed 's/^[ \t]*//')
-  [[ -z "$sys_vendor" ]] && sys_vendor="N/A"
+	# 4. CHỐT CHẶN CUỐI CÙNG: Nếu tất cả đều trượt -> Đích thị là máy vật lý
+	if [[ -z "$virt" || "$virt" == *"Bochs"* ]]; then
+		virt="Dedicated (Máy chủ vật lý)"
+	else
+		# Format lại viết hoa cho đẹp mắt
+		virt=$(echo "$virt" | sed 's/kvm/KVM/i; s/vmware/VMware/i; s/xen/Xen/i')
+	fi
 
-  nic_card=$(lspci 2>/dev/null | grep -i 'ethernet' | awk -F': ' '{print $2}' | head -1)
-  [[ -z "$nic_card" ]] && nic_card="Virtual NIC (KVM/VMware)"
+	#kiểm tra ảo hoá
 
-  # CPU Info & Features
-  hedieuhanh=$(hostnamectl | grep 'Operating System' | cut -f2 -d':' | sed 's/^ //g')
-  cname=$(lscpu | grep 'Model name:' | awk -F: '{print $2}' | sed 's/^[ \t]*//' | head -1)
-  cores=$(awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo)
-  [[ -z $cores ]] && cores=$(awk '/^processor/ {core++} END {print core}' /proc/cpuinfo)
+	# Hàm đo I/O linh hoạt theo Block Size
+	do_io() {
+		local bs=$1
+		local count=$2
+		(
+			LANG=C dd if=/dev/zero of=test_$$ bs=$bs count=$count conv=fdatasync 2>&1
+			rm -f test_$$
+			) | awk -F, '/copied/ {print $NF}' | sed 's/^[ \t]*//;s/[ \t]*$//'
+		}
 
-  freq=$(awk -F: '/cpu MHz/ {freq=$2} END {print freq}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' | head -n 1)
-  if [[ -z $freq || $freq == "0.000" ]]; then
-    freq=$(awk '{print $1 / 1000}' /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null)
-    [[ -z $freq ]] && freq="N/A"
-  fi
+	io_4k=$(do_io 4k 25600)    # Test 100MB cho Database
+	io_128k=$(do_io 128k 2048) # Test 256MB cho File Web
+	io_1m=$(do_io 1M 1024)     # Test 512MB cho Backup
 
-  cpu_cache=$(lscpu 2>/dev/null | grep -i "L3 cache" | awk -F: '{print $2}' | xargs)
-  [[ -z "$cpu_cache" ]] && cpu_cache=$(awk -F: '/cache size/ {print $2}' /proc/cpuinfo | head -1 | xargs)
-  [[ -z "$cpu_cache" ]] && cpu_cache="N/A"
+	# Thông tin Network & IP
+	ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com || echo "Không xác định được IP")
+	org="$(wget -q -T5 -O- ipinfo.io/org)"
+	city="$(wget -q -T5 -O- ipinfo.io/city)"
+	country="$(wget -q -T5 -O- ipinfo.io/country)"
 
-  # Nâng cấp hiển thị màu sắc cho tính năng AVX
-  cpu_aes=$(grep -m1 -q aes /proc/cpuinfo && echo "${C_GREEN}Có${C_RESET}" || echo "${C_RED}Không (CPU Đời cũ)${C_RESET}")
-  cpu_avx=$(grep -m1 -q avx2 /proc/cpuinfo && echo "${C_GREEN}Có (AVX2)${C_RESET}" || (grep -m1 -q avx /proc/cpuinfo && echo "${C_GREEN}Có (AVX)${C_RESET}" || echo "${C_RED}Không${C_RESET}"))
+	# Thông tin Stack WPTangToc
+	phpcheck=$(php -v 2>/dev/null | head -n 1 | awk '{print $2}' | cut -d'-' -f1)
+	mariacheck=$(mariadbd --version 2>/dev/null | awk '{print $3}' | cut -d'-' -f1)
+	olscheck=$(/usr/local/lsws/bin/lshttpd -v 2>/dev/null | grep -o 'LiteSpeed/[0-9.]*' | cut -d'/' -f2)
 
-  # RAM Info
-  check_ddr_ram=$(dmidecode -t memory 2>/dev/null | awk '/Type: DDR/ {print $2}' | head -n 1)
-  check_ram_bus=$(dmidecode -t memory 2>/dev/null | awk '/Speed:/ && $2 != "Unknown" {print $2" "$3}' | head -n 1)
-  if [[ -n "$check_ddr_ram" && -n "$check_ram_bus" ]]; then
-    ram_type_bus="$check_ddr_ram / $check_ram_bus"
-  elif [[ -n "$check_ddr_ram" ]]; then
-    ram_type_bus="$check_ddr_ram"
-  else
-    ram_type_bus="N/A (Virtual RAM)"
-  fi
+	sys_vendor=$(dmidecode -s system-manufacturer 2>/dev/null | head -n 1 | sed 's/^[ \t]*//')
+	sys_product=$(dmidecode -s system-product-name 2>/dev/null | head -n 1 | sed 's/^[ \t]*//')
+	[[ -z "$sys_vendor" ]] && sys_vendor="N/A"
 
-  tram=$(free -m | awk '/Mem/ {print $2}')
-  uram=$(free -m | awk '/Mem/ {print $3}')
-  ram_percent=$(echo "scale=0; $uram * 100 / $tram" | bc 2>/dev/null)
 
-  ram_color=$C_GREEN
-  [[ $ram_percent -gt 75 ]] && ram_color=$C_YELLOW
-  [[ $ram_percent -gt 90 ]] && ram_color=$C_RED
+	#check card mạng
+	# Khởi tạo biến rỗng
+	nic_card=""
 
-  swap=$(free -m | awk '/Swap/ {print $2}')
-  uswap=$(free -m | awk '/Swap/ {print $3}')
+	# 1. PHƯƠNG ÁN 1: Dùng lspci (Nếu máy chủ có cài gói pciutils)
+	if command -v lspci &> /dev/null; then
+		nic_card=$(lspci 2>/dev/null | grep -i 'ethernet' | awk -F': ' '{print $2}' | head -1)
+	fi
 
-  if command -v zramctl &>/dev/null && grep -q "^/dev/zram" /proc/swaps 2>/dev/null; then
-    z_disk=$(zramctl --bytes -n -o DISKSIZE 2>/dev/null | awk '{sum+=$1} END {print int(sum/1024/1024)}')
-    zram_info="${z_disk} MB (Active)"
-  fi
+	# 2. PHƯƠNG ÁN DỰ PHÒNG 2: Đọc trực tiếp từ Kernel Sysfs (Tuyệt đối không cần cài thêm gói)
+	if [[ -z "$nic_card" ]]; then
+		# Lấy tên card mạng (Interface) đang đảm nhận việc kết nối ra Internet (VD: eth0, ens3, enp3s0)
+		main_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')
 
-  up=$(awk '{a=$1/86400;b=($1%86400)/3600;c=($1%3600)/60} {printf("%d ngày, %d giờ %d phút\n",a,b,c)}' /proc/uptime)
-  load=$(w | head -1 | awk -F'load average:' '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+		if [[ -n "$main_iface" && -L "/sys/class/net/$main_iface/device/driver" ]]; then
+			# Truy xuất tên Driver đang điều khiển card mạng đó
+			driver_name=$(basename $(readlink /sys/class/net/$main_iface/device/driver) 2>/dev/null)
 
-  arch=$(uname -m)
-  lbit=$(getconf LONG_BIT)
-  date_now=$(date '+%d-%m-%Y %H:%M:%S %Z')
+			# "Dịch" tên Driver phần mềm sang tên thiết bị phần cứng để in ra cho đẹp
+			case "$driver_name" in
+				virtio_net) nic_card="Virtio Network Device (KVM/Proxmox)" ;;
+				vmxnet3)    nic_card="VMware VMXNET3 Ethernet" ;;
+				e1000*)     nic_card="Intel Gigabit Ethernet (e1000)" ;;
+				ixgbe)      nic_card="Intel 10 Gigabit Ethernet (ixgbe)" ;;
+				vif)        nic_card="Xen Virtual Network Interface" ;;
+				hv_netvsc)  nic_card="Microsoft Hyper-V Virtual Network" ;;
+				ena)        nic_card="Amazon Elastic Network Adapter (AWS)" ;;
+				*)          nic_card="Ethernet Adapter (Driver: $driver_name)" ;;
+			esac
+		fi
+	fi
 
-  disk_total=$(df -BG / | tail -n 1 | awk '{print $2}' | tr -d 'G')
-  disk_used=$(df -BG / | tail -n 1 | awk '{print $3}' | tr -d 'G')
-  disk_percent=$(df -h / | tail -n 1 | awk '{print $5}' | tr -d '%')
+	# 3. CHỐT CHẶN CUỐI CÙNG: Lưới an toàn nếu cả 2 phương án trên đều trượt
+	[[ -z "$nic_card" ]] && nic_card="Virtual NIC (KVM/VMware/Xen)"
+	#end check card mạng
 
-  disk_color=$C_GREEN
-  [[ ${disk_percent%\%} -gt 80 ]] && disk_color=$C_YELLOW
-  [[ ${disk_percent%\%} -gt 90 ]] && disk_color=$C_RED
 
-  _rundone "Hoàn tất quét hệ thống!"
-  clear
+	# CPU Info & Features
+	hedieuhanh=$(hostnamectl | grep 'Operating System' | cut -f2 -d':' | sed 's/^ //g')
+	cname=$(lscpu | grep 'Model name:' | awk -F: '{print $2}' | sed 's/^[ \t]*//' | head -1)
+	cores=$(awk -F: '/model name/ {core++} END {print core}' /proc/cpuinfo)
+	[[ -z $cores ]] && cores=$(awk '/^processor/ {core++} END {print core}' /proc/cpuinfo)
 
-  # ============================================================================
-  # VẼ GIAO DIỆN (Sử dụng 100% Hàm từ Thư viện echo-color)
-  # ============================================================================
-  print_border_top
-  center_text "${C_YELLOW}THÔNG TIN MÁY CHỦ - WPTANGTOC OLS${C_RESET}"
-  print_border_mid
-  
-  left_text "${C_GREEN}PHẦN MỀM LÕI (STACK)${C_RESET}" 1
-  print_kv "WPTangToc OLS" "$version_wptangtoc_ols"
-  print_kv "OpenLiteSpeed" "${olscheck:-N/A}"
-  print_kv "PHP" "${phpcheck:-N/A}"
-  print_kv "MariaDB" "${mariacheck:-N/A}"
-  
-  print_border_mid
-  left_text "${C_GREEN}TÀI NGUYÊN PHẦN CỨNG CHI TIẾT${C_RESET}" 1
-  print_kv "Mainboard/Vendor" "$sys_vendor $sys_product"
-  print_kv "CPU Model" "$cname"
-  print_kv "CPU Cores / Freq" "$cores Cores / $freq MHz"
-  print_kv "CPU Cache (L3)" "$cpu_cache"
-  print_kv "CPU Hỗ trợ AES" "$cpu_aes"
-  print_kv "CPU Hỗ trợ AVX" "$cpu_avx"
-  print_kv "RAM Type / Bus" "$ram_type_bus"
-  print_kv "RAM Usage" "${ram_color}${uram} MB / ${tram} MB (${ram_percent}%)${C_RESET}"
-  if [[ -n $zram_info ]]; then
-    print_kv "ZRAM Swap" "$zram_info"
-  fi
-  print_kv "Disk Usage" "${disk_color}${disk_used}GB / ${disk_total}GB (${disk_percent}%)${C_RESET}"
-  print_kv "Disk Speed (4K)" "$io_4k"
-  print_kv "Disk Speed (128K)" "$io_128k"
-  print_kv "Disk Speed (1M)" "$io_1m"
-  print_kv "Network Card" "$nic_card"
-  
-  print_border_mid
-  left_text "${C_GREEN}HỆ ĐIỀU HÀNH & MẠNG${C_RESET}" 1
-  print_kv "OS / Arch" "$hedieuhanh ($arch / $lbit-bit)"
-  print_kv "Virtualization" "$virt"
-  print_kv "Uptime" "$up"
-  print_kv "Load Average" "$load"
-  print_kv "IP Address" "$ip"
-  [[ -n "$org" ]] && print_kv "Datacenter" "$org"
-  [[ -n "$city" ]] && print_kv "Location" "$city, $country"
-  
-  print_border_bot
+	freq=$(awk -F: '/cpu MHz/ {freq=$2} END {print freq}' /proc/cpuinfo | sed 's/^[ \t]*//;s/[ \t]*$//' | head -n 1)
+	if [[ -z $freq || $freq == "0.000" ]]; then
+		freq=$(awk '{print $1 / 1000}' /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null)
+		[[ -z $freq ]] && freq="N/A"
+	fi
+
+	cpu_cache=$(lscpu 2>/dev/null | grep -i "L3 cache" | awk -F: '{print $2}' | xargs)
+	[[ -z "$cpu_cache" ]] && cpu_cache=$(awk -F: '/cache size/ {print $2}' /proc/cpuinfo | head -1 | xargs)
+	[[ -z "$cpu_cache" ]] && cpu_cache="N/A"
+
+	# Nâng cấp hiển thị màu sắc cho tính năng AVX
+	cpu_aes=$(grep -m1 -q aes /proc/cpuinfo && echo "${C_GREEN}Có${C_RESET}" || echo "${C_RED}Không (CPU Đời cũ)${C_RESET}")
+	cpu_avx=$(grep -m1 -q avx2 /proc/cpuinfo && echo "${C_GREEN}Có (AVX2)${C_RESET}" || (grep -m1 -q avx /proc/cpuinfo && echo "${C_GREEN}Có (AVX)${C_RESET}" || echo "${C_RED}Không${C_RESET}"))
+
+	# RAM Info
+	check_ddr_ram=$(dmidecode -t memory 2>/dev/null | awk '/Type: DDR/ {print $2}' | head -n 1)
+	check_ram_bus=$(dmidecode -t memory 2>/dev/null | awk '/Speed:/ && $2 != "Unknown" {print $2" "$3}' | head -n 1)
+	if [[ -n "$check_ddr_ram" && -n "$check_ram_bus" ]]; then
+		ram_type_bus="$check_ddr_ram / $check_ram_bus"
+	elif [[ -n "$check_ddr_ram" ]]; then
+		ram_type_bus="$check_ddr_ram"
+	else
+		ram_type_bus="N/A (Virtual RAM)"
+	fi
+
+	tram=$(free -m | awk '/Mem/ {print $2}')
+	uram=$(free -m | awk '/Mem/ {print $3}')
+	ram_percent=$(echo "scale=0; $uram * 100 / $tram" | bc 2>/dev/null)
+
+	ram_color=$C_GREEN
+	[[ $ram_percent -gt 75 ]] && ram_color=$C_YELLOW
+	[[ $ram_percent -gt 90 ]] && ram_color=$C_RED
+
+	swap=$(free -m | awk '/Swap/ {print $2}')
+	uswap=$(free -m | awk '/Swap/ {print $3}')
+
+	if command -v zramctl &>/dev/null && grep -q "^/dev/zram" /proc/swaps 2>/dev/null; then
+		z_disk=$(zramctl --bytes -n -o DISKSIZE 2>/dev/null | awk '{sum+=$1} END {print int(sum/1024/1024)}')
+		zram_info="${z_disk} MB (Active)"
+	fi
+
+	up=$(awk '{a=$1/86400;b=($1%86400)/3600;c=($1%3600)/60} {printf("%d ngày, %d giờ %d phút\n",a,b,c)}' /proc/uptime)
+	load=$(w | head -1 | awk -F'load average:' '{print $2}' | sed 's/^[ \t]*//;s/[ \t]*$//')
+
+	arch=$(uname -m)
+	lbit=$(getconf LONG_BIT)
+	date_now=$(date '+%d-%m-%Y %H:%M:%S %Z')
+
+	disk_total=$(df -BG / | tail -n 1 | awk '{print $2}' | tr -d 'G')
+	disk_used=$(df -BG / | tail -n 1 | awk '{print $3}' | tr -d 'G')
+	disk_percent=$(df -h / | tail -n 1 | awk '{print $5}' | tr -d '%')
+
+	disk_color=$C_GREEN
+	[[ ${disk_percent%\%} -gt 80 ]] && disk_color=$C_YELLOW
+	[[ ${disk_percent%\%} -gt 90 ]] && disk_color=$C_RED
+
+	_rundone "Hoàn tất quét hệ thống!"
+	clear
+
+	# ============================================================================
+	# VẼ GIAO DIỆN (Sử dụng 100% Hàm từ Thư viện echo-color)
+	# ============================================================================
+	print_border_top
+	center_text "${C_YELLOW}THÔNG TIN MÁY CHỦ - WPTANGTOC OLS${C_RESET}"
+	print_border_mid
+
+	left_text "${C_GREEN}PHẦN MỀM LÕI (STACK)${C_RESET}" 1
+	print_kv "WPTangToc OLS" "$version_wptangtoc_ols"
+	print_kv "OpenLiteSpeed" "${olscheck:-N/A}"
+	print_kv "PHP" "${phpcheck:-N/A}"
+	print_kv "MariaDB" "${mariacheck:-N/A}"
+
+	print_border_mid
+	left_text "${C_GREEN}TÀI NGUYÊN PHẦN CỨNG CHI TIẾT${C_RESET}" 1
+	print_kv "Mainboard/Vendor" "$sys_vendor $sys_product"
+	print_kv "CPU Model" "$cname"
+	print_kv "CPU Cores / Freq" "$cores Cores / $freq MHz"
+	print_kv "CPU Cache (L3)" "$cpu_cache"
+	print_kv "CPU Hỗ trợ AES" "$cpu_aes"
+	print_kv "CPU Hỗ trợ AVX" "$cpu_avx"
+	print_kv "RAM Type / Bus" "$ram_type_bus"
+	print_kv "RAM Usage" "${ram_color}${uram} MB / ${tram} MB (${ram_percent}%)${C_RESET}"
+	if [[ -n $zram_info ]]; then
+		print_kv "ZRAM Swap" "$zram_info"
+	fi
+	print_kv "Disk Usage" "${disk_color}${disk_used}GB / ${disk_total}GB (${disk_percent}%)${C_RESET}"
+	print_kv "Disk Speed (4K)" "$io_4k"
+	print_kv "Disk Speed (128K)" "$io_128k"
+	print_kv "Disk Speed (1M)" "$io_1m"
+	print_kv "Network Card" "$nic_card"
+
+	print_border_mid
+	left_text "${C_GREEN}HỆ ĐIỀU HÀNH & MẠNG${C_RESET}" 1
+	print_kv "OS / Arch" "$hedieuhanh ($arch / $lbit-bit)"
+	print_kv "Virtualization" "$virt"
+	print_kv "Uptime" "$up"
+	print_kv "Load Average" "$load"
+	print_kv "IP Address" "$ip"
+	[[ -n "$org" ]] && print_kv "Datacenter" "$org"
+	[[ -n "$city" ]] && print_kv "Location" "$city, $country"
+
+	print_border_bot
 }
 
 kiemtra
@@ -185,94 +254,95 @@ kiemtra
 echo ""
 
 speed_internet_test() {
-  local dl_url=$1
-  local nodeName=$2
-  
-  # Tự động bóc tách link Download để suy ra link Upload
-  local ul_url="${dl_url/random4000x4000.jpg/upload.php}"
+	local dl_url=$1
+	local nodeName=$2
 
-  # Bóc tách Domain từ URL để đo Ping
-  local domain=$(echo "$dl_url" | awk -F/ '{print $3}')
+	# Tự động bóc tách link Download để suy ra link Upload
+	local ul_url="${dl_url/random4000x4000.jpg/upload.php}"
 
-  # Đo Ping (Gửi 2 gói, timeout 2 giây)
-  local ping_time=$(ping -c 2 -W 2 "$domain" 2>/dev/null | tail -1 | awk -F '/' '{print $5}')
-  local ping_str=""
+	# Bóc tách Domain từ URL để đo Ping
+	local domain=$(echo "$dl_url" | awk -F/ '{print $3}')
 
-  # Phân loại độ trễ & CĂN LỀ PING (Dành đúng 7 ký tự cho số Ping)
-  if [[ "$ping_time" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-    local p_val=${ping_time%.*} 
-    local ping_pad=$(printf "%7s" "$ping_time") # Ép độ dài luôn bằng 7
-    if [[ "$p_val" -lt 60 ]]; then
-      ping_str="${C_GREEN}${ping_pad} ms${C_RESET}"
-    elif [[ "$p_val" -lt 150 ]]; then
-      ping_str="${C_YELLOW}${ping_pad} ms${C_RESET}"
-    else
-      ping_str="${C_RED}${ping_pad} ms${C_RESET}"
-    fi
-  else
-    local ping_pad=$(printf "%10s" "N/A") # Nếu lỗi thì in chữ N/A thẳng hàng
-    ping_str="${C_YELLOW}${ping_pad}${C_RESET}"
-  fi
+	# Đo Ping (Gửi 2 gói, timeout 2 giây)
+	local ping_time=$(ping -c 2 -W 2 "$domain" 2>/dev/null | tail -1 | awk -F '/' '{print $5}')
+	local ping_str=""
 
-  # Đo Download và Upload bằng cURL
-  local dl_bps=$(curl -s -w "%{speed_download}" -o /dev/null -m 10 "$dl_url")
-  local ul_bps=$(curl -s -w "%{speed_upload}" -o /dev/null -m 10 -F "file=@/tmp/wptt_upload_test.dat" "$ul_url")
+	# Phân loại độ trễ & CĂN LỀ PING (Dành đúng 7 ký tự cho số Ping)
+	if [[ "$ping_time" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+		local p_val=${ping_time%.*} 
+		local ping_pad=$(printf "%7s" "$ping_time") # Ép độ dài luôn bằng 7
+		if [[ "$p_val" -lt 60 ]]; then
+			ping_str="${C_GREEN}${ping_pad} ms${C_RESET}"
+		elif [[ "$p_val" -lt 150 ]]; then
+			ping_str="${C_YELLOW}${ping_pad} ms${C_RESET}"
+		else
+			ping_str="${C_RED}${ping_pad} ms${C_RESET}"
+		fi
+	else
+		local ping_pad=$(printf "%10s" "N/A") # Nếu lỗi thì in chữ N/A thẳng hàng
+		ping_str="${C_YELLOW}${ping_pad}${C_RESET}"
+	fi
 
-  # Convert tốc độ từ Bytes/sec sang MB/s
-  local dl_mb=$(echo "scale=1; ${dl_bps:-0} / 1048576" | bc 2>/dev/null | awk '{printf "%.1f", $0}')
-  local ul_mb=$(echo "scale=1; ${ul_bps:-0} / 1048576" | bc 2>/dev/null | awk '{printf "%.1f", $0}')
+	# Đo Download và Upload bằng cURL
+	local dl_bps=$(curl -s -w "%{speed_download}" -o /dev/null -m 10 "$dl_url")
+	local ul_bps=$(curl -s -w "%{speed_upload}" -o /dev/null -m 10 -F "file=@/tmp/wptt_upload_test.dat" "$ul_url")
 
-  # CĂN LỀ TỐC ĐỘ CHO THẲNG CỘT (Dành đúng 5 ký tự, VD: " 17.8" và "190.3")
-  local dl_pad=$(printf "%5s" "$dl_mb")
-  local ul_pad=$(printf "%5s" "$ul_mb")
+	# Convert tốc độ từ Bytes/sec sang MB/s
+	local dl_mb=$(echo "scale=1; ${dl_bps:-0} / 1048576" | bc 2>/dev/null | awk '{printf "%.1f", $0}')
+	local ul_mb=$(echo "scale=1; ${ul_bps:-0} / 1048576" | bc 2>/dev/null | awk '{printf "%.1f", $0}')
 
-  # Xử lý hiển thị UI tốc độ
-  local dl_str="${C_CYAN}${dl_pad} MB/s${C_RESET}"
-  [[ "$dl_mb" == "0.0" ]] && dl_str="${C_RED}$(printf "%10s" "Lỗi DL")${C_RESET}" # Căn 10 khoảng trắng cho báo lỗi
+	# CĂN LỀ TỐC ĐỘ CHO THẲNG CỘT (Dành đúng 5 ký tự, VD: " 17.8" và "190.3")
+	local dl_pad=$(printf "%5s" "$dl_mb")
+	local ul_pad=$(printf "%5s" "$ul_mb")
 
-  local ul_str="${C_GREEN}${ul_pad} MB/s${C_RESET}"
-  [[ "$ul_mb" == "0.0" ]] && ul_str="${C_RED}$(printf "%10s" "Lỗi UL")${C_RESET}"
+	# Xử lý hiển thị UI tốc độ
+	local dl_str="${C_CYAN}${dl_pad} MB/s${C_RESET}"
+	[[ "$dl_mb" == "0.0" ]] && dl_str="${C_RED}$(printf "%10s" "Lỗi DL")${C_RESET}" # Căn 10 khoảng trắng cho báo lỗi
 
-  # Format tên nhà mạng (Căn lề chuẩn của WPTangToc)
-  local clean_node=$(echo -en "$nodeName" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
-  local node_len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_node") 2>/dev/null | wc -m | tr -d ' ' )
-  [[ -z "$node_len" || "$node_len" == "0" ]] && node_len=${#clean_node}
-  
-  local pad_node=$((18 - node_len))
-  [[ $pad_node -lt 0 ]] && pad_node=0
-  
-  # Đẩy vào left_text, thêm khoảng trắng ở thanh | để nhìn thông thoáng
-  left_text "  ${nodeName}$(printf '%*s' "$pad_node" "") > Down: ${dl_str} | UP: ${ul_str} | Ping: ${ping_str}" 0
-}
+	local ul_str="${C_GREEN}${ul_pad} MB/s${C_RESET}"
+	[[ "$ul_mb" == "0.0" ]] && ul_str="${C_RED}$(printf "%10s" "Lỗi UL")${C_RESET}"
+
+	# Format tên nhà mạng (Căn lề chuẩn của WPTangToc)
+	local clean_node=$(echo -en "$nodeName" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+	local node_len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_node") 2>/dev/null | wc -m | tr -d ' ' )
+	[[ -z "$node_len" || "$node_len" == "0" ]] && node_len=${#clean_node}
+
+		local pad_node=$((18 - node_len))
+		[[ $pad_node -lt 0 ]] && pad_node=0
+
+		# Đẩy vào left_text, thêm khoảng trắng ở thanh | để nhìn thông thoáng
+		left_text "  ${nodeName}$(printf '%*s' "$pad_node" "") > Down: ${dl_str} | UP: ${ul_str} | Ping: ${ping_str}" 0
+	}
 
 speed() {
-  print_border_top
-  center_text "${C_YELLOW}KIỂM TRA BĂNG THÔNG & ĐỘ TRỄ MẠNG (NETWORK ROUTING)${C_RESET}"
-  print_border_mid
-  left_text "${C_GREEN}[ Mạng - Việt Nam ]${C_RESET}" 1
-  
-  # Tạo file rác 10MB mồi Test Upload
-  dd if=/dev/zero of=/tmp/wptt_upload_test.dat bs=1M count=10 2>/dev/null
-  
-  speed_internet_test 'http://speedtest1.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Hà Nội'
-  speed_internet_test 'http://speedtest5.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Đà Nẵng'
-  speed_internet_test 'http://speedtest3.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Hồ Chí Minh'
-  speed_internet_test 'http://speedtestkv1a.viettel.vn/speedtest/random4000x4000.jpg' 'Viettel, Hà Nội'
-  speed_internet_test 'http://speedtestkv2a.viettel.vn/speedtest/random4000x4000.jpg' 'Viettel, Đà Nẵng'
-  
-  # Xóa file rác hoàn trả RAM/I-O
-  rm -f /tmp/wptt_upload_test.dat
-  
-  print_border_bot
+	print_border_top
+	center_text "${C_YELLOW}KIỂM TRA BĂNG THÔNG & ĐỘ TRỄ MẠNG (NETWORK ROUTING)${C_RESET}"
+	print_border_mid
+	left_text "${C_GREEN}[ Mạng - Việt Nam ]${C_RESET}" 1
+
+	# Tạo file rác 10MB mồi Test Upload
+	dd if=/dev/zero of=/tmp/wptt_upload_test.dat bs=1M count=10 2>/dev/null
+
+	speed_internet_test 'http://speedtest1.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Hà Nội'
+	speed_internet_test 'http://speedtest5.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Đà Nẵng'
+	speed_internet_test 'http://speedtest3.vtn.com.vn/speedtest/random4000x4000.jpg' 'VNPT, Hồ Chí Minh'
+	speed_internet_test 'http://speedtestkv1a.viettel.vn/speedtest/random4000x4000.jpg' 'Viettel, Hà Nội'
+	speed_internet_test 'http://speedtestkv2a.viettel.vn/speedtest/random4000x4000.jpg' 'Viettel, Đà Nẵng'
+
+	# Xóa file rác hoàn trả RAM/I-O
+	rm -f /tmp/wptt_upload_test.dat
+
+	print_border_bot
 }
 
 speed
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
-echo ''
-echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
-read -r
-clear
-exec /usr/bin/wptangtoc 1
+	echo ''
+	echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+	read -r
+	clear
+	exec /usr/bin/wptangtoc 1
 fi
+
