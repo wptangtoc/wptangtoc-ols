@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng Thiết lập giới hạn dung lượng Page Cache HTML là một cài đặt cho phép bạn quy định dung lượng ổ đĩa tối đa mà bộ nhớ đệm [cache] chứa các trang HTML tĩnh của website được phép sử dụng.
@@ -14,6 +17,9 @@ function huong_dan() {
   Khi thiết lập giới hạn, Page Cache HTML sẽ hoạt động trong một khuôn khổ dung lượng được kiểm soát. Hệ thống sẽ tự động quản lý kích thước của nó, đảm bảo cache vẫn mang lại lợi ích về tốc độ mà không gây quá tải tài nguyên ổ cứng.
 }
 
+#Cú pháp BẬT: /etc/wptt/cache/wptt-setup-gioi-han-dung-luong-page-cache-html all on 10240 (Bật đồng loạt giới hạn 10GB).
+#Cú pháp TẮT: /etc/wptt/cache/wptt-setup-gioi-han-dung-luong-page-cache-html domain.com off.
+#Cú pháp TẮT: /etc/wptt/cache/wptt-setup-gioi-han-dung-luong-page-cache-html all off.
 # ==============================================================================
 # NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
 # ==============================================================================
@@ -21,57 +27,83 @@ function huong_dan() {
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}${quan_ly_cache} ➜ Thiết lập giới hạn dung lượng Page Cache HTML${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
 # ==============================================================================
-# HÀM MENU LỌC TRẠNG THÁI HIỆN TẠI (UX BO CONG)
+# HÀM CHỌN WEBSITE CÓ HIỂN THỊ TRẠNG THÁI GIỚI HẠN
 # ==============================================================================
 function lua_chon_NAME() {
-  unset NAME selects
-  selects=()
-  local box_inner_width=${box_inner_width:-71}
+  unset NAME
+  local selects=()
+  local i=1
 
   if [ "$(ls -At /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for filepath in /etc/wptt/vhost/.*.conf; do
       [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-      local dom="${filepath##*/}"
-      dom="${dom%.conf}"
-      dom="${dom#.}"
-      if [[ "$dom" == ?*.?* ]]; then
-        if [[ -f "/etc/cron.d/delete-cache-page-$dom.cron" ]]; then
-          # FIX MẠNH: Bắt chính xác số sau tên miền, không bị dính cụm > /dev/null 2>&1
-          local current_limit=$(grep -oP "$dom \K[0-9]+" "/etc/cron.d/delete-cache-page-$dom.cron" | head -n 1)
 
-          # Fallback (dự phòng) trường hợp grep không bắt được
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        local status_text=""
+        local status_color=""
+
+        if [[ -f "/etc/cron.d/delete-cache-page-$domain.cron" ]]; then
+          local current_limit=$(grep -oP "$domain \K[0-9]+" "/etc/cron.d/delete-cache-page-$domain.cron" 2>/dev/null | head -n 1)
           if [[ -z "$current_limit" ]]; then
-            current_limit=$(awk -v d="$dom" '{for(i=1;i<=NF;i++) if($i==d) print $(i+1)}' "/etc/cron.d/delete-cache-page-$dom.cron" 2>/dev/null | tr -cd '0-9')
+            current_limit=$(awk -v d="$domain" '{for(i=1;i<=NF;i++) if($i==d) print $(i+1)}' "/etc/cron.d/delete-cache-page-$domain.cron" 2>/dev/null | tr -cd '0-9')
           fi
 
-          selects+=("$dom|1|$current_limit") # 1 = Đã thiết lập
+          if [[ -n "$current_limit" ]]; then
+            status_text="[Đã giới hạn: ${current_limit} MB]"
+            status_color=$C_GREEN
+          else
+            status_text="[Đang Lỗi Cấu Hình]"
+            status_color=$C_RED
+          fi
         else
-          selects+=("$dom|0|0") # 0 = Chưa thiết lập
+          status_text="[Chưa giới hạn]"
+          status_color=$C_YELLOW
         fi
+
+        selects+=("$domain|$status_text|$status_color")
       fi
     done
   fi
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "${C_YELLOW}⚠️ Hệ thống chưa có website nào được khởi tạo!${C_RESET}"
+    echo -e "\n${C_RED}❌ Lỗi: Hệ thống chưa có website nào được khởi tạo!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-cache-main 1
   fi
 
-  # Render Khung Bo Cong
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  local num_domains=${#selects[@]}
+
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   local title_text="Lựa chọn Website để cấu hình giới hạn dung lượng Cache:"
-  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
   local pad_r=$((box_inner_width - len - 2))
   [[ $pad_r -lt 0 ]] && pad_r=0
+
   echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
   local line_len=$((len + 3))
@@ -80,177 +112,348 @@ function lua_chon_NAME() {
   local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
   echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  local i=1
-  for item in "${selects[@]}"; do
-    local dom=$(echo "$item" | cut -d'|' -f1)
-    local stt=$(echo "$item" | cut -d'|' -f2)
-    local limit=$(echo "$item" | cut -d'|' -f3)
-
-    if [[ "$stt" == "1" ]]; then
-      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} ${C_GREEN}[Giới hạn: %s MB]${C_RESET}" "$i" "$dom" "$limit")
-      local clean_text=$(printf "  %3d) %-30s [Giới hạn: %s MB]" "$i" "$dom" "$limit")
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Thiết lập giới hạn Cache cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Thiết lập giới hạn Cache cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     else
-      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} ${C_YELLOW}[Chưa giới hạn]${C_RESET}" "$i" "$dom")
-      local clean_text=$(printf "  %3d) %-30s [Chưa giới hạn]" "$i" "$dom")
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     fi
-
-    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    local pad=$((box_inner_width - item_len))
-    [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
   local fzf_installed=false
-  if command -v fzf &>/dev/null; then
-    fzf_installed=true
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=${exit_thoat:-Thoát}]: "
-  else
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
-  fi
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
 
   while true; do
-    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
     if ! read -r REPLY; then exit 1; fi
     REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
     case "$REPLY" in
-    0)
-      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-      NAME="0"
-      return 0
-      ;;
+    0) exec /etc/wptt/wptt-cache-main 1 ;;
     00)
       if $fzf_installed; then
-        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
-        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
-        if [[ -n "$dom" ]]; then
-          NAME="$dom"
-          return 0
-        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
-      else
-        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
       fi
       ;;
     *)
       if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-        local action_index=$((REPLY - 1))
-        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
         return 0
-      else
-        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
       fi
       ;;
     esac
   done
 }
 
-lua_chon_NAME
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+CLI_LIMIT=""
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
-  return 2>/dev/null || exit
-}
-
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
-  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
-  return 2>/dev/null || exit
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+  CLI_ACTION="bat"
+  CLI_LIMIT="${3:-10240}" # Mặc định 10GB nếu truyền CLI thiếu dung lượng
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+  CLI_ACTION="tat"
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+    CLI_LIMIT="${3:-10240}"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
+else
+  lua_chon_NAME
 fi
 
 # ==============================================================================
-# XỬ LÝ LOGIC (CÀI ĐẶT MỚI HOẶC GỠ BỎ)
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
 # ==============================================================================
+DOMAIN_LIST=()
+wp_action=""
+action_text=""
+Dung_luong=""
+
 echo ""
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
 
-if [[ ! -f "/etc/cron.d/delete-cache-page-$NAME.cron" ]]; then
-  # ---------------------------------------------------------
-  # NHÁNH 1: CHƯA THIẾT LẬP -> YÊU CẦU NHẬP VÀ SETUP
-  # ---------------------------------------------------------
-  echo -e "${C_YELLOW}Nhập số dung lượng MB bạn muốn giới hạn. (Ví dụ: Nhập 10240 cho 10GB)${C_RESET}"
-  echo -en "${C_CYAN}Nhập dung lượng MB [0=Thoát]: ${C_RESET}"
-  read -r Dung_luong
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+    wp_action="bat"
+    action_text="BẬT Giới hạn Cache"
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+    wp_action="tat"
+    action_text="GỠ BỎ Giới hạn Cache"
+  else
+    # NẾU CHỌN TỪ MENU UI (SỐ TÙY CHỌN CUỐI CÙNG) -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: GIỚI HẠN DUNG LƯỢNG CACHE${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác quản lý dung lượng ổ cứng cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  [[ "$Dung_luong" == "0" || -z "$Dung_luong" ]] && exec /etc/wptt/wptt-cache-main 1
+    str_opt1="  1) BẬT Giới hạn Cache (Áp dụng mức dung lượng đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Giới hạn Cache${C_RESET} (Áp dụng mức dung lượng đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
 
-  if [[ ! "$Dung_luong" =~ ^[0-9]+$ ]]; then
-    echo -e "\n${C_RED}❌ Lỗi: Bạn nhập sai kiểu dữ liệu! Vui lòng chỉ nhập số nguyên (Ví dụ: 2048, 5120...)${C_RESET}"
-    sleep 3
-    exec /etc/wptt/wptt-cache-main 1
+    str_opt2="  2) GỠ BỎ Giới hạn Cache (Cho phép lưu trữ thoải mái đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}GỠ BỎ Giới hạn Cache${C_RESET} (Cho phép lưu trữ thoải mái đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      wp_action="bat"
+      action_text="BẬT Giới hạn Cache"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      wp_action="tat"
+      action_text="GỠ BỎ Giới hạn Cache"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-cache-main 1
+    fi
   fi
 
-  echo ""
-  if wptt_xac_nhan "Xác nhận thiết lập giới hạn dung lượng cache ${Dung_luong}MB?" "Hệ thống sẽ tự động dọn dẹp Cache khi vượt ngưỡng ${C_YELLOW}${Dung_luong} MB${C_RESET}." "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "Đồng ý Thiết lập" "Hủy bỏ"; then
-    echo ""
-    _runing "Đang cấu hình Cronjob giám sát dung lượng ổ cứng cho $NAME..."
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* ]]; then
+      DOMAIN_LIST+=("$domain")
+    fi
+  done
 
+  if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}Không có website hợp lệ nào để thao tác!${C_RESET}" && sleep 2 && exit 1
+  fi
+
+else
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
+  pathcheck="/etc/wptt/vhost/.$NAME.conf"
+  [[ ! -f "$pathcheck" ]] && echo -e "\n${C_RED}Tên miền không tồn tại trên hệ thống này!${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-cache-main 1
+
+  DOMAIN_LIST=("$NAME")
+
+  if [[ $CLI_MODE -eq 1 ]]; then
+    wp_action="$CLI_ACTION"
+    if [[ "$wp_action" == "bat" ]]; then
+      action_text="BẬT Giới hạn Cache"
+    else
+      action_text="GỠ BỎ Giới hạn Cache"
+    fi
+  else
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH GIỚI HẠN DUNG LƯỢNG CACHE${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if [[ -f "/etc/cron.d/delete-cache-page-$NAME.cron" ]]; then
+      local current_limit=$(grep -oP "$NAME \K[0-9]+" "/etc/cron.d/delete-cache-page-$NAME.cron" 2>/dev/null | head -n 1)
+      left_text "  Website ${NAME} hiện ĐÃ THIẾT LẬP giới hạn (${current_limit} MB)." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      str_opt1="  1) GỠ BỎ Giới hạn (Cho phép lưu trữ thoải mái, không dọn dẹp tự động)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}GỠ BỎ Giới hạn${C_RESET} (Cho phép lưu trữ thoải mái, không dọn dẹp tự động)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+      str_opt2="  2) Không làm gì cả (Giữ nguyên cấu hình hiện tại)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên cấu hình hiện tại)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="tat"
+        action_text="GỠ BỎ Giới hạn Cache"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-cache-main 1
+      fi
+    else
+      left_text "  Website ${NAME} hiện CHƯA THIẾT LẬP giới hạn dung lượng." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      str_opt1="  1) BẬT Giới hạn Cache (Chống phình to ổ cứng tự động)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Giới hạn Cache${C_RESET} (Chống phình to ổ cứng tự động)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="bat"
+        action_text="BẬT Giới hạn Cache"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-cache-main 1
+      fi
+    fi
+  fi
+fi
+
+# ==============================================================================
+# HỎI MỨC DUNG LƯỢNG NẾU HÀNH ĐỘNG LÀ BẬT
+# ==============================================================================
+if [[ "$wp_action" == "bat" ]]; then
+  if [[ $CLI_MODE -eq 1 && "$CLI_LIMIT" =~ ^[0-9]+$ ]]; then
+    Dung_luong="$CLI_LIMIT"
+  else
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THIẾT LẬP DUNG LƯỢNG GIỚI HẠN CACHE${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Nhập mức dung lượng MB bạn muốn làm ngưỡng dọn dẹp." 2
+    left_text "  (Ví dụ: Nhập ${C_GREEN}10240${C_RESET} cho 10GB, hoặc ${C_GREEN}5120${C_RESET} cho 5GB)" 2
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập dung lượng MB [0=Thoát]: ${C_RESET}"
+    read -r Dung_luong
+
+    if [[ "$Dung_luong" == "0" || -z "$Dung_luong" ]]; then
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1 && exec /etc/wptt/wptt-cache-main 1
+    fi
+
+    if [[ ! "$Dung_luong" =~ ^[0-9]+$ ]]; then
+      echo -e "\n${C_RED}Lỗi: Bạn nhập sai kiểu dữ liệu! Vui lòng chỉ nhập số nguyên (Ví dụ: 2048, 5120...)${C_RESET}"
+      sleep 3
+      exec /etc/wptt/wptt-cache-main 1
+    fi
+  fi
+fi
+
+# ==============================================================================
+# THỰC THI SỬA ĐỔI CRONTAB
+# ==============================================================================
+echo ""
+thao_tac_thanh_cong=false
+
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  _runing "$action_text cho website $DOMAIN"
+
+  if [[ "$wp_action" == "bat" ]]; then
     phut=$(shuf -i0-59 -n1)
     [[ -z "$phut" ]] && phut='30'
 
-    cat >"/etc/cron.d/delete-cache-page-$NAME.cron" <<END
-$phut * * * * root /etc/wptt/cache/delete-cache-html-page-gioi-han-dung-luong-o-cung $NAME $Dung_luong > /dev/null 2>&1
+    cat >"/etc/cron.d/delete-cache-page-$DOMAIN.cron" <<END
+$phut * * * * root /etc/wptt/cache/delete-cache-html-page-gioi-han-dung-luong-o-cung $DOMAIN $Dung_luong > /dev/null 2>&1
 END
 
     if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
-      NAME_CRON_ubuntu=${NAME//[.]/_}
-      ln -sf "/etc/cron.d/delete-cache-page-$NAME.cron" "/etc/cron.d/delete-cache-page-${NAME_CRON_ubuntu}_cron"
-      systemctl restart cron.service
-    else
-      systemctl restart crond.service
+      NAME_CRON_ubuntu=${DOMAIN//[.]/_}
+      ln -sf "/etc/cron.d/delete-cache-page-$DOMAIN.cron" "/etc/cron.d/delete-cache-page-${NAME_CRON_ubuntu}_cron"
     fi
 
     # Thực thi luôn lệnh dọn dẹp lần đầu
-    . /etc/wptt/cache/delete-cache-html-page-gioi-han-dung-luong-o-cung "$NAME" "$Dung_luong" >/dev/null 2>&1
+    . /etc/wptt/cache/delete-cache-html-page-gioi-han-dung-luong-o-cung "$DOMAIN" "$Dung_luong" >/dev/null 2>&1
 
-    echo "Thiết lập tự động xoá cache dung lượng $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-    _rundone "Cấu hình Cronjob thành công"
+  else
+    rm -f "/etc/cron.d/delete-cache-page-$DOMAIN.cron"
+    if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
+      NAME_CRON_ubuntu=${DOMAIN//[.]/_}
+      rm -f "/etc/cron.d/delete-cache-page-${NAME_CRON_ubuntu}_cron"
+    fi
+  fi
 
-    # BẢNG BÁO CÁO THÀNH CÔNG (UX BO CONG)
+  echo "$action_text dung lượng $DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "$action_text cho website $DOMAIN"
+  thao_tac_thanh_cong=true
+done
+
+# ==============================================================================
+# KHỞI ĐỘNG LẠI DỊCH VỤ CRON VÀ HIỂN THỊ KẾT QUẢ
+# ==============================================================================
+if $thao_tac_thanh_cong; then
+  if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
+    systemctl restart cron.service >/dev/null 2>&1
+  else
+    systemctl restart crond.service >/dev/null 2>&1
+  fi
+
+  if [[ "$wp_action" == "bat" ]]; then
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP GIỚI HẠN CACHE${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
+    if [[ ${#DOMAIN_LIST[@]} -ge 2 ]]; then
+      left_text "Website thao tác : ${C_YELLOW}Tất cả ${#DOMAIN_LIST[@]} website${C_RESET}" 2
+    else
+      left_text "Website thao tác : ${C_YELLOW}${DOMAIN_LIST[0]}${C_RESET}" 2
+    fi
     left_text "Ngưỡng giới hạn  : ${C_GREEN}${Dung_luong} MB${C_RESET}" 2
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "Hệ thống sẽ chạy ngầm và tự động xóa bớt các file cache cũ" 2
     left_text "nhất mỗi khi tổng dung lượng cache vượt qua ngưỡng thiết lập." 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   else
-    echo -e "${C_YELLOW}Đã hủy thao tác thiết lập.${C_RESET}"
-  fi
-
-else
-  # ---------------------------------------------------------
-  # NHÁNH 2: ĐÃ THIẾT LẬP -> HỎI GỠ BỎ
-  # ---------------------------------------------------------
-  dung_luong_cache_limit_hien_tai=$(grep -oP "${NAME} \K[0-9]+" "/etc/cron.d/delete-cache-page-${NAME}.cron" | head -n 1)
-  if wptt_xac_nhan "Xác nhận bạn có muốn XÓA BỎ giới hạn này không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "Đang được cấu hình tự động dọn Cache disk giới hạn ${dung_luong_cache_limit_hien_tai}MB." "Đồng ý Xóa bỏ" "Hủy thao tác"; then
-    echo ""
-    _runing "Đang gỡ bỏ cấu hình Cronjob cho website $NAME..."
-
-    rm -f "/etc/cron.d/delete-cache-page-$NAME.cron"
-    if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
-      NAME_CRON_ubuntu=${NAME//[.]/_}
-      rm -f "/etc/cron.d/delete-cache-page-${NAME_CRON_ubuntu}_cron"
-      systemctl restart cron.service
-    else
-      systemctl restart crond.service
-    fi
-
-    _rundone "Gỡ bỏ thiết lập giới hạn thành công"
-
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ GIỚI HẠN CACHE${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Kể từ bây giờ, Page Cache HTML của ${C_YELLOW}$NAME${C_RESET} sẽ được lưu" 2
+    if [[ ${#DOMAIN_LIST[@]} -ge 2 ]]; then
+      left_text "Kể từ bây giờ, Page Cache HTML của ${C_YELLOW}Toàn bộ website${C_RESET} sẽ được lưu" 2
+    else
+      left_text "Kể từ bây giờ, Page Cache HTML của ${C_YELLOW}${DOMAIN_LIST[0]}${C_RESET} sẽ được lưu" 2
+    fi
     left_text "trữ thoải mái mà không bị giới hạn dung lượng tự động nữa." 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  else
-    echo -e "${C_YELLOW}Đã hủy thao tác xóa bỏ.${C_RESET}"
   fi
 fi
 
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+if [[ ${1:-} == "98" && $CLI_MODE -eq 0 ]]; then
+  exec /etc/wptt/wptt-cache-main 1
+fi
