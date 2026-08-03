@@ -21,7 +21,7 @@ function huong_dan() {
 
 #cli
 # /etc/wptt/wordpress/wp-cron-job all on 5 (Bật tối ưu toàn Server với chu kỳ 5 phút).
-# /etc/wptt/wordpress/wp-cron-job domain.com off (Tắt tối ưu WP-Cron, trả về mặc định).
+# wptt-wp-cron domain.com off (Tắt tối ưu WP-Cron, trả về mặc định).
 
 # ==============================================================================
 # NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
@@ -72,7 +72,7 @@ function lua_chon_NAME() {
           fi
 
           if $has_cron && $has_config; then
-            local checktuan=$(grep -oE '^\*/[0-9]+' "$cron_file" 2>/dev/null | cut -d'/' -f2 | head -n 1)
+            local checktuan=$(awk '{print $1}' "$cron_file" 2>/dev/null | grep -oE '[0-9]+$' | tail -n 1)
             status_text="[Đã TỐI ƯU - ${checktuan:-?} phút/lần]"
             status_color=$C_GREEN
           elif ! $has_cron && ! $has_config; then
@@ -428,14 +428,19 @@ if [[ "$wp_action" == "bat" ]]; then
   fi
 fi
 
+# Chống nghẽn Cổ chai: Định nghĩa lệnh hạ ưu tiên tiến trình cho Cron
+PRIORITY_CMD="ionice -c 3 nice -n 19"
+
+# Tính toán tổng số lượng Vhost có trên máy chủ để xem xét việc kích hoạt Sleep Giây
+TOTAL_WP_SITES=$(ls -1 /etc/wptt/vhost/.*.conf 2>/dev/null | wc -l)
+
 for DOMAIN in "${DOMAIN_LIST[@]}"; do
   _runing "$action_text cho website $DOMAIN..."
 
   . /etc/wptt/php/php-cli-domain-config $DOMAIN 2>/dev/null
-  unset lock_down #unset biến để tránh bị lỗi kiểm tra xem website có dùng lockdown hay không
   . /etc/wptt/vhost/.$DOMAIN.conf 2>/dev/null
 
-  # Bỏ qua nếu cấu hình vhost bị lỗi làm mất User (Tránh lỗi Sudo văng Script)
+  # Bỏ qua nếu cấu hình vhost bị lỗi làm mất User
   if [[ -z "$User_name_vhost" ]]; then
     _rundone "Lỗi: Không tìm thấy Username cấu hình cho $DOMAIN"
     continue
@@ -447,7 +452,7 @@ for DOMAIN in "${DOMAIN_LIST[@]}"; do
   ubuntu_cron_file="/etc/cron.d/wp-cron-job-${DOMAIN//[.]/_}_cron"
   wp_config_path="/usr/local/lsws/$DOMAIN/html/wp-config.php"
 
-  # [TỐI ƯU TƯƠNG THÍCH LOCKDOWN] - Chỉ can thiệp mở quyền file nếu website đang Bật Lockdown
+  # [TỐI ƯU TƯƠNG THÍCH LOCKDOWN]
   if [[ "$lock_down" == "1" ]]; then
     chattr -i "$wp_config_path" >/dev/null 2>&1
     chmod 644 "$wp_config_path" >/dev/null 2>&1
@@ -457,12 +462,29 @@ for DOMAIN in "${DOMAIN_LIST[@]}"; do
     # 1. Chèn wp-config
     $WP_EXEC config set DISABLE_WP_CRON true --raw --path="/usr/local/lsws/$DOMAIN/html" >/dev/null 2>&1
 
-    # 2. Tạo Crontab
+    # 2. Tạo Crontab (TẢN TẢI THÔNG MINH)
     giatuanwww=$($WP_EXEC option get home --path="/usr/local/lsws/$DOMAIN/html" --allow-root 2>/dev/null | grep 'www.')
     if [[ -n "$giatuanwww" ]]; then domain_req="www.$DOMAIN"; else domain_req="$DOMAIN"; fi
 
+    # Tản tải Phút
+    offset_minute=$(( RANDOM % phut ))
+    if [[ "$offset_minute" -eq 0 ]]; then
+      cron_time="*/$phut"
+    else
+      cron_time="${offset_minute}-59/${phut}"
+    fi
+    
+    # Tản tải Giây (Chỉ kích hoạt Micro-Staggering nếu Server có từ 30 website trở lên)
+    if [[ "$TOTAL_WP_SITES" -ge 30 ]]; then
+      offset_second=$(( RANDOM % 60 ))
+      sleep_cmd="sleep $offset_second && "
+    else
+      sleep_cmd=""
+    fi
+
+    # Kết hợp: Phút ngẫu nhiên + Sleep Giây (Nếu có) + Hạ ưu tiên + Timeout
     cat >"$cron_file" <<END
-*/$phut * * * * root /usr/bin/flock -n /tmp/wptt_cron_${DOMAIN}.lock wget -q -O - https://127.0.0.1/wp-cron.php?doing_wp_cron --header="Host: $domain_req" -U "WP Cron Optimize by WPTangToc OLS" --no-check-certificate >/dev/null 2>&1
+$cron_time * * * * root $sleep_cmd$PRIORITY_CMD /usr/bin/flock -n /tmp/wptt_cron_${DOMAIN}.lock wget -q -O - https://127.0.0.1/wp-cron.php?doing_wp_cron --header="Host: $domain_req" -U "WP Cron Optimize by WPTangToc OLS" --timeout=30 --tries=1 --no-check-certificate >/dev/null 2>&1
 END
 
     if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
@@ -477,7 +499,7 @@ END
     $WP_EXEC config delete DISABLE_WP_CRON --path="/usr/local/lsws/$DOMAIN/html" >/dev/null 2>&1
   fi
 
-  # [RESTORE LOCKDOWN] - Trả lại quyền bảo mật nếu website đang bật Lockdown
+  # [RESTORE LOCKDOWN]
   if [[ "$lock_down" == "1" ]]; then
     chmod 404 "$wp_config_path" >/dev/null 2>&1
     chattr +i "$wp_config_path" >/dev/null 2>&1
@@ -487,8 +509,6 @@ END
   _rundone "$action_text cho website $DOMAIN"
   thao_tac_thanh_cong=true
 
-  # CHỐNG VĂNG SSH: Giúp CPU và I/O có thời gian "thở" khi chạy hàng loạt WP-CLI
-  sleep 1.5
 done
 
 # ==============================================================================
@@ -512,7 +532,11 @@ if $thao_tac_thanh_cong; then
 
   if [[ "$wp_action" == "bat" ]]; then
     left_text "Chu kỳ Cronjob   : ${C_GREEN}Chạy $phut phút / Lần${C_RESET}" 2
-    left_text "Trạng thái mới   : ${C_GREEN}Đã TỐI ƯU. Máy chủ sẽ tự động kích hoạt tiến trình.${C_RESET}" 2
+    if [[ "$TOTAL_WP_SITES" -ge 10 ]]; then
+      left_text "Trạng thái mới   : ${C_GREEN}Đã TỐI ƯU (Bật tản tải đến từng Giây)${C_RESET}" 2
+    else
+      left_text "Trạng thái mới   : ${C_GREEN}Đã TỐI ƯU (Tản tải theo Phút)${C_RESET}" 2
+    fi
   else
     left_text "Trạng thái mới   : ${C_RED}Đã HỦY TỐI ƯU. Trả về WP-Cron mặc định.${C_RESET}" 2
   fi
