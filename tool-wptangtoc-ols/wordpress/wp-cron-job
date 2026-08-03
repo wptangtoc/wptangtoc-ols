@@ -21,7 +21,7 @@ function huong_dan() {
 
 #cli
 # /etc/wptt/wordpress/wp-cron-job all on 5 (Bật tối ưu toàn Server với chu kỳ 5 phút).
-#wptt-wp-cron domain.com off (Tắt tối ưu WP-Cron, trả về mặc định).
+# /etc/wptt/wordpress/wp-cron-job domain.com off (Tắt tối ưu WP-Cron, trả về mặc định).
 
 # ==============================================================================
 # NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
@@ -398,7 +398,7 @@ if [[ "$wp_action" == "bat" && -z "$phut" ]]; then
   left_text "  Nhập khoảng thời gian (phút) để máy chủ tự động kích hoạt WP-Cron." 2
   left_text "  Chỉ nhận số từ ${C_GREEN}1${C_RESET} đến ${C_GREEN}59${C_RESET}." 2
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-  echo -en "${C_CYAN}Nhập số phút [Enter = Mặc định 10 phút]: ${C_RESET}"
+  echo -en "${C_CYAN}👉 Nhập số phút [Enter = Mặc định 10 phút]: ${C_RESET}"
   read -r phut
 
   if [[ ! $phut =~ ^[0-9]+$ ]] || (("$phut" > 59)) || [[ "$phut" == "0" || -z "$phut" ]]; then
@@ -432,11 +432,26 @@ for DOMAIN in "${DOMAIN_LIST[@]}"; do
   _runing "$action_text cho website $DOMAIN..."
 
   . /etc/wptt/php/php-cli-domain-config $DOMAIN 2>/dev/null
+  unset lock_down #unset biến để tránh bị lỗi kiểm tra xem website có dùng lockdown hay không
   . /etc/wptt/vhost/.$DOMAIN.conf 2>/dev/null
+
+  # Bỏ qua nếu cấu hình vhost bị lỗi làm mất User (Tránh lỗi Sudo văng Script)
+  if [[ -z "$User_name_vhost" ]]; then
+    _rundone "Lỗi: Không tìm thấy Username cấu hình cho $DOMAIN"
+    continue
+  fi
+
   WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
   cron_file="/etc/cron.d/wp-cron-job-$DOMAIN.cron"
   ubuntu_cron_file="/etc/cron.d/wp-cron-job-${DOMAIN//[.]/_}_cron"
+  wp_config_path="/usr/local/lsws/$DOMAIN/html/wp-config.php"
+
+  # [TỐI ƯU TƯƠNG THÍCH LOCKDOWN] - Chỉ can thiệp mở quyền file nếu website đang Bật Lockdown
+  if [[ "$lock_down" == "1" ]]; then
+    chattr -i "$wp_config_path" >/dev/null 2>&1
+    chmod 644 "$wp_config_path" >/dev/null 2>&1
+  fi
 
   if [[ "$wp_action" == "bat" ]]; then
     # 1. Chèn wp-config
@@ -462,9 +477,18 @@ END
     $WP_EXEC config delete DISABLE_WP_CRON --path="/usr/local/lsws/$DOMAIN/html" >/dev/null 2>&1
   fi
 
+  # [RESTORE LOCKDOWN] - Trả lại quyền bảo mật nếu website đang bật Lockdown
+  if [[ "$lock_down" == "1" ]]; then
+    chmod 404 "$wp_config_path" >/dev/null 2>&1
+    chattr +i "$wp_config_path" >/dev/null 2>&1
+  fi
+
   echo "$action_text website $DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
   _rundone "$action_text cho website $DOMAIN"
   thao_tac_thanh_cong=true
+
+  # CHỐNG VĂNG SSH: Giúp CPU và I/O có thời gian "thở" khi chạy hàng loạt WP-CLI
+  sleep 1.5
 done
 
 # ==============================================================================
