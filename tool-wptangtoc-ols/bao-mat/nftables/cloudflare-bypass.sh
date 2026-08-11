@@ -17,5 +17,14 @@ nft add rule inet filter input ip saddr @cloudflarev4 accept
 fi
 
 
+
+
+nft add set ip httpdGuard cloudflarev4 { type ipv4_addr\; flags interval\; }
+ip_elements_cloudflare=$(nft list set ip httpdGuard cloudflarev4 | awk '/{ /,/}/' | cut -d '=' -f 2)
+nft delete element ip httpdGuard cloudflarev4 ${ip_elements_cloudflare}
+nft add element ip httpdGuard cloudflarev4 $cloudflare_ip
+nft add rule ip httpdGuard input ip saddr @cloudflarev4 accept
+
+
 nft list ruleset > /etc/sysconfig/nftables.conf
 systemctl restart nftables

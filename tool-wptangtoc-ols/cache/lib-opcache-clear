@@ -1,28 +1,56 @@
 #!/bin/bash
 # ==============================================================================
 # HÀM XÓA OPCACHE WEBSITE KHÔNG GÂY DOWNTIME (ZERO DOWNTIME)
-# Gọi hàm: wptt_xoa_opcache "wptangtoc.com"
-# sử dụng bằng thư viện PHP rồi curl nó hoạt động tuyệt vời hơn dùng wp cli opcache_reset, nó bao hàm tiến trình lsphp exec hơn
 # ==============================================================================
 function wptt_xoa_opcache() {
     local domain="$1"
     local web_root="/usr/local/lsws/$domain/html"
+    local path_conf="/etc/wptt/vhost/.$domain.conf"
 
     if [[ ! -d "$web_root" ]]; then
         echo -e "${C_RED}Lỗi: Không tìm thấy thư mục của domain $domain${C_RESET}"
         return 1
     fi
 
-	if [[ ! -f $web_root/index.php ]];then #nếu website không sử dụng mã nguồn index.php thì chả cần phải xoá opcache làm gì
+    if [[ ! -f "$web_root/index.php" ]]; then
         return 1
-	fi
+    fi
 
-    # 1. Tạo chuỗi bí mật ngẫu nhiên (16 ký tự) để chống bị dò rỉ file
+    # 1. Tải cấu hình WPTangToc OLS để check trạng thái Lockdown và lấy User
+    local is_locked=0
+    if [[ -f "$path_conf" ]]; then
+        source "$path_conf"
+        # Kiểm tra biến lock_down từ file cấu hình
+        [[ "$lock_down" == "1" ]] && is_locked=1
+    fi
+
+    # 2. Định tuyến thư mục ghi file OPcache
+    local target_dir="$web_root"
+    local relative_path=""
+
+    # Nếu Lockdown đang BẬT, chuyển hướng ngay vào các thư mục động
+    if [[ "$is_locked" -eq 1 ]]; then
+        if [[ -d "$web_root/wp-content/litespeed" ]]; then
+            target_dir="$web_root/wp-content/litespeed"
+            relative_path="wp-content/litespeed/"
+        elif [[ -d "$web_root/wp-content/cache" ]]; then
+            target_dir="$web_root/wp-content/cache"
+            relative_path="wp-content/cache/"
+        elif [[ -d "$web_root/wp-content/uploads" ]]; then
+            target_dir="$web_root/wp-content/uploads"
+            relative_path="wp-content/uploads/"
+        else
+            echo -e "${C_RED}Lỗi: Website bật Lockdown nhưng không tìm thấy thư mục ghi đệm hợp lệ!${C_RESET}"
+            return 1
+        fi
+    fi
+
+    # 3. Tạo chuỗi bí mật ngẫu nhiên (16 ký tự) để chống rò rỉ
     local secret_key=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16)
     local file_name="wptt_opcache_clear_${secret_key}.php"
-    local file_path="${web_root}/${file_name}"
+    local file_path="${target_dir}/${file_name}"
 
-    # 2. Tạo file PHP chứa lệnh reset OPcache
+    # 4. Tạo file PHP chứa lệnh reset OPcache
     cat <<'EOF' > "$file_path"
 <?php
 if (function_exists('opcache_reset')) {
@@ -30,16 +58,15 @@ if (function_exists('opcache_reset')) {
 }
 EOF
 
-	. /etc/wptt/vhost/.$domain.conf
-    
-    # 3. chmod
-    chown "${User_name_vhost}:${User_name_vhost}" "$file_path" 2>/dev/null
+    # 5. Chown chuẩn quyền User của vhost (Đã có sẵn khi dùng lệnh source ở bước 1)
+    if [[ -n "$User_name_vhost" ]]; then
+        chown "${User_name_vhost}:${User_name_vhost}" "$file_path" 2>/dev/null
+    fi
     chmod 644 "$file_path" 2>/dev/null
 
-    # 4. Kích hoạt File bằng cURL nội bộ
-    local result=$(curl -s -k -m 5 -H "Host: $domain" "http://127.0.0.1/$file_name")
+    # 6. Kích hoạt File bằng cURL nội bộ (Tự động nối đường dẫn tương đối)
+    curl -s -k -m 5 -H "Host: $domain" "http://127.0.0.1/${relative_path}${file_name}" >/dev/null
 
-    # 5. Thủ tiêu file bí mật ngay lập tức
+    # 7. Thủ tiêu file bí mật ngay lập tức
     rm -f "$file_path"
 }
-

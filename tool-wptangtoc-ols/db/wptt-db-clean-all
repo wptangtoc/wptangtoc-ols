@@ -1,0 +1,91 @@
+#!/bin/bash
+echo -e "KHỞI ĐỘNG CHIẾN DỊCH: CLEAN SẠCH TẬN GỐC VÀ TÁI TẠO TÀI KHOẢN...\n"
+
+# ==============================================================================
+# BƯỚC 1: DỌN SẠCH TÀN TÍCH - XÂY DỰNG CORE MARIADB MỚI TINH
+# ==============================================================================
+echo "[1/4] Đang dừng dịch vụ và dọn dẹp bộ lõi cũ..."
+systemctl stop mariadb 2>/dev/null
+
+# Xóa bỏ cờ ép buộc lỗi (nếu có)
+sed -i '/innodb_force_recovery/Id' /etc/my.cnf.d/zz_wptt_ram_fix.cnf 2>/dev/null
+systemctl daemon-reload
+
+# Cất thư mục hiện tại đi (Tạo ra thư mục trống hoàn toàn mới)
+mv /var/lib/mysql /var/lib/mysql_rac_$(date +%s) 2>/dev/null
+mkdir -p /var/lib/mysql
+chown -R mysql:mysql /var/lib/mysql
+
+echo "➜ Đang cài đặt lại lõi MariaDB nguyên thủy..."
+mysql_install_db --user=mysql --datadir=/var/lib/mysql >/dev/null 2>&1
+systemctl start mariadb
+
+# ==============================================================================
+# BƯỚC 2: TÁI TẠO TÀI KHOẢN QUẢN TRỊ ADMIN CỦA WPTANGTOC
+# ==============================================================================
+echo -e "\n[2/4] Đang khởi tạo tài khoản quản trị tối cao của hệ thống..."
+source /etc/wptt/.wptt.conf
+
+# Bơm quyền vào MariaDB (Mặc định khi mới cài chưa có pass root)
+mariadb -u root <<EOF
+FLUSH PRIVILEGES;
+CREATE USER IF NOT EXISTS 'wordpressadmin'@'localhost' IDENTIFIED BY '${database_admin_password}';
+GRANT ALL PRIVILEGES ON *.* TO 'wordpressadmin'@'localhost' WITH GRANT OPTION;
+DROP USER IF EXISTS 'root'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+
+# Tạo thẻ ủy quyền tạm thời
+TEMP_CNF_ROOT=$(mktemp /tmp/wptt_mariadb_auth.XXXXXX.cnf)
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=wordpressadmin
+password=${database_admin_password}
+host=localhost
+EOF
+trap "rm -f $TEMP_CNF_ROOT" EXIT
+
+# ==============================================================================
+# BƯỚC 3: QUÉT CẤU HÌNH WPTANGTOC (FILE ẨN) ĐỂ TẠO DATABASE
+# ==============================================================================
+echo -e "\n[3/4] Đang quét cấu hình WPTangToc để khởi tạo Database trắng..."
+for vhost_conf in /etc/wptt/vhost/.*.conf; do
+    [ -f "$vhost_conf" ] || continue
+    
+    db_db=$(grep -E '^DB_Name_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
+    db_user=$(grep -E '^DB_User_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
+    db_pass=$(grep -E '^DB_Password_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
+    
+    if [[ -n "$db_db" && -n "$db_user" && -n "$db_pass" ]]; then
+        echo "   ➜ Đã khởi tạo cấu trúc cho: $db_db"
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE DATABASE IF NOT EXISTS \`${db_db}\`;"
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';" 2>/dev/null
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';" 2>/dev/null
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON \`${db_db}\`.* TO '${db_user}'@'localhost';" 2>/dev/null
+    fi
+done
+
+# ==============================================================================
+# BƯỚC 4: BỌC LÓT BẰNG WP-CONFIG (TRỊ DỨT ĐIỂM BẤT ĐỒNG BỘ)
+# ==============================================================================
+echo -e "\n[4/4] Đang quét chéo wp-config.php để đảm bảo không bỏ sót..."
+for wpdir in /usr/local/lsws/*/html; do
+    [ -d "$wpdir/wp-admin" ] || continue
+    cd "$wpdir"
+    
+    db_name=$(wp config get DB_NAME --allow-root 2>/dev/null)
+    db_user=$(wp config get DB_USER --allow-root 2>/dev/null)
+    db_pass=$(wp config get DB_PASSWORD --allow-root 2>/dev/null)
+    
+    if [[ -n "$db_name" && -n "$db_user" && -n "$db_pass" ]]; then
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE DATABASE IF NOT EXISTS \`${db_name}\`;" 2>/dev/null
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE USER IF NOT EXISTS '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';" 2>/dev/null
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "ALTER USER '${db_user}'@'localhost' IDENTIFIED BY '${db_pass}';" 2>/dev/null
+        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON \`${db_name}\`.* TO '${db_user}'@'localhost';" 2>/dev/null
+    fi
+done
+
+mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES;"
+systemctl restart lsws 2>/dev/null || killall lsphp 2>/dev/null
+
+echo -e "\nCLEAN SẠCH THÀNH CÔNG RỰC RỠ! Toàn bộ nền móng MariaDB đã được đúc mới 100%!"
