@@ -1,0 +1,223 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# Tính năng: Tự động thay đổi toàn bộ Username cho TẤT CẢ website trên máy chủ.
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8
+
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_domain} ➜ THAY ĐỔI TOÀN BỘ USERNAME HỆ THỐNG${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# BƯỚC 1: XÁC NHẬN VÀ KIỂM TRA SỐ LƯỢNG
+# ==============================================================================
+if ! wptt_xac_nhan "CẢNH BÁO: Đổi Username TOÀN BỘ máy chủ!" \
+  "Hệ thống sẽ tự động sinh Username mới, an toàn cho tất cả website." \
+  "Quá trình này sẽ ngắt kết nối SSH hiện tại của các website (nếu có)." \
+  "Đồng ý càn quét và Đổi toàn bộ" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 0
+fi
+
+tong_so_web=0
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  domain="${filepath##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
+  if [[ "$domain" == ?*.?* ]]; then
+    ((tong_so_web++))
+  fi
+done
+
+if [[ $tong_so_web -eq 0 ]]; then
+  echo -e "${C_RED}❌ Không tìm thấy website nào trên hệ thống!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 1
+fi
+
+echo ""
+tien_do=1
+_runing "Bắt đầu tiến trình tái cấu trúc Username cho $tong_so_web website..."
+
+# ==============================================================================
+# BƯỚC 2: VÒNG LẶP XỬ LÝ TỪNG WEBSITE
+# ==============================================================================
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+  NAME="${filepath##*/}"
+  NAME="${NAME%.conf}"
+  NAME="${NAME#.}"
+
+  if [[ "$NAME" == ?*.?* && -d "/usr/local/lsws/$NAME" ]]; then
+    echo -e "${C_CYAN}[ $tien_do / $tong_so_web ]${C_RESET} Đang xử lý website: ${C_BOLD_WHITE}$NAME${C_RESET}"
+
+    # Lấy thông tin User cũ
+    unset User_name_vhost lock_down
+    . "$filepath" 2>/dev/null
+    
+    if [[ -z "$User_name_vhost" ]]; then
+      echo -e "   ${C_RED}➜ Bỏ qua: Không tìm thấy Username cũ cấu hình trong file!${C_RESET}"
+      ((tien_do++))
+      continue
+    fi
+
+    # Tự động sinh User mới an toàn (Lấy tên miền + 4 ký tự random)
+    random_suffix=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 4)
+    USER_CLEAN=${NAME//[-._]/}
+    USER="${USER_CLEAN}${random_suffix}"
+    
+    # Cắt gọn chuẩn 32 ký tự Linux
+    if ((${#USER} > 32)); then USER=$(echo "$USER" | cut -c 1-32); fi
+
+    # Nếu trùng User (Hiếm khi xảy ra), sinh lại
+    while id "$USER" &>/dev/null; do
+      random_suffix=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 4)
+      USER="${USER_CLEAN}${random_suffix}"
+      if ((${#USER} > 32)); then USER=$(echo "$USER" | cut -c 1-32); fi
+    done
+
+    echo -e "   ${C_GREEN}➜ Đổi từ: $User_name_vhost -> $USER${C_RESET}"
+
+    # 1. Tháo Jail và Namespace OLS
+    JAIL_PATH="/usr/local/lsws/$NAME"
+    if [[ -d "$JAIL_PATH/etc/wptt" ]]; then
+      umount -fl "$JAIL_PATH/etc/wptt" 2>/dev/null || true
+      umount -fl "$JAIL_PATH/etc/wptt-user" 2>/dev/null || true
+      umount -fl "$JAIL_PATH/usr/bin/wptangtoc-user" 2>/dev/null || true
+      umount -fl "$JAIL_PATH/.cron_spool" 2>/dev/null || true
+      REAL_SOCK=$(mariadb -N -e "select @@socket;" 2>/dev/null || echo "/var/lib/mysql/mysql.sock")
+      umount -fl "$JAIL_PATH$REAL_SOCK" 2>/dev/null || true
+    fi
+
+    OLS_NS_PATH="/var/lsns/*/$NAME"
+    if ls $OLS_NS_PATH 1>/dev/null 2>&1; then
+      fuser -k -9 $OLS_NS_PATH/* $OLS_NS_PATH/*/mnt 2>/dev/null || true
+      umount -fl $OLS_NS_PATH/*/mnt 2>/dev/null || true
+      umount -fl $OLS_NS_PATH/* 2>/dev/null || true
+      rm -rf /var/lsns/*/$NAME 2>/dev/null || true
+    fi
+
+    # Dọn socket PHP
+    NAMEPHP=${NAME//[-._]/}
+    rm -f /tmp/lshttpd/$NAMEPHP.sock*
+
+    # 2. Xử tử User cũ
+    pkill -9 -u "$User_name_vhost" >/dev/null 2>&1
+    crontab -r -u "$User_name_vhost" >/dev/null 2>&1
+    usermod -R wptangtoc-ols "$User_name_vhost" >/dev/null 2>&1
+    userdel -f "$User_name_vhost" >/dev/null 2>&1
+    find /tmp /dev/shm /var/tmp -user "$User_name_vhost" -delete >/dev/null 2>&1
+    rm -rf /home/"$User_name_vhost" 2>/dev/null
+    
+    # Xóa block SSH Chroot cũ
+    sed -i -e "/^#begin-WPTT_JAIL_$User_name_vhost/,/^#end-WPTT_JAIL_$User_name_vhost$/d" /etc/ssh/sshd_config 2>/dev/null || true
+
+    # 3. Khởi tạo User mới
+    useradd -p -m -d /usr/local/lsws/$NAME $USER >/dev/null 2>&1
+    cp -rf /etc/skel/. /usr/local/lsws/$NAME
+
+    # Cập nhật bashrc
+    sed -i '/wptangtoc/d; /wptt/d; /return/d' /usr/local/lsws/$NAME/.bashrc
+    echo '[[ $- != *i* ]] && return' >>/usr/local/lsws/$NAME/.bashrc
+    echo "alias 1='wptangtoc-user'" >>/usr/local/lsws/$NAME/.bashrc
+    echo "alias 11='wptangtoc-user'" >>/usr/local/lsws/$NAME/.bashrc
+    echo ". /etc/wptt-user/wptt-status" >>/usr/local/lsws/$NAME/.bashrc
+
+    chmod 755 /usr/local/lsws/$NAME
+    usermod $USER -s /sbin/nologin
+
+    # 4. Phân quyền lại thư mục (Sử dụng ionice để tránh nghẽn I/O)
+    [[ $lock_down ]] && . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME off
+    
+    ionice -c 3 nice -n 19 chown -Rh $USER:$USER /usr/local/lsws/$NAME/html >/dev/null 2>&1
+    ionice -c 3 nice -n 19 chown -Rh $USER:$USER /usr/local/lsws/$NAME/backup-website >/dev/null 2>&1
+    chown root:root /usr/local/lsws/$NAME/.* 2>/dev/null
+    chown root:root /usr/local/lsws/$NAME
+    
+    [[ $lock_down ]] && . /etc/wptt/bao-mat/wptt-chattr-file-lock $NAME on
+
+    # 5. Cập nhật cấu hình LiteSpeed
+    sed -i -e '/^virtualhost '$NAME'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+    echo "virtualhost $NAME {
+  vhRoot                  /usr/local/lsws/$NAME/
+  configFile              /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+  allowSymbolLink         1
+  enableScript            1
+  restrained              1
+  maxKeepAliveReq         1000
+  setUIDMode              2
+  user                    $USER
+  group                   $USER
+}" >>/usr/local/lsws/conf/httpd_config.conf
+
+    sed -i '/extUser/d; /extGroup/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+    sed -i "/instances/a extGroup                 $USER" /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+    sed -i "/instances/a extUser                 $USER" /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
+
+    sed -i '/User_name_vhost/d' "$filepath"
+    echo "User_name_vhost=$USER" >>"$filepath"
+
+    # 6. Đồng bộ WP-Cron ngầm (Regex chống đạn)
+    cron_file="/etc/cron.d/wp-cron-job-$NAME.cron"
+    if [[ -f "$cron_file" ]]; then
+      # Tóm gọn mọi định dạng (sudo, runuser, /sbin/runuser) và đổi sạch sang chuẩn mới
+      sed -E -i "s/(sudo|runuser|\/sbin\/runuser) -u $User_name_vhost/\/sbin\/runuser -u $USER --/g" "$cron_file"
+    fi
+
+    # 7. Thiết lập SSH Chroot mới
+    cat <<EOF >>/etc/ssh/sshd_config
+#begin-WPTT_JAIL_$USER
+Match User $USER
+    ChrootDirectory /usr/local/lsws/$NAME
+    ForceCommand internal-sftp
+    AllowTcpForwarding no
+    X11Forwarding no
+#end-WPTT_JAIL_$USER
+EOF
+
+    echo "Đổi User hàng loạt $User_name_vhost -> $USER cho website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    ((tien_do++))
+  fi
+done
+
+_rundone "Cấu hình Username mới cho toàn bộ website hoàn tất!"
+
+# ==============================================================================
+# BƯỚC 3: RELOAD TOÀN BỘ DỊCH VỤ 1 LẦN DUY NHẤT
+# ==============================================================================
+_runing "Đang nạp lại dịch vụ LiteSpeed, SSH và Cron..."
+
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+
+if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+  systemctl restart cron.service >/dev/null 2>&1
+else
+  systemctl restart crond.service >/dev/null 2>&1
+fi
+
+_rundone "Hệ thống đã nhận diện cấu hình mới thành công"
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}TÁI CẤU TRÚC USERNAME HOÀN TẤT${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tổng số Website : ${C_YELLOW}$tong_so_web${C_RESET}" 2
+left_text "Trạng thái      : ${C_GREEN}Đã thay đổi và phân quyền thành công 100%${C_RESET}" 2
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
