@@ -1,0 +1,119 @@
+#!/bin/bash
+# Tính năng: Cấp cứu tự động MariaDB sau thảm họa sập RAM (OOM Killer) hoặc lỗi cấu hình.
+
+# Khai báo màu sắc cho thông báo thêm phần rực rỡ
+C_GREEN='\033[1;32m'
+C_RED='\033[1;31m'
+C_YELLOW='\033[1;33m'
+C_CYAN='\033[1;36m'
+C_RESET='\033[0m'
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+echo -e "${C_CYAN}│${C_RESET} ${C_YELLOW}WPTANGTOC: CẤP CỨU MARIADB TỰ ĐỘNG${C_RESET}                         ${C_CYAN}│${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# BƯỚC 1: CẦM MÁU - Dừng mọi tiến trình MariaDB đang kẹt
+# ==============================================================================
+echo -e "${C_CYAN}[Bước 1]${C_RESET} Đang ép dừng dịch vụ MariaDB..."
+systemctl stop mariadb 2>/dev/null
+pkill -9 mariadbd 2>/dev/null # Bắn bỏ các tiến trình thây ma nếu systemctl không tắt được
+
+
+# ==============================================================================
+# BƯỚC 2: PHẪU THUẬT CẤU HÌNH RÁC (Tiêu diệt cấu hình ngáo 8TB & Cờ cấp cứu)
+# ==============================================================================
+echo -e "${C_CYAN}[Bước 2]${C_RESET} Quét và tiêu diệt cấu hình rác gây ngẽn RAM..."
+
+# Tìm và xóa toàn bộ các dòng chứa "innodb_force_recovery" ở mọi file cấu hình
+find /etc/my.cnf /etc/my.cnf.d/ -type f -exec sed -i -E '/innodb_force_recovery/Id' {} + 2>/dev/null
+
+# Xóa các giới hạn MAX ảo tưởng (Thủ phạm gây lỗi Cannot map 8TB lúc nãy)
+find /etc/my.cnf /etc/my.cnf.d/ -type f -exec sed -i -E '/innodb_buffer_pool_size_max/Id' {} + 2>/dev/null
+find /etc/my.cnf /etc/my.cnf.d/ -type f -exec sed -i -E '/innodb_buffer_pool_size/Id' {} + 2>/dev/null
+
+
+# ==============================================================================
+# BƯỚC 3: KÊ ĐƠN THUỐC MỚI (Tự động tính toán RAM chuẩn cho VPS)
+# ==============================================================================
+# Đọc tổng số RAM vật lý của máy (Tính bằng Gigabyte)
+TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
+
+# Thuật toán chia đôi RAM: Dành 50% RAM cho Database (Chuẩn tối ưu)
+POOL_SIZE=$((TOTAL_RAM / 2))
+[[ $POOL_SIZE -lt 1 ]] && POOL_SIZE=1 # Bọc lỗi: Đảm bảo tối thiểu luôn có 1GB
+
+echo -e "   ${C_GREEN}➜ Phát hiện hệ thống có ${TOTAL_RAM}GB RAM. Thiết lập Buffer Pool: ${POOL_SIZE}GB${C_RESET}"
+
+# Đóng gói cấu hình quyền lực cao nhất để ép MariaDB nghe lời
+cat > /etc/my.cnf.d/zz_wptt_ram_fix.cnf <<EOF
+[mysqld]
+innodb_buffer_pool_size = ${POOL_SIZE}G
+EOF
+
+
+# ==============================================================================
+# BƯỚC 4: THÁO GỠ VÒNG KIM CÔ CỦA SYSTEMD
+# ==============================================================================
+echo -e "👉 ${C_CYAN}[Bước 4]${C_RESET} Phá bỏ các rào cản RAM ảo của Kernel/Systemd..."
+
+# Tạo thư mục dự phòng thay vì xóa vĩnh viễn (Phòng hờ rủi ro)
+mkdir -p /tmp/wptt_mariadb_systemd_backup
+# Di dời các file Drop-in (thường chứa LimitAS, oom-protect) cản trở MariaDB xin RAM
+mv /etc/systemd/system/mariadb.service.d/*.conf /tmp/wptt_mariadb_systemd_backup/ 2>/dev/null
+
+# Cực kỳ quan trọng: Bắt Linux nạp lại thiết lập để nhận diện đã gỡ giới hạn
+systemctl daemon-reload
+
+
+# ==============================================================================
+# BƯỚC 5: ĐẢM BẢO QUYỀN SỞ HỮU
+# ==============================================================================
+echo -e "${C_CYAN}[Bước 5]${C_RESET} Cấp lại quyền sở hữu thư mục Database..."
+# Nếu root lỡ chui vào tạo file, đổi về mysql:mysql để MariaDB có quyền đọc/ghi
+chown -R mysql:mysql /var/lib/mysql
+
+
+# ==============================================================================
+# BƯỚC 6: SỐC ĐIỆN HỒI SINH (LẦN 1)
+# ==============================================================================
+echo -e "${C_CYAN}[Bước 6]${C_RESET} Đang kích hoạt lại MariaDB..."
+systemctl start mariadb
+
+# Kiểm tra xem nó đã "sống" chưa
+if systemctl is-active --quiet mariadb; then
+    echo -e "\n${C_GREEN}✅ TUYỆT VỜI! MariaDB đã sống dậy và khôi phục dữ liệu thành công!${C_RESET}\n"
+    exit 0
+fi
+
+
+# ==============================================================================
+# BƯỚC 7: KỊCH BẢN TỒI TỆ NHẤT (FILE LOG BỊ HỎNG DO OOM)
+# Nếu Lần 1 thất bại, 99% là file nhật ký (ib_logfile) đã bị hỏng rách lúc sập RAM.
+# ==============================================================================
+echo -e "\n${C_YELLOW}⚠️ Khởi động Lần 1 thất bại (File Log có thể đã hỏng)! Bắt đầu Kịch Bản Khẩn Cấp...${C_RESET}"
+
+systemctl stop mariadb 2>/dev/null
+
+# Tạo thư mục tạm theo thời gian thực để dọn rác
+DIR_BACKUP="/tmp/wptt_mariadb_logs_$(date +%s)"
+mkdir -p "$DIR_BACKUP"
+
+echo -e "Đang cách ly các file Log bị hỏng vào: $DIR_BACKUP"
+# Chuyển toàn bộ các file tạm, file ghi dở của InnoDB ra chỗ khác để nó tự tái tạo
+mv /var/lib/mysql/ib_logfile* "$DIR_BACKUP"/ 2>/dev/null
+mv /var/lib/mysql/tc.log "$DIR_BACKUP"/ 2>/dev/null
+mv /var/lib/mysql/aria_log* "$DIR_BACKUP"/ 2>/dev/null
+mv /var/lib/mysql/ib_buffer_pool "$DIR_BACKUP"/ 2>/dev/null
+
+# Sốc điện lần 2 (Không còn file log cũ, MariaDB buộc phải sinh file mới tinh)
+echo -e "Đang kích hoạt lại MariaDB (Lần 2)..."
+systemctl start mariadb
+
+if systemctl is-active --quiet mariadb; then
+    echo -e "\n${C_GREEN}✅ THÀNH CÔNG! MariaDB đã tự tái tạo File Log mới và hoạt động trơn tru!${C_RESET}\n"
+else
+    echo -e "\n${C_RED}❌ CẤP CỨU THẤT BẠI! Cấu trúc Core Data (ibdata1) có thể đã tổn thương nặng.${C_RESET}"
+    echo -e "Vui lòng chạy lệnh sau để tìm bệnh chính xác: ${C_YELLOW}journalctl -u mariadb -n 50 --no-pager${C_RESET}\n"
+fi
