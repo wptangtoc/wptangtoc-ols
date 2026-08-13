@@ -48,7 +48,32 @@ rm -f $path_nftables_config
 sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
 sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
 sed -i "s/^banaction_allports = .*/banaction_allports = firewallcmd-allports/" /etc/fail2ban/jail.local
+systemctl unmask fail2ban
+systemctl start fail2ban
+systemctl enable fail2ban
 systemctl restart fail2ban
 
+
+cat <(crontab -l) | sed "/bao-mat/d" | crontab -
+cat <(crontab -l) | sed "/truncate/d" | crontab -
+systemctl restart crond
+rm -rf /usr/local/lsws/*/bao-mat
+systemctl stop ddos-blocker-nftables
+systemctl disable ddos-blocker-nftables
+rm -f /usr/local/bin/anti
+rm -f /etc/systemd/system/ddos-blocker-nftables.service
+if [[ -f /etc/systemd/system/layer7-ddos-blocker-nftables.service ]]; then
+  systemctl stop layer7-ddos-blocker-nftables
+  systemctl disable layer7-ddos-blocker-nftables
+  rm -f /etc/systemd/system/layer7-ddos-blocker-nftables.service
+fi
+
+if [[ -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service ]]; then
+  systemctl stop layer7-lsws-litmit-ddos-blocker-nftables
+  systemctl disable layer7-ddos-blocker-nftables
+  rm -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service
+fi
+
+. /etc/wptt/logs/warn-log-chuyen-error-log
 firewall-cmd --reload
 echo "Hoàn tất remove nftables và bật lại firewalld"
