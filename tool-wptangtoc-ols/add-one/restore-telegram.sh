@@ -24,9 +24,6 @@ center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Tải file backup từ Teleg
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 echo "Tải file backup từ Telegram: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-# ==============================================================================
-# LỰA CHỌN DOMAIN
-# ==============================================================================
 . /etc/wptt/tenmien
 lua_chon_NAME "Download file backup từ Telegram"
 
@@ -43,18 +40,19 @@ if [[ ! -f "$pathcheck" ]]; then
   return 2>/dev/null || exit
 fi
 
-# ==============================================================================
-# TRUY XUẤT DỮ LIỆU TỪ MÁY CHỦ API
-# ==============================================================================
+TG_BASE_URL="https://api.telegram.org"
+if ! curl -I -s -m 3 "$TG_BASE_URL" > /dev/null 2>&1; then
+	API_PROXY=$(curl -X POST -s -m 5 "https://key.wptangtoc.com/get-telegram-work" -A 'Activate Backup Restore WPTangToc' | tr -d ' ' | tr -d '\n')
+    [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
+fi
+
 echo ""
 _runing "Đang kết nối đến máy chủ WPTangToc để lấy danh sách file..."
 log_file=$(mktemp -p /dev/shm)
 selects=()
 
-# Sửa lại URL chuẩn xác theo hệ sinh thái WPTangToc OLS
-curl -X POST -s "https://key.wptangtoc.com/restore.php" -A 'Activate Backup Restore WPTangToc' > "$log_file"
+curl -X POST -s "https://key.wptangtoc.com/restore" -H "Content-Type: application/json" -A 'Activate Backup Restore WPTangToc' > "$log_file"
 
-# Lọc danh sách file theo domain, bỏ đi phần .part_ để gom nhóm
 danh_sach=$(cat "$log_file" | cut -f2 -d ' ' | sed 's/\.part_[0-9]\+$//' | grep "^${NAME}_" | uniq | head -n 100)
 
 if [[ -z "$danh_sach" ]]; then
@@ -69,9 +67,6 @@ fi
 _rundone "Đã lấy danh sách file thành công!"
 echo ""
 
-# ==============================================================================
-# MENU CHỌN BẢN BACKUP 1 (HỖ TRỢ FZF)
-# ==============================================================================
 while IFS= read -r line; do selects+=("$line"); done <<<"$danh_sach"
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -134,7 +129,7 @@ while true; do
 done
 
 # ==============================================================================
-# HÀM TẢI & GHÉP NỐI FILE TELEGRAM (UX AWK PARSER ĐỈNH CAO)
+# HÀM TẢI & GHÉP NỐI (BẢO CHỨNG 100% TOÀN VẸN DATA)
 # ==============================================================================
 download_and_merge_telegram() {
   local target_file="$1"
@@ -144,32 +139,38 @@ download_and_merge_telegram() {
 
   echo -e "\n${C_CYAN}➜ Đang xử lý tải xuống: ${C_YELLOW}$target_file${C_RESET}"
   
-  # Lọc tất cả các mảnh part của file này trong log
-  mapfile -t dulieu_all < <(grep "$target_file" "$log_file")
+  mapfile -t dulieu_all < <(grep "$target_file" "$log_file" | sort -k2,2V)
   
   for du_lieu in "${dulieu_all[@]}"; do
     local file_id=$(echo "$du_lieu" | cut -f1 -d ' ')
     local ten_file_part=$(echo "$du_lieu" | cut -f2 -d ' ')
     
-    local file_path=$(curl -s -X POST "https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${telegram_api}/getFile" -d file_id="$file_id" | jq -r '.result.file_path')
+    local get_file_url="${TG_BASE_URL}/bot${telegram_api}/getFile"
+    local file_info=$(curl -s -X POST "$get_file_url" -d file_id="$file_id")
+    local file_path=$(echo "$file_info" | jq -r '.result.file_path')
+    local file_size_api=$(echo "$file_info" | jq -r '.result.file_size') # Lấy chuẩn dung lượng API
     
     if [[ "$file_path" == "null" || -z "$file_path" ]]; then
       _runloi "Không thể lấy link tải mảnh: $ten_file_part"
       return 1
     fi
 
-    # Bắt bảng dữ liệu thô của curl và dùng awk ép vẽ lại thành 1 dòng duy nhất (\r)
-    echo -e "   ${C_CYAN}➜ Kết nối tải mảnh:${C_RESET} $ten_file_part"
-    curl -o "$path_dl/$ten_file_part" "https://worker-soft-shape-e788.hoangtuan0137.workers.dev/file/bot${telegram_api}/$file_path" 2>&1 | awk -v RS='\r' -v green="${C_GREEN}" -v reset="${C_RESET}" '{
-        if ($1 ~ /^[0-9]+$/) {
-            printf "\r\033[K   %s⬇ Tiến độ:%s %3s%% ➜ Đã tải: %s / %s (Tốc độ: %s)", green, reset, $1, $4, $2, $7;
-            fflush();
-        }
-    }'
-    echo "" # Xuống dòng sạch sẽ sau khi tải xong 1 mảnh
+    echo -e "   ${C_CYAN}➜ Đang tải kết nối mảnh:${C_RESET} $ten_file_part"
+    local download_url="${TG_BASE_URL}/file/bot${telegram_api}/$file_path"
+    
+    # Ẩn Progress bar để chống gãy Pipe, chỉ báo trạng thái tải tĩnh
+    curl -sL -f -o "$path_dl/$ten_file_part" "$download_url"
     
     if [[ -f "$path_dl/$ten_file_part" ]]; then
-      # Nối file (append)
+      # SIÊU KIỂM TRA CHÉO: Dữ liệu tải về phải khớp 100% Byte với Telegram báo cáo
+      local downloaded_size=$(stat -c %s "$path_dl/$ten_file_part")
+      
+      if [[ "$downloaded_size" != "$file_size_api" ]]; then
+          _runloi "Lỗi rớt mạng! Dung lượng mảnh $ten_file_part bị thiếu."
+          return 1
+      fi
+      
+      # An toàn 100% rồi mới cho phép nối file (cat)
       if [[ "$ten_file_part" == *".part_"* ]]; then
         cat "$path_dl/$ten_file_part" >> "$path_dl/$target_file"
         rm -f "$path_dl/$ten_file_part"
@@ -180,13 +181,10 @@ download_and_merge_telegram() {
     fi
   done
   
-  _rundone "Hoàn tất ghép nối 100% file: $target_file"
+  _rundone "Hoàn tất ghép nối 100% an toàn: $target_file"
   return 0
 }
 
-# ==============================================================================
-# XÁC NHẬN TẢI FILE 1
-# ==============================================================================
 echo ""
 dongy_taifile1="n"
 if wptt_xac_nhan "Xác nhận để tải File này về máy chủ?" "${C_BOLD_WHITE}Tên file:${C_RESET} ${C_YELLOW}$file1${C_RESET}" "" "Đồng ý Tải" "Hủy bỏ"; then
@@ -194,14 +192,10 @@ if wptt_xac_nhan "Xác nhận để tải File này về máy chủ?" "${C_BOLD_
   download_and_merge_telegram "$file1"
 fi
 
-# ==============================================================================
-# BƯỚC 2: LOGIC GỢI Ý TẢI THÊM FILE ĐỒNG BỘ
-# ==============================================================================
 echo ""
 dongy_taifile2="n"
 file2=""
 
-# Loại bỏ file 1 khỏi danh sách selects
 filtered_selects=()
 for f in "${selects[@]}"; do
   [[ "$f" != "$file1" ]] && filtered_selects+=("$f")
@@ -258,12 +252,8 @@ if [[ ${#selects[@]} -gt 0 && "$dongy_taifile1" == "y" ]]; then
   fi
 fi
 
-# Xóa file log Telegram (Cleanup)
 rm -f "$log_file"
 
-# ==============================================================================
-# BẢNG BÁO CÁO TỔNG HỢP (UX BO CONG)
-# ==============================================================================
 echo ""
 echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}TIẾN TRÌNH DOWNLOAD TỪ TELEGRAM HOÀN TẤT${C_RESET}"
