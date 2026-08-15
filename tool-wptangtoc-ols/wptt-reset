@@ -7,20 +7,7 @@ function huong_dan() {
   Tính năng Factory Reset LiteSpeed Webserver [Khôi phục cài đặt gốc cho LiteSpeed Webserver]
 }
 
-if [[ ${2:-} = 'premium' ]]; then
-  unset key_activate
-  . /etc/wptt/.wptt.conf 2>/dev/null
-  if [[ -z $key_activate ]]; then
-    echo "Tính năng này là tính năng Premium bạn phải mua Active key mới có thể sử dụng được"
-    echo "Bạn hãy activate key thì sẽ được sử dụng tất cả các tính năng trong add ons"
-    check_menu_wptangtoc_active=${1:-}
-    if [[ $check_menu_wptangtoc_active = "98" ]]; then
-      exec /etc/wptt/wptt-add-one-main 1
-    fi
-    exit
-  fi
-fi
-
+. /etc/wptt/echo-color
 # ==============================================================================
 # HỆ THỐNG MÀU SẮC GIAO DIỆN (UX)
 # ==============================================================================
@@ -33,21 +20,24 @@ C_RESET='\e[0m'
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-echo -e "${C_CYAN}│${C_RESET} ${C_YELLOW}              WPTANGTOC OLS ➜ FACTORY RESET LITESPEED               ${C_RESET} ${C_CYAN}│${C_RESET}"
+center_text "${C_CYAN}${C_RESET} ${C_YELLOW}WPTANGTOC OLS ➜ FACTORY RESET LITESPEED${C_RESET}${C_CYAN}${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 echo ""
 
-# ==============================================================================
-# BƯỚC XÁC NHẬN AN TOÀN (SAFETY PROMPT)
-# ==============================================================================
-echo -e "${C_RED}CẢNH BÁO NGUY HIỂM TỘT ĐỘ ${C_RESET}"
-echo -e "${C_WHITE}Tính năng này sẽ XÓA SẠCH toàn bộ cấu hình máy chủ Webserver hiện tại.${C_RESET}"
-echo -e "${C_WHITE}Máy chủ sẽ được khôi phục về trạng thái nguyên bản lúc mới cài đặt WPTangToc OLS.${C_RESET}\n"
 
 echo -e "\n${C_CYAN}Đang khởi tạo tiến trình Factory Reset...${C_RESET}"
 echo "Reset toàn bộ cấu hình webserver : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 . /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+if [[ $1 = '98' ]];then #xác nhận thông qua menu phải yêu cầu hỏi nguời dùng cho chắc
+	if ! wptt_xac_nhan "Bạn có muốn Khôi phục cấu hình vhost và server.conf của LiteSpeed không?" "Tính năng này sẽ XÓA SẠCH toàn bộ cấu hình LiteSpeed hiện tại.." "sẽ được khôi phục về trạng thái nguyên bản lúc mới cài đặt WPTangToc OLS" "Đồng ý khôi phục" "Hủy thao tác"; then
+		[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-add-one-main 1
+		exit 0
+	fi
+fi
+
 
 # ==============================================================================
 # BƯỚC 1: TÍNH TOÁN TÀI NGUYÊN
@@ -769,12 +759,44 @@ if [[ -n "${download_api:-}" ]]; then
   fi
 fi
 
+
+#begin thuật toán tối ưu phân bổ tài nguyên OLS theo số luợng website
+# 1. Tính toán tài nguyên hiện tại
+tong_ram_mb=$(echo "scale=0; ${tong_ram_byte}/1024" | bc)
+so_luong_web=$(ls -A /etc/wptt/vhost 2>/dev/null | grep -E '\.conf$' | grep -v '^\.\.conf$' | wc -l)
+cpucore=$(grep -c ^processor /proc/cpuinfo)
+core_tien_lsphp_child=$((cpucore * 2))
+
+#begin tối ưu hoá chế độ ngủ đông OLS để tiết kiệm tài nguyên
+check_need_idle() {
+    local webs=$1
+    local ram=$2
+    if (( webs > 400 && ram < 32024 )) || \
+       (( webs > 200 && ram < 16024 )) || \
+       (( webs > 100 && ram < 8024 )) || \
+       (( webs > 50 && ram < 4024 )) || \
+       (( webs > 10 && ram < 2024 )) || \
+       (( ram < 1024 )); then
+        echo 1 # CẦN NGỦ ĐÔNG
+    else
+        echo 0 # CHƯA CẦN
+    fi
+}
+
+
+new_status=$(check_need_idle $so_luong_web $tong_ram_mb)
+if (( new_status == 1 )); then #đáp ứng đủ điều kiện
+    /etc/wptt/cau-hinh/wptt-ngu-dong-litespeed on all >/dev/null 2>&1
+fi
+#end tối ưu hoá chế độ ngủ đông OLS để tiết kiệm tài nguyên
+
 echo '100' >/etc/wptt/.ram_hien_tai
 /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
 
 if [[ -n "${ip_block_rules:-}" ]]; then
   rm -f "/etc/wptt/vhost/.$ip.conf"
 fi
+
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
