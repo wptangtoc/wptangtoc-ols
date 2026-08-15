@@ -471,11 +471,73 @@ fi
 
 sed -E -i "s/lsphp[0-9]+/lsphp${php_ver_chon}/g" "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 
-# Tính toán Optimize nhiều website
-tong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
-if (($(ls -A /etc/wptt/vhost | wc -l) > 10 || tong_ram_mb < 1024)); then
-  . /etc/wptt/cau-hinh/wptt-litespeed-config-cau-hinh-optimize-nhieu-web >/dev/null 2>&1
+
+#begin thuật toán tối ưu phân bổ tài nguyên OLS theo số luợng website
+# 1. Tính toán tài nguyên hiện tại
+tong_ram_mb=$(echo "scale=0; ${tong_ram_byte}/1024" | bc)
+so_luong_web=$(ls -A /etc/wptt/vhost 2>/dev/null | grep -E '\.conf$' | grep -v '^\.\.conf$' | wc -l)
+cpucore=$(grep -c ^processor /proc/cpuinfo)
+core_tien_lsphp_child=$((cpucore * 2))
+
+# ==============================================================================
+# HÀM KIỂM TRA TRẠNG THÁI 
+# ==============================================================================
+check_need_idle() {
+    local webs=$1
+    local ram=$2
+    if (( webs > 400 && ram < 32024 )) || \
+       (( webs > 200 && ram < 16024 )) || \
+       (( webs > 100 && ram < 8024 )) || \
+       (( webs > 50 && ram < 4024 )) || \
+       (( webs > 10 && ram < 2024 )) || \
+       (( ram < 1024 )); then
+        echo 1 # CẦN NGỦ ĐÔNG
+    else
+        echo 0 # CHƯA CẦN
+    fi
+}
+
+old_status=$(check_need_idle $((so_luong_web - 1)) $tong_ram_mb)
+new_status=$(check_need_idle $so_luong_web $tong_ram_mb)
+
+# ==============================================================================
+# 2. PHÂN LUỒNG XỬ LÝ (THUẬT TOÁN O(1) - KHÔNG QUÉT LẠI WEB CŨ)
+# ==============================================================================
+if (( new_status == 1 )); then
+    # --- LUỒNG A: VPS YẾU, CẦN NGỦ ĐÔNG ---
+    if (( old_status == 0 )); then
+        # Giọt nước tràn ly (Vừa vượt ngưỡng) -> Bật ngủ đông HÀNG LOẠT cho toàn bộ web
+        /etc/wptt/cau-hinh/wptt-ngu-dong-litespeed on all >/dev/null 2>&1
+    else
+        # Đã vượt ngưỡng từ trước -> Web cũ đã ngủ đông, CHỈ BẬT cho đúng WEB MỚI
+        /etc/wptt/cau-hinh/wptt-ngu-dong-litespeed on "$NAME" >/dev/null 2>&1
+    fi
+else
+    # --- LUỒNG B: VPS MẠNH, CHẠY CHẾ ĐỘ OPTIMIZE NHIỀU WEB ---
+    if (( so_luong_web == 11 )); then
+        # Vừa chạm mốc 11 -> Tối ưu HÀNG LOẠT cho 10 web cũ + web mới
+        . /etc/wptt/cau-hinh/wptt-litespeed-config-cau-hinh-optimize-nhieu-web >/dev/null 2>&1
+        
+    elif (( so_luong_web > 11 )); then
+        # Các web cũ đã tối ưu rồi -> CHỈ BƠM cấu hình Optimize vào file của WEB MỚI
+        vhost_file="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+        
+        # Dùng sức mạnh của Sed (Lấy từ file optimize-nhieu-web) bơm thẳng vào đúng 1 file
+        sed -i '/extprocessor/,/}/ { /env[[:space:]]/d }' "$vhost_file"
+        sed -i '/extprocessor/,/}/ {
+            /priority[[:space:]]/a \
+  env                     PHP_LSAPI_CHILDREN='"$core_tien_lsphp_child"'\
+  env                     LSAPI_AVOID_FORK=0\
+  env                     LSAPI_MAX_IDLE=30\
+  env                     LSAPI_MAX_IDLE_CHILDREN=1\
+  env                     LSAPI_MAX_PROCESS_TIME=120\
+  env                     LSAPI_PGRP_MAX_IDLE=30\
+  env                     LSAPI_ACCEPT_NOTIFY=1\
+  env                     LSAPI_MAX_CMD_SCRIPT_PATH_LEN=200
+        }' "$vhost_file"
+    fi
 fi
+#end thuật toán tối ưu phân bổ tài nguyên OLS theo số luợng website
 
 # _runing "Đang nạp lại hệ thống OpenLiteSpeed..."
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
