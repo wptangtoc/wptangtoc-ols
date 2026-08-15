@@ -23,9 +23,6 @@ if [[ -z "$NAME" ]]; then
     lua_chon_NAME
 fi
 
-# ==============================================================================
-# XỬ LÝ VÒNG LẶP CHO "TẤT CẢ WEBSITE"
-# ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
     if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
         for entry in $(ls -A /etc/wptt/vhost | grep -E '\.conf$' | grep -v '^\.\.conf$' | sort -uV); do
@@ -36,16 +33,12 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
             fi
         done
     fi
-
     [[ "$2" != "skip_menu" && "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
     exit 0
 fi
 
 [[ "$NAME" == "0" || -z "$NAME" ]] && { [[ "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1; exit 0; }
 
-# ==============================================================================
-# TIẾN HÀNH SAO LƯU WEBSITE CHỈ ĐỊNH
-# ==============================================================================
 domain="$NAME"
 path="/usr/local/lsws/$domain/html"
 
@@ -59,8 +52,14 @@ fi
 temp_file=$(mktemp -p /dev/shm)
 IP_VPS=$(curl -s4 --connect-timeout 5 ifconfig.me || curl -s4 --connect-timeout 5 icanhazip.com)
 
+TG_BASE_URL="https://api.telegram.org"
+if ! curl -I -s -m 3 "$TG_BASE_URL" > /dev/null 2>&1; then
+	API_PROXY=$(curl -X POST -s -m 5 "https://key.wptangtoc.com/get-telegram-work" -A 'Activate Backup Restore WPTangToc' | tr -d ' ' | tr -d '\n')
+    [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
+fi
+
 # ==============================================================================
-# HÀM GỬI FILE LÊN TELEGRAM
+# HÀM GỬI FILE (CÓ BẢO VỆ CHỐNG MẤT DỮ LIỆU)
 # ==============================================================================
 telegram_uploads_backup() {
     local file_path=$1
@@ -70,11 +69,9 @@ telegram_uploads_backup() {
     local type="Mã nguồn (Source)"
     [[ "$file_path" == *".sql.gz"* ]] && type="Cơ sở dữ liệu (Database)"
     
-    # KHẮC PHỤC LỖI XUỐNG DÒNG: Dùng printf -v để tạo ký tự newline chuẩn của Bash
     printf -v caption "📦 *Backup %s*\n🌐 Tên miền: \`%s\`\n🖥 Máy chủ: \`%s\`\n⏰ Thời gian: %s" "$type" "$domain_name" "$IP_VPS" "$date_time"
     
-    local worker_url="https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${telegram_api}/sendDocument"
-    
+    local worker_url="${TG_BASE_URL}/bot${telegram_api}/sendDocument"
     local max_retries=3
     local attempt=1
     local success=0
@@ -99,12 +96,15 @@ telegram_uploads_backup() {
             ((attempt++))
         fi
     done
+
+    # NẾU TẤT CẢ CÁC LẦN THỬ ĐỀU THẤT BẠI -> BÁO LỖI ĐỂ DỪNG NGAY LẬP TỨC
+    if (( success == 0 )); then return 1; fi
+    return 0
 }
 
 timedate=$(date +\_%Mphut\_%Hgio\_%d\_%m\_%Y)
 . "/etc/wptt/vhost/.$domain.conf"
 
-# Kiểm tra Disk xem đủ chỗ chứa file backup không
 . /etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup "$path" "${domain}${timedate}.zip"
 if [[ "$dieu_kien_disk" == '0' ]]; then
     [[ "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
@@ -134,26 +134,29 @@ rm -rf "$TEMP_CNF"
 
 if [[ -s "$db_path" ]]; then
     _rundone "Sao lưu Database thành công"
-    
     file_size_sql=$(stat -c %s "$db_path")
     file_size_mb_sql=$(echo "scale=2; $file_size_sql/1024/1024" | bc)
     
     echo -e "${C_CYAN}➜ Đang đẩy Database ($file_size_mb_sql MB) lên Telegram...${C_RESET}"
-    if (( $(echo "$file_size_mb_sql > 19" | bc -l) )); then
-        split -b 19m -d -a 4 --numeric-suffixes=1 "$db_path" "${db_path}.part_"
+    if (( $(echo "$file_size_mb_sql >= 19" | bc -l) )); then
+        # SỬA LẠI CHUẨN SPLIT: Dùng -d (Bắt đầu từ 0000) an toàn cho mọi OS
+        split -b 19m -d -a 4 "$db_path" "${db_path}.part_"
         for sql_part in $(ls -A "/usr/local/backup-website/$domain" | grep "${domain}${timedate}.sql.gz.part_" | sort -u); do
             echo "  - Uploading phần $sql_part..."
-            telegram_uploads_backup "/usr/local/backup-website/$domain/$sql_part" "$domain"
+            # BẮT BUỘC KIỂM TRA LỖI KHI UPLOAD
+            if ! telegram_uploads_backup "/usr/local/backup-website/$domain/$sql_part" "$domain"; then
+                _runloi "Lỗi Upload! Hủy tiến trình để bảo vệ file."
+                exit 1
+            fi
             rm -f "/usr/local/backup-website/$domain/$sql_part"
         done
     else
-        telegram_uploads_backup "$db_path" "$domain"
+        telegram_uploads_backup "$db_path" "$domain" || { _runloi "Lỗi Upload Database!"; exit 1; }
     fi
 else
     _runloi "Lỗi kết xuất Database!"
 fi
 rm -f "$db_path"
-
 
 # 2. SAO LƯU MÃ NGUỒN (SOURCE CODE)
 _runing "Đang nén Mã nguồn (Source Code)..."
@@ -162,31 +165,34 @@ cd "$path" && zip -r -q "$zip_path" * -x "wp-content/ai1wm-backups/*" -x "wp-con
 
 if [[ -s "$zip_path" ]]; then
     _rundone "Nén Mã nguồn thành công"
-    
     file_size=$(stat -c %s "$zip_path")
     file_size_mb=$(echo "scale=2; $file_size/1024/1024" | bc)
     
     echo -e "${C_CYAN}➜ Đang đẩy Mã nguồn ($file_size_mb MB) lên Telegram...${C_RESET}"
-    if (( $(echo "$file_size_mb > 19" | bc -l) )); then
-        split -b 19m -d -a 4 --numeric-suffixes=1 "$zip_path" "${zip_path}.part_"
+    if (( $(echo "$file_size_mb >= 19" | bc -l) )); then
+        # SỬA LẠI CHUẨN SPLIT: Dùng -d an toàn tuyệt đối
+        split -b 19m -d -a 4 "$zip_path" "${zip_path}.part_"
         for zip_part in $(ls -A "/usr/local/backup-website/$domain" | grep "${domain}${timedate}.zip.part_" | sort -u); do
             echo "  - Uploading phần $zip_part..."
-            telegram_uploads_backup "/usr/local/backup-website/$domain/$zip_part" "$domain"
+            # BẮT BUỘC KIỂM TRA LỖI KHI UPLOAD
+            if ! telegram_uploads_backup "/usr/local/backup-website/$domain/$zip_part" "$domain"; then
+                _runloi "Lỗi Upload! Hủy tiến trình để bảo vệ file."
+                exit 1
+            fi
             rm -f "/usr/local/backup-website/$domain/$zip_part"
         done
     else
-        telegram_uploads_backup "$zip_path" "$domain"
+        telegram_uploads_backup "$zip_path" "$domain" || { _runloi "Lỗi Upload Mã nguồn!"; exit 1; }
     fi
 else
     _runloi "Lỗi nén Mã nguồn!"
 fi
 rm -f "$zip_path"
 
-
-# 3. GỬI DỮ LIỆU ĐỊNH DANH JSON LÊN MÁY CHỦ API (NO DRM)
 if [[ -s "$temp_file" ]]; then
-    json_payload=$(cat "$temp_file" | jq -R 'split(" ") | {file_id: .[0], file_name: .[1]}' | jq -s '.' | jq -c '.')
-    API_URL="https://key.wptangtoc.com/backup.php" 
+    # Lọc bỏ dòng trống nếu có để tránh JQ sinh lỗi JSON rác
+    json_payload=$(grep -v '^$' "$temp_file" | jq -R 'split(" ") | {file_id: .[0], file_name: .[1]}' | jq -s '.' | jq -c '.')
+    API_URL="https://key.wptangtoc.com/backup" 
     curl -s -X POST -H "Content-Type: application/json" -d "$json_payload" "$API_URL" -A 'Activate Backup Restore WPTangToc' >/dev/null 2>&1
 fi
 
