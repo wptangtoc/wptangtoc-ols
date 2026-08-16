@@ -16,22 +16,29 @@ function huong_dan() {
   Bạn có thể dễ dàng Bật/Tắt tính năng này cho từng website hoặc tất cả website bằng 1 cú chạm.
 }
 
-. /etc/wptt/.wptt.conf
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
 
 clear
-echo -e "\n========================================================================="
-echo -e "| Bảo mật => Bật / Tắt Chống DDoS Website [Fail2ban]                    |"
-echo -e "=========================================================================\n"
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT ➜ Bật / Tắt Chống DDoS Website (Fail2ban)${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF) - CHUẨN UX 78PX
 # ==============================================================================
 function lua_chon_NAME() {
   unset NAME domain selects
   selects=()
+  local i=1
 
   # Vòng lặp Globbing siêu tốc không qua sub-shell
   for filepath in /etc/wptt/vhost/.*.conf; do
@@ -44,17 +51,23 @@ function lua_chon_NAME() {
     if [[ "$domain" == ?*.?* ]]; then
       local domain_fail2ban="${domain//[-._]/wp}"
       local filter_path="/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf"
+      
+      local status_text=""
+      local status_color=""
 
       if [[ -f "$filter_path" ]]; then
-        selects+=("$domain [Đang BẬT]")
+        status_text="[Đang BẬT]"
+        status_color=$C_GREEN
       else
-        selects+=("$domain [Đang TẮT]")
+        status_text="[Đang TẮT]"
+        status_color=$C_RED
       fi
+      selects+=("$domain|$status_text|$status_color")
     fi
   done
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\033[1;33mHệ thống chưa có Website nào để cấu hình Chống DDoS!\033[0m"
+    echo -e "\n${C_RED}❌ Lỗi: Không có website nào hợp lệ trên hệ thống để cấu hình!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
@@ -62,48 +75,97 @@ function lua_chon_NAME() {
   # Sắp xếp mảng chuẩn Version (Alphabetical)
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # Cải tiến UX: Thêm tùy chọn "Tất Cả" ở cuối nếu có >= 2 website
-  if [[ ${#selects[@]} -ge 2 ]]; then
+  local num_domains=${#selects[@]}
+  
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
     selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
   fi
 
-  # Hiển thị Menu PS3 hỗ trợ 00 (FZF)
-  if command -v fzf &>/dev/null; then
-    PS3="$(tput setab 0)-//- Lựa chọn website bạn muốn cấu hình [00=Tìm nhanh] [0=Thoát]:$(tput sgr0) "
-  else
-    PS3="$(tput setab 0)-//- Lựa chọn website bạn muốn cấu hình [0=Thoát]:$(tput sgr0) "
-  fi
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Nhập lựa chọn website cấu hình Chống DDoS:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
 
-  # Vòng lặp lấy giá trị
-  select selected_domain in "${selects[@]}"; do
-    NAME="$selected_domain"
-    break
-  done
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
-  # XỬ LÝ CHỌN NHANH [00] VỚI FZF
-  if [[ "$REPLY" == "00" ]] && command -v fzf &>/dev/null; then
-    local selected_name
-    selected_name=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --height 40% --border=rounded --color=border:red --reverse --prompt=">> Tìm website cấu hình DDoS [0=Thoát]: ")
-    selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-    if [[ -z "$selected_name" ]]; then
-      echo "Đã hủy chọn."
-      exec /etc/wptt/wptt-bao-mat-main 1
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      # Giao diện cắt lớp cho tùy chọn cuối cùng (Đồng loạt)
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt DDoS cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt DDoS cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      # Dòng website bình thường
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     fi
-    NAME="$selected_name"
-  fi
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-  # Xử lý nhập input thẳng tên domain (nếu không chọn số)
-  if [[ -z "$NAME" && "$REPLY" != "0" && "$REPLY" != "00" ]]; then
-    REPLY=$(echo "$REPLY" | tr '[:upper:]' '[:lower:]' | xargs)
-    for item in "${selects[@]}"; do
-      local check_dom=$(echo "$item" | cut -f1 -d ' ')
-      if [[ "$check_dom" == "$REPLY" ]]; then
-        NAME="$item"
-        break
+  # Dòng nhắc lệnh (Prompt) siêu sạch
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Tìm Nhanh | 0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-bao-mat-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm nhanh >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
       fi
-    done
-  fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
 }
 
 # Nếu gọi script kèm tên domain từ command line
@@ -113,7 +175,7 @@ else
   lua_chon_NAME
 fi
 
-# Tách lấy tên chuẩn (Cắt bỏ dòng trạng thái)
+# Tách lấy tên chuẩn (Cắt bỏ dòng trạng thái nếu có lọt qua)
 NAME=$(echo "$NAME" | cut -f1 -d ' ')
 
 # --- CHỐT CHẶN THOÁT HIỂM ---
@@ -162,14 +224,22 @@ function process_ddos() {
 
     # Kiểm tra Cloudflare CDN (Chống khóa nhầm IP Cloudflare)
     local TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$target_domain/cdn-cgi/trace" 2>/dev/null)
-    if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
-      if ! grep -q '103.21.244.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
-        echo -e "\n\033[1;31m[CẢNH BÁO] Phát hiện $target_domain dùng Cloudflare nhưng chưa bật Real IP!\033[0m"
-        echo "Vui lòng bật tính năng Hiện thị IP Log Real bypass Cloudflare CDN trước khi dùng chức năng này để tránh chặn nhầm."
-        _rundone "Đã BỎ QUA website $target_domain để đảm bảo an toàn."
-        return
-      fi
-    fi
+	if echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
+		if ! grep -q '103.21.244.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+			echo -en "\033[1A\033[2K\r" #xoá dùng runing ở trên
+			echo -e "\n\033[1;31m[CẢNH BÁO] Phát hiện $target_domain dùng Cloudflare CDN nhưng chưa bật Real IP!\033[0m"
+			echo "Vui lòng bật tính năng Hiện thị IP Log Real bypass Cloudflare CDN trước khi dùng chức năng này để tránh chặn nhầm IP."
+			if ! wptt_xac_nhan "Bạn có muốn kích hoạt tính năng Cloudflare Real IP không?" "Tính năng này để xác định đúng địa chi ip client" "Khi dùng cloudflare cdn" "Đồng ý kích hoạt" "Hủy thao tác"; then
+				[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+				exit 0
+			else
+				_runing "Kích hoạt Cloudflare show real IP"
+				. /etc/wptt/cloudflare-cdn-ip-show-real >/dev/null 2>&1
+				_rundone "Kích hoạt Cloudflare show real IP"
+			    _runing "$UI_STRING"
+			fi
+		fi
+	fi
 
     # Tách log cho Vhost
     if ! grep -q 'accesslog' "$vhost_conf" 2>/dev/null; then
@@ -267,32 +337,42 @@ ignoreregex = \.(?i)(robots\.txt|favicon\.ico|jpg|png|webp|css|js|jpeg|woff2|avi
 }
 
 # ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH
+# XỬ LÝ LÔGIC RẼ NHÁNH VÀ XÁC NHẬN BẰNG BOX UI
 # ==============================================================================
+echo ""
 
 if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  echo -e "\nBạn muốn BẬT hay TẮT Chống DDoS cho \033[1;33mTẤT CẢ\033[0m website?"
-  prompt="Lựa chọn của bạn [1-2]: "
+  
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH CHỐNG DDOS${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Bạn đang thao tác cấu hình Fail2ban cho toàn bộ hệ thống." 2
+  left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
+  str_opt1="  1) BẬT ĐỒNG LOẠT (Bật chống DDoS cho tất cả website)"
+  pad_opt1=$((box_inner_width - ${#str_opt1}))
+  [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT ĐỒNG LOẠT${C_RESET} (Bật chống DDoS cho tất cả website)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+  
+  str_opt2="  2) TẮT ĐỒNG LOẠT (Tắt chống DDoS trên tất cả website)"
+  pad_opt2=$((box_inner_width - ${#str_opt2}))
+  [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT ĐỒNG LOẠT${C_RESET} (Tắt chống DDoS trên tất cả website)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+  
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+  read -r mass_choice
+  
   mass_action=""
-  options=("BẬT đồng loạt" "TẮT đồng loạt" "Hủy bỏ")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      mass_action="bat"
-      break
-      ;;
-    2)
-      mass_action="tat"
-      break
-      ;;
-    3) exec /etc/wptt/wptt-bao-mat-main 1 ;;
-    *)
-      printf "\nNhập sai, tự động hủy.\n"
-      exec /etc/wptt/wptt-bao-mat-main 1
-      ;;
-    esac
-  done
+  if [[ "$mass_choice" == "1" ]]; then
+    mass_action="bat"
+  elif [[ "$mass_choice" == "2" ]]; then
+    mass_action="tat"
+  else
+    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
 
   [[ "$mass_action" == "bat" ]] && install_dependencies
 
@@ -309,29 +389,76 @@ if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "
 else
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
-    echoDo "Tên miền không tồn tại!"
+    echo -e "\n${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
     sleep 2
     exec /etc/wptt/wptt-bao-mat-main 1
   }
 
   domain_fail2ban="${NAME//[-._]/wp}"
+  
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH CHỐNG DDOS (FAIL2BAN)${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
   if [[ -f "/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf" ]]; then
-    process_ddos "$NAME" "tat"
+    left_text "  Website ${NAME} hiện ĐANG BẬT chế độ chống DDoS." 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) TẮT CHỐNG DDOS (Hủy theo dõi log và xóa quy tắc chặn)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT CHỐNG DDOS${C_RESET} (Hủy theo dõi log và xóa quy tắc chặn)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) Không làm gì cả (Giữ nguyên cấu hình)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên cấu hình)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r single_choice
+    
+    if [[ "$single_choice" == "1" ]]; then
+      process_ddos "$NAME" "tat"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
   else
-    install_dependencies
-    process_ddos "$NAME" "bat"
+    left_text "  Website ${NAME} hiện ĐANG TẮT chế độ chống DDoS." 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) BẬT CHỐNG DDOS (Chặn IP có dấu hiệu spam, truy cập ảo)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT CHỐNG DDOS${C_RESET} (Chặn IP có dấu hiệu spam, truy cập ảo)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r single_choice
+    
+    if [[ "$single_choice" == "1" ]]; then
+      install_dependencies
+      process_ddos "$NAME" "bat"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
   fi
 fi
 
 # ==============================================================================
 # KHỞI ĐỘNG LẠI DỊCH VỤ VÀ NEO MÀN HÌNH
 # ==============================================================================
-echo -e "\n\033[1;36mĐang nạp lại quy tắc Fail2ban và OpenLiteSpeed...\033[0m"
+echo -e "\n${C_CYAN}➜ Đang nạp lại quy tắc Fail2ban và OpenLiteSpeed...${C_RESET}"
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
 fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
-echo -e "\033[1;32mHoàn tất!\033[0m"
+_rundone "Hoàn tất thao tác Cấu hình Chống DDoS"
 
-echo -e "\n========================================================================="
-read -p "Nhấn phím [Enter] để quay lại menu..." dummy
-
+echo ""
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
