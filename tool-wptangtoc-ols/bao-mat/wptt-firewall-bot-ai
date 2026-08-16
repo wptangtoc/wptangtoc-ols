@@ -15,18 +15,25 @@ function huong_dan() {
   Bạn có thể dễ dàng Bật/Tắt bằng 1 cú chạm.
 }
 
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}BẢO MẬT ➜ Bật / Tắt Tường lửa Chặn BOT AI Crawlers${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT ➜ Bật / Tắt Tường Lửa Chặn BOT AI Crawlers${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-# Kiểm tra file quy tắc Firewall lõi
+# ==============================================================================
+# KIỂM TRA FILE QUY TẮC LÕI
+# ==============================================================================
 path_firewall_rules="/etc/wptt/bao-mat/firewall-bot-ai.txt"
 if [[ ! -f "$path_firewall_rules" ]]; then
   echo -e "${C_RED}❌ Không tìm thấy bộ quy tắc Chặn BOT AI tại hệ thống (/etc/wptt/bao-mat/firewall-bot-ai.txt)!${C_RESET}"
@@ -36,13 +43,14 @@ if [[ ! -f "$path_firewall_rules" ]]; then
 fi
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (KÈM TRẠNG THÁI BẬT/TẮT)
+# HÀM MENU LỌC THÔNG MINH (CÓ TRẠNG THÁI + FZF)
 # ==============================================================================
 function lua_chon_NAME() {
   unset NAME selects
   selects=()
-  local box_inner_width=${box_inner_width:-71}
+  local i=1
 
+  # Vòng lặp Globbing siêu tốc không qua sub-shell
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
@@ -53,35 +61,48 @@ function lua_chon_NAME() {
     if [[ "$domain" == ?*.?* ]]; then
       local htaccess_path="/usr/local/lsws/$domain/html/.htaccess"
       if [[ -f "$htaccess_path" ]]; then
+        local status_text=""
+        local status_color=""
+
         if grep -q '#begin-tuong-lua-block-bot-ai' "$htaccess_path" 2>/dev/null; then
-          selects+=("$domain|[Đang BẬT Chặn AI]")
+          status_text="[Đang BẬT Chặn AI]"
+          status_color=$C_GREEN
         else
-          selects+=("$domain|[Đang TẮT]")
+          status_text="[Đang TẮT]"
+          status_color=$C_RED
         fi
+
+        selects+=("$domain|$status_text|$status_color")
       fi
     fi
   done
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "${C_YELLOW}⚠️ Không tìm thấy website nào có file .htaccess trên hệ thống để thao tác!${C_RESET}"
+    echo -e "\n${C_RED}❌ Không tìm thấy website nào có file .htaccess trên hệ thống!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
 
-  # Sắp xếp danh sách
+  # Sắp xếp mảng
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
-  # Thêm Tùy chọn Hàng loạt nếu có >= 2 web
-  if [[ ${#selects[@]} -ge 2 ]]; then
-    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)|[Hàng Loạt]")
+  local num_domains=${#selects[@]}
+  
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
   fi
 
-  # RENDER KHUNG MENU BO CONG
+  # ============================================================================
+  # RENDER KHỐI BO CONG (TAB GẠCH CHÂN + CHIA CỘT)
+  # ============================================================================
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  local title_text="Lựa chọn website bạn muốn cấu hình Chặn BOT AI:"
-  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local title_text="Nhập lựa chọn website cấu hình Chặn BOT AI:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
   local pad_r=$((box_inner_width - len - 2))
   [[ $pad_r -lt 0 ]] && pad_r=0
+
   echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
   local line_len=$((len + 3))
@@ -90,87 +111,99 @@ function lua_chon_NAME() {
   local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
   echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  local i=1
-  for item in "${selects[@]}"; do
-    local dom=$(echo "$item" | cut -d'|' -f1)
-    local stt=$(echo "$item" | cut -d'|' -f2)
-
-    local color_dom="${C_BOLD_WHITE}"
-    local color_stt="${C_YELLOW}"
-
-    if [[ "$stt" == "[Đang BẬT Chặn AI]" ]]; then color_stt="${C_GREEN}"; fi
-    if [[ "$stt" == "[Đang TẮT]" ]]; then color_stt="${C_RED}"; fi
-    if [[ "$dom" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
-      color_dom="${C_YELLOW}"
-      color_stt="${C_CYAN}"
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      # Xử lý cắt lớp (Box Layout) cho tùy chọn đồng loạt
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt Tường lửa AI cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt Tường lửa AI cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      # Dòng website bình thường
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     fi
-
-    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${color_dom}%-35s${C_RESET} %s" "$i" "$dom" "${color_stt}${stt}${C_RESET}")
-    local clean_text=$(printf "  %3d) %-35s %s" "$i" "$dom" "$stt")
-
-    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    local pad=$((box_inner_width - item_len))
-    [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
+  # Dòng nhắc lệnh (Prompt) siêu sạch
   local fzf_installed=false
-  if command -v fzf &>/dev/null; then
-    fzf_installed=true
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
-  else
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
-  fi
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Tìm Nhanh | 0=Thoát]: "
 
   while true; do
-    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
     if ! read -r REPLY; then exit 1; fi
     REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
     case "$REPLY" in
-    0)
-      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-      NAME="0"
-      return 0
-      ;;
+    0) exec /etc/wptt/wptt-bao-mat-main 1 ;;
     00)
       if $fzf_installed; then
-        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website chặn AI >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
-        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
-        if [[ -n "$dom" ]]; then
-          NAME="$dom"
-          return 0
-        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
-      else
-        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm nhanh >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
       fi
       ;;
     *)
       if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-        local action_index=$((REPLY - 1))
-        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
         return 0
-      else
-        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
       fi
       ;;
     esac
   done
 }
 
-if [[ -n "$1" && "$1" != "98" ]]; then
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
   NAME="$1"
+  # Hỗ trợ truyền đối số cho 1 domain cụ thể
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
 else
   lua_chon_NAME
 fi
-
-# Cắt râu ria
-NAME=$(echo "$NAME" | cut -d'|' -f1 | xargs)
-
-# --- CHỐT CHẶN THOÁT HIỂM ---
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-bao-mat-main 1
 
 # ==============================================================================
 # HÀM THỰC THI BẬT/TẮT TƯỜNG LỬA CHẶN AI CHO 1 DOMAIN
@@ -233,83 +266,144 @@ function process_firewall_bot_ai() {
 }
 
 # ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH (CÓ UX XÁC NHẬN)
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
 # ==============================================================================
-echo ""
-thao_tac_thanh_cong=false
+DOMAIN_LIST=()
+mass_action=""
 msg_action=""
+thao_tac_thanh_cong=false
 
-if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}Cấu hình HÀNG LOẠT Chặn BOT AI cho toàn bộ hệ thống${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}1)${C_RESET} BẬT đồng loạt cho tất cả (Chặn Bot AI)                           ${C_CYAN}│${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}2)${C_RESET} TẮT đồng loạt cho tất cả (Cho phép Bot AI)                       ${C_CYAN}│${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET}  ${C_CYAN}3)${C_RESET} Hủy bỏ thao tác                                                  ${C_CYAN}│${C_RESET}"
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-
-  mass_action=""
-  while true; do
-    echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-3]: ${C_RESET}"
-    read -r REPLY
-    case "$REPLY" in
-    1)
+echo ""
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+  
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+    mass_action="bat"
+    msg_action="BẬT Hàng Loạt (Đã chặn BOT AI)"
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+    mass_action="tat"
+    msg_action="TẮT Hàng Loạt (Cho phép BOT AI)"
+  else
+    # NẾU CHỌN TỪ MENU UI (SỐ TÙY CHỌN CUỐI CÙNG) -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: TƯỜNG LỬA CHẶN AI${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình Tường lửa Chặn AI cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) BẬT Chặn BOT AI (Bảo vệ đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Chặn BOT AI${C_RESET} (Bảo vệ đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) TẮT Chặn BOT AI (Gỡ bỏ đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT Chặn BOT AI${C_RESET} (Gỡ bỏ đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+    
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
       mass_action="bat"
       msg_action="BẬT Hàng Loạt (Đã chặn BOT AI)"
-      break
-      ;;
-    2)
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
       mass_action="tat"
       msg_action="TẮT Hàng Loạt (Cho phép BOT AI)"
-      break
-      ;;
-    3)
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
-      sleep 1
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
       exec /etc/wptt/wptt-bao-mat-main 1
-      ;;
-    *) echo -e "${C_RED}❌ Nhập sai, vui lòng nhập từ 1 đến 3.${C_RESET}" ;;
-    esac
-  done
+    fi
+  fi
 
-  echo ""
+  # Quét toàn bộ danh sách domain để thực thi
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
-    if [[ "$domain" == ?*.?* ]]; then
+    if [[ "$domain" == ?*.?* && -d "/usr/local/lsws/$domain/html" ]]; then
       process_firewall_bot_ai "$domain" "$mass_action"
     fi
   done
   thao_tac_thanh_cong=true
 
 else
-  # Người dùng chọn 1 WEBSITE cụ thể
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [[ ! -f "$pathcheck" ]] && {
-    echo -e "${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
+    echo -e "\n${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
     sleep 2
     exec /etc/wptt/wptt-bao-mat-main 1
   }
 
   path_ht="/usr/local/lsws/$NAME/html/.htaccess"
 
-  if grep -q '#begin-tuong-lua-block-bot-ai' "$path_ht" 2>/dev/null; then
-    # ĐANG BẬT -> HỎI TẮT
-    if wptt_xac_nhan "Tính năng này đang BẬT. Bạn có muốn TẮT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý TẮT" "Hủy bỏ"; then
-      echo ""
-      msg_action="TẮT Chặn BOT AI (Cho phép AI Crawlers truy cập)"
-      process_firewall_bot_ai "$NAME" "tat"
-      thao_tac_thanh_cong=true
-    fi
+  # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+  if [[ $CLI_MODE -eq 1 ]]; then
+    process_firewall_bot_ai "$NAME" "$CLI_ACTION"
+    thao_tac_thanh_cong=true
+    if [[ "$CLI_ACTION" == "bat" ]]; then msg_action="BẬT Chặn BOT AI (Đá văng OpenAI, Claude...)"; else msg_action="TẮT Chặn BOT AI (Cho phép AI Crawlers truy cập)"; fi
   else
-    # ĐANG TẮT -> HỎI BẬT
-    if wptt_xac_nhan "Tính năng này đang TẮT. Bạn có muốn BẬT không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý BẬT" "Hủy bỏ"; then
-      echo ""
-      msg_action="BẬT Chặn BOT AI (Đá văng OpenAI, Claude, CCBot...)"
-      process_firewall_bot_ai "$NAME" "bat"
-      thao_tac_thanh_cong=true
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH TƯỜNG LỬA CHẶN BOT AI${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if grep -q '#begin-tuong-lua-block-bot-ai' "$path_ht" 2>/dev/null; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT Chặn AI." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) TẮT Chặn BOT AI (Mở cửa cho AI vào cào dữ liệu)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT Chặn BOT AI${C_RESET} (Mở cửa cho AI vào cào dữ liệu)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Giữ nguyên)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        msg_action="TẮT Chặn BOT AI (Cho phép AI Crawlers truy cập)"
+        process_firewall_bot_ai "$NAME" "tat"
+        thao_tac_thanh_cong=true
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
+    else
+      left_text "  Website ${NAME} hiện ĐANG MỞ CỬA cho Bot AI." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) BẬT Chặn BOT AI (Đá văng OpenAI, Claude... ra khỏi Server)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT Chặn BOT AI${C_RESET} (Đá văng OpenAI, Claude... ra khỏi Server)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        msg_action="BẬT Chặn BOT AI (Đá văng OpenAI, Claude, CCBot...)"
+        process_firewall_bot_ai "$NAME" "bat"
+        thao_tac_thanh_cong=true
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
     fi
   fi
 fi
@@ -318,18 +412,14 @@ fi
 # KHỞI ĐỘNG LẠI DỊCH VỤ VÀ IN BÁO CÁO (UX BO CONG)
 # ==============================================================================
 if $thao_tac_thanh_cong; then
-  # _runing "Đang nạp lại quy tắc Tường lửa và OpenLiteSpeed..."
   /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-  # _rundone "Cập nhật dịch vụ hệ thống hoàn tất"
 
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT CẤU HÌNH TƯỜNG LỬA CHẶN AI${C_RESET}"
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}"
-  left_text "Trạng thái       : ${C_GREEN}$msg_action${C_RESET}"
+  left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
+  left_text "Trạng thái       : ${C_GREEN}$msg_action${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-else
-  echo -e "${C_YELLOW}Đã hủy thao tác cấu hình Tường lửa.${C_RESET}"
 fi
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
