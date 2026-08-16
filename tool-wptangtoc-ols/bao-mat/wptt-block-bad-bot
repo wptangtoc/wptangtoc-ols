@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng Chống Bad Bots [Công cụ cào dữ liệu và Máy quét mã độc]
@@ -10,13 +13,15 @@ function huong_dan() {
   * Danh sách đen bao gồm: Các bot SEO rác, Bot cào dữ liệu TQ/Nga, Công cụ rà quét lỗ hổng.
   * Hành động: Bất kỳ IP nào sử dụng User-Agent nằm trong danh sách đen, CHỈ CẦN TRUY CẬP 1 LẦN DUY NHẤT sẽ bị Tường lửa Ipset khóa ngay lập tức.
   * Thời gian khóa: 24 tiếng [86400 giây].
-
 }
+
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -82,6 +87,20 @@ if ! wptt_xac_nhan "Bạn có muốn KÍCH HOẠT bảo vệ Chống Bad Bots kh
   exit 0
 fi
 
+# ------------------------------------------------------------------------------
+# 1. KIỂM TRA BẢO MẬT: BẬT CLOUDFLARE REAL IP ĐỂ CHỐNG KHÓA NHẦM IP CDN
+# ------------------------------------------------------------------------------
+if ! grep -q '103.21.244.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+  echo -e "\n${C_RED}[CẢNH BÁO QUAN TRỌNG]${C_RESET}"
+  echo -e "Hệ thống phát hiện máy chủ ${C_YELLOW}CHƯA BẬT${C_RESET} Show Real IP cho Cloudflare CDN."
+  echo "Fail2ban chặn theo Log toàn cục, nếu không lấy được Real IP, nó sẽ khóa nhầm IP của Cloudflare!"
+  if wptt_xac_nhan "Bạn có muốn KÍCH HOẠT Cloudflare Real IP ngay bây giờ không?" "Khuyên dùng để lấy IP thực của Client, chống sập web." "" "Đồng ý kích hoạt" "Bỏ qua rủi ro"; then
+    _runing "Đang cấu hình Cloudflare Show Real IP..."
+    . /etc/wptt/cloudflare-cdn-ip-show-real >/dev/null 2>&1
+    _rundone "Cấu hình Cloudflare Real IP thành công!"
+  fi
+fi
+
 echo ""
 _runing "Đang cài đặt thư viện cần thiết (Ipset & Pyinotify)..."
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
@@ -103,48 +122,57 @@ _rundone "Cài đặt thư viện nền tảng thành công"
 _runing "Đang kết nối Tường lửa và bơm luật (Rules) chặn Bots..."
 rule_fail2ban_name="badbots-wptt"
 
+# FIX LỖI CÚ PHÁP \n BẰNG CÁCH DÙNG BIẾN NHIỀU DÒNG CHUẨN
 if [[ -f /etc/csf/csf.conf ]]; then
-  action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]\n           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
-elif [[ $(systemctl status nftables.service 2>/dev/null | grep 'Active' | awk '{print $2}') == "active" ]]; then
+  action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+elif [[ $(systemctl status nftables.service 2>/dev/null | grep -i 'Active' | grep -o 'active') == "active" ]]; then
   action_thuc_thi_block="nftables-allports[name=$rule_fail2ban_name]"
-elif [[ $(systemctl status firewalld.service 2>/dev/null | grep 'Active' | awk '{print $2}') == "active" ]]; then
-  action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]\n           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
+elif [[ $(systemctl status firewalld.service 2>/dev/null | grep -i 'Active' | grep -o 'active') == "active" ]]; then
+  action_thuc_thi_block="firewallcmd-ipset[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           firewallcmd-ipset[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
 else
-  _runloi "Không tìm thấy Tường lửa!"
-  echo -e "\n${C_RED}❌ Lỗi: Hệ thống không xác định được Tường lửa nào đang chạy (CSF/Nftables/Firewalld).${C_RESET}"
-  sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-  exit 1
+  action_thuc_thi_block="iptables-multiport[actname=block-tcp, name=$rule_fail2ban_name-t, port=\"80,443\", protocol=\"tcp\"]
+           iptables-multiport[actname=block-udp, name=$rule_fail2ban_name-u, port=\"80,443\", protocol=\"udp\"]"
 fi
 
+# Đảm bảo có ít nhất 1 file log tồn tại để Fail2ban không bị Crash
+mkdir -p /usr/local/lsws/logs
+touch /usr/local/lsws/logs/access.log
+
 # Ghi cấu hình Jail
-echo "
+cat <<EOF >>"/etc/fail2ban/jail.local"
+
 #begin-badbots-wptangtoc
 [wptangtoc-badbots]
 enabled = true
 action = $action_thuc_thi_block
 filter = wptangtoc-badbots
 logpath = /usr/local/lsws/*/logs/access.log
+          /usr/local/lsws/logs/access.log
 backend = pyinotify
 maxretry = 1
 bantime = 86400
 findtime = 60
-#end-badbots-wptangtoc" >>/etc/fail2ban/jail.local
+#end-badbots-wptangtoc
+EOF
 
 # Tạo bộ lọc Regex nhận diện Bad Bots độc quyền của WPTangToc
+# Cải tiến failregex bắt mọi phương thức HTTP
 echo '[Definition]
 badbots = AhrefsBot|SemrushBot|MJ12bot|DotBot|Baiduspider|YandexBot|PetalBot|BLEXBot|MegaIndex|SeznamBot|ZoominfoBot|Barkrowler|DataForSeoBot|Serpstatbot|sqlmap|Nmap|Zmeu|Jorgee|masscan|httpx|nuclei|DirBuster|Panscient|netestate
-failregex = ^<HOST> .* "(GET|POST|HEAD) .* HTTP\/.*" .* ".*(?:%(badbots)s).*"$
+failregex = ^<HOST> .* "(GET|POST|DELETE|PUT|PATCH|HEAD|OPTIONS) .* HTTP\/.*" .* ".*(?:%(badbots)s).*"$
 ignoreregex =' >/etc/fail2ban/filter.d/wptangtoc-badbots.conf
 
 fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
 _rundone "Kích hoạt chặn Bad Bots thành công!"
 
-echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP BẢO VỆ${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "Máy chủ đã được đặt trong trạng thái phòng thủ chống lại" 2
 left_text "các trình thu thập dữ liệu rác và công cụ rà quét lỗ hổng." 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
+sleep 3
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
