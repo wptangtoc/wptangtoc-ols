@@ -1,7 +1,9 @@
 #!/bin/bash
 
 rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium.cron
-cat <(crontab -l) <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name '.htaccess' -exec false {} +; then /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1; fi') | crontab -
+# cat <(crontab -l) <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name '.htaccess' -exec false {} +; then wptt_smart_reload_lsws >/dev/null 2>&1; fi') | crontab -
+
+cat <(crontab -l 2>/dev/null) <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name ".htaccess" -exec false {} +; then /bin/bash -c ". /etc/wptt/core-functions && wptt_smart_reload_lsws" >/dev/null 2>&1; fi') | crontab -
 
 if $(cat /etc/*release | grep -q "Ubuntu") ; then
 	rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium_cron
