@@ -13,13 +13,12 @@ function huong_dan() {
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}ADD-ONS ➜ Ngăn chặn truy cập trực tiếp qua IP (Anti IP-Scan)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
 
 PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 
@@ -34,63 +33,113 @@ if [[ -z "$ip" ]]; then
 fi
 _rundone "Nhận diện IP Máy chủ: $ip"
 
-if [[ -n "$ip_domain" ]] || [[ -d "/usr/local/lsws/$ip/html" ]]; then
-  echo -e "\n${C_YELLOW}⚠️ THÔNG BÁO: Tính năng chặn truy cập IP ($ip) đã được kích hoạt từ trước!${C_RESET}\n"
-  
-  if [[ "${1:-}" == "98" ]]; then
-    echo -en "${C_YELLOW}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
-    read -r dummy
-    exec /etc/wptt/wptt-add-one-main 1
-  fi
-  exit 0
+# ==============================================================================
+# KIỂM TRA TRẠNG THÁI (ĐÃ CÀI ĐẶT HAY CHƯA)
+# ==============================================================================
+IS_INSTALLED=0
+if [[ -d "/usr/local/lsws/$ip/html" ]] || grep -q "$ip $ip" /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+    IS_INSTALLED=1
 fi
 
-# ==============================================================================
-# THỰC THI KHÓA IP VÀ PHÂN QUYỀN BẢO MẬT
-# ==============================================================================
-echo ""
-_runing "Đang khởi tạo Host ảo và rào chắn bảo vệ cho IP ($ip)..."
-. /etc/wptt/domain/wptt-themwebsite "$ip" >/dev/null 2>&1
+if [[ $IS_INSTALLED -eq 1 ]]; then
+  # ------------------------------------------------------------------------------
+  # KỊCH BẢN 1: ĐÃ CÀI ĐẶT -> CHỨC NĂNG GỠ BỎ (UNINSTALL)
+  # ------------------------------------------------------------------------------
+  echo -e "\n${C_YELLOW}THÔNG BÁO: Máy chủ đang được BẢO VỆ (Tính năng chặn IP đang Bật).${C_RESET}"
+  echo -en "${C_CYAN}➜ Bạn có muốn TẮT (Gỡ bỏ) lớp rào chắn này không? [y/N]: ${C_RESET}"
+  read -r confirm_uninstall
 
-echo '<IfModule mod_rewrite.c>
+  if [[ "$confirm_uninstall" =~ ^[Yy]$ ]]; then
+    echo ""
+    _runing "Đang gỡ bỏ cấu hình rào chắn IP ($ip)..."
+    
+    # Mở khóa file .htaccess để có thể xóa
+    chattr -i "/usr/local/lsws/$ip/html/.htaccess" >/dev/null 2>&1
+    
+    # Xóa toàn bộ thư mục và cấu hình Vhost của IP
+    rm -rf "/usr/local/lsws/$ip"
+    rm -rf "/usr/local/lsws/conf/vhosts/$ip"
+	rm -rf /home/$ip
+	rm -rf /wptangtoc-ols/$ip
+    
+
+	sed -i -e '/^virtualhost '$ip'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+	sed -i "/${ip} ${ip}/d" /usr/local/lsws/conf/httpd_config.conf
+
+
+    _rundone "Đã xóa bỏ dữ liệu Virtual Host rào chắn thành công"
+
+    _runing "Đang khởi động lại OpenLiteSpeed để áp dụng..."
+    wptt_smart_reload_lsws >/dev/null 2>&1
+    _rundone "OpenLiteSpeed khởi động thành công"
+
+    echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}GỠ BỎ ANTI IP-SCAN THÀNH CÔNG${C_RESET}"
+    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Mục tiêu      : ${C_YELLOW}Địa chỉ IP $ip${C_RESET}" 2
+    left_text "  Trạng thái    : ${C_RED}Rào chắn đã được tháo dỡ.${C_RESET}" 2
+    left_text "  Hiệu quả      : ${C_CYAN}Có thể truy cập trực tiếp bằng IP vào máy chủ.${C_RESET}" 2
+    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  else
+    echo -e "${C_GREEN}➜ Đã hủy thao tác gỡ bỏ. Máy chủ vẫn đang được bảo vệ an toàn!${C_RESET}\n"
+  fi
+
+else
+  # ------------------------------------------------------------------------------
+  # KỊCH BẢN 2: CHƯA CÀI ĐẶT -> CHỨC NĂNG BẬT BẢO VỆ (INSTALL)
+  # ------------------------------------------------------------------------------
+  echo -e "\n${C_CYAN}➜ Trạng thái: Chưa có rào chắn. Hệ thống sẽ tiến hành Cài Đặt...${C_RESET}"
+  echo ""
+  _runing "Đang khởi tạo Host ảo và rào chắn bảo vệ cho IP ($ip)..."
+  
+  # Khởi tạo Vhost cho IP bằng thư viện WPTangToc
+  . /etc/wptt/domain/wptt-themwebsite "$ip" >/dev/null 2>&1
+
+  echo '<IfModule mod_rewrite.c>
 RewriteRule .* - [E=blockbot:1,L]
 </IfModule>
 ' >"/usr/local/lsws/$ip/html/.htaccess"
 
-# Cài thuộc tính Immutable (Không thể xóa/sửa)
-chattr +i "/usr/local/lsws/$ip/html/.htaccess"
-_rundone "Tạo quy tắc tường lửa (Drop Request) thành công"
+  # Cài thuộc tính Immutable (Không thể xóa/sửa .htaccess)
+  chattr +i "/usr/local/lsws/$ip/html/.htaccess"
+  _rundone "Tạo quy tắc tường lửa (Drop Request) thành công"
 
-_runing "Đang dọn dẹp Access Log và thắt chặt phân quyền (Root)..."
-if [[ -f /usr/local/lsws/logs/access.log ]]; then
-  truncate -s 0 /usr/local/lsws/logs/access.log >/dev/null 2>&1
-  rm -f /usr/local/lsws/logs/access.log.*
+  _runing "Đang dọn dẹp Access Log và thắt chặt phân quyền (Root)..."
+  if [[ -f /usr/local/lsws/logs/access.log ]]; then
+    truncate -s 0 /usr/local/lsws/logs/access.log >/dev/null 2>&1
+    rm -f /usr/local/lsws/logs/access.log.*
+  fi
+
+  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+    tuong_thich_nhom_litespeed="nogroup"
+  else
+    tuong_thich_nhom_litespeed="nobody"
+  fi
+
+  mkdir -p /usr/local/lsws/logs
+  chown root:$tuong_thich_nhom_litespeed /usr/local/lsws/logs
+  chown root:root /usr/local/lsws
+  rm -f "/etc/wptt/vhost/.$ip.conf"
+  _rundone "Bảo vệ an toàn cấp độ thư mục hoàn tất"
+
+  _runing "Đang khởi động lại OpenLiteSpeed để nạp cấu hình..."
+  wptt_smart_reload_lsws >/dev/null 2>&1
+  _rundone "OpenLiteSpeed khởi động thành công"
+
+  echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT ANTI IP-SCAN${C_RESET}"
+  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Mục tiêu bảo vệ : ${C_YELLOW}Địa chỉ IP $ip${C_RESET}" 2
+  left_text "  Trạng thái      : ${C_BOLD_WHITE}Đã chặn toàn bộ truy cập bằng IP trực tiếp.${C_RESET}" 2
+  left_text "  Hiệu quả        : ${C_GREEN}Tàng hình trước Bot dò quét, chống Host Header Injection.${C_RESET}" 2
+  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
 
-if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
-  tuong_thich_nhom_litespeed="nogroup"
-else
-  tuong_thich_nhom_litespeed="nobody"
-fi
-
-mkdir -p /usr/local/lsws/logs
-chown root:$tuong_thich_nhom_litespeed /usr/local/lsws/logs
-chown root:root /usr/local/lsws
-rm -f "/etc/wptt/vhost/.$ip.conf"
-_rundone "Bảo vệ an toàn cấp độ thư mục hoàn tất"
-
-_runing "Đang khởi động lại OpenLiteSpeed để nạp cấu hình..."
-/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-_rundone "OpenLiteSpeed khởi động thành công"
-
-echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT ANTI IP-SCAN${C_RESET}"
-echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "  Mục tiêu bảo vệ : ${C_YELLOW}Địa chỉ IP $ip${C_RESET}" 2
-left_text "  Trạng thái      : ${C_BOLD_WHITE}Đã chặn toàn bộ truy cập bằng IP trực tiếp.${C_RESET}" 2
-left_text "  Hiệu quả        : ${C_GREEN}Tàng hình trước Bot dò quét, chống Host Header Injection.${C_RESET}" 2
-echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
+# ==============================================================================
+# QUẢN LÝ THOÁT VÀ QUAY LẠI MENU
+# ==============================================================================
 if [[ "${1:-}" == "98" ]]; then
+  echo -en "${C_YELLOW}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r dummy
   exec /etc/wptt/wptt-add-one-main 1
 fi
