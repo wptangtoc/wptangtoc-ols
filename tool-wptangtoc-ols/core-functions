@@ -231,6 +231,48 @@ function wptt_xac_nhan() {
   done
 }
 
+function wptt_smart_reload_lsws() {
+    local lock_file="/tmp/.wptt_ls_reload.lock"
+    local lsws_marker="/usr/local/lsws/cgid"
+
+    (
+        flock -n 9 || exit 0
+
+        local current_time=$(date +%s)
+        local last_run=0
+        
+        # Đọc trực tiếp Timestamp từ file do chính LiteSpeed quản lý
+        if [[ -f "$lsws_marker" ]]; then
+            last_run=$(stat -c %Y "$lsws_marker" 2>/dev/null || echo 0)
+        fi
+
+        local time_diff=$((current_time - last_run))
+
+        if [[ $time_diff -lt 8 ]]; then
+            sleep $((8 - time_diff))
+        fi
+
+        /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+        
+        # Cho LiteSpeed 3 giây để thở và ghi đè file cgid mới
+        sleep 3
+
+        # Kiểm tra sinh hiệu
+        if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running'; then
+			:
+        else
+            echo "Kích hoạt Auto-Heal do lỗi Reload: $(date '+%d-%m-%Y %H:%M:%S')" >> /var/log/wptangtoc-ols.log
+            
+            systemctl stop lsws.service >/dev/null 2>&1
+            rm -f /tmp/lshttpd/lshttpd.pid
+            killall -9 openlitespeed litespeed lshttpd 2>/dev/null
+            systemctl start lsws.service >/dev/null 2>&1
+            # Khi start thành công, file cgid tự động được hệ thống nạp lại
+        fi
+
+    ) 9> "$lock_file" &
+}
+
 
 # trap '
 #   # TUYỆT KỸ DIỆT ALARM: Mượn lệnh read ảo ép Linux đập nát cái đồng hồ cũ ngay lập tức
