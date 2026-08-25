@@ -42,7 +42,7 @@ fi
 
 TG_BASE_URL="https://api.telegram.org"
 if ! curl -I -s -m 3 "$TG_BASE_URL" > /dev/null 2>&1; then
-    API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://key.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
+    API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
     [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
 fi
 
@@ -51,7 +51,7 @@ _runing "Đang kết nối đến máy chủ WPTangToc để lấy danh sách fi
 log_file=$(mktemp -p /dev/shm)
 selects=()
 
-curl -X POST -s "https://key.wptangtoc.com/restore" -H "Content-Type: application/json" -A 'Activate Backup Restore WPTangToc' > "$log_file"
+curl -X POST -s "https://hub.wptangtoc.com/restore" -H "Content-Type: application/json" -A 'Activate Backup Restore WPTangToc' > "$log_file"
 
 danh_sach=$(cat "$log_file" | cut -f2 -d ' ' | sed 's/\.part_[0-9]\+$//' | grep "^${NAME}_" | uniq | head -n 100)
 
