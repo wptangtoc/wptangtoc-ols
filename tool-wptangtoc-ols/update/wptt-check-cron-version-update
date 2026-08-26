@@ -1,10 +1,48 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
 
-wptangtocols_version=$(curl -s --connect-timeout 60 --max-time 60 https://wptangtoc.com/share/version-wptangtoc-ols.txt?kiem-tra-version-crond | head -1 | grep '\.')
-if [[ $wptangtocols_version = "" ]]; then
-  wptangtocols_version=$(curl -s --connect-timeout 60 --max-time 60 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
+# Tạo thư mục tạm thời để xử lý an toàn
+TMP_DIR=$(mktemp -d)
+cd "$TMP_DIR" || exit
+
+# ==============================================================================
+# BỘ MÁY XÁC THỰC BẢO MẬT GPG (CHẠY NGẦM)
+# ==============================================================================
+# 1. Nạp Public Key (Phòng hờ trường hợp server khách hàng lỡ tay xóa mất)
+if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
+  curl -sL --connect-timeout 10 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+  if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
+    curl -sL --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+  fi
 fi
 
-if [[ $wptangtocols_version ]]; then
-  echo "$wptangtocols_version" >/tmp/wptangtoc-ols-version
+# 2. Tải file phiên bản và file chữ ký từ máy chủ chính
+curl -sL --connect-timeout 60 --max-time 60 "https://wptangtoc.com/share/version-wptangtoc-ols.txt?kiem-tra-version-crond" -o version.txt
+curl -sL --connect-timeout 60 --max-time 60 -A "checksum wptangtoc ols" "https://hub.wptangtoc.com/version-wptangtoc-ols.txt.sig" -o version.sig
+
+# 3. Dự phòng Github nếu máy chủ chính sập mạng hoặc file tải về rỗng
+if [[ ! -s version.txt || ! -s version.sig ]]; then
+  curl -sL --connect-timeout 60 --max-time 60 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt" -o version.txt
+  curl -sL --connect-timeout 60 --max-time 60 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt.sig" -o version.sig
 fi
+
+# ==============================================================================
+# QUÉT CHỮ KÝ VÀ TRÍCH XUẤT PHIÊN BẢN
+# ==============================================================================
+# Chỉ thực thi nếu tải thành công cả 2 file VÀ chữ ký GPG hợp lệ 100%
+if [[ -s version.txt && -s version.sig ]] && gpg --verify version.sig version.txt 2>/dev/null; then
+  
+  # Lấy dòng đầu tiên và lọc đúng định dạng phiên bản (có dấu chấm)
+  wptangtocols_version=$(head -1 version.txt | grep '\.')
+  
+  if [[ -n "$wptangtocols_version" ]]; then
+    echo "$wptangtocols_version" > /tmp/wptangtoc-ols-version
+  fi
+  
+fi
+
+# 4. Dọn dẹp chiến trường không để lại rác
+cd /root || exit
+rm -rf "$TMP_DIR"
