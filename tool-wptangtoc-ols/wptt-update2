@@ -94,16 +94,42 @@ TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR" || exit
 
 # ==============================================================================
-# XÁC THỰC BẢO MẬT GPG
+# BỘ MÁY TẢI VÀ GẮN CỨNG FINGERPRINT CHO PUBLIC KEY (CHỐNG TRÁO HÀNG)
 # ==============================================================================
-# Nạp Public Key nếu máy chủ chưa có
+# 1. Tải Public Key (Nếu chưa có, chỉ cần tải 1 lần lưu vào hệ thống)
 if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
   _runing "Đang nạp Khóa bảo mật GPG..."
-  curl -sL --connect-timeout 10 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
-  if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
-    curl -sL --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+  
+  # Tải file key về thư mục tạm
+  curl -sL --connect-timeout 10 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" -o wptangtoc-gpg-pub.key
+  
+  # Dự phòng Github nếu web chính sập
+  if [[ ! -s wptangtoc-gpg-pub.key ]]; then
+    curl -sL --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" -o wptangtoc-gpg-pub.key
   fi
-   _rundone "nạp Khóa bảo mật GPG..."
+
+  # Đọc Fingerprint thực tế (Chỉ lấy dòng đầu của Master Key)
+  real_fp=$(gpg --show-keys --with-colons wptangtoc-gpg-pub.key 2>/dev/null | awk -F: '$1 == "fpr" {print $10}' | head -n 1)
+  
+  # Fingerprint
+  expected_fp="EE091EEB9A5189BC80837C059AA528D37B902267"
+
+  # Kiểm định khắt khe
+  if [[ -n "$real_fp" && "$real_fp" == "$expected_fp" ]]; then
+    gpg --import wptangtoc-gpg-pub.key >/dev/null 2>&1
+    _rundone "Nạp Khóa bảo mật GPG thành công"
+  else
+    _runloi "CẢNH BÁO BẢO MẬT: Public Key giả mạo hoặc sai lệch Fingerprint!"
+    rm -f wptangtoc-gpg-pub.key
+    cd "$OLD_PWD" || cd /root
+    rm -rf "$TMP_DIR"
+    sleep 4
+    check_menu_wptangtoc_active=$2
+    [[ "$check_menu_wptangtoc_active" == "98" ]] && exec /etc/wptt/wptt-update-main 1
+    exec /etc/wptt/wptt-status2
+    exit 1
+  fi
+  rm -f wptangtoc-gpg-pub.key
 fi
 
 # Tải File Core + User + Chữ ký GPG theo Nhánh
