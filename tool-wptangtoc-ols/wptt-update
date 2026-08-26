@@ -73,7 +73,7 @@ center_text() {
 clear
 
 # ==============================================================================
-# 1. KIỂM TRA PHIÊN BẢN (GIAO DIỆN CHỜ)
+# 1. KIỂM TRA PHIÊN BẢN (GIAO DIỆN CHỜ & DỰ PHÒNG GITHUB)
 # ==============================================================================
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}HỆ THỐNG ➜ CẬP NHẬT WPTANGTOC OLS${C_RESET}"
@@ -82,11 +82,14 @@ print_line "${C_BOLD_WHITE}Phiên bản hiện tại:${C_RESET} ${C_YELLOW}$vers
 print_line "${C_CYAN}Đang kết nối máy chủ để kiểm tra phiên bản mới nhất...${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-# Lấy phiên bản mới nhất từ server
+# Lấy phiên bản mới nhất từ máy chủ chính
 wptangtocols_version=$(curl -sL --connect-timeout 5 --max-time 10 https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-update="$Website_chinh")
 
+# Trạm dự phòng: Gọi thẳng API từ Github nếu máy chủ chính sập hoặc trả về rỗng
+[[ -z "$wptangtocols_version" ]] && wptangtocols_version=$(curl -sL --connect-timeout 5 --max-time 10 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
+
 if [[ -z "$wptangtocols_version" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi mạng: Không thể kết nối đến máy chủ WPTangToc. Vui lòng thử lại sau!${C_RESET}"
+  echo -e "\n${C_RED}Lỗi mạng: Không thể kết nối đến máy chủ WPTangToc và trạm dự phòng. Vui lòng thử lại sau!${C_RESET}"
   sleep 3
   [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-update-main 1
   [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
@@ -111,36 +114,47 @@ else
   # ============================================================================
   if wptt_xac_nhan "Đã có bản cập nhật mới! Bạn có muốn nâng cấp ngay không?" "${C_BOLD_WHITE}Bản hiện tại:${C_RESET} ${C_YELLOW}$version_wptangtoc_ols${C_RESET}" "${C_BOLD_WHITE}Bản mới nhất:${C_RESET} ${C_GREEN}$wptangtocols_version${C_RESET}" "Tiến hành nâng cấp" "Để sau"; then
     echo ""
-    _runing "WPTangToc OLS đang tải về bản cập nhật $wptangtocols_version"
 
     OLD_PWD=$(pwd)
     TMP_DIR=$(mktemp -d)
     cd "$TMP_DIR" || exit
 
     # ==========================================================================
-    # BỘ MÁY XÁC THỰC BẢO MẬT GPG (ENTERPRISE STANDARD)
+    # BỘ MÁY XÁC THỰC BẢO MẬT GPG & DỰ PHÒNG NGUỒN TẢI
     # ==========================================================================
     # 1. Tải Public Key (Nếu chưa có, chỉ cần tải 1 lần lưu vào hệ thống)
-	if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
-		_runing "Đang nạp Khóa bảo mật GPG..."
-		curl -sL --connect-timeout 10 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
-		if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
-			curl -sL --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
-		fi
-		_rundone "nạp Khóa bảo mật GPG..."
-	fi
-
+    if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
+      _runing "Đang nạp Khóa bảo mật GPG..."
+      curl -sL --connect-timeout 10 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+      if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
+        curl -sL --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+      fi
+      _rundone "Nạp Khóa bảo mật GPG"
+    fi
 
     # 2. Tải File Core (.zip) và File Chữ Ký (.sig)
-    _runing "Đang tải mã nguồn Core..."
-    wget -q --timeout=15 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols.zip"
-    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig"
-
+    _runing "Đang tải mã nguồn Core WPTangToc OLS"
+    wget -q --timeout=15 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols.zip" -O wptangtoc-ols.zip
+    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig" -U 'checksum wptangtoc ols' -O wptangtoc-ols.zip.sig
     
+    # Dự phòng Github nếu máy chủ sập hoặc file trả về rỗng (0 byte)
+    if [[ ! -s wptangtoc-ols.zip || ! -s wptangtoc-ols.zip.sig ]]; then
+        wget -q --timeout=15 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip" -O wptangtoc-ols.zip
+        wget -q --timeout=15 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip.sig" -O wptangtoc-ols.zip.sig
+    fi
+    _rundone "Tải mã nguồn Core WPTangToc OLS"
+
     # 3. Tải File User (.zip) và File Chữ Ký (.sig)
-    _runing "Đang tải mã nguồn User..."
-    wget -q --timeout=15 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols-user.zip"
-    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig"
+    _runing "Đang tải mã nguồn User WPTangToc OLS"
+    wget -q --timeout=15 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols-user.zip" -O wptangtoc-ols-user.zip
+    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig" -U 'checksum wptangtoc ols' -O wptangtoc-ols-user.zip.sig
+    
+    # Dự phòng Github
+    if [[ ! -s wptangtoc-ols-user.zip || ! -s wptangtoc-ols-user.zip.sig ]]; then
+        wget -q --timeout=15 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-user.zip" -O wptangtoc-ols-user.zip
+        wget -q --timeout=15 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-user.zip.sig" -O wptangtoc-ols-user.zip.sig
+    fi
+    _rundone "Tải mã nguồn User WPTangToc OLS"
 
     # ==========================================================================
     # QUY TRÌNH QUÉT CHỮ KÝ VÀ KIỂM ĐỊNH TOÀN VẸN
@@ -167,6 +181,7 @@ else
 
     # Báo lỗi khẩn cấp nếu GPG phát hiện giả mạo
     if [[ $auth_core -eq 0 || $auth_user -eq 0 ]]; then
+      _runloi "Xác thực GPG Không Thành Công"
       [[ -n "$wptangtocols_version" ]] && echo "$wptangtocols_version" >/tmp/wptangtoc-ols-version
       
       echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -282,8 +297,12 @@ else
       [[ -n "$kiem_tra_ton_tai_nhom" ]] && sudo find /etc/wptt-user -type f -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} +
     fi
 
-    # Cấu hình phụ trợ (Script Update server)
+    # Cấu hình phụ trợ (Script Update server & Dự phòng Github)
     curl -sO https://wptangtoc.com/share/update --connect-timeout 10 --max-time 15
+    if [[ ! -s update ]]; then
+      curl -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update --connect-timeout 10 --max-time 15
+    fi
+
     if grep -q 'UPDATE_DONE="YES"' update 2>/dev/null; then
       bash update >/dev/null 2>&1
     fi
