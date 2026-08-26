@@ -157,7 +157,7 @@ if [[ -d "/usr/local/lsws/$NAME/html/quan-ly-files" ]]; then
 fi
 
 # ==============================================================================
-# BẮT ĐẦU CÀI ĐẶT & DOWNLOAD (TÍCH HỢP UX PV TÀNG HÌNH)
+# BẮT ĐẦU CÀI ĐẶT & DOWNLOAD (TÍCH HỢP UX PV TÀNG HÌNH & CHỐNG NGHẼN MẠNG)
 # ==============================================================================
 echo ""
 _runing "Tải FileManager cho website $NAME..."
@@ -166,54 +166,67 @@ user_quan_ly_file=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
 
 cd /usr/local/lsws/$NAME/html || exit 1
 
+fm_zip="quan-ly-files.zip"
+rm -f "$fm_zip" # Dọn rác trước khi tải
+
+# Định nghĩa 3 trạm tải chiến lược
+URL_1="https://wptangtoc.com/share/quan-ly-files.zip"
+# Link Github chuẩn (Dùng raw.githubusercontent.com để tải file thực tế)
+URL_2="https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/main/quan-ly-files.zip"
+# Trạm Proxy siêu tốc dự phòng đứt cáp
+URL_3="https://mirror.ghproxy.com/$URL_2"
+
 echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
 
-fm_zip="quan-ly-files.zip"
 function wptt_download_filemanager_ux() {
   local url="$1"
-  local dest_file="$2"
-  local extra_args="$3" # Nhận các cờ mở rộng như --no-check-certificate
-
-  # Lấy kích thước file từ Header để mớm cho PV tính %
-  local fsize=$(curl -sI --max-time 5 $extra_args "$url" 2>/dev/null | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+  
+  # Lấy kích thước thật qua header (Vượt 302 Redirect của Github)
+  local fsize=$(curl -sIL --max-time 5 "$url" | grep -i -E "content-length" | tail -n 1 | awk '{print $2}' | tr -d '\r')
 
   if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
-    # Dùng wget lấy luồng đổ vào pv vẽ biểu đồ, rồi xuất ra file zip
-    wget -qO- --timeout=15 --tries=3 $extra_args "$url" | pv -s "$fsize" -N "Tải FileManager" -p -t -e -r -b -w 90 >"$dest_file"
+    # Ép ngắt nếu tốc độ dưới 100KB/s trong 8 giây
+    curl -sL --connect-timeout 5 --speed-limit 102400 --speed-time 8 "$url" | pv -s "$fsize" -N "Tải FileManager" -p -t -e -r -b -w 90 > "$fm_zip"
+    local dl_status=${PIPESTATUS[0]}
+    
     # Tàng hình: lùi lên 1 dòng, xóa sạch tiến trình
     echo -en "\033[1A\033[2K\r"
+    return $dl_status
   else
-    # Phương án dự phòng nếu không có PV
-    wget -q --show-progress --timeout=15 --tries=3 $extra_args -O "$dest_file" "$url"
+    # Phương án dự phòng với Wget (Giao diện chuẩn 1 dòng)
+    wget -q --show-progress --timeout=8 --tries=2 "$url" -O "$fm_zip"
+    local dl_status=$?
+    
     echo -en "\033[1A\033[2K\r"
+    return $dl_status
   fi
 }
 
-rm -f "$fm_zip"
-# 1. Thử tải nguồn chính
-wptt_download_filemanager_ux "https://wptangtoc.com/share/quan-ly-files.zip" "$fm_zip" ""
+# Vòng lặp tải thông minh (Thử lần lượt từng Link)
+success_download=0
+for url in "$URL_1" "$URL_2" "$URL_3"; do
+  if wptt_download_filemanager_ux "$url"; then
+    # Kiểm tra tính toàn vẹn của File Zip (Tránh giải nén lỗi trắng trang)
+    if unzip -t "$fm_zip" &>/dev/null; then
+      success_download=1
+      break # Tải hoàn hảo -> Thoát vòng lặp!
+    fi
+  fi
+  rm -f "$fm_zip" # Nếu lỗi hoặc file hỏng, xóa đi để thử link tiếp theo
+done
 
-# 2. Dự phòng: Tải bỏ qua chứng chỉ SSL
-if [[ ! -s "$fm_zip" ]]; then
-  rm -f "$fm_zip"
-  wptt_download_filemanager_ux "https://wptangtoc.com/share/quan-ly-files.zip" "$fm_zip" "--no-check-certificate"
-fi
-
-# 3. Dự phòng: Tải từ Github
-if [[ ! -s "$fm_zip" ]]; then
-  rm -f "$fm_zip"
-  wptt_download_filemanager_ux "https://github.com/wptangtoc/wptangtoc-ols/raw/refs/heads/main/quan-ly-files.zip" "$fm_zip" ""
-fi
-
-if [[ ! -s "$fm_zip" ]]; then
+if [[ $success_download -eq 0 ]]; then
   _runloi "Tải FileManager thất bại! Vui lòng thử lại sau."
-  exec /etc/wptt/wptt-quan-ly-files-main 1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
+  return 2>/dev/null || exit 1
 fi
+
+echo -en "\033[1A\033[2K\r" # Xóa nốt dòng trống để UI khít lại
 
 unzip -oq "$fm_zip"
 rm -f "$fm_zip"
-echo -en "\033[1A\033[2K\r"
 _rundone "Tải FileManager cho website $NAME..."
+
 _runing "Cài đặt FileManager cho website $NAME..."
 sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
 sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
