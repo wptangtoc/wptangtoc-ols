@@ -50,7 +50,7 @@ if [[ -n "$id_dang_nhap_phpmyadmin" && -d "/usr/local/lsws/$Website_chinh/html/p
 fi
 
 # ==============================================================================
-# KHAI BÁO BIẾN DÙNG CHUNG (DRY PRINCIPLE)
+# KHAI BÁO BIẾN DÙNG CHUNG (FIX LỖI MẤT BIẾN)
 # ==============================================================================
 phpmyadmin_version="5.2.3"
 
@@ -67,63 +67,82 @@ else
 fi
 
 # ==============================================================================
-# TẢI VÀ GIẢI NÉN PHPMYADMIN (UX ĐỘNG CƠ TÀNG HÌNH)
+# TẢI VÀ GIẢI NÉN PHPMYADMIN (UX ĐỘNG CƠ TÀNG HÌNH & CHỐNG NGHẼN MẠNG)
 # ==============================================================================
 _runing "Đang tải PhpMyadmin $phpmyadmin_version..."
 cd "/usr/local/lsws/$Website_chinh/html" || exit 1
 
-echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
-
 pma_zip="/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+rm -f "$pma_zip" # Dọn rác file cũ nếu có
+
+git_version="${phpmyadmin_version//./_}"
+# 1. Trạm gốc phpMyAdmin
+URL_1="https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+# 2. Trạm Github Release (Bản Build chuẩn, không phải bản Source thô)
+URL_2="https://github.com/phpmyadmin/phpmyadmin/releases/download/RELEASE_${git_version}/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+# 3. Trạm Proxy siêu tốc (Dùng khi cáp quang biển đứt)
+URL_3="https://mirror.ghproxy.com/$URL_2"
+
+echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
 
 function wptt_download_pma_ux() {
   local url="$1"
-  local dest_file="$2"
-  local extra_args="$3" # Nhận các cờ mở rộng như --no-check-certificate
   
-  # Lấy kích thước file từ Header để mớm cho PV tính %
-  local fsize=$(curl -sI --max-time 5 $extra_args "$url" 2>/dev/null | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+  # Thêm cờ -L để đi theo 302 Redirect và tail -n 1 lấy dung lượng thật
+  local fsize=$(curl -sIL --max-time 5 "$url" | grep -i -E "content-length" | tail -n 1 | awk '{print $2}' | tr -d '\r')
   
   if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
-    # Dùng wget lấy luồng đổ vào pv vẽ biểu đồ, rồi xuất ra file zip
-    wget -qO- --timeout=15 --tries=3 $extra_args "$url" | pv -s "$fsize" -N "Tải PhpMyAdmin" -p -t -e -r -b -w 90 > "$dest_file"
+    # Ép ngắt nếu tốc độ dưới 100KB/s trong 8 giây
+    curl -sL --connect-timeout 5 --speed-limit 102400 --speed-time 8 "$url" | pv -s "$fsize" -N "Tải PhpMyAdmin" -p -t -e -r -b -w 90 > "$pma_zip"
+    local dl_status=${PIPESTATUS[0]}
+    
     # Tàng hình: lùi lên 1 dòng, xóa sạch tiến trình
     echo -en "\033[1A\033[2K\r"
+    return $dl_status
   else
-    # Phương án dự phòng
-    wget -q --show-progress --timeout=15 --tries=3 $extra_args -O "$dest_file" "$url"
+    # Phương án dự phòng với Wget (Giao diện chuẩn 1 dòng)
+    wget -q --show-progress --timeout=8 --tries=2 "$url" -O "$pma_zip"
+    local dl_status=$?
+    
     echo -en "\033[1A\033[2K\r"
+    return $dl_status
   fi
 }
 
-# 1. Thử tải từ nguồn chính
-wptt_download_pma_ux "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" "$pma_zip" ""
+# Vòng lặp tải thông minh (Thử lần lượt từng Link)
+success_download=0
+for url in "$URL_1" "$URL_2" "$URL_3"; do
+  if wptt_download_pma_ux "$url"; then
+    # Kiểm tra tính toàn vẹn của File Zip (Tránh giải nén lỗi làm sập phpMyAdmin)
+    if unzip -t "$pma_zip" &>/dev/null; then
+      success_download=1
+      break # Tải hoàn hảo -> Thoát vòng lặp!
+    fi
+  fi
+  rm -f "$pma_zip" # Nếu lỗi hoặc file hỏng, xóa đi để thử link tiếp theo
+done
 
-# 2. Dự phòng: Tải bỏ qua SSL
-if [[ ! -s "$pma_zip" ]]; then
-  rm -f "$pma_zip"
-  wptt_download_pma_ux "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" "$pma_zip" "--no-check-certificate"
+if [[ $success_download -eq 0 ]]; then
+  _runloi "Tải PhpMyAdmin thất bại"
+  echo -e "${C_RED}Lỗi: Mạng quốc tế nghẽn, không thể tải PhpMyAdmin. Vui lòng thử lại sau!${C_RESET}"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
+  return 2>/dev/null || exit 1
 fi
 
-# 3. Dự phòng: Tải từ Github nếu trang chủ sập
-if [[ ! -s "$pma_zip" ]]; then
-  rm -f "$pma_zip"
-  git_version="${phpmyadmin_version//./_}"
-  wptt_download_pma_ux "https://github.com/phpmyadmin/phpmyadmin/archive/refs/tags/RELEASE_${git_version}.zip" "$pma_zip" ""
-fi
+# Xóa nốt dòng trống để UI khít lại
+echo -en "\033[1A\033[2K\r"
 
 # ==============================================================================
 # BẮT ĐẦU XỬ LÝ FILE VÀ CẤU HÌNH
 # ==============================================================================
 unzip -oq "$pma_zip"
 mv "/usr/local/lsws/$Website_chinh/html/phpMyAdmin-$phpmyadmin_version-all-languages" "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
-echo -en "\033[1A\033[2K\r"
 
 if [[ ! -d "/usr/local/lsws/$Website_chinh/html/phpmyadmin" ]]; then
-_runloi "Đang tải PhpMyadmin $phpmyadmin_version..."
+  _runloi "Giải nén PhpMyadmin $phpmyadmin_version..."
   exec /etc/wptt/wptt-phpmyadmin-main 1
 fi
-_rundone "Đang tải PhpMyadmin $phpmyadmin_version..."
+_rundone "Tải và cài đặt PhpMyadmin $phpmyadmin_version"
 
 rm -f "$pma_zip"
 
@@ -144,6 +163,8 @@ chmod 555 /usr/local/lsws/phpmyadmin
 mkdir -p "/usr/local/lsws/$Website_chinh/passwd"
 Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
 id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
+
+# Biến $PHP_Command giờ đã được nạp chuẩn xác!
 Encrypt_string=$($PHP_Command -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
 
 echo "$id_ols_admin:$Encrypt_string" >"/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
@@ -207,7 +228,6 @@ fi
 _runing "Đang nạp lại cấu hình OpenLiteSpeed..."
 wptt_smart_reload_lsws >/dev/null 2>&1
 
-# Em gom 2 cái _rundone lại thành 1 để tiết kiệm dòng, hiển thị gọn gàng hơn
 _rundone "Cài đặt và kích hoạt PhpMyadmin $phpmyadmin_version"
 echo "Kích hoạt PhpMyAdmin: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
@@ -270,6 +290,6 @@ echo -e "${C_GREEN}╰───────────────────�
 
 echo -e "${C_CYAN}Ghi chú:${C_RESET} Bạn có thể xem lại tài khoản tại menu: WPTangToc OLS => Quản lý PhpMyAdmin"
 echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
-read -r
+read -r dummy
 
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1

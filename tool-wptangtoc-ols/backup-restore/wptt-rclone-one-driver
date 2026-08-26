@@ -69,29 +69,27 @@ if [[ -f "$duong_dan_rclone" && -s "$duong_dan_rclone" ]]; then
 fi
 
 # ==============================================================================
-# CÀI ĐẶT BINARY RCLONE & CÔNG CỤ JQ (JSON PARSER)
+# CÀI ĐẶT BINARY RCLONE (ĐỘNG CƠ TẢI XUỐNG THÔNG MINH + GIAO DIỆN PV) & JQ
 # ==============================================================================
-_runing "Đang cài đặt Rclone..."
+_runing "Đang cài đặt và đồng bộ hóa công cụ Rclone..."
 rm -rf ~/.config/rclone
 mkdir -p /root/.config/rclone
 rm -rf /usr/sbin/rclone /usr/bin/rclone
 cd /tmp || exit
 
-
-#rclone yêu cầu phải có thư viện unzip bắt buộc thì mới chạy đuợc
-if ! command -v unzip &>/dev/null; then #đề phòng máy chủ xoá mất unzip khi cài đặt sẽ phải chạy lại
-    if [ -f /etc/redhat-release ]; then
-      dnf install unzip -y -q >/dev/null 2>&1 || yum install unzip -y -q >/dev/null 2>&1
-    elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install unzip -y -q >/dev/null 2>&1; fi
+# rclone yêu cầu phải có thư viện unzip bắt buộc thì mới chạy đuợc
+if ! command -v unzip &>/dev/null; then
+  if [ -f /etc/redhat-release ]; then
+    dnf install unzip -y -q >/dev/null 2>&1 || yum install unzip -y -q >/dev/null 2>&1
+  elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install unzip -y -q >/dev/null 2>&1; fi
 fi
 
-
-if ! command -v jq &> /dev/null; then #cài đặt jq nếu như hệ thống chưa có
+if ! command -v jq &> /dev/null; then
   yum install jq -y -q >/dev/null 2>&1 || dnf install jq -y -q >/dev/null 2>&1 || apt-get install jq -y -q >/dev/null 2>&1
 fi
 
-phienban=$(curl -s https://downloads.rclone.org/version.txt | awk '{print $2}' | tr -d 'v')
-[[ -z "$phienban" ]] && phienban="1.74.2"
+phienban=$(curl --connect-timeout 5 -s https://downloads.rclone.org/version.txt | awk '{print $2}' | tr -d 'v')
+[[ -z "$phienban" ]] && phienban="1.74.2" # Fallback version nếu curl lỗi
 
 if [[ $(uname -m | grep 'aarch64') ]]; then
   cpu_dong_="linux-arm64"
@@ -99,15 +97,66 @@ else
   cpu_dong_="linux-amd64"
 fi
 
-wget -q "https://downloads.rclone.org/v${phienban}/rclone-v${phienban}-${cpu_dong_}.zip"
-if [[ ! -f "rclone-v${phienban}-${cpu_dong_}.zip" ]]; then
-  wget -q "https://github.com/rclone/rclone/releases/download/v${phienban}/rclone-v${phienban}-${cpu_dong_}.zip" --no-check-certificate
+FILE_ZIP="rclone-v${phienban}-${cpu_dong_}.zip"
+rm -f "$FILE_ZIP"
+
+URL_1="https://github.com/rclone/rclone/releases/download/v${phienban}/$FILE_ZIP"
+URL_2="https://downloads.rclone.org/v${phienban}/$FILE_ZIP"
+URL_3="https://mirror.ghproxy.com/https://github.com/rclone/rclone/releases/download/v${phienban}/$FILE_ZIP"
+
+echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
+
+# Hàm tải file tích hợp giao diện PV UX Tàng Hình & Ép ngắt khi nghẽn mạng
+function wptt_download_rclone_ux() {
+  local url="$1"
+  
+  # Thêm cờ -L để vượt qua 302 Redirect của Github và tail -n 1 để lấy dung lượng thật
+  local fsize=$(curl -sIL --max-time 5 "$url" | grep -i -E "content-length" | tail -n 1 | awk '{print $2}' | tr -d '\r')
+
+  if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+    # Dùng curl đổ luồng qua pv vẽ thanh tiến trình siêu mượt
+    curl -sL --connect-timeout 5 --speed-limit 102400 --speed-time 8 "$url" | pv -s "$fsize" -N "Tải Rclone v${phienban}" -p -t -e -r -b -w 90 > "$FILE_ZIP"
+    local dl_status=${PIPESTATUS[0]}
+    
+    # Xóa sạch thanh tiến trình sau khi tải xong (Tàng hình)
+    echo -en "\033[1A\033[2K\r"
+    return $dl_status
+  else
+    # Dự phòng: Nếu máy chủ chưa cài pv, dùng wget để thanh tiến trình gọn gàng hơn curl -#
+    wget -q --show-progress --timeout=8 --tries=2 "$url" -O "$FILE_ZIP"
+    local dl_status=$?
+    
+    # Xóa sạch thanh tiến trình dự phòng
+    echo -en "\033[1A\033[2K\r"
+    return $dl_status
+  fi
+}
+
+success_download=0
+for url in "$URL_1" "$URL_2" "$URL_3"; do
+  if wptt_download_rclone_ux "$url"; then
+    if unzip -t "$FILE_ZIP" &>/dev/null; then
+      success_download=1
+      break # Tải file hoàn hảo -> Thoát vòng lặp!
+    fi
+  fi
+  rm -f "$FILE_ZIP" # Xóa file hỏng để thử link tiếp theo
+done
+
+if [[ $success_download -eq 0 ]]; then
+  _runloi "Cài đặt Rclone"
+  echo -e "${C_RED}Lỗi: Mạng quốc tế nghẽn, không thể tải Rclone. Vui lòng thử lại sau!${C_RESET}"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+  exec /usr/bin/wptangtoc 1
+  exit 1
 fi
 
-unzip -oq "rclone-v${phienban}-${cpu_dong_}.zip"
+echo -en "\033[1A\033[2K\r" # Xóa nốt dòng trống để UI khít lại
+
+unzip -oq "$FILE_ZIP"
 cp -r "rclone-v${phienban}-${cpu_dong_}/rclone" /usr/sbin/
 chmod 755 /usr/sbin/rclone
-rm -rf "/tmp/rclone-v${phienban}-${cpu_dong_}" "rclone-v${phienban}-${cpu_dong_}.zip"
+rm -rf "/tmp/rclone-v${phienban}-${cpu_dong_}" "$FILE_ZIP"
 _rundone "Cài đặt nền tảng Rclone thành công (Phiên bản: $phienban)"
 
 # ==============================================================================
@@ -248,7 +297,7 @@ if rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc_ols_backup'; then
   fi
 else
   _runloi "Thiết lập OneDrive thất bại"
-  echo -e "${C_RED}❌ Lỗi: Máy chủ không thể kết nối tới Microsoft API. Token có thể đã hết hạn hoặc thiếu quyền.${C_RESET}"
+  echo -e "${C_RED}Lỗi: Máy chủ không thể kết nối tới Microsoft API. Token có thể đã hết hạn hoặc thiếu quyền.${C_RESET}"
   rm -f "$duong_dan_rclone"
 fi
 
