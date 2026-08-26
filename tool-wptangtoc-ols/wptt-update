@@ -35,7 +35,7 @@ unset khong_dau_vi_ngon_ngu wptangtocols_version ngon_ngu
 # ==============================================================================
 if grep -qi 'ID="centos"' /etc/os-release 2>/dev/null && grep -qE 'VERSION_ID="?7"?' /etc/os-release 2>/dev/null; then
   echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  echo -e "${C_RED}│${C_RESET} ${C_YELLOW}CẢNH BÁO: HỆ ĐIỀU HÀNH KHÔNG CÒN ĐƯỢC HỖ TRỢ${C_RESET}                             ${C_RED}│${C_RESET}"
+  echo -e "${C_RED}│${C_RESET} ${C_YELLOW}CẢNH BÁO: HỆ ĐIỀU HÀNH KHÔNG CÒN ĐƯỢC HỖ TRỢ${C_RESET}                               ${C_RED}│${C_RESET}"
   echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   echo -e "${C_RED}│${C_RESET} Tính năng cập nhật này đã chính thức ngừng hoạt động trên ${C_BOLD_WHITE}CentOS 7${C_RESET}.      ${C_RED}│${C_RESET}"
   echo -e "${C_RED}│${C_RESET} Hiện tại CentOS 7 đã hết vòng đời (End-of-Life) và không còn an toàn.      ${C_RED}│${C_RESET}"
@@ -117,43 +117,74 @@ else
     TMP_DIR=$(mktemp -d)
     cd "$TMP_DIR" || exit
 
-    # Lấy Checksum
-    unset checksum_wptangtoc_file id_checksum id_checksum_user
-    checksum_wptangtoc_file=$(curl -sL --connect-timeout 10 --max-time 15 -A 'checksum wptangtoc ols' https://hub.wptangtoc.com/checksum.txt)
-    [[ -z "$checksum_wptangtoc_file" ]] && checksum_wptangtoc_file=$(curl -skL --connect-timeout 10 --max-time 15 -A 'checksum wptangtoc ols' http://hub.wptangtoc.com/checksum.txt)
+    # ==========================================================================
+    # BỘ MÁY XÁC THỰC BẢO MẬT GPG (ENTERPRISE STANDARD)
+    # ==========================================================================
+    # 1. Tải Public Key (Nếu chưa có, chỉ cần tải 1 lần lưu vào hệ thống)
+	if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
+		_runing "Đang nạp Khóa bảo mật GPG..."
+		curl -sL --connect-timeout 10 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+		if ! gpg --list-keys "giatuan@wptangtoc.com" >/dev/null 2>&1; then
+			curl -sL --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" | gpg --import >/dev/null 2>&1
+		fi
+		_rundone "nạp Khóa bảo mật GPG..."
+	fi
 
-    mapfile -t checksum_array <<<"$checksum_wptangtoc_file"
-    id_checksum="${checksum_array[0]}"
-    id_checksum_user="${checksum_array[1]}"
 
-    # Tải file Core
-    wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/wptangtoc-ols.zip
-    [[ "$id_checksum" != $(md5sum wptangtoc-ols.zip 2>/dev/null | awk '{print $1}') ]] && rm -f wptangtoc-ols.zip
-    if [[ ! -f wptangtoc-ols.zip ]]; then
-      sleep 2
-      wget -q --timeout=15 --tries=3 http://wptangtoc.com/share/wptangtoc-ols.zip --no-check-certificate
-      [[ "$id_checksum" != $(md5sum wptangtoc-ols.zip 2>/dev/null | awk '{print $1}') ]] && rm -f wptangtoc-ols.zip
+    # 2. Tải File Core (.zip) và File Chữ Ký (.sig)
+    _runing "Đang tải mã nguồn Core..."
+    wget -q --timeout=15 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols.zip"
+    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig"
+
+    
+    # 3. Tải File User (.zip) và File Chữ Ký (.sig)
+    _runing "Đang tải mã nguồn User..."
+    wget -q --timeout=15 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols-user.zip"
+    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig"
+
+    # ==========================================================================
+    # QUY TRÌNH QUÉT CHỮ KÝ VÀ KIỂM ĐỊNH TOÀN VẸN
+    # ==========================================================================
+    _runing "Đang xác thực Chữ ký điện tử (GPG Signature)..."
+    
+    # Cờ xác nhận (Mặc định là Thất bại)
+    auth_core=0
+    auth_user=0
+
+    # Kiểm tra File Core
+    if [[ -f wptangtoc-ols.zip && -f wptangtoc-ols.zip.sig ]]; then
+        if gpg --verify wptangtoc-ols.zip.sig wptangtoc-ols.zip 2>/dev/null; then
+            auth_core=1
+        fi
     fi
 
-    # Tải file User
-    wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/wptangtoc-ols-user.zip
-    [[ "$id_checksum_user" != $(md5sum wptangtoc-ols-user.zip 2>/dev/null | awk '{print $1}') ]] && rm -f wptangtoc-ols-user.zip
-    if [[ ! -f wptangtoc-ols-user.zip ]]; then
-      wget -q --timeout=15 --tries=3 http://wptangtoc.com/share/wptangtoc-ols-user.zip --no-check-certificate
-      [[ "$id_checksum_user" != $(md5sum wptangtoc-ols-user.zip 2>/dev/null | awk '{print $1}') ]] && rm -f wptangtoc-ols-user.zip
+    # Kiểm tra File User
+    if [[ -f wptangtoc-ols-user.zip && -f wptangtoc-ols-user.zip.sig ]]; then
+        if gpg --verify wptangtoc-ols-user.zip.sig wptangtoc-ols-user.zip 2>/dev/null; then
+            auth_user=1
+        fi
     fi
 
-    # Báo lỗi nếu thiếu file
-    if [[ ! -f wptangtoc-ols.zip || ! -f wptangtoc-ols-user.zip ]]; then
+    # Báo lỗi khẩn cấp nếu GPG phát hiện giả mạo
+    if [[ $auth_core -eq 0 || $auth_user -eq 0 ]]; then
       [[ -n "$wptangtocols_version" ]] && echo "$wptangtocols_version" >/tmp/wptangtoc-ols-version
-      echo -e "\n${C_RED}Tải file thất bại hoặc Checksum không khớp. Đã hủy cập nhật để bảo đảm an toàn!${C_RESET}"
+      
+      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      echo -e "${C_RED}│${C_RESET} ${C_YELLOW}CẢNH BÁO BẢO MẬT NGHIÊM TRỌNG (GPG AUTHENTICATION FAILED)${C_RESET}                    ${C_RED}│${C_RESET}"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      echo -e "${C_RED}│${C_RESET} Hệ thống phát hiện mã nguồn tải về bị hỏng hoặc chữ ký không hợp lệ!       ${C_RED}│${C_RESET}"
+      echo -e "${C_RED}│${C_RESET} Quá trình cập nhật đã bị HỦY BỎ để bảo vệ an toàn cho máy chủ của bạn.       ${C_RED}│${C_RESET}"
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+      
       rm -rf "$TMP_DIR"
-      sleep 3
+      sleep 4
       [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-update-main 1
       [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
       exec /etc/wptt/wptt-status2
-      exit
+      exit 1
     fi
+    
+    _rundone "Xác thực GPG Thành Công. Đang tiến hành cài đặt..."
 
     # ==========================================================================
     # BACKUP ĐỂ ROLLBACK (PHÒNG HỜ)
@@ -188,7 +219,7 @@ else
       exit
     fi
 
-    rm -f wptangtoc-ols.zip
+    rm -f wptangtoc-ols.zip wptangtoc-ols.zip.sig
     rm -rf tool-wptangtoc-ols
 
     [[ -d /etc/wptt-child ]] && \cp -rf /etc/wptt-child/* /etc/wptt
@@ -206,7 +237,7 @@ else
     \cp -f /etc/wptt/wptt /usr/bin
     rm -f /etc/wptt/wptt
 
-	\cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin
+    \cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin
 
     # Chown file Vhost cho User
     if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
@@ -228,7 +259,7 @@ else
     unzip -qo wptangtoc-ols-user.zip
     \cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user
 
-    rm -f wptangtoc-ols-user.zip
+    rm -f wptangtoc-ols-user.zip wptangtoc-ols-user.zip.sig
     rm -rf tool-wptangtoc-ols-user
 
     if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
@@ -244,8 +275,6 @@ else
       chown root:root /usr/bin/wptangtoc-user
       chmod 700 /usr/bin/wptangtoc-user
     fi
-
-
 
     # Khử dấu ngôn ngữ
     if [[ "$khong_dau_vi_ngon_ngu" == '1' ]]; then
