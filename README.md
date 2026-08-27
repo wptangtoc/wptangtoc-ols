@@ -67,7 +67,7 @@ Bạn paste đoạn mã này vào terminal của bạn rồi phần mềm sẽ t
 
 hoặc
 
-<pre>curl -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols && bash wptangtoc-ols</pre>
+<pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
 
 Nếu bạn muốn cài đặt luôn sẵn mã nguồn WordPress vào domain luôn thì có thể dùng đoạn này:
 
@@ -75,7 +75,7 @@ Nếu bạn muốn cài đặt luôn sẵn mã nguồn WordPress vào domain lu�
 
 hoặc:
 
-<pre>curl -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols && bash wptangtoc-ols wp</pre>
+<pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols wp</pre>
 
 Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cung cấp VPS nào đó mà bạn cảm thấy uy tín bạn có thể thuê ở đó. Để có thể sử dụng công cụ này.
 
