@@ -1,6 +1,5 @@
 <div align="center">
-    <img src="https://wptangtoc.com/wp-content/uploads/2021/06/logo-wp-tang-toc.png" alt="WPTangToc OLS Logo" width="300">
-    <h1>🚀 WPTangToc OLS</h1>
+    <h1>WPTangToc OLS</h1>
     <p><b>Giải pháp Thiết lập & Quản trị Webserver Miễn phí, Siêu tốc độ, Dành riêng cho WordPress</b></p>
     <p>
         <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3">
