@@ -181,7 +181,7 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
         
         if [[ $umount_success -eq 0 ]]; then
             clear
-            echo -e "\e[31m❌ THẤT BẠI: Không thể ngắt kết nối ổ /home.\e[0m"
+            echo -e "\e[31mTHẤT BẠI: Không thể ngắt kết nối ổ /home.\e[0m"
             echo "Đang có một tiến trình cấp hệ thống chiếm dụng phân vùng này."
             echo "Vui lòng khởi động lại (reboot) máy chủ và chạy lại kịch bản cài đặt từ thư mục /root."
             exit 1
@@ -192,7 +192,7 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
         # =========================================================
         if ! lvremove -y "$HOME_DEV" >/dev/null 2>&1; then
             mount "$HOME_DEV" /home 2>/dev/null
-            echo -e "\e[31m❌ THẤT BẠI: Lỗi hệ thống khi xóa phân vùng ảo Logical Volume.\e[0m"
+            echo -e "\e[31mTHẤT BẠI: Lỗi hệ thống khi xóa phân vùng ảo Logical Volume.\e[0m"
             exit 1
         fi
         
@@ -217,7 +217,7 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
         sleep 2
     else
         clear
-        echo -e "\e[31m❌ LỖI PHÂN VÙNG Ổ CỨNG: Máy chủ của bạn được chia phân vùng /home riêng biệt.\e[0m"
+        echo -e "\e[31mLỖI PHÂN VÙNG Ổ CỨNG: Máy chủ của bạn được chia phân vùng /home riêng biệt.\e[0m"
         echo "Do không sử dụng kiến trúc ảo hóa LVM, hệ thống không thể tự động gộp phân vùng."
         echo "Vui lòng liên hệ với nhà cung cấp VPS, máy chủ của bạn cài hệ điều hành linux theo dạng nhánh gốc /"
         echo "Hiện tại hệ điều hành của bạn đang được phân quyền theo dạng home dung lượng lớn và nhánh gốc / dung lượng nhỏ"
@@ -229,26 +229,58 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
 fi
 
 
-rm -f wptangtoc-ols
+rm -f "wptangtoc-ols" "wptangtoc-ols-$SERVER_OS"
 
-# DOWNLOAD BỘ CÀI ĐẶT WPTANGTOC OLS
-# Dọn dẹp file cũ nếu có để tránh đụng độ
-rm -f "wptangtoc-ols-$SERVER_OS"
+echo "Đang tải và kiểm chứng mã nguồn..."
 
-# 1. Tải từ máy chủ chính (Thêm -f để bỏ qua nếu lỗi 404/500, thêm timeout để chống treo)
-curl -sfO --connect-timeout 30 --max-time 30 "https://wptangtoc.com/share/wptangtoc-ols-$SERVER_OS"
+# Hàm tải và check SHA256
+function download_and_verify() {
+    local url_script="$1"
+    local url_checksum="$2"
+    
+    # Tải script (Thêm -L)
+    if ! curl -sfLO --connect-timeout 30 "$url_script"; then
+        return 1 
+    fi
+    
+    # Tải mã băm (Thêm -L) -> Xóa ký tự \r -> Lọc đúng OS -> Kiểm tra
+	#SHA256SUMS.txt sẽ xử lý trực tiếp ở trên ram kỹ thuật Stream qua RAM
+    if curl -sfL --connect-timeout 30 -A "checksum wptangtoc ols" "$url_checksum" | tr -d '\r' | grep -E "[[:space:]]wptangtoc-ols-$SERVER_OS$" | sha256sum -c - >/dev/null 2>&1; then
+        return 0 
+    else
+        rm -f "wptangtoc-ols-$SERVER_OS"
+        return 1 
+    fi
+}
 
-# 2. Kiểm tra tính toàn vẹn. Nếu không phải bash script, chuyển hướng Github
-if ! grep -q '^#!/bin/bash' "wptangtoc-ols-$SERVER_OS" 2>/dev/null; then
-    rm -f "wptangtoc-ols-$SERVER_OS"
-    curl -sfO --connect-timeout 30 --max-time 30 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-$SERVER_OS"
+DOWNLOAD_SUCCESS=0
+
+# 1. Thử nghiệm Nguồn chính (Máy chủ WPTangToc & Hub)
+if download_and_verify "https://wptangtoc.com/share/wptangtoc-ols-$SERVER_OS" "https://hub.wptangtoc.com/SHA256SUMS.txt"; then
+    echo -e "\e[32m[Nguồn WPTangToc OLS server] Xác thực an toàn thành công!\e[0m"
+    DOWNLOAD_SUCCESS=1
+else
+    echo -e "\e[33mNguồn chính gặp sự cố mạng hoặc sai SHA256SUMS, đang tự động chuyển sang kho dự phòng GitHub Releases...\e[0m"
+    sleep 2
+    
+    # 2. Thử nghiệm Nguồn dự phòng (Kéo từ bản Release ổn định mới nhất)
+    if download_and_verify "https://github.com/wptangtoc/wptangtoc-ols/releases/latest/download/wptangtoc-ols-$SERVER_OS" "https://github.com/wptangtoc/wptangtoc-ols/releases/latest/download/SHA256SUMS.txt"; then
+        echo -e "\e[32m[Nguồn: GitHub Releases] Xác thực an toàn thành công!\e[0m"
+        DOWNLOAD_SUCCESS=1
+    fi
 fi
 
-# 3. Kiểm tra chốt chặn cuối cùng trước khi thực thi
-if grep -q '^#!/bin/bash' "wptangtoc-ols-$SERVER_OS" 2>/dev/null; then #kiểm tra tính toán vẹn của file tránh truờng hợp download bị lỗi mà vẫn thực thi
-    bash "wptangtoc-ols-$SERVER_OS" "$1"
-else
-    echo -e "\nLỗi: Không thể tải xuống bộ cài đặt hợp lệ!"
-    echo "Vui lòng kiểm tra lại kết nối mạng (DNS) của máy chủ hoặc thử lại sau."
+# CHỐT CHẶN BẢO MẬT
+if [[ $DOWNLOAD_SUCCESS -eq 0 ]]; then
+    clear
+    echo -e "\e[31mLỖI NGHIÊM TRỌNG: Tệp cài đặt không an toàn!\e[0m"
+    echo "Hệ thống không thể tải hoặc xác thực tính toàn vẹn của mã nguồn từ bất kỳ đâu."
+    echo "Tiến trình đã bị hủy tự động để bảo vệ máy chủ của bạn khỏi mã độc."
+    echo "Vui lòng kiểm tra lại cấu hình DNS mạng hoặc liên hệ Gia Tuấn."
     exit 1
 fi
+
+# THỰC THI
+echo -e "\e[32mBắt đầu cài đặt...\e[0m"
+bash "wptangtoc-ols-$SERVER_OS" "$1"
+
