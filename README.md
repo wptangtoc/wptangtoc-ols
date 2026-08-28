@@ -49,7 +49,7 @@
 <p>Bạn chỉ cần dán đoạn mã này vào Terminal (quyền <code>root</code>), hệ thống sẽ chạy và có menu hỏi bạn một số thiết lập cơ bản:</p>
 <pre><code>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</code></pre>
 <p><i>Link dự phòng từ GitHub:</i></p>
-<pre><code>curl -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols && bash wptangtoc-ols</code></pre>
+<pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
 
 <h3>Cách 2: 🤖 Cài đặt Không Chạm (Unattended / Zero-Touch)</h3>
 <p>Tuyệt chiêu dành cho các Sysadmin muốn triển khai hạ tầng hàng loạt (Mass Deployment) qua Ansible, Cloud-Init, hãng VPS đóng template hoặc đơn giản là bạn "lười" bấm phím. Chỉ cần thêm cờ <code>--auto</code>, phần mềm sẽ <b>tự động bỏ qua mọi câu hỏi</b>, áp dụng ngay cấu hình mặc định an toàn, ổn định và nhanh nhất do tác giả định chuẩn (PHP 8.3, MariaDB Stable 10.11, Port mặc định).</p>
@@ -58,15 +58,20 @@
 <hr>
 
 <h2>🛠️ Danh sách Tính năng Đồ sộ</h2>
-<p>WPTangToc OLS bao gồm đầy đủ các tính năng mà một System Admin chuyên nghiệp cần tới:</p>
+<p>WPTangToc OLS không chỉ là kịch bản cài đặt, mà là một hệ sinh thái quản trị máy chủ hoàn chỉnh mang tiêu chuẩn Enterprise, bao gồm:</p>
 <ul>
-    <li><b>Nền tảng lõi:</b> OpenLiteSpeed + LSPHP (Hỗ trợ nhiều phiên bản từ 7.1 đến 8.5 chạy song song) + MariaDB (10.6 đến 12.3).</li>
-    <li><b>Quản lý Website:</b> Thêm không giới hạn Domain/Subdomain, Sao chép nhân bản website (Clone), Giả lập môi trường test (Staging).</li>
-    <li><b>Cache Đa tầng:</b> Hỗ trợ đầy đủ OPcache, Page Cache HTML, Browser Cache, Object Cache (Redis, Memcached, Valkey, KeyDB).</li>
-    <li><b>Bảo mật toàn diện:</b> Cài đặt SSL Let's Encrypt miễn phí tự động gia hạn vĩnh viễn, Tường lửa 8G Firewall, CSF/Firewalld/NFtables, ClamAV Antivirus, Chống Brute Force, Khóa IP, Chặn truy cập theo Quốc gia.</li>
-    <li><b>Quản trị Database & File:</b> Tích hợp PHPMyAdmin và TinyFileManager an toàn trực tiếp trên trình duyệt. Chuyển đổi siêu tốc Engine MySQL (InnoDB, MyISAM, Aria).</li>
-    <li><b>Tự động hóa hệ thống:</b> Tự động sao lưu Database & Source Code, Đẩy Backup lên Cloud, Cảnh báo đăng nhập SSH qua Telegram, Tự động restart dịch vụ khi bị treo.</li>
-    <li><b>Giám sát:</b> Theo dõi lưu lượng mạng, CPU, RAM theo thời gian thực (wtop).</li>
+    <li><b>Nền tảng lõi tối thượng:</b> Vận hành trên OpenLiteSpeed, LSPHP tùy biến đa phiên bản (7.1 đến 8.5 chạy song song) và hệ quản trị cơ sở dữ liệu MariaDB LTS (10.6 đến 12.3).</li>
+    <li><b>Tối ưu Hệ điều hành & Mạng (Kernel Tuning):</b> Tự động cấu hình sysctl, ulimit, kích hoạt thuật toán chống nghẽn mạng TCP BBR và phân bổ tối ưu Zram/Swap theo đúng phần cứng vật lý.</li>
+    <li><b>Quản lý Website toàn diện:</b> Khởi tạo không giới hạn Domain/Subdomain, cấp phát chứng chỉ SSL Let's Encrypt tự động gia hạn. Dễ dàng nhân bản (Clone) và tạo môi trường thử nghiệm (Staging) chỉ với 1 thao tác.</li>
+    <li><b>Bảo mật Cô lập (Defense in Depth):</b> Ứng dụng công nghệ PhpSuExec + Chroot + Namespace giam lỏng từng website. Chống "cháy lan" mã độc 100%. Tự động đổi Port SSH bảo vệ máy chủ.</li>
+    <li><b>Tường lửa & Quét mã độc:</b> Tích hợp 8G Firewall, CSF/Firewalld/NFtables bảo vệ. Trang bị ClamAV Antivirus, Fail2ban chống Brute Force, Khóa IP xấu và thiết lập chặn truy cập theo Quốc gia.</li>
+    <li><b>Cache Đa tầng Tiên tiến:</b> Bật sẵn OPcache, Page Cache HTML, Browser Cache. Hỗ trợ cấu hình Object Cache siêu tốc (Redis, Memcached, Valkey, KeyDB) giao tiếp trực tiếp qua UNIX Socket.</li>
+    <li><b>Tối ưu chuyên sâu WordPress:</b> Hỗ trợ quản trị mạnh mẽ qua WP-CLI. Tự động thiết lập tính năng siêu bảo mật LockDown WordPress và thay thế WP-Cron bằng Linux Cron để giảm tải CPU.</li>
+    <li><b>Quản trị Database Thông minh:</b> Tự động Auto-tune cấu hình MariaDB (Query Cache, Buffer Pool) khớp với lượng RAM hiện có. Tích hợp sẵn PHPMyAdmin và hỗ trợ chuyển đổi Engine (InnoDB, MyISAM, Aria).</li>
+    <li><b>Tuơng thích Cloudflare CDN:</b> Hỗ trợ SSL full Cloudflare và show real ip Cloudflare...</li>
+    <li><b>An toàn Dữ liệu & Tự động hóa:</b> Tự động sao lưu định kỳ. và đẩy thẳng lên Cloud (Amazon S3, Cloudflare R2, Google Drive, Telegram...).</li>
+    <li><b>Giám sát & Tự phục hồi:</b> Cảnh báo đăng nhập lạ qua Telegram. Giám sát tài nguyên máy chủ (wtop) thời gian thực và tự động Restart các dịch vụ nếu phát hiện tình trạng treo, đảm bảo Uptime tối đa.</li>
+    <li><b>Còn nhiều tính năng khác đợi bạn trải nghiệm...</b></li>
 </ul>
 
 <hr>
