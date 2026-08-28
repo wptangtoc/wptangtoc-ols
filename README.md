@@ -117,6 +117,13 @@
 
 <hr>
 
+<h2>🔒 Cam kết Quyền riêng tư & Minh bạch (Zero Telemetry)</h2>
+<p>Chúng mình thấu hiểu rằng đối với System Admin, dữ liệu và quyền kiểm soát là ranh giới không thể xâm phạm. WPTangToc OLS được xây dựng dựa trên triết lý tối thượng đó:</p>
+<ul>
+    <li>📖 <b>100% Minh bạch (Transparent):</b> Toàn bộ mã nguồn bash script đều là mã thuần (clear-text), không mã hóa (no obfuscation), không biên dịch ẩn. Bất kỳ ai cũng có thể (và được khuyến khích) đọc và kiểm tra từng dòng code trước khi bấm chạy.</li>
+    <li>👑 <b>Toàn quyền làm chủ (Total Ownership):</b> Bạn chạy website gì, nội dung ra sao, lưu lượng thế nào... tác giả hoàn toàn không biết và không thể biết. Bạn là người cầm 100% chìa khóa, toàn quyền quyết định việc sử dụng, triển khai và kinh doanh trên máy chủ của chính mình.</li>
+</ul>
+
 <hr>
 
 <h2>⚠️ Tuyên Bố Miễn Trừ Trách Nhiệm & Tinh Thần Mã Nguồn Mở (Disclaimer)</h2>
