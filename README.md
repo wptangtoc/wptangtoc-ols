@@ -30,7 +30,7 @@
     <li><b>AlmaLinux:</b> 8, 9, 10 <i>(Khuyên dùng: AlmaLinux 9)</i> 🏆</li>
     <li><b>Rocky Linux:</b> 8, 9, 10</li>
     <li><b>Red Hat Enterprise Linux (RHEL):</b> 8, 9, 10</li>
-    <li><b>Oracle Linux Server:</b> 8, 9</li>
+    <li><b>Oracle Linux Server:</b> 8, 9, 10</li>
     <li><b>Ubuntu:</b> 22.04, 24.04 <i>(Thử nghiệm)</i></li>
 </ul>
 
@@ -52,9 +52,10 @@
 <pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
 
 <h3>Cách 2: 🤖 Cài đặt Không Chạm (Unattended / Zero-Touch)</h3>
-<p>Tuyệt chiêu dành cho các Sysadmin muốn triển khai hạ tầng hàng loạt (Mass Deployment) qua Ansible, Cloud-Init, hãng VPS đóng template hoặc đơn giản là bạn "lười" bấm phím. Chỉ cần thêm cờ <code>--auto</code>, phần mềm sẽ <b>tự động bỏ qua mọi câu hỏi</b>, áp dụng ngay cấu hình mặc định an toàn, ổn định và nhanh nhất do tác giả định chuẩn (PHP 8.3, MariaDB Stable 10.11, Port mặc định).</p>
+<p>Tuyệt chiêu dành cho các Sysadmin muốn triển khai hạ tầng hàng loạt (Mass Deployment) qua Ansible, Cloud-Init, hãng VPS đóng thành template hay Snapshots để nhân bản rất nhanh chóng và tiện lợi hoặc đơn giản là bạn "lười" bấm phím. Chỉ cần thêm cờ <code>--auto</code>, phần mềm sẽ <b>tự động bỏ qua mọi câu hỏi</b>, áp dụng ngay cấu hình mặc định an toàn, ổn định và nhanh nhất do tác giả định chuẩn (PHP 8.3, MariaDB Stable LTS 10.11, Port SSH mặc định).</p>
 <pre><code>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols --auto</code></pre>
-
+<p><i>Link dự phòng từ GitHub:</i></p>
+<pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols --auto</pre>
 <hr>
 
 <h2>🛠️ Danh sách Tính năng Đồ sộ</h2>
@@ -68,7 +69,7 @@
     <li><b>Cache Đa tầng Tiên tiến:</b> Bật sẵn OPcache, Page Cache HTML, Browser Cache. Hỗ trợ cấu hình Object Cache siêu tốc (Redis, Memcached, Valkey, KeyDB) giao tiếp trực tiếp qua UNIX Socket.</li>
     <li><b>Tối ưu chuyên sâu WordPress:</b> Hỗ trợ quản trị mạnh mẽ qua WP-CLI. Tự động thiết lập tính năng siêu bảo mật LockDown WordPress và thay thế WP-Cron bằng Linux Cron để giảm tải CPU.</li>
     <li><b>Quản trị Database Thông minh:</b> Tự động Auto-tune cấu hình MariaDB (Query Cache, Buffer Pool) khớp với lượng RAM hiện có. Tích hợp sẵn PHPMyAdmin và hỗ trợ chuyển đổi Engine (InnoDB, MyISAM, Aria).</li>
-    <li><b>Tuơng thích Cloudflare CDN:</b> Hỗ trợ SSL full Cloudflare và show real ip Cloudflare...</li>
+    <li><b>Tương thích Cloudflare CDN:</b> Hỗ trợ SSL full Cloudflare và show real ip Cloudflare...</li>
     <li><b>An toàn Dữ liệu & Tự động hóa:</b> Tự động sao lưu định kỳ. và đẩy thẳng lên Cloud (Amazon S3, Cloudflare R2, Google Drive, Telegram...).</li>
     <li><b>Giám sát & Tự phục hồi:</b> Cảnh báo đăng nhập lạ qua Telegram. Giám sát tài nguyên máy chủ (wtop) thời gian thực và tự động Restart các dịch vụ nếu phát hiện tình trạng treo, đảm bảo Uptime tối đa.</li>
     <li><b>Còn nhiều tính năng khác đợi bạn trải nghiệm...</b></li>
@@ -79,18 +80,24 @@
 <h2>📚 Nguồn tài liệu & Cộng đồng hỗ trợ</h2>
 <ul>
     <li><b>Trang chủ & Hướng dẫn chi tiết:</b> <a href="https://wptangtoc.com/wptangtoc-ols/">Tại đây</a></li>
-    <li><b>Nhật ký cập nhật (Changelog):</b> <a href="https://wptangtoc.com/changelog-wptangtoc-ols/">Tại đây</a></li>
+    <li><b>Nhật ký cập nhật (Changelog) Commit:</b> <a href="https://github.com/wptangtoc/wptangtoc-ols/commits/main/">Tại đây</a></li>
     <li><b>Cộng đồng hỗ trợ:</b> Tham gia <a href="https://www.facebook.com/groups/wptangtoc/">Group Tăng Tốc WordPress</a> trên Facebook để được giải đáp thắc mắc.</li>
 </ul>
 
-<h3>Các đối tác công nghệ mở:</h3>
+<h3>Các lõi công nghệ & Mã nguồn mở được tích hợp:</h3>
 <p>
     <a href="https://openlitespeed.org/">OpenLiteSpeed</a> | 
     <a href="https://downloads.mariadb.org/">MariaDB</a> | 
     <a href="https://www.php.net/">PHP</a> | 
     <a href="https://wp-cli.org/">WP-CLI</a> | 
     <a href="https://rclone.org/">Rclone</a> | 
-    <a href="https://www.fail2ban.org/">Fail2ban</a>
+    <a href="https://www.fail2ban.org/">Fail2ban</a> | 
+    <a href="https://www.phpmyadmin.net/">phpMyAdmin</a> | 
+    <a href="https://letsencrypt.org/">Let's Encrypt</a> | 
+    <a href="https://valkey.io/">Valkey</a> | 
+    <a href="https://www.clamav.net/">ClamAV</a> | 
+    <a href="https://tinyfilemanager.github.io/">TinyFileManager</a> |
+    <a href="https://perishablepress.com/8g-firewall/">8G Firewall</a>
 </p>
 
 <hr>
