@@ -58,7 +58,7 @@ cat <(crontab -l) <(echo "* * * * * sleep 40; /usr/bin/python3 /usr/local/lsws/$
 cat <(crontab -l) <(echo "* * * * * sleep 50; /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/$NAME/logs/access.log") | crontab -
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
 else
   path_nftables_config="/etc/sysconfig/nftables.conf"

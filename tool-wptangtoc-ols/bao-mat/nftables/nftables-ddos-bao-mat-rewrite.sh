@@ -77,7 +77,7 @@ fi
 cat <(crontab -l) | sed "/truncate/d" | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/logs/error.log") | crontab -
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
 else
   path_nftables_config="/etc/sysconfig/nftables.conf"

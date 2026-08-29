@@ -23,12 +23,42 @@ CHAT_ID=$(echo $telegram_id)
 # Đường dẫn đến file log (tùy chọn)
 LOG_FILE="/var/log/ssl_expiry.log"
 
-# Hàm gửi tin nhắn Telegram
+
+
 send_telegram_message() {
   local message="$1"
-  url_tele="https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot${BOT_TOKEN}/sendMessage"
-  curl -s -d "chat_id=$CHAT_ID&text=${message}&disable_web_page_preview=true&parse_mode=markdown" $url_tele >/dev/null
+
+  local url_tele_goc="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+  
+  # LẦN 1: Thử gửi bằng API gốc (Sử dụng cách viết -d tách dòng siêu an toàn của sếp)
+  local response
+  response=$(curl -s -m 5 -X POST "$url_tele_goc" \
+    -d chat_id="$CHAT_ID" \
+    -d text="$message" \
+    -d disable_web_page_preview="true" \
+    -d parse_mode="markdown")
+  
+  # SIÊU KIỂM TRA TẦNG API: Nếu Telegram không trả về chữ "ok":true
+  if [[ "$response" != *"\"ok\":true"* ]]; then
+    
+    # === BẬT CHẾ ĐỘ DỰ PHÒNG: CHUYỂN QUA PROXY ===
+    local API_PROXY
+    API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
+    
+    local url_tele_proxy
+    if [[ "$API_PROXY" == *"workers.dev"* ]]; then
+      url_tele_proxy="https://$API_PROXY/bot${BOT_TOKEN}/sendMessage"
+    fi
+    
+    # LẦN 2: Bắn lại qua Proxy
+    curl -s -m 10 -X POST "$url_tele_proxy" \
+      -d chat_id="$CHAT_ID" \
+      -d text="$message" \
+      -d disable_web_page_preview="true" \
+      -d parse_mode="markdown" >/dev/null
+  fi
 }
+
 
 # Hàm kiểm tra chứng chỉ
 check_certificate() {
