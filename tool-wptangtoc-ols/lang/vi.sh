@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC2034
+# shellcheck disable=all
 #wptangtoc main
 quan_ly_="Quản lý"
 quan_ly_wordpress="Quản lý WordPress"
