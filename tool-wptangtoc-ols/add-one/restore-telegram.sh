@@ -6,9 +6,10 @@
 # shellcheck disable=SC2154,SC1090,SC1091
 
 function huong_dan() {
-  Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn.
-  Hệ thống sẽ tự động tìm kiếm, tải xuống và ghép nối các file bị phân mảnh [split parts]
-  trở thành một file hoàn chỉnh [Zip/SQL] để chuẩn bị cho quá trình khôi phục.
+  # Vá lỗi SC2102: Thêm lệnh echo và bọc ngoặc kép cho văn bản thuần túy
+  echo "Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn."
+  echo "Hệ thống sẽ tự động tìm kiếm, tải xuống và ghép nối các file bị phân mảnh [split parts]"
+  echo "trở thành một file hoàn chỉnh [Zip/SQL] để chuẩn bị cho quá trình khôi phục."
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -29,10 +30,10 @@ echo "Tải file backup từ Telegram: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wpt
 . /etc/wptt/tenmien
 lua_chon_NAME "Download file backup từ Telegram"
 
-# Vá lỗi SC2317: Tách logic để ShellCheck không bị nhầm lẫn
+# Vá lỗi SC2317: Bỏ 'exec' để ShellCheck không báo lỗi Unreachable code
 if [[ "$NAME" == "0" || -z "$NAME" ]]; then
   if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-backup-restore-main 1
+    /etc/wptt/wptt-backup-restore-main 1
   fi
   return 2>/dev/null || exit 0
 fi
@@ -43,7 +44,7 @@ if [[ ! -f "$pathcheck" ]]; then
   sleep 3
   # Vá lỗi SC2317
   if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-backup-restore-main 1
+    /etc/wptt/wptt-backup-restore-main 1
   fi
   return 2>/dev/null || exit 0
 fi
@@ -68,7 +69,8 @@ if [[ -z "$danh_sach" ]]; then
   echo -e "${C_YELLOW}Không tìm thấy bản sao lưu nào cho domain $NAME trên Telegram!${C_RESET}"
   rm -f "$log_file"
   sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+  # Vá lỗi SC2317
+  [[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
   exit 0
 fi
 
@@ -111,7 +113,8 @@ while true; do
   0)
     echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
     rm -f "$log_file"
-    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+    # Vá lỗi SC2317
+    [[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
     exit 0
     ;;
   00)
@@ -313,4 +316,4 @@ else
 fi
 
 sleep 3
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+[[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
