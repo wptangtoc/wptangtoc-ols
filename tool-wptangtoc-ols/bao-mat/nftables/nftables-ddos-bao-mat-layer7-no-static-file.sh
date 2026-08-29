@@ -86,6 +86,7 @@ fi
 cat <(crontab -l) | sed "/logs\/access.log/d" | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/$NAME/logs/access.log") | crontab -
 if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
+if grep -q "AlmaLinux\|Rocky\|CentOS" /etc/*release 2>/dev/null; then
   systemctl restart crond
 else
   systemctl restart cron
