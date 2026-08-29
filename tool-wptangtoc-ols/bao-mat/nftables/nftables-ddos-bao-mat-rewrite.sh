@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091
 
 nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
 if [[ "$nftables_service" != "active" ]]; then
@@ -92,7 +93,7 @@ if [[ $(cat "$path_nftables_config" | grep 'ipvietnam') = '' ]]; then
     cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc/sysconfig
   fi
 
-  chmod 600 $path_nftables_config
+  chmod 600 "$path_nftables_config"
 
   #mở port ssh
   port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$')
@@ -100,33 +101,40 @@ if [[ $(cat "$path_nftables_config" | grep 'ipvietnam') = '' ]]; then
     port_checkssh=22
   fi
 
-  sed -i "/chain input /a\ \ tcp dport $port_checkssh accept #port ssh" $path_nftables_config
+  sed -i "/chain input /a\ \ tcp dport $port_checkssh accept #port ssh" "$path_nftables_config"
   systemctl restart nftables
 
   path_webgui="/usr/local/lsws/conf/disablewebconsole"
   if [[ ! -f $path_webgui ]]; then
     port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | grep -o '[0-9]\+$')
-    sed -i "/chain input /a\ \ tcp dport $port_webgui_openlitespeed accept #port webguiadmin" $path_nftables_config
+    sed -i "/chain input /a\ \ tcp dport $port_webgui_openlitespeed accept #port webguiadmin" "$path_nftables_config"
     systemctl restart nftables
   fi
 
 fi
 
-if [[ $(echo $google | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)') ]]; then #loc nếu không call được thì thôi
-  google=$(echo $google | sed 's/ /, /g')
-  google=$(echo $google | sed 's/^/{ /g' | sed 's/$/ }/g')
-  nft add element inet filter GGv4 $google
+# Vá lỗi SC2143: Dùng grep -q thay vì so sánh output
+if echo "$google" | grep -qE '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'; then #loc nếu không call được thì thôi
+  # Vá lỗi SC2001: Dùng thay thế chuỗi nội tại của Bash
+  google="${google// /, }"
+  google="{ $google }"
+  # Vá lỗi SC2086: Bọc ngoặc kép cho biến
+  nft add element inet filter GGv4 "$google"
 else
   echo "không gọi được ip của google, ngừng tiến trình"
   exit
 fi
 
-if [[ $(echo $bing_ip | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)') ]]; then #loc nếu không call được thì thôi
+# Vá lỗi SC2143
+if echo "$bing_ip" | grep -qE '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'; then #loc nếu không call được thì thôi
   ip_elements_bing=$(nft list set inet filter BINGv4 | awk '/{ /,/}/' | cut -d '=' -f 2)
-  nft delete element inet filter BINGv4 ${ip_elements_bing}
-  bing_ip=$(echo $bing_ip | sed 's/ /, /g')
-  bing_ip=$(echo $bing_ip | sed 's/^/{ /g' | sed 's/$/ }/g')
-  nft add element inet filter BINGv4 $bing_ip
+  # Vá lỗi SC2086
+  nft delete element inet filter BINGv4 "$ip_elements_bing" 2>/dev/null
+  # Vá lỗi SC2001
+  bing_ip="${bing_ip// /, }"
+  bing_ip="{ $bing_ip }"
+  # Vá lỗi SC2086
+  nft add element inet filter BINGv4 "$bing_ip"
 else
   echo "không gọi được ip của bing"
 fi
@@ -137,12 +145,15 @@ fi
 nft list ruleset >/etc/sysconfig/nftables.conf
 
 ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
-. /etc/wptt/bao-mat/nftables/bypass-ip.sh $ip
+# Vá lỗi SC2086
+. /etc/wptt/bao-mat/nftables/bypass-ip.sh "$ip"
 
 . /etc/wptt/logs/error-chuyen-warn-log-server
 
 systemctl restart nftables
-if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
+
+# Vá lỗi SC2091: Thay vì if $(cat ... | grep -q), dùng trực tiếp if grep -q
+if grep -q "AlmaLinux\|Rocky\|CentOS" /etc/*release 2>/dev/null; then
   systemctl restart crond
 else
   systemctl restart cron
