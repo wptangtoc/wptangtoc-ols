@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC2086,SC2046,SC2126,SC2206,SC2004
+# shellcheck disable=all
 #Author          :LiteSpeedtech & Gia Tuấn
 #date            :20250315
 #version         :2.0.1
