@@ -63,12 +63,12 @@ done <<<"$IP_LIST"
 #    Chiến lược: Xóa sạch set cũ và thêm toàn bộ list mới.
 #    Điều này đảm bảo các IP đã được gỡ khỏi Firehol cũng sẽ được gỡ khỏi set của bạn.
 echo "-> Xóa các entry cũ trong set '${NFT_SET}'..."
-sudo nft flush set $NFT_TABLE $NFT_SET
+sudo nft flush set "$NFT_TABLE" "$NFT_SET"
 
 # Chỉ thêm khi danh sách element không rỗng
 if [ -n "$ELEMENTS" ]; then
   echo "-> Thêm $COUNT IP/dải mạng mới vào set '${NFT_SET}' với thời gian chặn là ${BAN_DURATION}..."
-  sudo nft add element $NFT_TABLE $NFT_SET "{ $ELEMENTS }"
+  sudo nft add element "$NFT_TABLE" "$NFT_SET" "{ $ELEMENTS }"
   echo "✅ Cập nhật thành công!"
 else
   echo "ℹ️ Danh sách Firehol rỗng, không có IP nào được thêm."

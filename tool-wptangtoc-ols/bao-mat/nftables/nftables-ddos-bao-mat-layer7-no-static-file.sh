@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091
 
 nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
 if [[ "$nftables_service" != "active" ]]; then
@@ -31,7 +32,8 @@ if [[ -f /etc/systemd/system/layer7-ddos-blocker-nftables.service ]]; then
   exit
 fi
 
-if [[ $(nft list ruleset | grep 'blackaction') = '' ]]; then
+# Đã thay đổi để tránh lỗi SC2143
+if ! nft list ruleset | grep -q 'blackaction'; then
   echo "nftables chưa được thiết lập triển khai chống ddos"
   exit
 fi
@@ -39,24 +41,26 @@ fi
 dnf install golang -y
 
 if [[ ! -f /etc/systemd/system/layer7-ddos-blocker-nftables.service ]]; then
-  mkdir -p /usr/local/lsws/$NAME/bao-mat
-  cp -f /etc/wptt/bao-mat/nftables/anti-website-layer-7-no-static-file.go /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go
-  sed -i "s/wptangtoc.com/$NAME/g" /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go
+  mkdir -p "/usr/local/lsws/$NAME/bao-mat"
+  cp -f /etc/wptt/bao-mat/nftables/anti-website-layer-7-no-static-file.go "/usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go"
+  sed -i "s/wptangtoc.com/$NAME/g" "/usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go"
+  
   ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
   mkdir -p /etc/go_blocker/
   echo '103.106.105.75' >>/etc/go_blocker/whitelist.txt
   echo "$ip" >>/etc/go_blocker/whitelist.txt
-  sed -i "s/\ /\\n/g" /etc/go_blocker/whitelist.txt
+  sed -i "s/ /\\n/g" /etc/go_blocker/whitelist.txt
+  
   ip_all=$(cat /etc/go_blocker/whitelist.txt | sort -u)
-  echo $ip_all >/etc/go_blocker/whitelist.txt
-  sed -i "s/\ /\\n/g" /etc/go_blocker/whitelist.txt
+  echo "$ip_all" >/etc/go_blocker/whitelist.txt
+  sed -i "s/ /\\n/g" /etc/go_blocker/whitelist.txt
 
-  chmod +x /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go
-  cd /usr/local/lsws/$NAME/bao-mat && go build anti-website-layer-7.go && chmod +x anti-website-layer-7
+  chmod +x "/usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go"
+  cd "/usr/local/lsws/$NAME/bao-mat" && go build anti-website-layer-7.go && chmod +x anti-website-layer-7
   rm -f /usr/local/bin/anti-website-layer-7
-  mv /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7 /usr/local/bin/
-  # rm -rf /usr/local/lsws/$NAME/bao-mat
+  mv "/usr/local/lsws/$NAME/bao-mat/anti-website-layer-7" /usr/local/bin/
+  
   echo '
 [Unit]
 Description=Go Lang Log Blocker for Litespeed Layer 7
@@ -85,7 +89,8 @@ fi
 
 cat <(crontab -l) | sed "/logs\/access.log/d" | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/$NAME/logs/access.log") | crontab -
-if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
+
+# Đã xóa lệnh if bị thừa ở đây
 if grep -q "AlmaLinux\|Rocky\|CentOS" /etc/*release 2>/dev/null; then
   systemctl restart crond
 else
