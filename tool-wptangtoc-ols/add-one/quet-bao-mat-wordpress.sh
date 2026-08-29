@@ -1,9 +1,11 @@
 #!/bin/bash
+# shellcheck disable=SC1091
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
 # @description: Quét lỗ hổng bảo mật & Mã độc WordPress 
 # @since: 2026
+
 
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -22,7 +24,7 @@ if [[ -z "$NAME" ]]; then
   echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_YELLOW}TỐI ƯU & BẢO MẬT ➜ Lựa chọn website quét bảo mật:${C_RESET}"
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-  lua_chon_NAME
+  lua_chon_NAME "website quét bảo mật"
 fi
 
 # ==============================================================================
