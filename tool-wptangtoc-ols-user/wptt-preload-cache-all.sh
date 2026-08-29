@@ -1,3 +1,5 @@
+#!/bin/bash
+# shellcheck disable=all
 #Author          :LiteSpeedtech & Gia Tuấn
 #date            :20250315
 #version         :2.0.1

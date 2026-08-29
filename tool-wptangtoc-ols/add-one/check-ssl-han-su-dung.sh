@@ -1,24 +1,33 @@
 #!/bin/bash
+# shellcheck disable=SC1091
 
 # Số ngày trước khi hết hạn để cảnh báo
 THRESHOLD=7
 
 # --- Cấu hình ---
 DOMAINS=()
-for entry in $(ls -A /etc/wptt/vhost); do
-  NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-  if [ "$NAME" != "${NAME/./}" ]; then
-    DOMAINS+=("$NAME")
-  fi
+
+for filepath in /etc/wptt/vhost/.*.conf; do
+	[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+	domain="${filepath##*/}"
+	domain="${domain%.conf}"
+	domain="${domain#.}"
+
+	if [[ "$domain" == ?*.?* ]]; then
+		DOMAINS+=("$domain")
+	fi
 done
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 
 # Telegram Bot API Token (LẤY TỪ BOTFATHER)
-BOT_TOKEN=$(echo $telegram_api)
+
+BOT_TOKEN="$telegram_api"
 
 # Chat ID của người nhận/nhóm nhận tin nhắn (LẤY BẰNG CÁCH GỬI TIN NHẮN CHO BOT)
-CHAT_ID=$(echo $telegram_id)
+CHAT_ID="$telegram_id"
+
 
 # Đường dẫn đến file log (tùy chọn)
 LOG_FILE="/var/log/ssl_expiry.log"
