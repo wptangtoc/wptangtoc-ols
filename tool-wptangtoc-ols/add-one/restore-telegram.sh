@@ -3,6 +3,7 @@
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
 # @since: 2026
+# shellcheck disable=SC2154,SC1090,SC1091
 
 function huong_dan() {
   Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn.
@@ -12,7 +13,8 @@ function huong_dan() {
 
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+# Vá lỗi SC2086: Bọc ngoặc kép cho đường dẫn chứa biến
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
@@ -27,17 +29,23 @@ echo "Tải file backup từ Telegram: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wpt
 . /etc/wptt/tenmien
 lua_chon_NAME "Download file backup từ Telegram"
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
-  return 2>/dev/null || exit
-}
+# Vá lỗi SC2317: Tách logic để ShellCheck không bị nhầm lẫn
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-backup-restore-main 1
+  fi
+  return 2>/dev/null || exit 0
+fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
+  echo -e "\n${C_RED}Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
-  return 2>/dev/null || exit
+  # Vá lỗi SC2317
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-backup-restore-main 1
+  fi
+  return 2>/dev/null || exit 0
 fi
 
 TG_BASE_URL="https://api.telegram.org"
@@ -109,7 +117,9 @@ while true; do
   00)
     if $fzf_installed; then
       selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm bản sao lưu >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
-      selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+      # Vá lỗi SC2001: Dùng nội tại Bash để cắt chuỗi thay vì dùng lệnh sed
+      selected_name="${selected_name#*: }"
+      
       if [[ -n "$selected_name" ]]; then
         file1="$selected_name"
         break
@@ -142,13 +152,23 @@ download_and_merge_telegram() {
   mapfile -t dulieu_all < <(grep "$target_file" "$log_file" | sort -k2,2V)
   
   for du_lieu in "${dulieu_all[@]}"; do
-    local file_id=$(echo "$du_lieu" | cut -f1 -d ' ')
-    local ten_file_part=$(echo "$du_lieu" | cut -f2 -d ' ')
+    # Vá lỗi SC2155: Khai báo local riêng, gán giá trị riêng
+    local file_id
+    file_id=$(echo "$du_lieu" | cut -f1 -d ' ')
+    
+    local ten_file_part
+    ten_file_part=$(echo "$du_lieu" | cut -f2 -d ' ')
     
     local get_file_url="${TG_BASE_URL}/bot${telegram_api}/getFile"
-    local file_info=$(curl -s -X POST "$get_file_url" -d file_id="$file_id")
-    local file_path=$(echo "$file_info" | jq -r '.result.file_path')
-    local file_size_api=$(echo "$file_info" | jq -r '.result.file_size') # Lấy chuẩn dung lượng API
+    
+    local file_info
+    file_info=$(curl -s -X POST "$get_file_url" -d file_id="$file_id")
+    
+    local file_path
+    file_path=$(echo "$file_info" | jq -r '.result.file_path')
+    
+    local file_size_api
+    file_size_api=$(echo "$file_info" | jq -r '.result.file_size')
     
     if [[ "$file_path" == "null" || -z "$file_path" ]]; then
       _runloi "Không thể lấy link tải mảnh: $ten_file_part"
@@ -163,7 +183,8 @@ download_and_merge_telegram() {
     
     if [[ -f "$path_dl/$ten_file_part" ]]; then
       # SIÊU KIỂM TRA CHÉO: Dữ liệu tải về phải khớp 100% Byte với Telegram báo cáo
-      local downloaded_size=$(stat -c %s "$path_dl/$ten_file_part")
+      local downloaded_size
+      downloaded_size=$(stat -c %s "$path_dl/$ten_file_part")
       
       if [[ "$downloaded_size" != "$file_size_api" ]]; then
           _runloi "Lỗi rớt mạng! Dung lượng mảnh $ten_file_part bị thiếu."

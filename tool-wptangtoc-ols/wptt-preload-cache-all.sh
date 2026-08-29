@@ -1,3 +1,4 @@
+#!/bin/bash
 #Author          :LiteSpeedtech & Gia Tuấn
 #date            :20250315
 #version         :2.0.1
@@ -392,7 +393,7 @@ function validmap() {
     if [[ $ngon_ngu = '' ]]; then
       ngon_ngu='vi'
     fi
-    . /etc/wptt/lang/$ngon_ngu.sh
+    . "/etc/wptt/lang/$ngon_ngu.sh"
 
     echo "Kết nối không thành công với không có code mã nào được trả về - ${CURL_RETURN_CODE}, exit"
     echo "========================================================================="
@@ -410,7 +411,7 @@ function validmap() {
       if [[ $ngon_ngu = '' ]]; then
         ngon_ngu='vi'
       fi
-      . /etc/wptt/lang/$ngon_ngu.sh
+      . "/etc/wptt/lang/$ngon_ngu.sh"
 
       echo "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
       echo "========================================================================="

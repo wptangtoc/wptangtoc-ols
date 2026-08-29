@@ -6,7 +6,7 @@ nft add element ip blackblock blackaction { 0.0.0.0 } >/dev/null 2>&1
 
 # (Tùy chọn) Kéo theo restart nếu anh có dùng các file nftables.conf tĩnh khác
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
 else
   path_nftables_config="/etc/sysconfig/nftables.conf"
