@@ -37,16 +37,16 @@ bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]
 
 if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
   if [[ ! -f /etc/systemd/system/ddos-blocker-nftables.service ]]; then
-    mkdir -p /usr/local/lsws/$NAME/bao-mat
-    cp -f /etc/wptt/bao-mat/nftables/anti.go /usr/local/lsws/$NAME/bao-mat/anti.go
+    mkdir -p /usr/local/lsws/"$NAME"/bao-mat
+    cp -f /etc/wptt/bao-mat/nftables/anti.go /usr/local/lsws/"$NAME"/bao-mat/anti.go
 
     ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
-    sed -i "/var whitelistIPs/a \"$ip\"," /usr/local/lsws/$NAME/bao-mat/anti.go
-    chmod +x /usr/local/lsws/$NAME/bao-mat/anti.go
-    cd /usr/local/lsws/$NAME/bao-mat && go build anti.go && chmod +x anti
+    sed -i "/var whitelistIPs/a \"$ip\"," /usr/local/lsws/"$NAME"/bao-mat/anti.go
+    chmod +x /usr/local/lsws/"$NAME"/bao-mat/anti.go
+    cd /usr/local/lsws/"$NAME"/bao-mat && go build anti.go && chmod +x anti
     rm -f /usr/local/bin/anti
-    mv /usr/local/lsws/$NAME/bao-mat/anti /usr/local/bin/
+    mv /usr/local/lsws/"$NAME"/bao-mat/anti /usr/local/bin/
     # rm -rf /usr/local/lsws/$NAME/bao-mat
     echo '
 [Unit]
@@ -85,9 +85,8 @@ fi
 
 #file config /etc/sysconfig/nftables.conf
 
-if [[ $(cat $path_nftables_config | grep 'ipvietnam') = '' ]]; then
-
-  if $(cat /etc/*release | grep -q "ubuntu"); then
+if [[ $(cat "$path_nftables_config" | grep 'ipvietnam') = '' ]]; then
+  if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
     cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc
   else
     cp -f /etc/wptt/bao-mat/nftables/nftables.conf /etc/sysconfig

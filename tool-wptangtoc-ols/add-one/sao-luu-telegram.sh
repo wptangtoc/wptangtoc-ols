@@ -2,6 +2,7 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
+# shellcheck disable=SC1091,SC2154,SC1090
 
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -25,8 +26,15 @@ fi
 
 if [[ "$NAME" == 'Tất cả website' ]]; then
     if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
-        for entry in $(ls -A /etc/wptt/vhost | grep -E '\.conf$' | grep -v '^\.\.conf$' | sort -uV); do
-            domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+        # Vá lỗi SC2010: Quét thư mục bằng vòng lặp chuẩn của Bash
+        for entry_path in /etc/wptt/vhost/.*.conf /etc/wptt/vhost/*.conf; do
+            [[ -f "$entry_path" ]] || continue
+            entry=$(basename "$entry_path")
+            [[ "$entry" == "..conf" ]] && continue
+            
+            domain="${entry#.}"
+            domain="${domain%.conf}"
+            
             if [[ -d "/usr/local/lsws/$domain/html" ]]; then
                 echo -e "\n${C_YELLOW}➜ Đang tiến hành sao lưu hàng loạt: ${C_GREEN}$domain${C_RESET}"
                 bash /etc/wptt/add-one/sao-luu-telegram.sh "$domain" "skip_menu"
@@ -54,7 +62,6 @@ IP_VPS=$(curl -s4 --connect-timeout 5 ifconfig.me || curl -s4 --connect-timeout 
 
 TG_BASE_URL="https://api.telegram.org"
 if ! curl -I -s -m 3 "$TG_BASE_URL" > /dev/null 2>&1; then
-	# API_PROXY=$(curl -X POST -s -m 5 "https://hub.wptangtoc.com/get-telegram-work" -A 'Activate Backup Restore WPTangToc' | tr -d ' ' | tr -d '\n')
     API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
     [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
 fi
@@ -65,7 +72,10 @@ fi
 telegram_uploads_backup() {
     local file_path=$1
     local domain_name=$2
-    local date_time="$(date "+%d-%m-%Y %H:%M")"
+    
+    # Vá lỗi SC2155: Khai báo tách biệt với gán giá trị
+    local date_time
+    date_time="$(date "+%d-%m-%Y %H:%M")"
     
     local type="Mã nguồn (Source)"
     [[ "$file_path" == *".sql.gz"* ]] && type="Cơ sở dữ liệu (Database)"
@@ -78,15 +88,20 @@ telegram_uploads_backup() {
     local success=0
     
     while (( attempt <= max_retries && success == 0 )); do
-        local response=$(curl -4 -s -S -X POST "$worker_url" \
+        # Vá lỗi SC2155
+        local response
+        response=$(curl -4 -s -S -X POST "$worker_url" \
             -F document=@"${file_path}" \
             -F parse_mode='Markdown' \
             -F caption="${caption}" \
             -F disable_notification=true \
             -F chat_id="${telegram_id}")
             
-        local file_id=$(echo "$response" | jq -r '.result.document.file_id // empty')
-        local file_name=$(echo "$response" | jq -r '.result.document.file_name // empty')
+        local file_id
+        file_id=$(echo "$response" | jq -r '.result.document.file_id // empty')
+        
+        local file_name
+        file_name=$(echo "$response" | jq -r '.result.document.file_name // empty')
         
         if [[ -n "$file_id" && -n "$file_name" ]]; then
             echo "$file_id $file_name" >> "$temp_file"
@@ -103,8 +118,9 @@ telegram_uploads_backup() {
     return 0
 }
 
-timedate=$(date +\_%Mphut\_%Hgio\_%d\_%m\_%Y)
-. "/etc/wptt/vhost/.$domain.conf"
+# Vá lỗi SC1001: Bỏ các dấu gạch chéo ngược (\) thừa
+timedate=$(date +_%Mphut_%Hgio_%d_%m_%Y)
+. "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
 
 . /etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup "$path" "${domain}${timedate}.zip"
 if [[ "$dieu_kien_disk" == '0' ]]; then
@@ -140,16 +156,19 @@ if [[ -s "$db_path" ]]; then
     
     echo -e "${C_CYAN}➜ Đang đẩy Database ($file_size_mb_sql MB) lên Telegram...${C_RESET}"
     if (( $(echo "$file_size_mb_sql >= 19" | bc -l) )); then
-        # SỬA LẠI CHUẨN SPLIT: Dùng -d (Bắt đầu từ 0000) an toàn cho mọi OS
         split -b 19m -d -a 4 "$db_path" "${db_path}.part_"
-        for sql_part in $(ls -A "/usr/local/backup-website/$domain" | grep "${domain}${timedate}.sql.gz.part_" | sort -u); do
+        
+        # Vá lỗi SC2010: Dùng Globbing thay cho ls | grep
+        for sql_part_path in "/usr/local/backup-website/$domain/${domain}${timedate}.sql.gz.part_"*; do
+            [[ -f "$sql_part_path" ]] || continue
+            sql_part=$(basename "$sql_part_path")
+            
             echo "  - Uploading phần $sql_part..."
-            # BẮT BUỘC KIỂM TRA LỖI KHI UPLOAD
-            if ! telegram_uploads_backup "/usr/local/backup-website/$domain/$sql_part" "$domain"; then
+            if ! telegram_uploads_backup "$sql_part_path" "$domain"; then
                 _runloi "Lỗi Upload! Hủy tiến trình để bảo vệ file."
                 exit 1
             fi
-            rm -f "/usr/local/backup-website/$domain/$sql_part"
+            rm -f "$sql_part_path"
         done
     else
         telegram_uploads_backup "$db_path" "$domain" || { _runloi "Lỗi Upload Database!"; exit 1; }
@@ -162,7 +181,9 @@ rm -f "$db_path"
 # 2. SAO LƯU MÃ NGUỒN (SOURCE CODE)
 _runing "Đang nén Mã nguồn (Source Code)..."
 zip_path="/usr/local/backup-website/$domain/${domain}${timedate}.zip"
-cd "$path" && zip -r -q "$zip_path" * -x "wp-content/ai1wm-backups/*" -x "wp-content/cache/*" -x "wp-content/updraft/*" -x "error_log" -x "wp-content/debug.log" -x "wp-content/uploads/backupbuddy_backups/*" -x "wp-content/backups-dup-*/*"
+
+# Vá lỗi SC2035: Dùng ./* thay cho * để tránh xung đột với tùy chọn của lệnh zip
+cd "$path" && zip -r -q "$zip_path" ./* -x "wp-content/ai1wm-backups/*" -x "wp-content/cache/*" -x "wp-content/updraft/*" -x "error_log" -x "wp-content/debug.log" -x "wp-content/uploads/backupbuddy_backups/*" -x "wp-content/backups-dup-*/*"
 
 if [[ -s "$zip_path" ]]; then
     _rundone "Nén Mã nguồn thành công"
@@ -171,16 +192,19 @@ if [[ -s "$zip_path" ]]; then
     
     echo -e "${C_CYAN}➜ Đang đẩy Mã nguồn ($file_size_mb MB) lên Telegram...${C_RESET}"
     if (( $(echo "$file_size_mb >= 19" | bc -l) )); then
-        # SỬA LẠI CHUẨN SPLIT: Dùng -d an toàn tuyệt đối
         split -b 19m -d -a 4 "$zip_path" "${zip_path}.part_"
-        for zip_part in $(ls -A "/usr/local/backup-website/$domain" | grep "${domain}${timedate}.zip.part_" | sort -u); do
+        
+        # Vá lỗi SC2010: Dùng Globbing thay cho ls | grep
+        for zip_part_path in "/usr/local/backup-website/$domain/${domain}${timedate}.zip.part_"*; do
+            [[ -f "$zip_part_path" ]] || continue
+            zip_part=$(basename "$zip_part_path")
+            
             echo "  - Uploading phần $zip_part..."
-            # BẮT BUỘC KIỂM TRA LỖI KHI UPLOAD
-            if ! telegram_uploads_backup "/usr/local/backup-website/$domain/$zip_part" "$domain"; then
+            if ! telegram_uploads_backup "$zip_part_path" "$domain"; then
                 _runloi "Lỗi Upload! Hủy tiến trình để bảo vệ file."
                 exit 1
             fi
-            rm -f "/usr/local/backup-website/$domain/$zip_part"
+            rm -f "$zip_part_path"
         done
     else
         telegram_uploads_backup "$zip_path" "$domain" || { _runloi "Lỗi Upload Mã nguồn!"; exit 1; }
@@ -191,7 +215,6 @@ fi
 rm -f "$zip_path"
 
 if [[ -s "$temp_file" ]]; then
-    # Lọc bỏ dòng trống nếu có để tránh JQ sinh lỗi JSON rác
     json_payload=$(grep -v '^$' "$temp_file" | jq -R 'split(" ") | {file_id: .[0], file_name: .[1]}' | jq -s '.' | jq -c '.')
     API_URL="https://hub.wptangtoc.com/backup" 
     curl -s -X POST -H "Content-Type: application/json" -d "$json_payload" "$API_URL" -A 'Activate Backup Restore WPTangToc' >/dev/null 2>&1

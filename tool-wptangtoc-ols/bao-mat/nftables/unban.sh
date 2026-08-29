@@ -1,11 +1,13 @@
 #!/bin/bash
 ip="$1"
 
-if [[ $ip = '' ]]; then
-  read -p "Nhập địa chỉ ip bạn muốn block" ip
+if [[ -z "$ip" ]]; then
+  # Vá lỗi SC2162: Thêm cờ -r để đọc chuỗi thô (raw)
+  read -r -p "Nhập địa chỉ IP bạn muốn unblock: " ip
 fi
 
-if [[ $(echo $ip | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)') = '' ]]; then #kiểm tra có phải ipv4 không
+# Vá lỗi SC2086: Bọc ngoặc kép cho biến "$ip"
+if [[ $(echo "$ip" | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)') = '' ]]; then #kiểm tra có phải ipv4 không
   error_block_ipv4='1'
 fi
 
@@ -15,12 +17,12 @@ if [[ $(echo "$ip" | grep -xE '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-
 
 if [[ $error_block_ipv6 = '1' && $error_block_ipv4 = '1' ]]; then
   echo "Bạn không nhập đúng định dạng IP"
-  exec /etc/wptt/wptt-khoa-ip-main 1
-  return 2>/dev/null
-  exit
+  # Vá lỗi SC2317: Bỏ lệnh 'exec' để script tiếp tục chạy xuống dòng return/exit
+  /etc/wptt/wptt-khoa-ip-main 1
+  return 2>/dev/null || exit 0
 fi
 
-nft delete element blackblock blackaction "{$ip}"
+nft delete element blackblock blackaction "{$ip}" 2>/dev/null
 
 if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
@@ -28,4 +30,4 @@ else
   path_nftables_config="/etc/sysconfig/nftables.conf"
 fi
 
-nft list ruleset >$path_nftables_config
+nft list ruleset > "$path_nftables_config"
