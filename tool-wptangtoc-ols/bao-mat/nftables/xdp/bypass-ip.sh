@@ -38,7 +38,7 @@ VALUE=1
 echo "Đang thêm IP: $IP_TO_WHITELIST (Hex: $HEX_KEY) vào whitelist..."
 
 # 5. Thêm IP vào BPF map
-sudo bpftool map update id "$MAP_ID" key $HEX_KEY value $VALUE
+sudo bpftool map update id "$MAP_ID" key "$HEX_KEY" value "$VALUE"
 
 echo "✅ Đã thêm thành công IP $IP_TO_WHITELIST vào danh sách trắng."
 

@@ -31,22 +31,24 @@ fi
 # XỬ LÝ VÒNG LẶP CHO "TẤT CẢ WEBSITE"
 # ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
-  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
-      path_html="/usr/local/lsws/$domain/html"
-      
-      # Chỉ quét các website là WordPress
-      if [[ -f "$path_html/wp-config.php" ]]; then
-        echo -e "\n${C_YELLOW}➜ Đang tiến hành quét bảo mật hàng loạt: ${C_GREEN}$domain${C_RESET}"
-        # SỬ DỤNG BASH ĐỂ TRÁNH TRÀN BIẾN MÔI TRƯỜNG
-        bash /etc/wptt/add-one/quet-bao-mat-wordpress.sh "$domain" "skip_menu"
-      fi
-    done
-  fi
+	for filepath in /etc/wptt/vhost/.*.conf; do
+		[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+		domain="${filepath##*/}"
+		domain="${domain%.conf}"
+		domain="${domain#.}"
 
-  [[ "$2" != "skip_menu" && "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
-  exit 0
+		if [[ "$domain" == ?*.?* ]]; then
+			path_html="/usr/local/lsws/$domain/html"
+			# Chỉ quét các website là WordPress
+			if [[ -f "$path_html/wp-config.php" ]]; then
+				echo -e "\n${C_YELLOW}➜ Đang tiến hành quét bảo mật hàng loạt: ${C_GREEN}$domain${C_RESET}"
+				# SỬ DỤNG BASH ĐỂ TRÁNH TRÀN BIẾN MÔI TRƯỜNG
+				bash /etc/wptt/add-one/quet-bao-mat-wordpress.sh "$domain" "skip_menu"
+			fi
+		fi
+	done
+	[[ "$2" != "skip_menu" && "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
+	exit 0
 fi
 
 [[ "$NAME" == "0" || -z "$NAME" ]] && { [[ "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1; exit 0; }
