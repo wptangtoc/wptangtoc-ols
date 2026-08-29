@@ -6,7 +6,6 @@
 # shellcheck disable=SC2154,SC1090,SC1091,SC2317
 
 function huong_dan() {
-  # Vá lỗi SC2102: Thêm lệnh echo và bọc ngoặc kép cho văn bản thuần túy
   Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn.
   Hệ thống sẽ tự động tìm kiếm, tải xuống và ghép nối các file bị phân mảnh [split parts]
   trở thành một file hoàn chỉnh [Zip/SQL] để chuẩn bị cho quá trình khôi phục.
