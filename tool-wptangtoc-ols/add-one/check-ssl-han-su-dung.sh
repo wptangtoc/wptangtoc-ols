@@ -30,7 +30,7 @@ CHAT_ID="$telegram_id"
 
 
 # Đường dẫn đến file log (tùy chọn)
-LOG_FILE="/var/log/ssl_expiry.log"
+# LOG_FILE="/var/log/ssl_expiry.log"
 
 
 
