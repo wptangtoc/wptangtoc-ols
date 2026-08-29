@@ -1,5 +1,5 @@
 #!/bin/bash
-
+# shellcheck disable=SC2034
 #wptangtoc main
 quan_ly_="Manager"
 quan_ly_wordpress="WordPress Manager"
