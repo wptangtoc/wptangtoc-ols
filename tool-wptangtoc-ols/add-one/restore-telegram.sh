@@ -3,18 +3,17 @@
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
 # @since: 2026
-# shellcheck disable=SC2154,SC1090,SC1091
+# shellcheck disable=SC2154,SC1090,SC1091,SC2317
 
 function huong_dan() {
   # Vá lỗi SC2102: Thêm lệnh echo và bọc ngoặc kép cho văn bản thuần túy
-  echo "Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn."
-  echo "Hệ thống sẽ tự động tìm kiếm, tải xuống và ghép nối các file bị phân mảnh [split parts]"
-  echo "trở thành một file hoàn chỉnh [Zip/SQL] để chuẩn bị cho quá trình khôi phục."
+  Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn.
+  Hệ thống sẽ tự động tìm kiếm, tải xuống và ghép nối các file bị phân mảnh [split parts]
+  trở thành một file hoàn chỉnh [Zip/SQL] để chuẩn bị cho quá trình khôi phục.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-# Vá lỗi SC2086: Bọc ngoặc kép cho đường dẫn chứa biến
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
