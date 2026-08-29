@@ -1,49 +1,91 @@
 #!/bin/bash
+# shellcheck disable=SC1091,SC2154
 
 # --- Cấu hình ---
 DOMAINS=()
-for entry in $(ls -A /etc/wptt/vhost); do
-  NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+
+# BẢO MẬT/TỐI ƯU (Vá lỗi SC2045): Dùng vòng lặp trực tiếp quét thư mục, tránh lỗi khoảng trắng của lệnh 'ls'
+for path in /etc/wptt/vhost/.*; do
+  # Bỏ qua nếu là thư mục . hoặc ..
+  entry=$(basename "$path")
+  [[ "$entry" == "." || "$entry" == ".." ]] && continue
+  
+  # BẢO MẬT/TỐI ƯU (Vá lỗi SC2086): Dùng tính năng cắt chuỗi gốc của Bash, loại bỏ 'sed' giúp chạy nhanh hơn
+  NAME="${entry#.}"
+  NAME="${NAME%.conf}"
+  
   if [ "$NAME" != "${NAME/./}" ]; then
     DOMAINS+=("$NAME")
   fi
 done
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 
+# Vá lỗi SC2116 và SC2086: Bỏ 'echo' thừa, gán trực tiếp biến
 # Telegram Bot API Token (LẤY TỪ BOTFATHER)
-BOT_TOKEN=$(echo $telegram_api)
+BOT_TOKEN="$telegram_api"
 
 # Chat ID của người nhận/nhóm nhận tin nhắn (LẤY BẰNG CÁCH GỬI TIN NHẮN CHO BOT)
-CHAT_ID=$(echo $telegram_id)
+CHAT_ID="$telegram_id"
 
-if [[ $(which whois) = '' ]]; then
-  yum install whois -y
+if ! command -v whois >/dev/null 2>&1; then
+	if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
+		apt install whois -y
+	else
+		dnf install whois -y
+	fi
 fi
+
 
 # Hàm gửi tin nhắn Telegram
 send_telegram_message() {
   local domain="$1"
   local expiry_date="$2"
   local days_left="$3"
-
   local message="Domain: $domain sắp hết hạn
 Ngày hết hạn: $expiry_date
 Số ngày còn lại: $days_left
 
 Vui lòng gia hạn tên miền để tránh gián đoạn dịch vụ."
-  curl -s -X POST "https://worker-soft-shape-e788.hoangtuan0137.workers.dev/bot$BOT_TOKEN/sendMessage" \
+
+  local url_tele_goc="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
+  
+  # LẦN 1: Thử gửi bằng API gốc (Sử dụng cách viết -d tách dòng siêu an toàn của sếp)
+  local response
+  response=$(curl -s -m 5 -X POST "$url_tele_goc" \
     -d chat_id="$CHAT_ID" \
-    -d text="$message" >/dev/null
+    -d text="$message" \
+    -d disable_web_page_preview="true" \
+    -d parse_mode="markdown")
+  
+  # SIÊU KIỂM TRA TẦNG API: Nếu Telegram không trả về chữ "ok":true
+  if [[ "$response" != *"\"ok\":true"* ]]; then
+    
+    # === BẬT CHẾ ĐỘ DỰ PHÒNG: CHUYỂN QUA PROXY ===
+    local API_PROXY
+    API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
+    
+    local url_tele_proxy
+    if [[ "$API_PROXY" == *"workers.dev"* ]]; then
+      url_tele_proxy="https://$API_PROXY/bot${BOT_TOKEN}/sendMessage"
+    fi
+    
+    # LẦN 2: Bắn lại qua Proxy
+    curl -s -m 10 -X POST "$url_tele_proxy" \
+      -d chat_id="$CHAT_ID" \
+      -d text="$message" \
+      -d disable_web_page_preview="true" \
+      -d parse_mode="markdown" >/dev/null
+  fi
 }
 
 # --- Lọc danh sách domain, chỉ giữ lại domain gốc ---
-ROOT_DOMAINS=$(for domain in $DOMAINS; do
-  echo "$domain" | awk -F. '{OFS="."; print $(NF-1), $NF}' | sort -u
-done)
+# Vá lỗi SC2128 và SC2068: Sử dụng mapfile để đẩy output thành một mảng (array) chuẩn xác
+mapfile -t ROOT_DOMAINS < <(printf "%s\n" "${DOMAINS[@]}" | awk -F. '{OFS="."; print $(NF-1), $NF}' | sort -u)
 
-for domain in ${ROOT_DOMAINS[@]}; do
-  whois_data=$(/usr/bin/whois $domain)
+for domain in "${ROOT_DOMAINS[@]}"; do
+  # Vá lỗi SC2086: Bọc ngoặc kép cho $domain
+  whois_data=$(/usr/bin/whois "$domain" 2>/dev/null)
 
   expiry_date=$(echo "$whois_data" | grep -E -i "Expiry Date:|Expiration Date:|paid-till" | head -n 1 | awk '{print $NF}')
   # Dự phòng
@@ -69,10 +111,6 @@ for domain in ${ROOT_DOMAINS[@]}; do
   if [[ "$days_left" -le 14 && "$days_left" -gt 0 ]]; then
     send_telegram_message "$domain" "$expiry_date" "$days_left"
   fi
-  # Bỏ phần thông báo khi đã hết hạn, hoặc giữ lại nếu bạn muốn:
-  # elif [[ "$days_left" -le 0 ]]; then
-  #     send_telegram_message "$domain" "$expiry_date" "$days_left"
-  # fi
 done
 
 exit 0

@@ -12,7 +12,7 @@ systemctl unmask nftables
 systemctl start nftables
 systemctl enable nftables
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
 else
   path_nftables_config="/etc/sysconfig/nftables.conf"
@@ -39,7 +39,7 @@ if [[ ! -f $path_webgui ]]; then
 fi
 
 #remote mariadb port
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
 else
   duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
