@@ -22,7 +22,7 @@ Việc công khai lỗ hổng trước khi có bản vá có thể gây nguy hi�
 *   **Email liên hệ:** [giatuan@wptangtoc.com](mailto:giatuan@wptangtoc.com)
 *   **Tiêu đề thư:** `[Security WPTangToc OLS] - <Tóm tắt ngắn gọn lỗ hổng>`
 Hoặc
-*   ** Liên hệ trao đổi trực tiếp:** tiếp qua Zalo 0866880462 (Gia Tuấn)
+*   ** Liên hệ trao đổi trực tiếp:** qua Zalo 0866880462 (Gia Tuấn)
 
 ### 📝 Thông tin cần có trong báo cáo của bạn:
 Để chúng tôi có thể tái tạo và khắc phục vấn đề nhanh nhất, vui lòng cung cấp:

@@ -16,9 +16,9 @@
 <h2>🔥 Tại sao bạn nên chọn WPTangToc OLS?</h2>
 <ul>
     <li>⚡ <b>Hiệu năng xé gió:</b> Tích hợp OpenLiteSpeed, LSPHP tùy biến (nhanh hơn PHP-FPM thuần), Giao thức HTTP/3 QUIC, và tối ưu Object Cache (Redis/Memcached/Valkey) ở mức tầng UNIX Socket sâu nhất.</li>
-    <li>🛡️ <b>Bảo mật cô lập tuyệt đối:</b> Sử dụng công nghệ <code>PhpSuExec + Chroot + Namespace</code> để giam lỏng (cô lập) từng website. Nếu một trang web trên máy chủ bị hack, hacker cũng vĩnh viễn không thể "cháy lan" sang các trang web khác.</li>
+    <li>🛡️ <b>Bảo mật cô lập:</b> Sử dụng công nghệ <code>PhpSuExec + Chroot + Namespace</code> để giam lỏng (cô lập) từng website. Nếu một trang web trên máy chủ bị hack, hacker cũng vĩnh viễn không thể "cháy lan" sang các trang web khác. nhiều lớp giúp giảm thiểu nguy cơ lây lan mã độc giữa các website.</li>
     <li>🤖 <b>Tự động hóa thông minh:</b> Mọi thao tác cấu hình phức tạp, tối ưu Database, hay quản lý Firewall đều được giải quyết tự động chỉ bằng phím bấm.</li>
-    <li>☁️ <b>Bảo vệ dữ liệu toàn diện (Zero Data Loss):</b> Hệ thống sao lưu thông minh vận hành hoàn toàn tự động đóng gói và đẩy thẳng dữ liệu của bạn lên đa nền tảng Cloud (Amazon S3, Google Drive, OneDrive, Telegram, Cloudflare R2...). Giải phóng bạn khỏi nỗi lo rủi ro phần cứng, đảm bảo website luôn có sẵn phương án khôi phục thần tốc trước mọi sự cố hay thảm họa không lường trước.</li>
+    <li>☁️ <b>Bảo vệ dữ liệu toàn diện:</b> Hệ thống sao lưu thông minh vận hành hoàn toàn tự động đóng gói và đẩy thẳng dữ liệu của bạn lên đa nền tảng Cloud (Amazon S3, Google Drive, OneDrive, Telegram, Cloudflare R2...). Giải phóng bạn khỏi nỗi lo rủi ro phần cứng, hỏng ổ cứng... Đảm bảo website luôn có sẵn phương án khôi phục thần tốc trước mọi sự cố hay thảm họa không lường trước.</li>
 </ul>
 
 <hr>
@@ -61,7 +61,7 @@
 <h2>🛠️ Danh sách Tính năng Đồ sộ</h2>
 <p>WPTangToc OLS không chỉ là kịch bản cài đặt, mà là một hệ sinh thái quản trị máy chủ hoàn chỉnh mang tiêu chuẩn Enterprise, bao gồm:</p>
 <ul>
-    <li><b>Nền tảng lõi tối thượng:</b> Vận hành trên OpenLiteSpeed, LSPHP tùy biến đa phiên bản (7.1 đến 8.5 chạy song song) và hệ quản trị cơ sở dữ liệu MariaDB LTS (10.6 đến 12.3).</li>
+    <li><b>Nền tảng lõi tối thượng:</b> Vận hành trên OpenLiteSpeed, LSPHP tùy biến đa phiên bản (7.1 đến 8.5 chạy song song) và hệ quản trị cơ sở dữ liệu MariaDB LTS (10.11 đến 12.3).</li>
     <li><b>Tối ưu Hệ điều hành & Mạng (Kernel Tuning):</b> Tự động cấu hình sysctl, ulimit, kích hoạt thuật toán chống nghẽn mạng TCP BBR và phân bổ tối ưu Zram/Swap theo đúng phần cứng vật lý.</li>
     <li><b>Quản lý Website toàn diện:</b> Khởi tạo không giới hạn Domain/Subdomain, cấp phát chứng chỉ SSL Let's Encrypt tự động gia hạn. Dễ dàng nhân bản (Clone) và tạo môi trường thử nghiệm (Staging) chỉ với 1 thao tác.</li>
     <li><b>Bảo mật Cô lập (Defense in Depth):</b> Ứng dụng công nghệ PhpSuExec + Chroot + Namespace giam lỏng từng website. Chống "cháy lan" mã độc 100%. Tự động đổi Port SSH bảo vệ máy chủ.</li>
