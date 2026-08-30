@@ -1,4 +1,5 @@
 #!/bin/bash
+umask 077
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
