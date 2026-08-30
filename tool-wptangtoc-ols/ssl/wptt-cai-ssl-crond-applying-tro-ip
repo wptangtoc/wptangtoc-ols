@@ -1,125 +1,166 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2024
+# @since: 2024 (Upgraded: 2026)
 
-. /etc/wptt/.wptt.conf
-. /etc/wptt/echo-color
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-NAME=$1
-if [[ $NAME = '98' ]]; then
-  echo ""
-  echo ""
-  echo ""
-  echo "========================================================================="
-  echo "|Quản lý SSL => Cài đặt tự động cài đặt ssl SSL FREE letsencrypt        |"
-  echo "========================================================================="
-  NAME=''
+# ==============================================================================
+# PHÂN TÍCH ĐỐI SỐ TRUYỀN VÀO (CLI ARGUMENTS)
+# ==============================================================================
+NAME="${1:-}"
+MENU_FLAG="${2:-}"
+
+# Nếu tham số đầu tiên là mã điều hướng Menu -> Gọi từ Menu GUI cũ
+if [[ "$NAME" == "98" || "$NAME" == "99" ]]; then
+  MENU_FLAG="$NAME"
+  NAME=""
 fi
 
-if [[ $NAME = '' ]]; then
-  function lua_chon_NAME() {
-    NAME=""
-    if [ "$(ls -At /etc/wptt/vhost)" ]; then
-      selects=()
-      for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
-        NAME=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
-        if [[ -d /usr/local/lsws/$NAME/html ]]; then
-          if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
-            if [ "$NAME" != "${NAME/./}" ]; then
-              selects+=("$NAME")
-            fi
-          fi
-        fi
-      done
-
-      if [[ $selects = '' ]]; then
-        echo "Tất cả website được cài ssl hết trước đó rồi"
-        exit
-      fi
-
-      #check tổng số website, nếu 2 website trở lên thì sẽ tự động có tính năng tất cả
-      a=0
-      for select in ${selects[@]}; do
-        a=$(expr "$a" + 1)
-      done
-
-      if [[ $a != 1 ]]; then
-        selects+=("Tat-ca-website")
-      fi
-      PS3="
--//- Lựa chọn website bạn muốn tự động cài đặt ssl letsencrypt:  "
-      select select in ${selects[@]}; do
-        NAME=$select
-        index=$REPLY
-        break
-      done
-    else
-      clear
-      echo "Không có domain nào tồn tại trên hệ thống."
-    fi
-  }
-
-  lua_chon_NAME
-fi
-
-if [[ $NAME = 'Tat-ca-website' ]]; then
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
-      domain=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
-      path_html="/etc/letsencrypt/live/$domain"
-      i=1
-      if [[ ! -d "$path_html" ]]; then
-        . /etc/wptt/ssl/cai-ssl-all-free "$domain"
-      fi
-    done
-  fi
-  exit
-fi
-
-if [[ $NAME = "0" || $NAME = '' ]]; then
-  exec /etc/wptt/wptt-ssl-main 1
-fi
-
-path="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$path" ]]; then
+if [[ "$2" != "no-ui" ]]; then
   clear
-  echoDo "Domain không tồn tại trên VPS này."
-  sleep 3
-  exec /etc/wptt/wptt-ssl-main 1
-  exit
+  echo ""
+  print_border_top "$C_CYAN"
+  center_text "${C_YELLOW}TỰ ĐỘNG CÀI ĐẶT SSL (CHỜ TRỎ IP)${C_RESET}" "$C_CYAN"
+  print_border_bot "$C_CYAN"
+  echo ""
 fi
 
-if [[ -d /etc/letsencrypt/live/$NAME || -d /usr/local/lsws/$NAME/ssl ]]; then
-  echo "Đã kích hoạt ssl trước đó rồi"
-  if [[ -f /etc/cron.d/cai-ssl-auto-$NAME-tu-dong.cron ]]; then
-    rm -f /etc/cron.d/cai-ssl-auto-"$NAME"-tu-dong.cron
-    systemctl restart crond.service
-    if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-      NAME_CRON_ubuntu=${NAME//[.]/_}
-      rm -f /etc/cron.d/cai-ssl-auto-"$NAME_CRON_ubuntu"-tu-dong_cron
-      systemctl restart cron.service
-    fi
+# ==============================================================================
+# 1. KIỂM TRA TÊN MIỀN & GRACEFUL FALLBACK UX
+# ==============================================================================
+# Nếu khách truyền vào tên miền nhưng sai hoặc chưa tồn tại
+if [[ -n "$NAME" && "$NAME" != "0" && "$NAME" != 'Tat-ca-website' && "$NAME" != 'Tất cả website' ]]; then
+  if [[ ! -f "/etc/wptt/vhost/.${NAME}.conf" ]]; then
+    echo -e "\n${C_RED}❌ Cảnh báo: Tên miền '${NAME}' chưa được thêm vào hệ thống!${C_RESET}"
+    echo -e "${C_YELLOW}Hệ thống tự động chuyển sang giao diện danh sách website...${C_RESET}\n"
+    sleep 2
+    NAME="" # Xóa biến để tự động gọi Menu bên dưới
   fi
-  return 2>/dev/null
-  exit
 fi
 
-if [[ -f /etc/cron.d/cai-ssl-auto-$NAME-tu-dong.cron ]]; then
-  echo "Đã kích hoạt tự động cài ssl"
-  return 2>/dev/null
-  exit
+# Nếu không có đối số, mở Menu cho khách chọn
+if [[ -z "$NAME" || "$NAME" == "0" ]]; then
+  # Ưu tiên thư viện có tính năng "Tất cả website" nếu có, không thì dùng bản chuẩn
+  if [[ -f "/etc/wptt/tenmien-them-lua-chon-tat-ca-website" ]]; then
+    . /etc/wptt/tenmien-them-lua-chon-tat-ca-website
+    lua_chon_NAME "Tự động cài SSL"
+  else
+    . /etc/wptt/tenmien
+    lua_chon_NAME "Tự động cài SSL"
+  fi
 fi
 
-cat >"/etc/cron.d/cai-ssl-auto-$NAME-tu-dong.cron" <<END
-*/2 * * * * root /etc/wptt/ssl/crond-ssl-auto/check-tro-ip-vs-run $NAME >/dev/null 2>&1
-END
+# ==============================================================================
+# 2. XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE)
+# ==============================================================================
+if [[ "$NAME" == 'Tat-ca-website' || "$NAME" == 'Tất cả website' ]]; then
+  echo -e "\n${C_YELLOW}[!] Đang quét và thiết lập cài SSL tự động cho TOÀN BỘ website...${C_RESET}\n"
+  
+  # Sử dụng vòng lặp nội tại Bash (O(1) CPU) thay cho ls + grep + sed
+  for entry in /etc/wptt/vhost/.*.conf; do
+    [[ -e "$entry" ]] || continue # Bỏ qua nếu không có file nào khớp
+    
+    # Cắt chuỗi lấy domain siêu tốc độ
+    domain="${entry##*/}"      # Cắt lấy phần đuôi file (VD: .wptangtoc.com.conf)
+    domain="${domain#\.}"      # Cắt bỏ dấu chấm ở đầu
+    domain="${domain%\.conf}"  # Cắt bỏ đuôi .conf
+    
+    [[ -z "$domain" || "$domain" == "." || "$domain" == ".." ]] && continue
+    
+    # Nếu chưa có SSL thì mới cài
+    if [[ ! -d "/etc/letsencrypt/live/$domain" && ! -d "/usr/local/lsws/$domain/ssl" ]]; then
+      _runing "Đang kích hoạt tính năng chờ SSL cho: $domain"
+      # Gọi lại chính file này ở chế độ ngầm
+      bash "$0" "$domain" "no-ui" >/dev/null 2>&1
+      _rundone "Kích hoạt chờ cài SSL cho $domain [OK]"
+    fi
+  done
+  
+  echo -e "\n${C_GREEN}[HOÀN TẤT] Đã xử lý toàn bộ website trên máy chủ.${C_RESET}\n"
+  [[ "$MENU_FLAG" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  exec /usr/bin/wptangtoc 1
+  exit 0
+fi
 
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-  NAME_CRON_ubuntu=${NAME//[.]/_}
-  ln -sf /etc/cron.d/cai-ssl-auto-"$NAME"-tu-dong.cron /etc/cron.d/cai-ssl-auto-"${NAME_CRON_ubuntu}"-tu-dong_cron
+# Chốt an toàn: Khách bấm thoát từ Menu
+if [[ -z "$NAME" || "$NAME" == "0" ]]; then
+  [[ "$MENU_FLAG" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  exec /usr/bin/wptangtoc 1
+  exit 0
+fi
+
+# ==============================================================================
+# 3. XỬ LÝ WEBSITE ĐƠN
+# ==============================================================================
+if [[ -d "/etc/letsencrypt/live/$NAME" || -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  echo -e "\n${C_GREEN}✅ Website ${C_YELLOW}$NAME${C_GREEN} đã được cài đặt SSL từ trước!${C_RESET}"
+  
+  # Dọn dẹp Cronjob cũ nếu có
+  if [[ -f "/etc/cron.d/cai-ssl-auto-$NAME-tu-dong.cron" ]]; then
+    _runing "Đang dọn dẹp tiến trình theo dõi cũ..."
+    rm -f "/etc/cron.d/cai-ssl-auto-${NAME:?}-tu-dong.cron"
+    
+    if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+      NAME_CRON_ubuntu="${NAME//[.]/_}"
+      rm -f "/etc/cron.d/cai-ssl-auto-${NAME_CRON_ubuntu:?}-tu-dong_cron"
+      systemctl restart cron.service
+    else
+      systemctl restart crond.service
+    fi
+    _rundone "Dọn dẹp tiến trình theo dõi [OK]"
+  fi
+  
+  sleep 2
+  [[ "$MENU_FLAG" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  exec /usr/bin/wptangtoc 1
+  exit 0
+fi
+
+cron_file="/etc/cron.d/cai-ssl-auto-$NAME-tu-dong.cron"
+
+if [[ -f "$cron_file" ]]; then
+  echo -e "\n${C_CYAN}ℹ️ Tiến trình chờ cài SSL cho ${C_YELLOW}$NAME${C_CYAN} đã và đang hoạt động!${C_RESET}"
+  echo -e "Hệ thống sẽ tự động quét 2 phút/lần cho đến khi IP được trỏ đúng."
+  sleep 3
+  [[ "$MENU_FLAG" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  exec /usr/bin/wptangtoc 1
+  exit 0
+fi
+
+# ==============================================================================
+# 4. THIẾT LẬP CRONJOB
+# ==============================================================================
+_runing "Đang thiết lập tiến trình nền (Cronjob) tự động cài SSL..."
+
+cat >"$cron_file" <<EOF
+*/2 * * * * root /bin/bash /etc/wptt/ssl/crond-ssl-auto/check-tro-ip-vs-run $NAME >/dev/null 2>&1
+EOF
+
+if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+  NAME_CRON_ubuntu="${NAME//[.]/_}"
+  ln -sf "$cron_file" "/etc/cron.d/cai-ssl-auto-${NAME_CRON_ubuntu}-tu-dong_cron"
   systemctl restart cron.service
 else
   systemctl restart crond.service
 fi
-echo "Tự động kiểm tra và tiến hành cài ssl cứ 2 phút 1 lần cho website $NAME"
+
+_rundone "Thiết lập tiến trình nền (Cronjob) tự động"
+
+# Bảng báo cáo UX mượt mà
+if [[ "$2" != "no-ui" ]]; then
+  echo ""
+  print_border_top "$C_GREEN"
+  center_text "${C_BOLD_WHITE}[ KÍCH HOẠT THÀNH CÔNG ]${C_RESET}" "$C_GREEN"
+  print_border_mid "$C_GREEN"
+  left_text "Website  : ${C_YELLOW}$NAME${C_RESET}" 2 "$C_GREEN"
+  left_text "Chu kỳ   : ${C_WHITE}Quét 2 phút / lần${C_RESET}" 2 "$C_GREEN"
+  left_text "Kịch bản : ${C_GREEN}Tự động cài SSL Let's Encrypt ngay khi IP trỏ đúng${C_RESET}" 2 "$C_GREEN"
+  print_border_bot "$C_GREEN"
+  echo ""
+  
+  [[ "$MENU_FLAG" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+  exec /usr/bin/wptangtoc 1
+fi
