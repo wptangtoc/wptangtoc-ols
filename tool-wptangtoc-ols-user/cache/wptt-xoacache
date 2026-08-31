@@ -2,161 +2,227 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2022
-. /etc/wptt-user/echo-color
+# @since: 2026
+
+export box_inner_width=78
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+. /etc/wptt-user/echo-color 2>/dev/null
+. /etc/wptt-user/core-functions 2>/dev/null
+
+if [[ "$1" == "98" ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt-user/wptt-cache-main 1"
+fi
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ CACHE ➜ Xóa toàn bộ Cache website${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
 NAME=$1
+[[ "$NAME" == "98" ]] && NAME=""
 
-if [[ $NAME = "98" ]];then
-NAME=""
+if [[ -z "$NAME" ]]; then
+  . /etc/wptt-user/tenmien
+  lua_chon_NAME "Xóa Cache"
 fi
 
-if [[ "$NAME" = "" ]]; then
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Cache => Xóa cache 	                                          |"
-echo "========================================================================="
-. /etc/wptt-user/tenmien
-lua_chon_NAME
-fi
-
-
-. /etc/wptt-user/echo-color
-
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  echoDo "Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress"
-  echoDo "Tính năng này chỉ dành cho mã nguồn WordPress"
-  sleep 3
-. /etc/wptt-user/wptt-cache-main 1
-return >/dev/null 2>&1 ; exit
-fi
-
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt-user/wptt-cache-main 1
 
 path2="/usr/local/lsws/$NAME/html"
+pathcheckwp="$path2/wp-load.php"
 
-plugins_active=$(wp plugin list --fields=name --status=active --path="$path2" --allow-root 2>/dev/null | sed '1d')
+if [[ ! -f "$pathcheckwp" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress!${C_RESET}"
+  echo "Tính năng xóa cache chuyên sâu này chỉ dành riêng cho WordPress."
+  sleep 3
+  exec /etc/wptt-user/wptt-cache-main 1
+fi
 
-echo "Xóa website $NAME:"
-_runing "Xóa OpCache"
-wp eval 'opcache_reset();' --path="$path2" --allow-root >/dev/null 2>&1
-_rundone "Xóa OpCache"
+echo -e "\n${C_YELLOW}Đang tiến hành dọn dẹp Cache cho website: $NAME${C_RESET}\n"
 
-_runing "Xóa WP object cache"
+# ==============================================================================
+# HÀM XÓA OPCACHE WEBSITE KHÔNG GÂY DOWNTIME (ZERO DOWNTIME)
+# ==============================================================================
+function wptt_xoa_opcache() {
+    local domain="$1"
+    local web_root="/usr/local/lsws/$domain/html"
+    local path_conf="/etc/wptt/vhost/.$domain.conf"
+
+    if [[ ! -d "$web_root" ]]; then
+        echo -e "${C_RED}Lỗi: Không tìm thấy thư mục của domain $domain${C_RESET}"
+        return 1
+    fi
+
+    # 1. Tải cấu hình WPTangToc OLS để check trạng thái Lockdown và lấy User
+    local is_locked=0
+    if [[ -f "$path_conf" ]]; then
+        source "$path_conf"
+        # Kiểm tra biến lock_down từ file cấu hình
+        [[ "$lock_down" == "1" ]] && is_locked=1
+    fi
+
+    # 2. Định tuyến thư mục ghi file OPcache
+    local target_dir="$web_root"
+    local relative_path=""
+
+    # Nếu Lockdown đang BẬT, chuyển hướng ngay vào các thư mục động
+    if [[ "$is_locked" -eq 1 ]]; then
+        if [[ -d "$web_root/wp-content/litespeed" ]]; then
+            target_dir="$web_root/wp-content/litespeed"
+            relative_path="wp-content/litespeed/"
+        elif [[ -d "$web_root/wp-content/cache" ]]; then
+            target_dir="$web_root/wp-content/cache"
+            relative_path="wp-content/cache/"
+        elif [[ -d "$web_root/wp-content/uploads" ]]; then
+            target_dir="$web_root/wp-content/uploads"
+            relative_path="wp-content/uploads/"
+        else
+            echo -e "${C_RED}Lỗi: Website bật Lockdown nhưng không tìm thấy thư mục ghi đệm hợp lệ!${C_RESET}"
+            return 1
+        fi
+    fi
+
+    # 3. Tạo chuỗi bí mật ngẫu nhiên (16 ký tự) để chống rò rỉ (có fallback an toàn)
+    local secret_key=$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16)
+    [[ -z "$secret_key" ]] && secret_key="$RANDOM$RANDOM"
+    local file_name="wptt_opcache_clear_${secret_key}.php"
+    local file_path="${target_dir}/${file_name}"
+
+    # 4. Tạo file PHP chứa lệnh reset OPcache
+    cat <<'EOF' > "$file_path"
+<?php
+if (function_exists('opcache_reset')) {
+    opcache_reset();
+}
+EOF
+
+    # 5. Chown chuẩn quyền User của vhost (Đã có sẵn khi dùng lệnh source ở bước 1)
+    if [[ -n "$User_name_vhost" ]]; then
+        chown "${User_name_vhost}:${User_name_vhost}" "$file_path" 2>/dev/null
+    fi
+    chmod 644 "$file_path" 2>/dev/null
+
+    # 6. Kích hoạt File bằng cURL nội bộ (Tự động nối đường dẫn tương đối)
+    curl -s -k -m 5 -H "Host: $domain" "http://127.0.0.1/${relative_path}${file_name}" >/dev/null
+
+    # 7. Thủ tiêu file bí mật ngay lập tức
+    rm -f "$file_path"
+}
+
+# ==============================================================================
+# XÓA CACHE LÕI (OPCACHE & OBJECT CACHE) - AN TOÀN TRONG CHROOT
+# ==============================================================================
+_runing "Đang xóa PHP OPcache (Zero Downtime)..."
+wptt_xoa_opcache "$NAME"
+_rundone "Xóa PHP OPcache thành công"
+
+_runing "Đang xóa WordPress Object Cache..."
 wp cache flush --path="$path2" --allow-root >/dev/null 2>&1
-_rundone "Xóa WP object cache"
+_rundone "Xóa WP Object Cache thành công (An toàn Isolation)"
 
-if [[ -f /etc/redis.conf ]];then
-	if [ "$(redis-cli ping)" = "PONG" ]; then
-		_runing "Xóa bộ nhớ cache Redis"
-		( echo "flushall" ) | redis-cli >/dev/null 2>&1
-		_rundone "Xóa bộ nhớ cache Redis"
-	fi
+# Lấy danh sách Plugin đang kích hoạt
+plugins_active=$(wp plugin list --fields=name --status=active --path="$path2" --allow-root 2>/dev/null)
+
+# ==============================================================================
+# XÓA CACHE CỦA CÁC PLUGIN THÔNG DỤNG
+# ==============================================================================
+if echo "$plugins_active" | grep -q 'litespeed-cache'; then
+  _runing "Đang xóa LiteSpeed Cache..."
+  wp litespeed-purge all --path="$path2" --allow-root >/dev/null 2>&1
+  _rundone "Xóa LiteSpeed Cache thành công"
+
+  if grep -q 'litespeed_conf' "$path2/wp-content/object-cache.php" 2>/dev/null; then
+    _runing "Đang xóa LiteSpeed Object Cache chuyên sâu..."
+    wp eval 'if(class_exists("LiteSpeed\Purge")) { LiteSpeed\Purge::purge_all_object(); }' --allow-root --path="$path2" >/dev/null 2>&1
+    _rundone "Xóa LiteSpeed Object Cache thành công"
+  fi
 fi
 
-pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/litespeed-cache"
-if [[ $(echo "$plugins_active" | grep 'litespeed-cache') ]]; then
-	_runing "xóa cache LiteSpeed cache"
-	wp litespeed-purge all --path="$path2" --allow-root >/dev/null 2>&1
-	_rundone "xóa cache LiteSpeed cache"
-
-	if [[ -f /usr/local/lsws/$NAME/html/wp-content/object-cache.php ]];then
-		if [[ $(cat /usr/local/lsws/"$NAME"/html/wp-content/object-cache.php | grep 'litespeed_conf') ]];then
-			if [[ -f /etc/redis.conf || -f /etc/sysconfig/memcached || -d /usr/local/lsmcd ]];then
-				_runing "Xóa Object Cache"
-			wp eval 'LiteSpeed\Purge::purge_all_object();' --allow-root >/dev/null 2>&1 --path="$path2"
-				_rundone "Xóa Object Cache"
-			fi
-		fi
-	fi
+if echo "$plugins_active" | grep -q 'swift-performance'; then
+  _runing "Đang xóa Swift Performance Cache..."
+  wp sp_clear_all_cache --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa Swift Performance Cache thành công"
 fi
 
-# if [[ $(echo $plugins_active | grep 'swift-performance-lite') ]];then
-# 		_runing "xóa cache swift preformance"
-# 	wp sp_clear_all_cache --allow-root --path="$path2" >/dev/null 2>&1
-# 		_rundone "xóa cache swift preformance"
-# fi
-
-
-if [[ $(echo "$plugins_active" | grep 'swift-performance') ]];then
-	_runing "xóa cache swift preformance"
-	wp sp_clear_all_cache --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache swift preformance"
+if echo "$plugins_active" | grep -q 'wp-rocket'; then
+  _runing "Đang xóa WP Rocket Cache..."
+  wp eval 'if(function_exists("rocket_clean_domain")){ rocket_clean_domain(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa WP Rocket Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-rocket') ]];then
-	_runing "xóa cache wp rocket"
-	wp eval 'rocket_clean_domain();' --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache wp rocket"
+if echo "$plugins_active" | grep -q 'w3-total-cache'; then
+  _runing "Đang xóa W3 Total Cache..."
+  wp eval 'if(function_exists("w3tc_pgcache_flush")){ w3tc_pgcache_flush(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa W3 Total Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'w3-total-cache') ]];then
-	_runing "xóa cache w3-total-cache"
-	wp eval 'w3tc_pgcache_flush();' --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache w3-total-cache"
+if echo "$plugins_active" | grep -q 'cache-enabler'; then
+  _runing "Đang xóa Cache Enabler..."
+  wp eval 'if(class_exists("Cache_Enabler")){ Cache_Enabler::clear_total_cache(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa Cache Enabler thành công"
 fi
 
-
-if [[ $(echo "$plugins_active" | grep 'cache-enabler') ]];then
-	_runing "xóa cache cache-enabler"
-	wp eval 'Cache_Enabler::clear_total_cache();' --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache cache-enabler"
+if echo "$plugins_active" | grep -q 'autoptimize'; then
+  _runing "Đang xóa Autoptimize Cache..."
+  wp eval 'if(class_exists("autoptimizeCache")){ autoptimizeCache::clearall(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa Autoptimize Cache thành công"
 fi
 
-
-if [[ $(echo "$plugins_active" | grep 'autoptimize') ]];then
-	_runing "xóa cache autoptimize"
-	wp eval 'autoptimizeCache::clearall();' --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache autoptimize"
+if echo "$plugins_active" | grep -q 'flying-press'; then
+  _runing "Đang xóa Flying Press Cache..."
+  wp eval 'if(class_exists("FlyingPress\Purge")){ FlyingPress\Purge::purge_cached_pages(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa Flying Press Cache thành công"
 fi
 
-
-if [[ $(echo "$plugins_active" | grep 'flying-press') ]];then
-	_runing "xóa cache Flying Press"
-	wp eval 'FlyingPress\Purge::purge_cached_pages();' --allow-root --path="$path2" >/dev/null 2>&1
-	_runing "xóa cache Flying Press"
+if echo "$plugins_active" | grep -q 'wp-optimize'; then
+  _runing "Đang xóa WP-Optimize Cache..."
+  wp eval 'if(class_exists("WP_Optimize_Cache_Commands")){ $cmd = new WP_Optimize_Cache_Commands(); $cmd->purge_page_cache(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa WP-Optimize Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-optimize') ]];then
-	_runing "xóa cache wp-optimize"
-	wp eval '$wpoptimize_cache_commands = new WP_Optimize_Cache_Commands(); $wpoptimize_cache_commands->purge_page_cache();' --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache wp-optimize"
+if echo "$plugins_active" | grep -q 'breeze'; then
+  _runing "Đang xóa Breeze Cache..."
+  wp eval "do_action('breeze_clear_all_cache');" --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa Breeze Cache thành công"
 fi
 
-
-if [[ $(echo "$plugins_active" | grep 'breeze') ]];then
-	_runing "xóa cache breeze"
-	wp eval "do_action('breeze_clear_all_cache');" --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache breeze"
+if echo "$plugins_active" | grep -q 'flyingproxy'; then
+  _runing "Đang xóa FlyingProxy Cache..."
+  wp eval 'if(class_exists("FlyingProxy\Purge")){ FlyingProxy\Purge::invalidate(); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa FlyingProxy Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'flyingproxy') ]];then
-	_runing "xóa cache flyingproxy"
-	wp eval "FlyingProxy\Purge::invalidate();" --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache flyingproxy"
+if echo "$plugins_active" | grep -q 'wp-fastest-cache'; then
+  _runing "Đang xóa WP Fastest Cache..."
+  wp fastest-cache clear all --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa WP Fastest Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-fastest-cache') ]];then
-		_runing "xóa cache wp-fastest-cache"
-	wp fastest-cache clear all --allow-root --path="$path2" >/dev/null 2>&1
-		_rundone "xóa cache wp-fastest-cache"
+if echo "$plugins_active" | grep -q 'wp-performance'; then
+  _runing "Đang xóa WP Performance Cache..."
+  wp wpp flush --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa WP Performance Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-performance') ]];then
-		_runing "xóa cache WP Performance"
-	wp wpp flush  --allow-root --path="$path2" >/dev/null 2>&1
-		_rundone "xóa cache WP Performance"
+if echo "$plugins_active" | grep -q 'wp-super-cache'; then
+  _runing "Đang xóa WP Super Cache..."
+  wp eval 'global $file_prefix, $supercachedir; if(empty($supercachedir) && function_exists("get_supercache_dir")){ $supercachedir = get_supercache_dir(); } if(function_exists("wp_cache_clean_cache")){ wp_cache_clean_cache($file_prefix); }' --allow-root --path="$path2" >/dev/null 2>&1
+  _rundone "Xóa WP Super Cache thành công"
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-super-cache') ]];then
-	_runing "xóa cache WP Super Cache"
-	wp eval 'global $file_prefix, $supercachedir;if ( empty( $supercachedir ) && function_exists( "get_supercache_dir" ) ) {$supercachedir = get_supercache_dir();}wp_cache_clean_cache( $file_prefix );' --allow-root --path="$path2" >/dev/null 2>&1
-	_rundone "xóa cache WP Super Cache"
-fi
+# ==============================================================================
+# TÓM TẮT & THOÁT
+# ==============================================================================
+clear
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}DỌN DẸP CACHE THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Website: ${C_YELLOW}$NAME${C_RESET}"
+left_text "Bộ đệm : Đã dọn dẹp OPcache, Object Cache & Page Cache."
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]];then
-. /etc/wptt-user/wptt-cache-main 1
-fi
-
+[[ "$1" == "98" ]] && exec /etc/wptt-user/wptt-cache-main 1
