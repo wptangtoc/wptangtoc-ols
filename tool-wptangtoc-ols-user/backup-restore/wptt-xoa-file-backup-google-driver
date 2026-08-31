@@ -2,137 +2,139 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2022
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Sao lưu & khôi phục => Xóa file sao lưu Backup trên Google driver      |"
-echo "========================================================================="
+# @since: 2026
 
-checkactivate=$(grep -rnw "$HOME/.config/rclone/rclone.conf" -e "wptangtoc" >>/dev/null 2>&1 && echo 2)
-if [[ "$checkactivate" = "2" ]]; then
-    google=4
-else
-    echo "Hệ thống của bạn chưa kích hoạt rclone Google Driver"
-    . /etc/wptt-user/wptt-backup-restore-main 1
-    exit
+export box_inner_width=78
+
+. /etc/wptt-user/echo-color 2>/dev/null
+. /etc/wptt-user/core-functions 2>/dev/null
+
+if [[ "$1" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt-user/wptt-backup-restore-main 1"
 fi
 
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Xóa File Backup trên Cloud${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# KIỂM TRA TRẠNG THÁI KẾT NỐI CLOUD
+# ==============================================================================
+if ! grep -rnw "$HOME/.config/rclone/rclone.conf" -e "wptangtoc" >/dev/null 2>&1; then
+  echo -e "${C_RED}❌ Hệ thống của bạn chưa được liên kết với Lưu trữ đám mây nào!${C_RESET}"
+  echo "Vui lòng thiết lập Rclone (Google Drive / OneDrive) trước khi sử dụng."
+  sleep 4
+  exec /etc/wptt-user/wptt-backup-restore-main 1
+fi
+
+if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$HOME/.config/rclone/rclone.conf" 2>/dev/null; then
+  cloud_service="OneDrive"
+elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$HOME/.config/rclone/rclone.conf" 2>/dev/null; then
+  cloud_service="S3 Storage"
+else
+  cloud_service="Google Drive"
+fi
 
 . /etc/wptt-user/tenmien
-. /etc/wptt-user/echo-color
-lua_chon_NAME
+lua_chon_NAME "Xóa file từ Cloud"
+NAME="$NAME"
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-	. /etc/wptt-user/wptt-backup-restore-main 1
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt-user/wptt-backup-restore-main 1
+
+# Xác định tên thư mục Cloud
+CLOUD_DIR="wptangtoc_ols_backup"
+if [[ "$cloud_service" == "S3 Storage" ]]; then
+  CLOUD_DIR="wptangtoc-ols-backup"
+elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+  CLOUD_DIR="wptangtoc-ols-backup"
 fi
 
-a="y"
-while [[ $a = "y" ]]
-do
-	_runing "Tải danh sách từ Google Driver"
-	selects=()
-	x=$(rclone lsf wptangtoc:wptangtoc_ols_backup/"$NAME")
-	while IFS= read -r line; do selects+=("$line"); done <<<"$x"
-		if [[ $selects = '' ]];then
-	_runloi "Tải danh sách từ Google Driver"
-			echoDo "Không có file backup nào tồn tại."
-			sleep 3
-			. /etc/wptt-user/wptt-backup-restore-main 1
-		fi
-	_rundone "Tải danh sách từ Google Drive"
-	echo '========================================================================='
-	echo ''
-	echo "Danh sách các file backup của website $NAME lưu trữ trên Google Driver"
-		PS3="
-$(tput setab 0)-//- Nhập lựa chọn file backup của bạn muốn xóa (1-${#selects[@]}) [0=Thoát]:$(tput sgr0) "
-		select select in ${selects[@]}; do
-			file=$select
-			break
-		done
+# ==============================================================================
+# VÒNG LẶP CHÍNH (TỰ ĐỘNG REFRESH DANH SÁCH CLOUD SAU KHI XÓA)
+# ==============================================================================
+while true; do
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}DỌN DẸP FILE BACKUP CLOUD ➜ $NAME${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  
+  _runing "Đang kết nối để lấy danh sách từ $cloud_service..."
+  
+  # Fetch danh sách file từ Rclone
+  x=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null)
+  
+  # Xóa dòng Loading
+  echo -ne "\033[1A\r\033[K"
+  
+  selects=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && selects+=("$line")
+  done <<< "$x"
 
-if [[ "$file" = "" || "$file" = '0' ]]; then
-	. /etc/wptt-user/wptt-backup-restore-main 1
-fi
+  if [[ ${#selects[@]} -eq 0 || -z "${selects[0]}" ]]; then
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}Không có file backup nào trên $cloud_service!${C_RESET}$(printf '%*s' $((box_inner_width - 48)) "")${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    sleep 3
+    exec /etc/wptt-user/wptt-backup-restore-main 1
+  fi
 
+  # Chỉ đo dung lượng của đúng thư mục domain (Cực nhanh)
+  before_delete=$(rclone size "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -i 'size' | awk -F ':' '{print $2}' | awk -F '(' '{print $1}' | xargs)
 
-echo "Bạn có muốn xóa file backup $file trên Google Driver không? "
-prompt="Nhập lựa chọn của bạn [1-2]: "
-dongy="n"
-options=("Đồng ý" "Không đồng ý")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-	case "$REPLY" in
-		1)
-			dongy="y"
-			break
-			;;
+  left_text "Nguồn Cloud      : $cloud_service"
+  left_text "Thư mục lưu trữ  : $CLOUD_DIR/$NAME/"
+  left_text "Tổng dung lượng  : ${C_RED}${before_delete:-Đang tính toán...}${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-		2)
-			dongy="n"
-			break
-			;;
+  i=1
+  for val in "${selects[@]}"; do
+    item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$val")
+    clean_row=$(printf "  %3d) %s" "$i" "$val")
+    pad=$((box_inner_width - ${#clean_row}))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-		$((${#options[@]} + 1)))
-			printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-			break
-			;;
-		*)
-			printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-			break
-			;;
-	esac
+  echo -en "${C_CYAN}Nhập số thứ tự file cần XÓA (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
+  read -r REPLY
+
+  if [[ "$REPLY" == "0" || -z "$REPLY" ]]; then
+    break # Thoát vòng lặp
+  fi
+
+  if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+    idx=$((REPLY - 1))
+    file_to_del="${selects[$idx]}"
+
+    if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn XÓA VĨNH VIỄN file này không?" "File: ${C_YELLOW}$file_to_del${C_RESET}" "Hành động này sẽ xóa file khỏi $cloud_service mãi mãi!" "Đồng ý Xóa" "Giữ lại"; then
+      
+      # Ghi log an toàn trong Chroot
+      echo "Xóa backup domain $NAME trên $cloud_service ($CLOUD_DIR/$NAME/$file_to_del): $(date '+%d-%m-%Y %H:%M')" >> /tmp/wptangtoc-ols.log
+      
+      echo ""
+      _runing "Đang xóa $file_to_del khỏi $cloud_service..."
+      rclone -q delete "wptangtoc:$CLOUD_DIR/$NAME/$file_to_del" 2>/dev/null
+      _rundone "Xóa $file_to_del thành công"
+      
+      after_delete=$(rclone size "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | grep -i 'size' | awk -F ':' '{print $2}' | awk -F '(' '{print $1}' | xargs)
+      
+      clear
+      echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}XÓA FILE TRÊN CLOUD THÀNH CÔNG${C_RESET}"
+      echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "File đã xóa : $file_to_del"
+      left_text "Dung lượng  : Giảm từ ${C_RED}${before_delete}${C_RESET} xuống còn ${C_GREEN}${after_delete:-0 Bytes}${C_RESET}"
+      echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      sleep 2
+    fi
+  else
+    echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
+    sleep 1
+  fi
 done
 
-if [[ "$dongy" = "y" ]]; then
-echo "Xoá backup domain $NAME trên lưu trữ đám mây wptangtoc_ols_backup/$NAME/$file: $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
-_runing "Xóa $file backup của website $NAME trên Google Driver"
-before_delete=$(rclone size wptangtoc: 2>/dev/null --exclude "Personal Vault/**"| grep 'size' | cut -f2 -d ':' | cut -f1 -d '(')
-rclone -v delete wptangtoc:wptangtoc_ols_backup/"$NAME"/"$file"
-_rundone "Xóa $file backup của website $NAME trên Google Driver"
-	echo "==================================================================="
-	echo "Dung luong thu muc truoc khi xoa	: ${before_delete}"
-	echo "Dung luong thu muc sau khi xoa		: $(rclone size wptangtoc: --exclude "Personal Vault/**" 2>/dev/null| grep 'size' | cut -f2 -d ':' | cut -f1 -d '(')"
-	echo "==================================================================="
-fi
-
-if [[ $(rclone lsf wptangtoc:wptangtoc_ols_backup/"$NAME" |grep ".zip$\|.sql$\|.sql.gz$") ]];then
-echo "Bạn có muốn tiếp tục xóa file backup nữa không?: "
-prompt="Nhập lựa chọn của bạn [1-2]: "
-a="n"
-options=("Đồng ý" "Không đồng ý")
-PS3="$prompt"
-select opt in "${options[@]}"; do
-	case "$REPLY" in
-		1)
-			a="y"
-			break
-			;;
-
-		2)
-			a="n"
-			break
-			;;
-
-		$((${#options[@]} + 1)))
-			printf "\nBạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-			break
-			;;
-		*)
-			printf "Bạn nhập sai hệ thống sẽ chọn là không đồng ý\n"
-			break
-			;;
-	esac
-done
-else
-	a='n'
-fi
-
-done
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]];then
-. /etc/wptt-user/wptt-backup-restore-main 1
-fi
-
+exec /etc/wptt-user/wptt-backup-restore-main 1
