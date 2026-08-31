@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 echo -e "KHỞI ĐỘNG CHIẾN DỊCH: CLEAN SẠCH TẬN GỐC VÀ TÁI TẠO TÀI KHOẢN...\n"
 
 # ==============================================================================
@@ -25,22 +26,24 @@ systemctl start mariadb
 # ==============================================================================
 echo -e "\n[2/4] Đang khởi tạo tài khoản quản trị tối cao của hệ thống..."
 source /etc/wptt/.wptt.conf
+# Tạo thẻ ủy quyền tạm thời
+password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
+[[ -z "$password_database_root" ]] && password_database_root="$database_admin_password" #không mã hoá trả tuơng thích nguợc
 
 # Bơm quyền vào MariaDB (Mặc định khi mới cài chưa có pass root)
 mariadb -u root <<EOF
 FLUSH PRIVILEGES;
-CREATE USER IF NOT EXISTS 'wordpressadmin'@'localhost' IDENTIFIED BY '${database_admin_password}';
+CREATE USER IF NOT EXISTS 'wordpressadmin'@'localhost' IDENTIFIED BY '${password_database_root}';
 GRANT ALL PRIVILEGES ON *.* TO 'wordpressadmin'@'localhost' WITH GRANT OPTION;
 DROP USER IF EXISTS 'root'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-# Tạo thẻ ủy quyền tạm thời
-TEMP_CNF_ROOT=$(mktemp -p /etc/wptt/tmp/wptt_mariadb_auth.XXXXXX.cnf)
+TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_mariadb_auth.XXXXXX.cnf)
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user=wordpressadmin
-password=${database_admin_password}
+password=${password_database_root}
 host=localhost
 EOF
 trap "rm -f $TEMP_CNF_ROOT" EXIT
@@ -54,7 +57,10 @@ for vhost_conf in /etc/wptt/vhost/.*.conf; do
     
     db_db=$(grep -E '^DB_Name_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
     db_user=$(grep -E '^DB_User_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
-    db_pass=$(grep -E '^DB_Password_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
+    db_pass_quet=$(grep -E '^DB_Password_web=' "$vhost_conf" | cut -d'=' -f2 | tr -d '"' | tr -d "'" | tr -d '\r' | xargs)
+	db_pass=$(wptt_giai_ma "$db_pass_quet" 2>/dev/null)
+	[[ -z "$db_pass" ]] && db_pass="$db_pass_quet" #không mã hoá trả tuơng thích nguợc
+
     
     if [[ -n "$db_db" && -n "$db_user" && -n "$db_pass" ]]; then
         echo "   ➜ Đã khởi tạo cấu trúc cho: $db_db"
@@ -87,5 +93,5 @@ done
 
 mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES;"
 systemctl restart lsws 2>/dev/null || killall lsphp 2>/dev/null
-
+rm -f "$TEMP_CNF_ROOT"
 echo -e "\nCLEAN SẠCH THÀNH CÔNG RỰC RỠ! Toàn bộ nền móng MariaDB đã được đúc mới 100%!"

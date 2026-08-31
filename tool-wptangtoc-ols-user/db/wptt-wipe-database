@@ -1,34 +1,98 @@
 #!/bin/bash
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quản lý Database => Xóa toàn bộ dữ liệu database                       |"
-echo "========================================================================="
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+
+export box_inner_width=78
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+. /etc/wptt-user/echo-color 2>/dev/null
+. /etc/wptt-user/core-functions 2>/dev/null
+
+if [[ "$1" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt-user/wptt-db-main 1"
+fi
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DATABASE ➜ Xóa toàn bộ dữ liệu (Wipe Database)${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
 NAME=$1
-if [[ $NAME = '98' ]];then
-NAME=''
+[[ "$NAME" == "98" ]] && NAME=""
+
+if [[ -z "$NAME" ]]; then
+  . /etc/wptt-user/tenmien
+  lua_chon_NAME "Wipe Database"
 fi
 
-if [[ $NAME = '' ]];then
-. /etc/wptt-user/tenmien
-lua_chon_NAME
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt-user/wptt-db-main 1
+
+. /etc/wptt/vhost/."$NAME".conf 2>/dev/null
+
+# ==============================================================================
+# XÁC NHẬN AN TOÀN TRƯỚC KHI THỰC THI LỆNH NGUY HIỂM
+# ==============================================================================
+echo ""
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn XÓA SẠCH dữ liệu Database của website này?" "Hành động này sẽ DROP toàn bộ Database cũ và tạo mới lại từ đầu." "Dữ liệu sẽ MẤT VĨNH VIỄN nếu không có bản Backup!" "Đồng ý Xóa trắng (Wipe)" "Hủy thao tác"; then
+  echo -e "\n${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+  sleep 2
+  [[ "$1" == "98" ]] && exec /etc/wptt-user/wptt-db-main 1
+  exit 0
 fi
 
-. /etc/wptt-user/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-    . /etc/wptt-user/wptt-db-main 1
-fi
+echo "Xóa toàn bộ dữ liệu database website $NAME (User): $(date '+%d-%m-%Y %H:%M')" >>/tmp/wptangtoc-ols.log
 
-_runing "Xóa toàn bộ dữ liệu database của website $NAME"
-. /etc/wptt/vhost/."$NAME".conf
-mariadb -u "$DB_User_web" -p"$DB_Password_web" -e "DROP DATABASE IF EXISTS ${DB_Name_web}"
-mariadb -u "$DB_User_web" -p"$DB_Password_web" -e "CREATE DATABASE IF NOT EXISTS ${DB_Name_web}"
+# ==============================================================================
+# THỰC THI DỌN DẸP BẰNG CƠ CHẾ BẢO MẬT KÉP (AES + CNF)
+# ==============================================================================
+_runing "Đang tiến hành dọn dẹp và tái tạo Database..."
 
-_rundone "Xóa toàn bộ dữ liệu database của website $NAME"
+wptt_abort_db_injection() {
+    _runloi "$1"
+    sleep 2
+    [[ "$2" == "98" ]] && exec /etc/wptt-user/wptt-db-main 1
+    exit 1
+}
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]];then
-. /etc/wptt-user/wptt-db-main 1
-fi
+[[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
+[[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
 
+password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
+[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
+
+TEMP_CNF=$(mktemp -p "/tmp" wptt_db_XXXXXX.cnf)
+chmod 600 "$TEMP_CNF"
+cat >"$TEMP_CNF" <<EOF
+[client]
+user=${DB_User_web}
+password=${password_database_website_giai_ma}
+host=localhost
+max_allowed_packet=1G
+default-character-set=utf8mb4
+EOF
+
+mariadb --defaults-extra-file="$TEMP_CNF" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_Name_web}\`;"
+mariadb --defaults-extra-file="$TEMP_CNF" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS \`${DB_Name_web}\`;"
+
+rm -f "$TEMP_CNF"
+
+_rundone "Dọn dẹp và tái tạo Database thành công"
+
+# ==============================================================================
+# BẢNG TÓM TẮT THÀNH CÔNG
+# ==============================================================================
+clear
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}WIPE DATABASE THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Website      : ${C_YELLOW}$NAME${C_RESET}"
+left_text "Tên Database : $DB_Name_web"
+left_text "Trạng thái   : Đã xóa trắng và tái tạo mới hoàn toàn."
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "$1" == "98" ]] && exec /etc/wptt-user/wptt-db-main 1
