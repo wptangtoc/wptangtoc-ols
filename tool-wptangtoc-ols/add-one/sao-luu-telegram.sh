@@ -135,6 +135,22 @@ echo -e "${C_CYAN}╰───────────────────�
 
 # 1. SAO LƯU DATABASE
 _runing "Đang kết xuất Cơ sở dữ liệu (Database)..."
+
+#Nguy cơ Local SQL Injection
+wptt_abort_db_injection() {
+    _runloi "$1"
+    sleep 2
+    [[ "$2" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+    return 2>/dev/null || exit 1
+}
+
+# 2. Thực thi kiểm tra 3 lớp bằng toán tử ngắn mạch (&&)
+[[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
+[[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
+[[ "$DB_Password_web" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu Database chứa ký tự cấm (khoảng trắng, dấu nháy, backtick...)!" "$1"
+#end nguy cơ local sql Injection
+
+
 TEMP_CNF=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
 chmod 600 "$TEMP_CNF"
 cat >"$TEMP_CNF" <<EOF
