@@ -147,16 +147,20 @@ wptt_abort_db_injection() {
 # 2. Thực thi kiểm tra 3 lớp bằng toán tử ngắn mạch (&&)
 [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
 [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
-[[ "$DB_Password_web" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu Database chứa ký tự cấm (khoảng trắng, dấu nháy, backtick...)!" "$1"
+
 #end nguy cơ local sql Injection
 
 
+password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
+[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
+
 TEMP_CNF=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
-chmod 600 "$TEMP_CNF"
+chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+
 cat >"$TEMP_CNF" <<EOF
 [client]
 user=${DB_User_web}
-password=${DB_Password_web}
+password=${password_database_website_giai_ma}
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
