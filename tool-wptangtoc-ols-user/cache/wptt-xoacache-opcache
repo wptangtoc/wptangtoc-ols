@@ -1,0 +1,127 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+
+export box_inner_width=78
+
+. /etc/wptt-user/echo-color 2>/dev/null
+. /etc/wptt-user/core-functions 2>/dev/null
+
+if [[ "$1" == "98" ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt-user/wptt-cache-main 1"
+fi
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ CACHE ➜ Xóa OPcache PHP (Zero Downtime)${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+. /etc/wptt-user/tenmien
+lua_chon_NAME "Xóa OPcache PHP"
+NAME="$NAME"
+
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt-user/wptt-cache-main 1
+
+path2="/usr/local/lsws/$NAME/html"
+pathcheckwp="$path2/wp-load.php"
+
+if [[ ! -f "$pathcheckwp" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress!${C_RESET}"
+  sleep 3
+  exec /etc/wptt-user/wptt-cache-main 1
+fi
+
+echo -e "\n${C_YELLOW}Đang tiến hành dọn dẹp OPcache PHP cho website: $NAME${C_RESET}\n"
+
+# ==============================================================================
+# HÀM XÓA OPCACHE WEBSITE KHÔNG GÂY DOWNTIME (TRONG CHROOT JAIL)
+# ==============================================================================
+function wptt_xoa_opcache() {
+    local domain="$1"
+    local web_root="/usr/local/lsws/$domain/html"
+    local path_conf="/etc/wptt/vhost/.$domain.conf"
+
+    if [[ ! -d "$web_root" ]]; then
+        echo -e "${C_RED}Lỗi: Không tìm thấy thư mục của domain $domain${C_RESET}"
+        return 1
+    fi
+
+    # 1. Tải cấu hình WPTangToc OLS để lấy $User_name_vhost và $lock_down
+    local is_locked=0
+    if [[ -f "$path_conf" ]]; then
+        source "$path_conf"
+        [[ "$lock_down" == "1" ]] && is_locked=1
+    fi
+
+    # 2. Định tuyến thư mục ghi file OPcache (Xử lý Lockdown)
+    local target_dir="$web_root"
+    local relative_path=""
+
+    if [[ "$is_locked" -eq 1 ]]; then
+        if [[ -d "$web_root/wp-content/litespeed" ]]; then
+            target_dir="$web_root/wp-content/litespeed"
+            relative_path="wp-content/litespeed/"
+        elif [[ -d "$web_root/wp-content/cache" ]]; then
+            target_dir="$web_root/wp-content/cache"
+            relative_path="wp-content/cache/"
+        elif [[ -d "$web_root/wp-content/uploads" ]]; then
+            target_dir="$web_root/wp-content/uploads"
+            relative_path="wp-content/uploads/"
+        else
+            echo -e "${C_RED}Lỗi: Website bật Lockdown nhưng không tìm thấy thư mục ghi đệm hợp lệ!${C_RESET}"
+            return 1
+        fi
+    fi
+
+    # 3. Tạo file mồi (Tránh lộ URL bằng Random Key)
+    local secret_key=$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16)
+    [[ -z "$secret_key" ]] && secret_key="$RANDOM$RANDOM"
+    local file_name="wptt_opcache_clear_${secret_key}.php"
+    local file_path="${target_dir}/${file_name}"
+
+    cat <<'EOF' > "$file_path"
+<?php
+if (function_exists('opcache_reset')) {
+    opcache_reset();
+}
+EOF
+
+    # 4. Phân quyền cho file (Đảm bảo OLS chạy được trong lồng)
+    if [[ -n "$User_name_vhost" ]]; then
+        chown "${User_name_vhost}:${User_name_vhost}" "$file_path" 2>/dev/null
+    fi
+    chmod 644 "$file_path" 2>/dev/null
+
+    # 5. Kích hoạt cURL để gọi PHP chạy lệnh opcache_reset
+    curl -s -k -m 5 -H "Host: $domain" "http://127.0.0.1/${relative_path}${file_name}" >/dev/null
+
+    # 6. Dọn rác
+    rm -f "$file_path"
+}
+
+# ==============================================================================
+# THỰC THI LỆNH
+# ==============================================================================
+_runing "Đang kích hoạt quy trình xóa PHP OPcache an toàn..."
+wptt_xoa_opcache "$NAME"
+_rundone "Xóa bộ nhớ đệm mã nguồn (OPcache) thành công"
+
+# ==============================================================================
+# TÓM TẮT & THOÁT
+# ==============================================================================
+clear
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}DỌN DẸP OPCACHE THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Website: ${C_YELLOW}$NAME${C_RESET}"
+left_text "Ghi chú: Mã nguồn PHP đã được làm mới. Page Cache vẫn được giữ nguyên!"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "$1" == "98" ]]; then
+  echo -en "${C_CYAN}Nhấn phím [Enter] để quay lại Menu Cache...${C_RESET}"
+  read -r
+  exec /etc/wptt-user/wptt-cache-main 1
+fi
