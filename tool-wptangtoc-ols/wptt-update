@@ -280,55 +280,47 @@ else
 
     \cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin
 
-    ## Chown file Vhost cho User
-	#if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
-		#for filepath in /etc/wptt/vhost/.*.conf; do
-			#[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-			#domain="${filepath##*/}"
-			#domain="${domain%.conf}"
-			#domain="${domain#.}"
-			#path="/usr/local/lsws/$domain/html"
-			##/usr/local/lsws/$domain/etc xác định đã chmod ảo hoá
-			#if [[ -d "$path" && -f /etc/wptt/vhost/.$domain.conf && -d /usr/local/lsws/$domain/etc ]]; then
-				#if [[ $(stat -c '%U' "/usr/local/lsws/"$domain"/etc" 2>/dev/null) == "root" ]];then #phải chính hiệu chủ sở hữu là root
-					#. /etc/wptt/vhost/."$domain".conf
-					#if [[ -n "$User_name_vhost" ]];then
-						#if [[ -n $(cat /etc/group | grep '^wptangtoc-ols:' | grep "$User_name_vhost") ]]; then
-							#chown "$User_name_vhost":"$User_name_vhost" /etc/wptt/vhost/."$domain".conf
-							## chown "root":"root" /etc/wptt/vhost/."$domain".conf
-						#fi
-					#fi
-				#fi
-			#fi
-		#done
-	#fi
-
 
 	# ==========================================================================
     # CẬP NHẬT PHÂN QUYỀN VHOST THEO CƠ CHẾ BẢO MẬT (ZERO TRUST)
     # ==========================================================================
-	if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
-		for filepath in /etc/wptt/vhost/.*.conf; do
-			[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-			domain="${filepath##*/}"
-			domain="${domain%.conf}"
-			domain="${domain#.}"
+	chown root:root /etc/wptt/.wptt.conf
+	chmod 600 /etc/wptt/.wptt.conf
 
-			# Xóa các file .conf ảo cũ bị phân quyền sai trong Jail (Nếu có)
-			path="/usr/local/lsws/$domain"
+    for filepath in /etc/wptt/vhost/.*.conf; do
+        [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+        
+        # 1. Trạng thái mặc định: Đóng băng tuyệt đối (Auto-Healing)
+        chown root:root "$filepath"
+        chmod 600 "$filepath"
 
-			if [[ -d "$path" && -f /etc/wptt/vhost/.$domain.conf && -d /usr/local/lsws/$domain/etc ]]; then
-				if [[ $(stat -c '%U' "/usr/local/lsws/"$domain"/etc" 2>/dev/null) == "root" ]];then #phải chính hiệu chủ sở hữu là root
-					# Giao quyền sở hữu nhóm cho wptangtoc-ols và khóa Others (640)
-					. $filepath
-					if [[ -n $(cat /etc/group | grep '^wptangtoc-ols:' | grep "$User_name_vhost") ]]; then
-						chown root:wptangtoc-ols "$filepath"
-						chmod 640 "$filepath"
-					fi
-				fi
-			fi
-		done
-	fi
+        # 2. Kiểm tra nới lỏng quyền nếu hệ thống có sử dụng Jail
+        if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
+            domain="${filepath##*/}"
+            domain="${domain%.conf}"
+            domain="${domain#.}"
+
+            path="/usr/local/lsws/$domain"
+
+            # Xác định lồng Jail đang hoạt động (có thư mục /etc của root)
+            if [[ -d "$path" && -d "$path/etc" ]]; then
+                if [[ $(stat -c '%U' "$path/etc" 2>/dev/null) == "root" ]]; then
+                    # Dùng grep bóc tách biến an toàn
+                    check_user_vhost=$(grep -E '^User_name_vhost=' "$filepath" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+                    
+                    if [[ -n "$check_user_vhost" ]]; then
+                        # Kiểm tra user có nằm trong nhóm wptangtoc-ols không
+                        if grep -q "^wptangtoc-ols:.*$check_user_vhost" /etc/group 2>/dev/null; then
+                            chown root:wptangtoc-ols "$filepath"
+                            chmod 640 "$filepath"
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    done
+
+
 
     # ==========================================================================
     # TIẾN HÀNH GIẢI NÉN VÀ CHÉP FILE (USER)
