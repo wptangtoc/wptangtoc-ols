@@ -11,14 +11,43 @@ export LC_ALL=en_US.UTF-8
 
 box_inner_width=78
 
-# Lấy thông tin môi trường
+# --- BẪY THOÁT ĐỘT NGỘT (Đảm bảo hiện lại con trỏ nếu bấm Ctrl+C) ---
+trap 'tput cnorm; echo ""; exit' SIGINT SIGTERM
+
+# --- LẤY THÔNG TIN HỆ THỐNG TRONG LỒNG CHROOT ---
 current_user="${USER:-$(whoami 2>/dev/null)}"
-current_path=$(pwd)
-if [[ "$current_path" == "/" ]]; then
-  current_path="/ (Chroot Root)"
+
+# Tự động trích xuất Tên miền (Domain) từ file cấu hình Vhost được mount trong lồng
+domain=$(ls -A /etc/wptt/vhost/ 2>/dev/null | grep '^\.' | grep '\.conf$' | head -n 1 | sed 's/^\.//' | sed 's/\.conf$//')
+
+# 1. Kiểm tra Phiên bản PHP
+if command -v php >/dev/null 2>&1; then
+    php_ver=$(php -v 2>/dev/null | head -n 1 | awk '{print $2}')
+else
+    php_ver="Không xác định"
 fi
 
-# Lời chào theo buổi
+# 2. Quét dung lượng mã nguồn
+if [[ -d "/html" ]]; then
+    disk_usage=$(du -sh /html 2>/dev/null | awk '{print $1}')
+else
+    disk_usage="Không xác định"
+fi
+
+# 3. Lấy thông tin Database từ wp-config.php (nếu có)
+db_name="Chưa cấu hình (Hoặc không tìm thấy wp-config)"
+db_user="Chưa cấu hình"
+wp_config="/html/wp-config.php"
+
+if [[ -f "$wp_config" ]]; then
+    db_name=$(grep -E "^define\(\s*'DB_NAME'" "$wp_config" | cut -d "'" -f 4 | head -n 1)
+    db_user=$(grep -E "^define\(\s*'DB_USER'" "$wp_config" | cut -d "'" -f 4 | head -n 1)
+    
+    [[ -z "$db_name" ]] && db_name="Không xác định"
+    [[ -z "$db_user" ]] && db_user="Không xác định"
+fi
+
+# 4. Lời chào theo buổi
 thoi_gian=$(date +'%H' | sed 's/^0//g')
 if (($thoi_gian < 10)); then
   thoi_diem='Chúc bạn có buổi sáng tuyệt vời'
@@ -30,94 +59,64 @@ else
   thoi_diem='Chúc bạn có buổi tối tuyệt vời'
 fi
 
-# --- CÁC HÀM VẼ UI SIÊU TỐC CHO LIVE CLOCK ---
-center_text_live() {
+# --- CÁC HÀM VẼ UI TĨNH ---
+center_text_static() {
   local text="$1"
-  local clean_text=$(echo -e "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local clean_text=$(echo -e "$text" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
   local text_len=${#clean_text}
   local pad_left=$(((box_inner_width - text_len) / 2))
   local pad_right=$((box_inner_width - text_len - pad_left))
   [[ $pad_left -lt 0 ]] && pad_left=0
   [[ $pad_right -lt 0 ]] && pad_right=0
-  printf "${C_CYAN}│${C_RESET}%*s%s%*s${C_CYAN}│${C_RESET}\n" "$pad_left" "" "$text" "$pad_right" ""
+  echo -e "${C_CYAN}│${C_RESET}$(printf '%*s' "$pad_left" "")${text}$(printf '%*s' "$pad_right" "")${C_CYAN}│${C_RESET}"
 }
 
-left_text_live() {
+left_text_static() {
   local text="$1"
-  local clean_text=$(echo -e "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local clean_text=$(echo -e "$text" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
   local text_len=${#clean_text}
   local pad_right=$((box_inner_width - text_len - 2))
   [[ $pad_right -lt 0 ]] && pad_right=0
-  printf "${C_CYAN}│${C_RESET}  %s%*s${C_CYAN}│${C_RESET}\n" "$text" "$pad_right" ""
+  echo -e "${C_CYAN}│${C_RESET}  ${text}$(printf '%*s' "$pad_right" "")${C_CYAN}│${C_RESET}"
 }
 
-# --- DISPLAY FUNCTION ---
-print_dashboard() {
-  local current_time=$(date "+%d/%m/%Y %H:%M:%S")
-  local out=""
-
-  out+="${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}\n"
-  out+=$(center_text_live "${C_BOLD_WHITE}WPTANGTOC OLS - USER CONTROL PANEL${C_RESET}")"\n"
-  out+=$(center_text_live "${C_YELLOW}Môi trường quản trị bảo mật tuyệt đối (Chroot Jail)${C_RESET}")"\n"
-  out+="${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}\n"
-  
-  out+=$(left_text_live "${C_GREEN}${thoi_diem}!${C_RESET}")"\n"
-  out+=$(left_text_live "")"\n"
-  
-  out+=$(left_text_live "Tài khoản (User)   : ${C_YELLOW}$current_user${C_RESET}")"\n"
-  out+=$(left_text_live "Thư mục hiện tại   : ${C_YELLOW}$current_path${C_RESET}")"\n"
-  out+=$(left_text_live "Quyền hạn hệ thống : ${C_RED}Bị giới hạn (Restricted / Jail)${C_RESET}")"\n"
-  out+=$(left_text_live "Thời gian máy chủ  : ${C_GREEN}$current_time${C_RESET}")"\n"
-  
-  out+="${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}\n"
-  out+=$(center_text_live "${C_GREEN}[ENTER] Mở Menu Quản Trị  |  [0] Thoát ra dòng lệnh${C_RESET}")"\n"
-  out+="${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
-  
-  # Xóa các dòng thừa bên dưới để tránh lưu rác khi Terminal bị thu nhỏ
-  out+="\033[J"
-  
-  # In toàn bộ cục String ra màn hình trong 1 lần (Chống giật/Flicker)
-  echo -ne "$out"
-}
-
-# --- VÒNG LẶP CHÍNH (Đồng hồ Live siêu mượt) ---
-tput civis # Ẩn con trỏ chuột
-clear      # Xóa sạch màn hình 1 lần duy nhất lúc khởi động
-
-ACTION="menu"
-
-while true; do
-  tput cup 0 0 # Ghim con trỏ chuột về tọa độ [0,0] (Góc trên cùng bên trái)
-  print_dashboard
-
-  # Chờ người dùng bấm phím trong 1 giây
-  read -t 1 -n 1 -s key_input
-  if [ $? -eq 0 ]; then
-    if [[ "$key_input" == "0" ]]; then
-      ACTION="exit"
-    else
-      ACTION="menu"
-    fi
-    break
-  fi
-done
-
-# Bắt lỗi thoát đột ngột (Ctrl+C)
-trap - SIGINT
-tput cnorm # Hiện lại con trỏ chuột
+# --- IN GIAO DIỆN ---
+tput civis # ẨN CON TRỎ CHUỘT
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text_static "${C_BOLD_WHITE}WPTANGTOC OLS - USER CONTROL PANEL${C_RESET}"
+center_text_static "${C_YELLOW}Môi trường quản trị bảo mật tuyệt đối (Chroot Jail)${C_RESET}"
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text_static "${C_GREEN}${thoi_diem}!${C_RESET}"
+left_text_static ""
+left_text_static "Tài khoản (User)   : ${C_YELLOW}$current_user${C_RESET}"
+left_text_static "Quyền hạn hệ thống : ${C_RED}Bị giới hạn (Jail)${C_RESET}"
+left_text_static "Thư mục mã nguồn   : ${C_YELLOW}/usr/local/lsws/$domain/html${C_RESET}"
+left_text_static "Dung lượng website : ${C_GREEN}$disk_usage${C_RESET} (Thư mục /html)"
+left_text_static "Phiên bản PHP      : ${C_GREEN}$php_ver${C_RESET}"
+left_text_static "Cơ sở dữ liệu (DB) : ${C_YELLOW}$db_name${C_RESET}"
+left_text_static "Tài khoản DB (User): ${C_YELLOW}$db_user${C_RESET}"
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+center_text_static "${C_GREEN}[ENTER] Mở Menu Quản Trị  |  [0] Thoát ra dòng lệnh${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 echo ""
 
+# Chờ người dùng bấm phím
+read -n 1 -s key_input
+
+tput cnorm # HIỆN LẠI CON TRỎ CHUỘT NGAY SAU KHI BẤM XONG
+trap - SIGINT SIGTERM # Gỡ bẫy phím
+
 # --- CHUYỂN HƯỚNG MÀN HÌNH ---
-case $ACTION in
-"exit")
+if [[ "$key_input" == "0" ]]; then
   echo -e "\nĐã thoát ra màn hình Terminal (Dòng lệnh)."
   echo -e "Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc-user${C_RESET} để gọi lại Menu Quản Trị."
-  ;;
-*)
+  exit 0
+else
   if [ -f "/etc/wptt-user/wptangtoc-user" ]; then
     exec /etc/wptt-user/wptangtoc-user
   else
-    echo -e "${C_RED}❌ Lỗi: Không tìm thấy file wptangtoc-user. Vui lòng liên hệ Admin!${C_RESET}"
+    echo -e "${C_RED}Lỗi: Không tìm thấy file wptangtoc-user. Vui lòng liên hệ Admin!${C_RESET}"
+    exit 1
   fi
-  ;;
-esac
+fi
