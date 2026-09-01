@@ -1,0 +1,134 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Tool Migrate mật khẩu văn bản thô sang mã hóa AES-256 (Dành cho Root)
+
+export box_inner_width=78
+
+# Nạp cấu hình và thư viện lõi của WPTangToc OLS
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}WPTANGTOC OLS ➜ MIGRATION TOOL: CONVERT PLAINTEXT TO AES-256${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# 1. KIỂM TRA & KHỞI TẠO MASTER KEY
+# ==============================================================================
+KEY_DIR="/etc/wptt-aes"
+KEY_FILE="$KEY_DIR/.wptt_salt.bin"
+
+if [[ ! -f "$KEY_FILE" ]]; then
+    _runing "Chưa có Master Key. Đang khởi tạo chìa khóa AES-256..."
+    mkdir -p "$KEY_DIR"
+    openssl rand -base64 48 > "$KEY_FILE"
+
+    chown root:root "$KEY_FILE"
+    chmod 400 "$KEY_FILE"
+    chmod 700 "$KEY_DIR"
+    _rundone "Khởi tạo Master Key thành công tại: $KEY_FILE"
+    echo ""
+else
+    echo -e "${C_GREEN}✅ Hệ thống đã có sẵn Master Key tại: $KEY_FILE${C_RESET}\n"
+fi
+
+# ==============================================================================
+# 2. CÁC HÀM XỬ LÝ MÃ HÓA
+# ==============================================================================
+function is_encrypted() {
+    local string="$1"
+    if [[ "$string" == U2FsdGVkX1* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function wptt_encrypt() {
+    local plaintext="$1"
+    echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$KEY_FILE" 2>/dev/null
+}
+
+# ==============================================================================
+# 3. MÃ HÓA MẬT KHẨU ROOT MARIADB (database_admin_password)
+# ==============================================================================
+WPTT_CONF="/etc/wptt/.wptt.conf"
+admin_status="Không tìm thấy cấu hình"
+
+echo -e "${C_YELLOW}Đang kiểm tra file cấu hình lõi hệ thống...${C_RESET}\n"
+
+if [[ -f "$WPTT_CONF" ]]; then
+    admin_pass=$(grep -E "^database_admin_password=" "$WPTT_CONF" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+    
+    if [[ -n "$admin_pass" ]]; then
+        if is_encrypted "$admin_pass"; then
+            echo -e " ➜ Mật khẩu Root MariaDB đã được mã hóa ➜ ${C_YELLOW}[BYPASS]${C_RESET}\n"
+            admin_status="${C_YELLOW}Bypass (Đã mã hóa trước đó)${C_RESET}"
+        else
+            _runing "Phát hiện Plaintext mật khẩu Root MariaDB, đang mã hóa..."
+            
+            encrypted_admin_pass=$(wptt_encrypt "$admin_pass")
+            # ĐÃ FIX: Đổi vách ngăn sed từ / sang |
+            sed -i "s|^database_admin_password=.*|database_admin_password=\"$encrypted_admin_pass\"|" "$WPTT_CONF"
+            
+            _rundone "Mã hóa mật khẩu Root MariaDB thành công"
+            echo ""
+            admin_status="${C_GREEN}Mã hóa thành công (Mới)${C_RESET}"
+        fi
+    fi
+fi
+
+# ==============================================================================
+# 4. THỰC THI QUÉT VÀ CHUYỂN ĐỔI HÀNG LOẠT (VHOSTS)
+# ==============================================================================
+VHOST_DIR="/etc/wptt/vhost"
+count_success=0
+count_bypass=0
+
+echo -e "${C_YELLOW}Đang quét các file cấu hình website tại $VHOST_DIR...${C_RESET}\n"
+
+# Lặp qua tất cả các file cấu hình domain (loại trừ file mẫu ..conf)
+for conf_file in $(ls -A "$VHOST_DIR" 2>/dev/null | grep -v '^\.\.conf$' | grep -E '^\..*\.conf$'); do
+    full_path="$VHOST_DIR/$conf_file"
+    domain=$(echo "$conf_file" | sed 's/^\.//' | sed 's/\.conf$//')
+    
+    [[ ! -f "$full_path" ]] && continue
+
+    # TÌM TÊN BIẾN MẬT KHẨU: 
+    VAR_NAME="DB_Password_web" 
+    
+    current_pass=$(grep -E "^${VAR_NAME}=" "$full_path" | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+
+    if [[ -n "$current_pass" ]]; then
+        if is_encrypted "$current_pass"; then
+            echo -e " ➜ Website ${C_CYAN}$domain${C_RESET}: Mật khẩu đã được mã hóa ➜ ${C_YELLOW}[BYPASS]${C_RESET}"
+            ((count_bypass++))
+        else
+            _runing "Website $domain: Phát hiện Plaintext, đang mã hóa..."
+            
+            encrypted_pass=$(wptt_encrypt "$current_pass")
+            # ĐÃ FIX: Đổi vách ngăn sed từ / sang |
+            sed -i "s|^${VAR_NAME}=.*|${VAR_NAME}=\"$encrypted_pass\"|" "$full_path"
+            
+            _rundone "Website $domain: Mã hóa thành công"
+            ((count_success++))
+        fi
+    fi
+done
+
+# ==============================================================================
+# BẢNG TÓM TẮT
+# ==============================================================================
+echo ""
+echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}KẾT QUẢ MIGRATION AES-256${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Root MariaDB Password : $admin_status"
+left_text "Vhost mã hóa mới      : ${C_GREEN}$count_success${C_RESET} website"
+left_text "Vhost bỏ qua (Bypass) : ${C_YELLOW}$count_bypass${C_RESET} website"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
