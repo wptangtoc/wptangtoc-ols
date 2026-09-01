@@ -114,12 +114,18 @@ if [[ $check ]]; then
     # =================================================================
 
     # 1. Dọn dẹp nhà giam cũ (nếu có)
-    rm -rf "${JAIL_PATH:?}"/{bin,lib,lib64,sbin,usr,dev,etc,tmp}
+    rm -rf "${JAIL_PATH:?}"/{bin,lib,lib64,sbin,usr,dev,etc,tmp,logs}
 
     # 2. Đổ móng chuẩn kiến trúc AlmaLinux 9 / Ubuntu
     mkdir -p "$JAIL_PATH"/usr/{bin,sbin,lib,lib64}
-    mkdir -p "$JAIL_PATH"/{dev,etc,tmp,dev/pts}
+    mkdir -p "$JAIL_PATH"/{dev,etc,tmp,dev/pts,logs}
     chmod 1777 "$JAIL_PATH"/tmp
+    
+    # [TÍNH NĂNG LOGS] Phân quyền độc quyền cho thư mục Logs Vhost
+    # OLS (nobody) cần quyền ghi để lưu access/error log. User cần quyền đọc. Khóa chặt Other.
+	mkdir -p "$JAIL_PATH"/log
+    chown nobody:"$User_name_vhost" "$JAIL_PATH"/logs
+    chmod 750 "$JAIL_PATH"/logs #chmod 750 nobody đuợc 7 và quyền $User_name_vhost đuợc 5
 
     ln -s usr/bin "$JAIL_PATH"/bin
     ln -s usr/sbin "$JAIL_PATH"/sbin
@@ -356,6 +362,21 @@ Match User $User_name_vhost
 #end-WPTT_JAIL_$User_name_vhost
 EOF
     systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+    
+    # [TÍNH NĂNG LOGS] Cập nhật Cấu hình Vhost OLS để tách Log riêng
+    VHOST_CONF="/usr/local/lsws/conf/vhosts/$NAME/vhconf.conf"
+    if [[ -f "$VHOST_CONF" ]]; then
+      # Bơm khối Access Log và Error Log mới nếu chưa có
+      if ! grep -q "errorlog /usr/local/lsws/$NAME/logs/error.log" "$VHOST_CONF"; then
+        sed -i "/^errorlog/d" "$VHOST_CONF"
+        echo -e "errorlog /usr/local/lsws/$NAME/logs/error.log {\n  useServer               0\n  logLevel                WARN\n  rollingSize             10M\n}\n" >> "$VHOST_CONF"
+      fi
+      if ! grep -q "accesslog /usr/local/lsws/$NAME/logs/access.log" "$VHOST_CONF"; then
+        sed -i "/^accesslog/d" "$VHOST_CONF"
+        echo -e "accesslog /usr/local/lsws/$NAME/logs/access.log {\n  useServer               0\n  logFormat               \"%h %l %u %t \\\"%r\\\" %>s %b \\\"%{Referer}i\\\" \\\"%{User-Agent}i\\\"\"\n  logHeaders              7\n  rollingSize             10M\n  keepDays                7\n}\n" >> "$VHOST_CONF"
+      fi
+    fi
+
   else
     _runloi "$thiet_lap PassWord cho username $User_name_vhost"
     check_menu_wptangtoc_active=$1
@@ -459,7 +480,7 @@ if [[ $check = '' ]]; then
   fi
   # =================================================================
 
-  # 3. Đập bỏ lồng
+  # 3. Đập bỏ lồng (Giữ lại thư mục logs)
   rm -rf "${JAIL_PATH:?}"/{bin,lib,lib64,sbin,usr,dev,etc,tmp,var}
 
   # 4. Restart lại OLS để trả lại socket mượt mà
