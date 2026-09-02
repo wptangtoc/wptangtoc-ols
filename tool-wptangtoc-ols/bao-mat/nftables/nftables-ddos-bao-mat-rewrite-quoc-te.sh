@@ -16,7 +16,7 @@ echo "Lựa chọn triển khai ddos nftables:"
 echo ""
 lua_chon_NAME
 . /etc/wptt/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+if [[ "$NAME" = "0" || -z "$NAME" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
 
