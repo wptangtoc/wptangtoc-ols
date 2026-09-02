@@ -1,5 +1,4 @@
 #!/bin/bash
-
 function huong_dan() {
   Việc sử dụng API của Cloudflare để xóa cache [bộ nhớ đệm] CDN là một tính năng mạnh mẽ và linh hoạt, cho phép bạn tự động hóa và kiểm soát chính xác việc làm mới nội dung trên mạng lưới của Cloudflare.
 
@@ -16,9 +15,7 @@ function huong_dan() {
 
   Bằng cách tận dụng API của Cloudflare, bạn có thể nâng cao đáng kể hiệu quả quản lý cache cho website của mình, đảm bảo nội dung luôn được cập nhật và trải nghiệm người dùng được tối ưu.
 }
-# ==============================================================================
-# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
-# ==============================================================================
+
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
@@ -27,10 +24,12 @@ function huong_dan() {
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_cache} ➜ Thiết lập API Cache Cloudflare CDN${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_cache:-QUẢN LÝ CACHE} ➜ Thiết lập API Cache Cloudflare CDN${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
+# Phân quyền tàng hình (Chỉ Root mới nhìn thấy thư mục này)
 mkdir -p /etc/wptt/cloudflare-cdn-cache
+chmod 700 /etc/wptt/cloudflare-cdn-cache
 
 # ==============================================================================
 # HÀM MENU LỌC TRẠNG THÁI THIẾT LẬP (UX BO CONG)
@@ -44,7 +43,6 @@ function lua_chon_NAME() {
     for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
       local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
       if [[ "$dom" == ?*.?* ]]; then
-        # Fix lỗi biến của bản gốc: Dùng dom thay vì domain
         if [[ -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$dom.conf" ]]; then
           selects+=("$dom|1") # 1 = Đã thiết lập
         else
@@ -166,7 +164,6 @@ if [[ ! -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf" ]]; then
   _runing "Đang kiểm tra kết nối Cloudflare Proxy cho website $NAME..."
   TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
 
-  # Fix lỗi grep -q của bản gốc
   if ! echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
     _runloi "Kiểm tra Cloudflare thất bại"
     echo -e "${C_RED}❌ Lỗi: Website $NAME hiện KHÔNG hoạt động qua Proxy của Cloudflare (Đám mây cam).${C_RESET}"
@@ -183,6 +180,17 @@ if [[ ! -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf" ]]; then
   read -r email_cloudflare
   [[ "$email_cloudflare" == "0" || -z "$email_cloudflare" ]] && exec /etc/wptt/wptt-cache-main 1
 
+
+  while [[ "$email_cloudflare" == "${email_cloudflare/@/}" ]]; do
+    echo -e "${C_CYAN}│${C_RESET} ${C_RED}❌ Email không đúng định dạng!${C_RESET}"
+    echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}Nhập lại Email cloudflare:${C_RESET} "
+    read -r email_cloudflare
+  done
+
+  echo -e "\nHướng dẫn lấy Key: Truy cập ${C_BOLD_WHITE}https://dash.cloudflare.com/profile/api-tokens${C_RESET}"
+  echo -e "   Kéo xuống dòng ${C_YELLOW}'Global API Key'${C_RESET} => Bấm nút 'View' màu xanh để copy."
+  echo -e "   ${C_RED}Cảnh báo: Global API Key chứa quyền cao nhất, hãy bảo mật thông tin này!${C_RESET}"
+
   echo -en "${C_CYAN}Nhập Global API Key [0=Thoát]: ${C_RESET}"
   read -r KEY
   [[ "$KEY" == "0" || -z "$KEY" ]] && exec /etc/wptt/wptt-cache-main 1
@@ -191,11 +199,14 @@ if [[ ! -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf" ]]; then
   _runing "Đang xác thực thông tin và lấy Zone ID từ Cloudflare..."
   echo "Thiết lập Cloudflare CDN xoá cache website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-  echo "dns_cloudflare_email = $email_cloudflare
-dns_cloudflare_api_key = $KEY" >"/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
+  # === ĐÓNG GÓI MÃ HÓA (XÓA DẤU XUỐNG DÒNG) ===
+  key_ma_hoa_api_cloudflare=$(wptt_ma_hoa "$KEY" | tr -d '\n\r')
 
-  chmod 700 -R /etc/wptt/cloudflare-cdn-cache
-  chmod 400 "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
+  echo "dns_cloudflare_email=$email_cloudflare
+dns_cloudflare_api_key='${key_ma_hoa_api_cloudflare}'" >"/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
+
+chown root:root /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf
+chmod 400 "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
 
   function dns_coudflare_xac_thuc_zones() {
     local check_domain="$1"
@@ -224,13 +235,14 @@ dns_cloudflare_api_key = $KEY" >"/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf
     center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP CLOUDFLARE CDN CACHE${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
-    left_text "Trạng thái mới   : Hệ thống sẽ tự động quét và xóa cache Cloudflare" 2
-    left_text "                   mỗi khi bạn sử dụng Menu Xóa Cache của WPTangToc." 2
+    left_text "Trạng thái mới   : Hệ thống sẽ tự động giải mã cấu hình, " 2
+    left_text "                   quét và xóa cache trên Cloudflare" 2
+    left_text "                   mỗi khi bạn sử dụng tính năng Xóa Cache." 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   else
     rm -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
     _runloi "Xác thực thông tin API thất bại"
-    echo -e "${C_RED}❌ Lỗi: Email hoặc Global API Key không chính xác, hoặc không có quyền truy cập vào Domain này.${C_RESET}"
+    echo -e "${C_RED}Lỗi: Email hoặc Global API Key không chính xác, hoặc không có quyền truy cập vào Domain này.${C_RESET}"
     echo -e "Vui lòng kiểm tra lại thông tin và thử lại sau."
   fi
 
@@ -238,7 +250,7 @@ else
   # ---------------------------------------------------------
   # NHÁNH 2: ĐÃ THIẾT LẬP -> HỎI GỠ BỎ
   # ---------------------------------------------------------
-  if wptt_xac_nhan "Website này đang được tự động xóa cache CDN. Bạn có muốn GỠ BỎ thiết lập này không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý Gỡ bỏ" "Hủy thao tác"; then
+  if wptt_xac_nhan "Website này đang được cấu hình tự động xóa cache CDN. Bạn có muốn GỠ BỎ thiết lập này không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý Gỡ bỏ" "Hủy thao tác"; then
     echo ""
     _runing "Đang xóa bỏ cấu hình API Cloudflare cho $NAME..."
     rm -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"

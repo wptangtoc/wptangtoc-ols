@@ -1,50 +1,72 @@
 #!/bin/bash
 . /etc/wptt/echo-color
+. /etc/wptt/core-functions 2>/dev/null
 
 domain=$1
 _runing "Xoá cache cloudflare"
 
-if [[ -d /usr/local/lsws/$domain/html/wp-content/plugins/cloudflare ]];then
-KEY=$(wp option get cloudflare_api_key --path=/usr/local/lsws/"$domain"/html 2>/dev/null)
-EMAIL=$(wp option get cloudflare_api_email --path=/usr/local/lsws/"$domain"/html 2>/dev/null)
+KEY=""
+EMAIL=""
+
+# 1. THỬ LẤY KEY TỪ WORDPRESS PLUGIN (NẾU CÓ)
+if [[ -d "/usr/local/lsws/$domain/html/wp-content/plugins/cloudflare" ]]; then
+  KEY=$(wp option get cloudflare_api_key --path="/usr/local/lsws/$domain/html" --allow-root 2>/dev/null)
+  EMAIL=$(wp option get cloudflare_api_email --path="/usr/local/lsws/$domain/html" --allow-root 2>/dev/null)
 fi
 
+# 2. NẾU KHÔNG CÓ TỪ PLUGIN, LẤY TỪ FILE CONFIG WPTANGTOC
+if [[ -z "$KEY" || -z "$EMAIL" ]]; then
+  if [[ -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$domain.conf" ]]; then
+    
+    # Kỹ thuật bóc tách an toàn 100% (Tương thích ngược file cũ có khoảng trắng)
+    # Lệnh tr -d " '\"\r\n" sẽ gọt sạch khoảng trắng, nháy đơn, nháy kép và ký tự xuống dòng
+    EMAIL=$(grep 'dns_cloudflare_email' "/etc/wptt/cloudflare-cdn-cache/.wptt-$domain.conf" | cut -d '=' -f2 | tr -d " '\"\r\n")
+    raw_key=$(grep 'dns_cloudflare_api_key' "/etc/wptt/cloudflare-cdn-cache/.wptt-$domain.conf" | cut -d '=' -f2 | tr -d " '\"\r\n")
 
-if [[ -z "$KEY" ]];then
-	if [[ -f /etc/wptt/.cloudflare/wptt-$domain.ini ]];then
-		EMAIL=$(cat /etc/wptt/.cloudflare/wptt-"$domain".ini | grep 'dns_cloudflare_email' | cut -f2 -d '=' | sed 's/ //g')
-		KEY=$(cat /etc/wptt/.cloudflare/wptt-"$domain".ini | grep 'dns_cloudflare_api_key' | cut -f2 -d '=' | sed 's/ //g')
-	fi
-
-
-	if [[ -f /etc/wptt/cloudflare-cdn-cache/.wptt-$domain.conf ]];then
-		EMAIL=$(cat /etc/wptt/cloudflare-cdn-cache/.wptt-"$domain".conf | grep 'dns_cloudflare_email' | cut -f2 -d '=' | sed 's/ //g')
-		KEY=$(cat /etc/wptt/cloudflare-cdn-cache/.wptt-"$domain".conf | grep 'dns_cloudflare_api_key' | cut -f2 -d '=' | sed 's/ //g')
-	fi
+    # Xử lý giải mã tự động (Fallback về raw_key nếu là chuỗi chưa mã hóa của bản cũ)
+    cloudflare_tmp_key=$(wptt_giai_ma "$raw_key" 2>/dev/null)
+    KEY="${cloudflare_tmp_key:-$raw_key}"
+  fi
 fi
 
-if [[ -z "$KEY" ]];then
-_runloi "Xoá cache cloudflare"
-return 2>/dev/null;exit;
+# 3. CHỐT CHẶN AN TOÀN
+if [[ -z "$KEY" || -z "$EMAIL" ]]; then
+  _runloi "Chưa tìm thấy cấu hình kết nối Cloudflare."
+  return 2>/dev/null || exit
 fi
 
-function dns_coudflare_xac_thuc_zones(){
-AUTH_HEADERS=( "X-Auth-Email: $EMAIL" "X-Auth-Key: $KEY" )
-kiem_tra_ket_noi=$(curl -X GET "https://api.cloudflare.com/client/v4/zones?name=$1" \
-"${AUTH_HEADERS[@]/#/-H}" \
--H "Content-Type: application/json" \
-| python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')" >/tmp/check-dns-cloudflare 2>&1)
+# ==============================================================================
+# HÀM XÁC THỰC VÀ LẤY ZONE ID TỪ CLOUDFLARE
+# ==============================================================================
+function dns_coudflare_xac_thuc_zones() {
+  local target_domain="$1"
+  AUTH_HEADERS=("X-Auth-Email: $EMAIL" "X-Auth-Key: $KEY")
+  
+  curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$target_domain" \
+    "${AUTH_HEADERS[@]/#/-H}" \
+    -H "Content-Type: application/json" | \
+    python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if 'result' in data and len(data['result']) > 0 else '')" >/tmp/check-dns-cloudflare 2>&1
 }
 
+# 4. GỌI API LẤY ZONE ID
 dns_coudflare_xac_thuc_zones "$domain"
+zones=$(cat /tmp/check-dns-cloudflare 2>/dev/null)
+rm -f /tmp/check-dns-cloudflare
 
-zones=$(cat /tmp/check-dns-cloudflare)
-
-if [[ $zones ]];then
-curl -X POST "https://api.cloudflare.com/client/v4/zones/$zones/purge_cache" \
-     -H "X-Auth-Email: $EMAIL" \
-     -H "X-Auth-Key: $KEY" \
-     -H "Content-Type: application/json" \
-     --data '{"purge_everything":true}' >/dev/null 2>&1
-_rundone "Xoá cache cloudflare"
+# 5. THỰC THI LỆNH XÓA CACHE ALL (PURGE EVERYTHING)
+if [[ -n "$zones" ]]; then
+  api_response=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$zones/purge_cache" \
+       -H "X-Auth-Email: $EMAIL" \
+       -H "X-Auth-Key: $KEY" \
+       -H "Content-Type: application/json" \
+       --data '{"purge_everything":true}')
+       
+  # Kiểm tra kết quả trả về từ Cloudflare
+  if echo "$api_response" | grep -qi '"success":true'; then
+    _rundone "Xoá cache cloudflare thành công"
+  else
+    _runloi "Xoá cache cloudflare thất bại (API từ chối)"
+  fi
+else
+  _runloi "Xoá cache cloudflare thất bại (Không lấy được Zone ID)"
 fi
