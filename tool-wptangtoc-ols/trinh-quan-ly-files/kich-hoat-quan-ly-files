@@ -157,21 +157,20 @@ if [[ -d "/usr/local/lsws/$NAME/html/quan-ly-files" ]]; then
 fi
 
 # ==============================================================================
-# BẮT ĐẦU CÀI ĐẶT & DOWNLOAD (TÍCH HỢP UX PV TÀNG HÌNH & CHỐNG NGHẼN MẠNG)
+# BẮT ĐẦU CÀI ĐẶT & DOWNLOAD (TÍCH HỢP ZERO TRUST GPG & UX PV TÀNG HÌNH)
 # ==============================================================================
 echo ""
-_runing "Tải FileManager cho website $NAME..."
+_runing "Tải và xác thực GPG FileManager cho website $NAME..."
 password_quan_ly_file=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
 user_quan_ly_file=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
 
 cd /usr/local/lsws/"$NAME"/html || exit 1
 
 fm_zip="quan-ly-files.zip"
-rm -f "$fm_zip" # Dọn rác trước khi tải
+rm -f "$fm_zip" "$fm_zip.sig" #clean truớc khi download
 
 # Định nghĩa 3 trạm tải chiến lược
 URL_1="https://wptangtoc.com/share/quan-ly-files.zip"
-# Link Github chuẩn (Dùng raw.githubusercontent.com để tải file thực tế)
 URL_2="https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/main/quan-ly-files.zip"
 
 echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
@@ -201,21 +200,31 @@ function wptt_download_filemanager_ux() {
   fi
 }
 
-# Vòng lặp tải thông minh (Thử lần lượt từng Link)
+# Vòng lặp tải thông minh (Thử lần lượt từng Link kèm xác thực GPG)
 success_download=0
 for url in "$URL_1" "$URL_2"; do
   if wptt_download_filemanager_ux "$url"; then
-    # Kiểm tra tính toàn vẹn của File Zip (Tránh giải nén lỗi trắng trang)
-    if unzip -t "$fm_zip" &>/dev/null; then
-      success_download=1
-      break # Tải hoàn hảo -> Thoát vòng lặp!
+    
+    # --- BƯỚC 1: TẢI CHỮ KÝ GPG ĐỂ ĐỐI CHIẾU ---
+    wget -q --timeout=15 --tries=3 "https://hub.wptangtoc.com/quan-ly-files.zip.sig" -U 'checksum wptangtoc ols' -O "${fm_zip}.sig"
+    
+    # --- BƯỚC 2: XÁC THỰC BẢO MẬT GPG ---
+    if gpg --verify "${fm_zip}.sig" "$fm_zip" >/dev/null 2>&1; then
+      
+      # --- BƯỚC 3: KIỂM TRA TÍNH TOÀN VẸN CỦA FILE NÉN ---
+      if unzip -t "$fm_zip" &>/dev/null; then
+        success_download=1
+        break # Tải, Xác thực và Checksum hoàn hảo -> Thoát vòng lặp!
+      fi
+    else
+      echo -e "\n${C_RED}❌ CẢNH BÁO BẢO MẬT: Chữ ký GPG không hợp lệ hoặc thiếu Public Key! Bỏ qua nguồn tải này.${C_RESET}"
     fi
   fi
-  rm -f "$fm_zip" # Nếu lỗi hoặc file hỏng, xóa đi để thử link tiếp theo
+  rm -f "$fm_zip" "${fm_zip}.sig" # Nếu lỗi, GPG sai hoặc file hỏng, xóa đi để thử link tiếp theo
 done
 
 if [[ $success_download -eq 0 ]]; then
-  _runloi "Tải FileManager thất bại! Vui lòng thử lại sau."
+  _runloi "Tải hoặc Xác thực FileManager thất bại! Vui lòng kiểm tra lại mạng hoặc khóa GPG."
   [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit 1
 fi
@@ -223,8 +232,8 @@ fi
 echo -en "\033[1A\033[2K\r" # Xóa nốt dòng trống để UI khít lại
 
 unzip -oq "$fm_zip"
-rm -f "$fm_zip"
-_rundone "Tải FileManager cho website $NAME..."
+rm -f "$fm_zip" "${fm_zip}.sig"
+_rundone "Tải và xác thực FileManager cho website $NAME thành công."
 
 _runing "Cài đặt FileManager cho website $NAME..."
 sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/."$NAME".conf
