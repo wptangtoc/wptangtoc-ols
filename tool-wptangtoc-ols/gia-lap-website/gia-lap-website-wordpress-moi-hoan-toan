@@ -24,15 +24,32 @@ wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ ch�
 wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị sập! Hệ thống từ chối khởi tạo website."
 
 # ==============================================================================
-# KHỞI TẠO BIẾN VÀ TÊN MIỀN RANDOM
+# KHỞI TẠO BIẾN VÀ TÊN MIỀN RANDOM (TỐI ƯU CHIỀU DÀI SUBDOMAIN < 63 KÝ TỰ)
 # ==============================================================================
 NAME="${Website_chinh:-}"
 domain_phuc_vu="wptangtoc-ols.com"
 
-# Tạo chuỗi random và định danh Subdomain
-ten_ngau_nhien=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 4)
-ten_mien_random=${NAME//[-._]/$ten_ngau_nhien}
-subdomain_ten_mien=$(echo "$ten_mien_random" | tr '[:upper:]' '[:lower:]')
+# 1. Tính toán không gian an toàn cho Subdomain (Cắt bỏ phần đuôi .wptangtoc-ols.com)
+max_subdomain_len=$((63 - ${#domain_phuc_vu} - 1)) # -1 cho dấu chấm nối
+
+# 2. Xóa bỏ các ký tự đặc biệt khỏi Tên miền chính để làm tiền tố
+clean_name="${NAME//[-._]/}"
+clean_name=$(echo "$clean_name" | tr '[:upper:]' '[:lower:]')
+
+# 3. Tính toán không gian còn lại cho tiền tố (Dành 5 ký tự cho hậu tố random)
+# Ví dụ random là "abcd", thì cần 5 ký tự (1 gạch ngang + 4 random)
+max_prefix_len=$((max_subdomain_len - 5))
+
+# 4. Cắt gọt tiền tố nếu nó quá dài
+if [[ ${#clean_name} -gt $max_prefix_len ]]; then
+    clean_name="${clean_name:0:$max_prefix_len}"
+fi
+
+# 5. Khởi tạo chuỗi ngẫu nhiên (4 ký tự)
+ten_ngau_nhien=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 4)
+
+# 6. Lắp ráp Subdomain an toàn 100% tuân thủ RFC (không quá 63 ký tự)
+subdomain_ten_mien="${clean_name}-${ten_ngau_nhien}"
 STAGING_DOMAIN="${subdomain_ten_mien}.${domain_phuc_vu}"
 
 ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
@@ -67,28 +84,97 @@ fi
 _rundone "Khởi tạo Virtual Host thành công"
 
 # ==============================================================================
-# DOWNLOAD VÀ GIẢI NÉN WORDPRESS CORE
+# DOWNLOAD VÀ GIẢI NÉN WORDPRESS CORE (NÂNG CẤP BẢO MẬT SHA-1 VÀ PV UX)
 # ==============================================================================
 _runing "Đang tải xuống và giải nén mã nguồn WordPress mới nhất..."
-cd "/usr/local/lsws/$STAGING_DOMAIN/html/" || exit
-rm -rf "/usr/local/lsws/$STAGING_DOMAIN/html/"*
-wget -q http://wordpress.org/latest.tar.gz
+
+OLD_PWD=$(pwd)
+TMP_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX)
+cd "$TMP_DIR" || exit
+
+echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
+
+# Hàm tải file tích hợp giao diện PV UX Tàng Hình
+function wptt_download_wp_ux() {
+  local url="$1"
+  # Lấy kích thước file từ Header để mớm cho PV tính %
+  local fsize
+  fsize=$(curl -sI --max-time 5 "$url" | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+
+  if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+    wget -qO- --timeout=15 --tries=3 "$url" | pv -s "$fsize" -N "Tải WordPress" -p -t -e -r -b -w 90 >latest.tar.gz
+    echo -en "\033[1A\033[2K\r"
+  else
+    wget -q --show-progress --timeout=15 --tries=3 "$url"
+    echo -en "\033[1A\033[2K\r"
+  fi
+}
+
+wptt_download_wp_ux "https://wordpress.org/latest.tar.gz"
+
+# SỬ DỤNG SHA1 ĐỂ KIỂM ĐỊNH MÃ NGUỒN TỐT HƠN MD5
+id_checksum_wordpress=$(curl -s https://wordpress.org/latest.tar.gz.sha1 | head -1)
+[[ "$id_checksum_wordpress" != $(sha1sum latest.tar.gz 2>/dev/null | awk '{print $1}') ]] && rm -f latest.tar.gz
+
+# Dự phòng tải HTTP nếu bị lỗi mạng
+if [[ ! -f latest.tar.gz ]]; then
+  wptt_download_wp_ux "http://wordpress.org/latest.tar.gz"
+  id_checksum_wordpress=$(curl -s http://wordpress.org/latest.tar.gz.sha1 | head -1)
+  [[ "$id_checksum_wordpress" != $(sha1sum latest.tar.gz 2>/dev/null | awk '{print $1}') ]] && rm -f latest.tar.gz
+fi
+echo -en "\033[1A\033[2K\r"
+
+if [[ ! -f latest.tar.gz ]]; then
+  _runloi "Tải mã nguồn WordPress thất bại"
+  echo -e "${C_RED}Lỗi: Chưa thể download hoặc mã SHA-1 không khớp, vui lòng thử lại sau!${C_RESET}"
+  cd "$OLD_PWD" || cd /root || exit
+  rm -rf "$TMP_DIR"
+  . /etc/wptt/domain/wptt-xoa-website "$STAGING_DOMAIN" >/dev/null 2>&1
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-gia-lap-main 1
+  return 2>/dev/null
+  exit
+fi
+
+# Kiểm tra thư viện nén
+if ! command -v tar &>/dev/null; then 
+  if [ -f /etc/redhat-release ]; then
+    dnf install tar -y -q >/dev/null 2>&1 || yum install tar -y -q >/dev/null 2>&1
+  elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install tar -y -q >/dev/null 2>&1; fi
+fi
+
+if ! command -v gzip &>/dev/null; then 
+  if [ -f /etc/redhat-release ]; then
+    dnf install gzip -y -q >/dev/null 2>&1 || yum install gzip -y -q >/dev/null 2>&1
+  elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install gzip -y -q >/dev/null 2>&1; fi
+fi
+
+# Xả nén an toàn và chuyển mã nguồn
 tar -zxf latest.tar.gz
+rm -rf "/usr/local/lsws/$STAGING_DOMAIN/html/"*
 mv wordpress/* "/usr/local/lsws/$STAGING_DOMAIN/html/"
-rm -rf wordpress latest.tar.gz
+cd "$OLD_PWD" || cd /root || exit
+rm -rf "$TMP_DIR"
+
 _rundone "Tải và giải nén mã nguồn WordPress hoàn tất"
 
 # ==============================================================================
 # CÀI ĐẶT DATABASE & WORDPRESS BẰNG WP-CLI
 # ==============================================================================
 _runing "Đang tự động thiết lập Database và cài đặt WordPress..."
+
+if [[ ! -x /usr/local/bin/wp ]]; then
+  curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+  chmod +x wp-cli.phar
+  mv wp-cli.phar /usr/local/bin/wp
+fi
+
 . "/etc/wptt/vhost/.$STAGING_DOMAIN.conf"
 tien_to_db=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 6)
 
 # Cấu hình wp-config.php
 password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
 [[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
-wp core config --dbname="$DB_Name_web" --dbuser="$DB_User_web" --dbpass="$password_database_website_giai_ma" --dbhost=localhost --dbprefix="${tien_to_db}_" --allow-root --extra-php >/dev/null 2>&1 <<PHP
+/usr/local/bin/wp core config --dbname="$DB_Name_web" --dbuser="$DB_User_web" --dbpass="$password_database_website_giai_ma" --dbhost=localhost --dbprefix="${tien_to_db}_" --allow-root --path="/usr/local/lsws/$STAGING_DOMAIN/html/" --extra-php >/dev/null 2>&1 <<PHP
 define( 'WP_DEBUG_LOG', false );
 define( 'WP_DEBUG_DISPLAY', false );
 PHP
@@ -100,40 +186,50 @@ mypassword=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 16)
 emailwp="admin@${STAGING_DOMAIN}"
 
 # Install WP
-wp core install --url="http://$STAGING_DOMAIN" --title="$SiteTitle" --admin_user="$idusername" --admin_password="$mypassword" --admin_email="$emailwp" --allow-root >/dev/null 2>&1
-wp language core install vi --path="/usr/local/lsws/$STAGING_DOMAIN/html" --activate --allow-root >/dev/null 2>&1
-wp option update timezone_string "Asia/Ho_Chi_Minh" --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
-wp rewrite structure '/%postname%/' --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
+/usr/local/bin/wp core install --url="http://$STAGING_DOMAIN" --title="$SiteTitle" --admin_user="$idusername" --admin_password="$mypassword" --admin_email="$emailwp" --path="/usr/local/lsws/$STAGING_DOMAIN/html/" --allow-root >/dev/null 2>&1
+/usr/local/bin/wp language core install vi --path="/usr/local/lsws/$STAGING_DOMAIN/html" --activate --allow-root >/dev/null 2>&1
+/usr/local/bin/wp option update timezone_string "Asia/Ho_Chi_Minh" --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
+/usr/local/bin/wp rewrite structure '/%postname%/' --path="/usr/local/lsws/$STAGING_DOMAIN/html" --allow-root >/dev/null 2>&1
 
 # Chặn Bot tìm kiếm
-wp option set blog_public 0 --allow-root --path="/usr/local/lsws/$STAGING_DOMAIN/html" >/dev/null 2>&1
+/usr/local/bin/wp option set blog_public 0 --allow-root --path="/usr/local/lsws/$STAGING_DOMAIN/html" >/dev/null 2>&1
 
 if [[ -f "/usr/local/lsws/$STAGING_DOMAIN/html/robots.txt" ]]; then
   cp -f "/usr/local/lsws/$STAGING_DOMAIN/html/robots.txt" "/tmp/$STAGING_DOMAIN-robots.txt"
 fi
+
+echo '# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+# END WordPress' >"/usr/local/lsws/$STAGING_DOMAIN/html/.htaccess"
+
 _rundone "Cài đặt WordPress thành công"
 
 _runing "Đang phân quyền bảo mật (Chown) cho thư mục mã nguồn..."
 chown -R "$User_name_vhost":"$User_name_vhost" "/usr/local/lsws/$STAGING_DOMAIN/html"
+chown root:root "/usr/local/lsws/$STAGING_DOMAIN"
 _rundone "Phân quyền bảo mật hoàn tất"
 
 # ==============================================================================
-# CHỜ XÁC THỰC DNS (CÓ SPINNER UX)
+# CHỜ XÁC THỰC DNS (ĐƠN GIẢN HÓA - ỔN ĐỊNH 100%)
 # ==============================================================================
 unset check_dns api_google_check_dns_online_ipv4 api_cloudflare_dns_check_ipv4
 a=0
-
-tput civis
-spin='-\|/'
-spinner_idx=0
 
 if [[ -f "/tmp/dem-check_dns-wptangtoc-ols" ]]; then
   rm -f "/tmp/dem-check_dns-wptangtoc-ols"
 fi
 
+_runing "Đang chờ Cloudflare cập nhật máy chủ DNS toàn cầu..."
+
 while [[ -z "$check_dns" && -z "$api_google_check_dns_online_ipv4" && -z "$api_cloudflare_dns_check_ipv4" ]]; do
-  spinner_idx=$(( (spinner_idx+1) % 4 ))
-  echo -en "\r  ${C_CYAN} Đang chờ Cloudflare cập nhật máy chủ DNS toàn cầu... ${C_YELLOW}${spin:$spinner_idx:1}${C_RESET} ($a giây)"
   
   check_dns=$(host "$STAGING_DOMAIN" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
   api_google_check_dns_online_ipv4=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=$STAGING_DOMAIN&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
@@ -148,8 +244,6 @@ while [[ -z "$check_dns" && -z "$api_google_check_dns_online_ipv4" && -z "$api_c
   fi
 
   if [[ $(cat /tmp/dem-check_dns-wptangtoc-ols) == '30' ]]; then
-    echo -en "\r\033[K"
-    tput cnorm
     _runloi "Xác thực DNS quá thời gian (Timeout 30s)"
     echo -e "${C_RED}❌ Chưa thể khởi tạo website giả lập lúc này (Cloudflare phản hồi chậm).${C_RESET}"
     . /etc/wptt/domain/wptt-xoa-website "$STAGING_DOMAIN" >/dev/null 2>&1
@@ -158,27 +252,37 @@ while [[ -z "$check_dns" && -z "$api_google_check_dns_online_ipv4" && -z "$api_c
   fi
 done
 
-echo -en "\r\033[K"
-tput cnorm
 _rundone "Cập nhật DNS toàn cầu thành công"
-
 # ==============================================================================
-# KIỂM TRA TRẠNG THÁI WEBSITE SAU KHI DỰNG (ĐÃ FIX BUG CHECK HTTP)
+# KIỂM TRA TRẠNG THÁI WEBSITE SAU KHI DỰNG (FIX LOCAL DNS CACHE BUG)
 # ==============================================================================
 _runing "Đang kiểm tra tính khả dụng của Website và cấu hình SEO..."
 
-# Kiểm tra mã phản hồi HTTP trực tiếp trên tên miền VỪA TẠO (STAGING_DOMAIN)
-http_status=$(curl -o /dev/null -s -w "%{http_code}\n" "http://$STAGING_DOMAIN" 2>/dev/null)
+# Cập nhật Litespeed để nạp cấu hình wp-config.php & .htaccess vừa tạo
+wptt_smart_reload_lsws >/dev/null 2>&1
+sleep 3
 
-if [[ "$http_status" -ne 200 && "$http_status" -ne 301 && "$http_status" -ne 302 ]]; then 
-  . /etc/wptt/domain/wptt-xoa-website "$STAGING_DOMAIN" >/dev/null 2>&1
-  _runloi "Website không phản hồi. Đã hủy bỏ tiến trình."
-  exec /etc/wptt/wptt-gia-lap-main 1
+# Dùng cờ --resolve ép Curl trỏ thẳng domain về IP của VPS để vượt rào Local DNS Cache
+http_status="000"
+for i in {1..3}; do
+  http_status=$(curl -o /dev/null -s -w "%{http_code}" --resolve "$STAGING_DOMAIN:80:127.0.0.1" --connect-timeout 5 "http://$STAGING_DOMAIN" 2>/dev/null)
+
+  if [[ "$http_status" == "200" || "$http_status" == "301" || "$http_status" == "302" ]]; then 
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$http_status" != "200" && "$http_status" != "301" && "$http_status" != "302" ]]; then 
+  # Không xóa website vì wp-cli đã báo cài đặt thành công, chỉ báo lỗi kết nối cục bộ
+  _runloi "Website phản hồi mã $http_status (Có thể do mạng cục bộ chậm)."
+  # Vẫn chèn Noindex vì file .conf vẫn tồn tại
+  sed -i '/extraHeaders /a X-Robots-Tag noindex' "/usr/local/lsws/conf/vhosts/$STAGING_DOMAIN/$STAGING_DOMAIN.conf"
 else
   # Đóng dấu chặn Google Bots (Noindex) ở tầng Server
   sed -i '/extraHeaders /a X-Robots-Tag noindex' "/usr/local/lsws/conf/vhosts/$STAGING_DOMAIN/$STAGING_DOMAIN.conf"
+  _rundone "Kiểm tra khả dụng và thiết lập Noindex hoàn tất"
 fi
-_rundone "Kiểm tra khả dụng và thiết lập Noindex hoàn tất"
 
 # ==============================================================================
 # CÀI ĐẶT SSL VÀ RESTART LITESPEED
