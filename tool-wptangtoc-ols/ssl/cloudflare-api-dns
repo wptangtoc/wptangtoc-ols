@@ -17,14 +17,16 @@ function huong_dan() {
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+. /etc/wptt/core-functions 2>/dev/null
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}QUẢN LÝ SSL ➜ Quản Lý DNS API ➜ Thiết Lập Cloudflare API${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
+# Khóa cứng thư mục chứa API (Chỉ Root được vào)
 mkdir -p /etc/wptt/.cloudflare
+chmod 700 /etc/wptt/.cloudflare
 
 NAME=$1
 [[ "$NAME" == "98" ]] && NAME=""
@@ -47,8 +49,8 @@ if [[ -z "$NAME" ]]; then
           domain="${domain%.conf}"
           domain="${domain#.}"
           
-          # Chỉ lấy domain hợp lệ và chưa thiết lập API
-          if [[ "$domain" == ?*.?* && ! -f "/etc/wptt/.cloudflare/wptt-$domain.ini" ]]; then
+          # Đổi thành đuôi .conf thay vì .ini để chuẩn hóa file Bash Variables
+          if [[ "$domain" == ?*.?* && ! -f "/etc/wptt/.cloudflare/wptt-$domain.conf" ]]; then
             selects+=("$domain")
           fi
         done
@@ -148,7 +150,7 @@ if [[ ! -f "$pathcheck" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]]; then
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
 fi
 
-if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
+if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.conf" ]]; then
   echo -e "\n${C_YELLOW}Tên miền $NAME đã được thiết lập Cloudflare API từ trước!${C_RESET}"
   sleep 2
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
@@ -178,7 +180,7 @@ fi
 _rundone "Xác nhận tên miền đang sử dụng Cloudflare DNS"
 
 # ==============================================================================
-# NHẬP THÔNG TIN XÁC THỰC (API)
+# NHẬP THÔNG TIN XÁC THỰC (API) - BẢO MẬT CHỐNG NHÌN TRỘM (Shoulder Surfing)
 # ==============================================================================
 echo -e "\n${C_YELLOW}Tính năng này giúp cài đặt SSL Let's Encrypt ẩn danh, không cần trỏ IP Webserver.${C_RESET}"
 
@@ -189,12 +191,20 @@ if [[ "$email_cloudflare" == "0" || -z "$email_cloudflare" ]]; then
   exec /etc/wptt/ssl/cloudflare-api-dns-main 1
 fi
 
-echo -e "\n👉 Hướng dẫn lấy Key: Truy cập ${C_BOLD_WHITE}https://dash.cloudflare.com/profile/api-tokens${C_RESET}"
-echo -e "   Kéo xuống dòng ${C_YELLOW}'Global API Key'${C_RESET} => Bấm nút 'View' màu xanh để copy."
-echo -e "   ${C_RED}Cảnh báo: Global API Key chứa quyền cao nhất, hãy bảo mật thông tin này!${C_RESET}"
+while [[ "$email_cloudflare" == "${email_cloudflare/@/}" ]]; do
+    echo -e "${C_CYAN}│${C_RESET} ${C_RED}❌ Email không đúng định dạng!${C_RESET}"
+    echo -en "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}Nhập lại Email cloudflare:${C_RESET} "
+    read -r email_cloudflare
+done
 
-echo -en "${C_CYAN}👉 Nhập Cloudflare Global API KEY [0=Thoát]: ${C_RESET}"
-read -r KEY
+echo -e "\nHướng dẫn lấy Key: Truy cập ${C_BOLD_WHITE}https://dash.cloudflare.com/profile/api-tokens${C_RESET}"
+echo -e "   Kéo xuống dòng ${C_YELLOW}'Global API Key'${C_RESET} => Bấm nút 'View' màu xanh để copy."
+echo -e "   ${C_RED}Cảnh báo: Lệnh nhập Key đã được bật chế độ TÀNG HÌNH. Mật khẩu dán vào sẽ không hiện ra màn hình!${C_RESET}"
+
+# Dùng read -rs để chống lộ API Key trên Terminal
+echo -en "${C_CYAN}Dán Cloudflare Global API KEY của bạn vào đây [0=Thoát]: ${C_RESET}"
+read -rs KEY
+echo "" # Xuống dòng bù lại sau khi read -s
 
 if [[ "$KEY" == "0" || -z "$KEY" ]]; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
@@ -202,16 +212,19 @@ if [[ "$KEY" == "0" || -z "$KEY" ]]; then
 fi
 
 # ==============================================================================
-# THIẾT LẬP VÀ XÁC THỰC KẾT NỐI API
+# THIẾT LẬP, MÃ HÓA VÀ XÁC THỰC KẾT NỐI API
 # ==============================================================================
-echo ""
-_runing "Đang kết nối và xác thực với máy chủ API Cloudflare..."
+_runing "Đang mã hóa dữ liệu, kết nối và xác thực API Cloudflare..."
 echo "Thiết lập Cloudflare DNS API website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-echo "dns_cloudflare_email = $email_cloudflare
-dns_cloudflare_api_key = $KEY" >"/etc/wptt/.cloudflare/wptt-$NAME.ini"
+# Mã hóa AES-256 (Ép phẳng chuỗi bằng tr -d)
+key_ma_hoa_api_cloudflare=$(wptt_ma_hoa "$KEY" | tr -d '\n\r')
 
-chmod 600 "/etc/wptt/.cloudflare/wptt-$NAME.ini" # Đổi về 600 để tăng cường bảo mật cho file chứa API Key
+# Lưu dưới dạng file Bash Source (.conf) thay vì .ini
+echo "dns_cloudflare_email='$email_cloudflare'
+dns_cloudflare_api_key='${key_ma_hoa_api_cloudflare}'" >"/etc/wptt/.cloudflare/wptt-$NAME.conf"
+
+chmod 400 "/etc/wptt/.cloudflare/wptt-$NAME.conf" # Siêu bảo vệ, read-only cho root
 
 # Cài đặt gói Python Certbot Cloudflare nếu chưa có
 check_install=$(ls /etc/wptt/.cloudflare | grep 'wptt')
@@ -219,6 +232,9 @@ if [[ -z "$check_install" ]]; then
   dnf install -y python3-cloudflare >/dev/null 2>&1
   dnf install -y python3-certbot-dns-cloudflare >/dev/null 2>&1
 fi
+
+# Tạo File Tạm an toàn bằng mktemp để tránh rủi ro Symlink Attack
+TMP_ZONE=$(mktemp)
 
 # Hàm xác thực Zone ID
 function dns_coudflare_xac_thuc_zones() {
@@ -229,7 +245,7 @@ function dns_coudflare_xac_thuc_zones() {
   curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$target_domain" \
     "${AUTH_HEADERS[@]/#/-H}" \
     -H "Content-Type: application/json" |
-    python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if 'result' in data and data['result'] else '')" >/tmp/check-dns-cloudflare 2>&1
+    python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if 'result' in data and data['result'] else '')" >"$TMP_ZONE" 2>&1
 }
 
 # Thực thi xác thực dựa trên tên miền gốc hoặc subdomain
@@ -240,14 +256,14 @@ else
 fi
 
 # Đọc kết quả Zone ID
-ZONE_ID=$(cat /tmp/check-dns-cloudflare)
-rm -f /tmp/check-dns-cloudflare
+ZONE_ID=$(cat "$TMP_ZONE")
+rm -f "$TMP_ZONE"
 
 # ==============================================================================
 # BÁO CÁO KẾT QUẢ
 # ==============================================================================
 if [[ -n "$ZONE_ID" ]]; then
-  _rundone "Xác thực API Cloudflare thành công"
+  _rundone "Xác thực API và Mã hóa dữ liệu thành công"
   
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP CLOUDFLARE API DNS${C_RESET}"
@@ -255,10 +271,10 @@ if [[ -n "$ZONE_ID" ]]; then
   left_text "  Tên miền liên kết : ${C_YELLOW}$NAME${C_RESET}" 2
   left_text "  Tài khoản CF      : ${C_CYAN}$email_cloudflare${C_RESET}" 2
   left_text "  Zone ID Trích xuất: ${C_BOLD_WHITE}$ZONE_ID${C_RESET}" 2
-  left_text "  Trạng thái        : ${C_GREEN}Đã sẵn sàng Cài đặt & Gia hạn SSL tự động.${C_RESET}" 2
+  left_text "  Trạng thái        : ${C_GREEN}Dữ liệu đã mã hóa (Zero Trust). Sẵn sàng Cài SSL.${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 else
-  rm -f "/etc/wptt/.cloudflare/wptt-$NAME.ini"
+  rm -f "/etc/wptt/.cloudflare/wptt-$NAME.conf"
   _runloi "Xác thực API Cloudflare thất bại"
   
   echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"

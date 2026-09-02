@@ -1,4 +1,4 @@
-!/bin/bash
+#!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
@@ -86,6 +86,41 @@ fi
 _rundone "Thu thập thông tin tên miền hoàn tất"
 
 # ==============================================================================
+# GIẢI MÃ API KEY VÀ TẠO FILE CREDENTIALS TẠM TRÊN RAM (ZERO TRUST)
+# ==============================================================================
+CF_CRED_FILE=""
+TMP_INI=""
+
+if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.conf" ]]; then
+  # LUỒNG BẢO MẬT MỚI: File .conf chứa API Key mã hóa
+  . "/etc/wptt/.cloudflare/wptt-$NAME.conf" 2>/dev/null
+  
+  # Giải mã AES-256 (Tương thích ngược nếu chưa mã hóa)
+  tmp_api=$(wptt_giai_ma "$dns_cloudflare_api_key" 2>/dev/null)
+  decrypted_key="${tmp_api:-$dns_cloudflare_api_key}"
+
+  # Khởi tạo file .ini tạm trên RAM (SHM) hoặc /tmp (Dự phòng)
+  TMP_INI=$(mktemp -p /dev/shm wptt_cf_XXXXXX.ini 2>/dev/null || mktemp /tmp/wptt_cf_XXXXXX.ini)
+  chmod 400 "$TMP_INI" # Ép quyền Read-only cực đoan
+  
+  echo "dns_cloudflare_email = $dns_cloudflare_email" > "$TMP_INI"
+  echo "dns_cloudflare_api_key = $decrypted_key" >> "$TMP_INI"
+  
+  CF_CRED_FILE="$TMP_INI"
+
+elif [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
+  # TƯƠNG THÍCH NGƯỢC: File .ini cleartext cũ (chưa kịp nâng cấp)
+  CF_CRED_FILE="/etc/wptt/.cloudflare/wptt-$NAME.ini"
+else
+  _runloi "Không tìm thấy cấu hình Cloudflare API!"
+  echo -e "${C_RED}Vui lòng vào Menu thiết lập Cloudflare API DNS cho tên miền này trước.${C_RESET}"
+  rm -f "/tmp/ssl-$NAME.txt"
+  sleep 3
+  exec /etc/wptt/wptt-ssl-main 1
+  exit 1
+fi
+
+# ==============================================================================
 # THỰC THI CERTBOT (CHẾ ĐỘ CLOUDFLARE API)
 # ==============================================================================
 echo ""
@@ -95,8 +130,12 @@ echo "Cài đặt SSL Let's Encrypt API website $NAME: $(date '+%d-%m-%Y %H:%M')
 list_ssl_domain_all=$(cat "/tmp/ssl-$NAME.txt" | sort -u | uniq | sed '/^$/d' | sed 's/^/-d /g' | tr -s '\n' ' ')
 duong_dan_docroot_web=$(grep 'docRoot' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" | awk '{print $2}' | head -n 1)
 
-certbot_output=$(certbot certonly --dns-cloudflare --dns-cloudflare-credentials "/etc/wptt/.cloudflare/wptt-$NAME.ini" --non-interactive --agree-tos --register-unsafely-without-email --expand -w "${duong_dan_docroot_web}" $list_ssl_domain_all 2>&1)
+# Gọi Certbot với đường dẫn tới file Credential (Dù là bản cũ hay bản tạm trên RAM)
+certbot_output=$(certbot certonly --dns-cloudflare --dns-cloudflare-credentials "$CF_CRED_FILE" --non-interactive --agree-tos --register-unsafely-without-email --expand -w "${duong_dan_docroot_web}" $list_ssl_domain_all 2>&1)
 certbot_exit_code=$?
+
+# HỦY DIỆT NGAY LẬP TỨC FILE TẠM TRÊN RAM ĐỂ XÓA DẤU VẾT
+[[ -n "$TMP_INI" && -f "$TMP_INI" ]] && rm -f "$TMP_INI"
 
 # ==============================================================================
 # KIỂM TRA LỖI RATE LIMIT & LỖI HỆ THỐNG
@@ -177,9 +216,9 @@ if [[ "$NAME" == "$Website_chinh" && -f "/usr/local/lsws/conf/httpd_config.conf"
   sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
 
-  sed -i "/https/a   keyFile                \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a   certFile               \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/https/a   CACertFile             \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   keyFile                 \/etc\/letsencrypt\/live\/${NAME}\/privkey.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   certFile                \/etc\/letsencrypt\/live\/${NAME}\/cert.pem" /usr/local/lsws/conf/httpd_config.conf
+  sed -i "/https/a   CACertFile              \/etc\/letsencrypt\/live\/${NAME}\/chain.pem" /usr/local/lsws/conf/httpd_config.conf
 fi
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
