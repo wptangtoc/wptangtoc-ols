@@ -97,7 +97,7 @@ if [[ $(cat "$path_nftables_config" | grep 'ipvietnam') = '' ]]; then
 
   #mở port ssh
   port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$')
-  if [[ $port_checkssh = '' ]]; then
+  if [[ -z "$port_checkssh" ]]; then
     port_checkssh=22
   fi
 

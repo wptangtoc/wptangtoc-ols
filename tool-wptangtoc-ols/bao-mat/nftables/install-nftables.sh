@@ -23,7 +23,7 @@ nft flush ruleset #xoa clean hết mode cũ
 cat /etc/wptt/bao-mat/nftables/nftables-co-ban.conf >$path_nftables_config
 
 port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$')
-if [[ $port_checkssh = '' ]]; then
+if [[ -z "$port_checkssh" ]]; then
   port_checkssh=22
 fi
 sed -i "/chain input /a\ \ tcp dport $port_checkssh accept #port ssh" $path_nftables_config
