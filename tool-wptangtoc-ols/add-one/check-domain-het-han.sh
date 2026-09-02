@@ -21,12 +21,9 @@ done
 
 . /etc/wptt/.wptt.conf 2>/dev/null
 
-# Vá lỗi SC2116 và SC2086: Bỏ 'echo' thừa, gán trực tiếp biến
 # Telegram Bot API Token (LẤY TỪ BOTFATHER)
-BOT_TOKEN="$telegram_api"
-
-# Chat ID của người nhận/nhóm nhận tin nhắn (LẤY BẰNG CÁCH GỬI TIN NHẮN CHO BOT)
-CHAT_ID="$telegram_id"
+BOT_TOKEN=$(wptt_giai_ma "$telegram_api" 2>/dev/null); BOT_TOKEN="${BOT_TOKEN:-$telegram_api}"
+CHAT_ID=$(wptt_giai_ma "$telegram_id" 2>/dev/null); CHAT_ID="${CHAT_ID:-$telegram_id}"
 
 if ! command -v whois >/dev/null 2>&1; then
 	if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
