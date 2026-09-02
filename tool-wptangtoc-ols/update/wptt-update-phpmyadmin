@@ -17,6 +17,7 @@ function huong_dan() {
   Sau khi cập nhật, cài đặt phpMyAdmin của bạn sẽ được nâng cấp lên phiên bản mới hơn, mang lại các cải tiến về bảo mật và tính năng.
 }
 
+
 . /etc/wptt/.wptt.conf
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh"
@@ -27,13 +28,13 @@ check_menu_wptangtoc_active=$1
 clear
 echo ""
 if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
-  echo "========================================================================="
-  echo "|$quan_ly_update => $cap_nhat PhpMyAdmin                                 |"
-  echo "========================================================================="
+	print_border_top
+	center_text "$quan_ly_update => $cap_nhat PhpMyAdmin"
+	print_border_bot
 elif [[ "$check_menu_wptangtoc_active" == "97" ]]; then
-  echo "========================================================================="
-  echo "|$quan_ly_phpmyadmin => $cap_nhat PhpMyAdmin                               |"
-  echo "========================================================================="
+	print_border_top
+	center_text"$quan_ly_phpmyadmin => $cap_nhat PhpMyAdmin"
+	print_border_bot
 fi
 echo ""
 
@@ -41,7 +42,8 @@ echo ""
 if [[ -z "$id_dang_nhap_phpmyadmin" || ! -d "/usr/local/lsws/$Website_chinh/html/phpmyadmin" ]]; then
   echoDo "$ban_chua_kich_hoat PhpMyAdmin"
   sleep 3
-  exec /etc/wptt/wptt-phpmyadmin-main 1
+  [[ "$check_menu_wptangtoc_active" == "97" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
+  [[ "$check_menu_wptangtoc_active" == "98" ]] && exec /etc/wptt/wptt-update-main 1
   exit
 fi
 
@@ -73,68 +75,79 @@ options=("$dong_y" "$khong_dong_y")
 PS3="$prompt"
 select opt in "${options[@]}"; do
   case "$REPLY" in
-  1)
-    dongy="y"
-    break
-    ;;
-  2)
-    dongy="n"
-    break
-    ;;
-  *)
-    printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-    break
-    ;;
+  1) dongy="y"; break ;;
+  2) dongy="n"; break ;;
+  *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
   esac
 done
 
 if [[ "$dongy" == "y" ]]; then
-  UI_STRING="$cap_nhat PhpMyadmin $phien_ban $phpmyadmin_version"
+  UI_STRING="$cap_nhat PhpMyadmin $phien_ban $phpmyadmin_version (GPG Secure)"
   _runing "$UI_STRING"
 
-  # 1. Khai báo môi trường
   if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
     tuong_thich_nhom_litespeed="nogroup"
   else
     tuong_thich_nhom_litespeed="nobody"
   fi
 
-  if [[ -f "/usr/local/lsws/admin/fcgi-bin/admin_php" ]]; then
-    PHP_Command="/usr/local/lsws/admin/fcgi-bin/admin_php"
-  else
-    PHP_Command="/usr/local/lsws/admin/fcgi-bin/admin_php5"
-  fi
-
-  # 2. Tải bản mới về thư mục tạm (An toàn hơn)
+  # 1. Tải bản mới về thư mục tạm
   tmp_dir=$(mktemp -d /etc/wptt/tmp/XXXXXX)
   cd "$tmp_dir" || exit 1
 
-  wget "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" >/dev/null 2>&1
+  pma_zip="phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+  git_version="${phpmyadmin_version//./_}"
+  
+  URL_1="https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+  URL_2="https://github.com/phpmyadmin/phpmyadmin/releases/download/RELEASE_${git_version}/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
 
-  if [[ ! -f "phpMyAdmin-$phpmyadmin_version-all-languages.zip" ]]; then
-    wget "https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip" --no-check-certificate >/dev/null 2>&1
-  fi
+  # Nhập Public Keyring
+  curl -sL https://files.phpmyadmin.net/phpmyadmin.keyring | gpg --import --quiet >/dev/null 2>&1
 
-  if [[ ! -f "phpMyAdmin-$phpmyadmin_version-all-languages.zip" ]]; then
-    git_version="${phpmyadmin_version//./_}"
-    wget -O "phpMyAdmin-$phpmyadmin_version-all-languages.zip" "https://github.com/phpmyadmin/phpmyadmin/archive/refs/tags/RELEASE_${git_version}.zip" >/dev/null 2>&1
-  fi
+  function wptt_download_pma_ux() {
+    local url="$1"
+    wget -q --timeout=15 --tries=3 "$url" -O "$pma_zip"
+    return $?
+  }
 
-  if [[ ! -f "phpMyAdmin-$phpmyadmin_version-all-languages.zip" ]]; then
-    _runloi "Không thể tải bản cập nhật phpMyAdmin từ các nguồn!"
+  success_download=0
+  for url in "$URL_1" "$URL_2"; do
+    if wptt_download_pma_ux "$url"; then
+      
+      # Tải Chữ ký GPG
+      wget -q --timeout=15 --tries=3 "${url}.asc" -U 'checksum wptangtoc ols' -O "${pma_zip}.asc"
+      
+      # Xác thực GPG
+      if gpg --verify "${pma_zip}.asc" "$pma_zip" >/dev/null 2>&1; then
+        
+        # Kiểm tra Zip
+        if unzip -t "$pma_zip" &>/dev/null; then
+          success_download=1
+          break
+        fi
+      fi
+    fi
+    rm -f "$pma_zip" "${pma_zip}.asc"
+  done
+
+  if [[ $success_download -eq 0 ]]; then
+    _runloi "Tải hoặc Xác thực GPG PhpMyAdmin thất bại!"
+    echo -e "${C_RED}Lỗi: Mạng quốc tế nghẽn hoặc xác thực GPG không thành công. Cập nhật bị hủy bỏ.${C_RESET}"
     rm -rf "$tmp_dir"
+    sleep 3
+    [[ "$check_menu_wptangtoc_active" == "97" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
+    [[ "$check_menu_wptangtoc_active" == "98" ]] && exec /etc/wptt/wptt-update-main 1
     exit 1
   fi
 
   # 3. Giải nén và chuẩn bị
-  unzip -q "phpMyAdmin-$phpmyadmin_version-all-languages.zip"
+  unzip -oq "$pma_zip"
   mv phpMyAdmin-$phpmyadmin_version-all-languages phpmyadmin_new
 
   # 4. Tráo đổi thư mục (Atomic Update)
-  rm -rf "/usr/local/lsws/phpmyadmin" # Xóa thư mục temp cũ của lsws
+  rm -rf "/usr/local/lsws/phpmyadmin"
   mkdir -p /usr/local/lsws/phpmyadmin
 
-  # Thay thế thư mục chính trong html
   rm -rf "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
   mv "$tmp_dir/phpmyadmin_new" "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
 
@@ -158,7 +171,8 @@ if [[ "$dongy" == "y" ]]; then
   echo "Cập nhật PhpMyAdmin lên $phpmyadmin_version: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
   _rundone "$UI_STRING"
 
-  echo -e "\n\033[1;32m[OK] phpMyAdmin đã được nâng cấp lên bản $phpmyadmin_version thành công!\033[0m"
+  echo -e "\n\033[1;32m[OK] phpMyAdmin đã được nâng cấp lên bản $phpmyadmin_version và Xác thực an toàn thành công!\033[0m"
+  sleep 2
 fi
 
 # Quay lại menu cũ
