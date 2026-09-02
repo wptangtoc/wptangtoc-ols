@@ -140,6 +140,9 @@ while true; do
   esac
 done
 
+telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null); telegram_api="${telegram_tmp_api:-$telegram_api}"
+telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null); telegram_id="${telegram_tmp_id:-$telegram_id}"
+
 # ==============================================================================
 # HÀM TẢI & GHÉP NỐI (BẢO CHỨNG 100% TOÀN VẸN DATA)
 # ==============================================================================
