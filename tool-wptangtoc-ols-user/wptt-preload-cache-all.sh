@@ -391,7 +391,7 @@ function validmap() {
 
   if [ ${CURL_RETURN_CODE} -ne 0 ]; then
     . /etc/wptt/.wptt.conf
-    if [[ $ngon_ngu = '' ]]; then
+    if [[ -z "$ngon_ngu" ]]; then
       ngon_ngu='vi'
     fi
     . "/etc/wptt/lang/$ngon_ngu.sh"
@@ -409,7 +409,7 @@ function validmap() {
     if [ "${HTTPCODE}" != '200' ]; then
 
       . /etc/wptt/.wptt.conf
-      if [[ $ngon_ngu = '' ]]; then
+      if [[ -z "$ngon_ngu" ]]; then
         ngon_ngu='vi'
       fi
       . "/etc/wptt/lang/$ngon_ngu.sh"
