@@ -34,6 +34,8 @@
     <li><b>Ubuntu:</b> 22.04, 24.04 <i>(Thử nghiệm)</i></li>
 </ul>
 
+<p>Ghi chú: hiện tại đang tạm ngừng AlmaLinux 10, Rocky 10, Red Hat Enterprise Linux vì lỗi thư viện cài SSL certbot chưa native khi nào xử lý xong sẽ quay trở lại</p>
+
 <h3>⚙️ Cấu hình yêu cầu</h3>
 <ul>
     <li><b>Tối thiểu:</b> CPU 1 vCore | RAM > 512MB | Ổ cứng > 8GB</li>
