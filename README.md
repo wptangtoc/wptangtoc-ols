@@ -34,7 +34,7 @@
     <li><b>Ubuntu:</b> 22.04, 24.04 <i>(Thử nghiệm)</i></li>
 </ul>
 
-<p>Ghi chú: hiện tại đang tạm ngừng AlmaLinux 10, Rocky 10, Red Hat Enterprise Linux vì lỗi thư viện cài SSL certbot chưa native khi nào xử lý xong sẽ quay trở lại</p>
+<p>Ghi chú: hiện tại đang tạm ngừng AlmaLinux 10, Rocky 10, Red Hat Enterprise Linux vì lỗi thư viện cài SSL certbot chưa native khi nào xử lý xong sẽ quay trở lại, đợi team EPEL việc này có thể mất vài tuần, thậm chí vài tháng tùy thuộc vào các Maintainer bên dự án EPEL.</p>
 
 <h3>⚙️ Cấu hình yêu cầu</h3>
 <ul>
