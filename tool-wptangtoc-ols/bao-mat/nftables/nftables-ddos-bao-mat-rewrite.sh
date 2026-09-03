@@ -47,8 +47,7 @@ if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
     chmod +x /usr/local/lsws/"$NAME"/bao-mat/anti.go
     cd /usr/local/lsws/"$NAME"/bao-mat && go build anti.go && chmod +x anti
     rm -f /usr/local/bin/anti
-    mv /usr/local/lsws/"$NAME"/bao-mat/anti /usr/local/bin/
-    # rm -rf /usr/local/lsws/$NAME/bao-mat
+    mv /usr/local/lsws/"${NAME:?}"/bao-mat/anti /usr/local/bin/
     echo '
 [Unit]
 Description=Go Lang Log Blocker for Litespeed
