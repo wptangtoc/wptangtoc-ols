@@ -66,7 +66,7 @@ danh_sach=$(cat "$log_file" | cut -f2 -d ' ' | sed 's/\.part_[0-9]\+$//' | grep 
 if [[ -z "$danh_sach" ]]; then
   _runloi "Truy xuất danh sách thất bại"
   echo -e "${C_YELLOW}Không tìm thấy bản sao lưu nào cho domain $NAME trên Telegram!${C_RESET}"
-  rm -f "$log_file"
+  rm -f "${log_file:?}"
   sleep 3
   # Vá lỗi SC2317
   [[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
@@ -111,7 +111,7 @@ while true; do
   case "$REPLY" in
   0)
     echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-    rm -f "$log_file"
+    rm -f "${log_file:?}"
     # Vá lỗi SC2317
     [[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
     exit 0
@@ -150,7 +150,7 @@ download_and_merge_telegram() {
   local target_file="$1"
   local path_dl="/usr/local/backup-website/$NAME"
   mkdir -p "$path_dl"
-  rm -f "$path_dl/$target_file"
+  rm -f "${path_dl:?}/${target_file:?}"
 
   echo -e "\n${C_CYAN}➜ Đang xử lý tải xuống: ${C_YELLOW}$target_file${C_RESET}"
   
@@ -199,7 +199,7 @@ download_and_merge_telegram() {
       # An toàn 100% rồi mới cho phép nối file (cat)
       if [[ "$ten_file_part" == *".part_"* ]]; then
         cat "$path_dl/$ten_file_part" >> "$path_dl/$target_file"
-        rm -f "$path_dl/$ten_file_part"
+        rm -f "${path_dl:?}/${ten_file_part:?}"
       fi
     else
       _runloi "Tải mảnh thất bại: $ten_file_part"
@@ -278,7 +278,7 @@ if [[ ${#selects[@]} -gt 0 && "$dongy_taifile1" == "y" ]]; then
   fi
 fi
 
-rm -f "$log_file"
+rm -f "${log_file:?}"
 
 echo ""
 echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"

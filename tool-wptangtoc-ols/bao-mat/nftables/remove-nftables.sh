@@ -52,7 +52,7 @@ else
 fi
 
 # Vá lỗi SC2086
-rm -f "$path_nftables_config"
+rm -f "${path_nftables_config:?}"
 
 sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
 sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
