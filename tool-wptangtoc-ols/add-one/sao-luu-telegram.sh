@@ -172,7 +172,7 @@ EOF
 
 db_path="/usr/local/backup-website/$domain/${domain}${timedate}.sql.gz"
 mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" | gzip > "$db_path"
-rm -rf "$TEMP_CNF"
+rm -rf "${TEMP_CNF:?}"
 
 if [[ -s "$db_path" ]]; then
     _rundone "Sao lưu Database thành công"
@@ -193,7 +193,7 @@ if [[ -s "$db_path" ]]; then
                 _runloi "Lỗi Upload! Hủy tiến trình để bảo vệ file."
                 exit 1
             fi
-            rm -f "$sql_part_path"
+            rm -f "${sql_part_path:?}"
         done
     else
         telegram_uploads_backup "$db_path" "$domain" || { _runloi "Lỗi Upload Database!"; exit 1; }
@@ -201,7 +201,7 @@ if [[ -s "$db_path" ]]; then
 else
     _runloi "Lỗi kết xuất Database!"
 fi
-rm -f "$db_path"
+rm -f "${db_path:?}"
 
 # 2. SAO LƯU MÃ NGUỒN (SOURCE CODE)
 _runing "Đang nén Mã nguồn (Source Code)..."
@@ -229,7 +229,7 @@ if [[ -s "$zip_path" ]]; then
                 _runloi "Lỗi Upload! Hủy tiến trình để bảo vệ file."
                 exit 1
             fi
-            rm -f "$zip_part_path"
+            rm -f "${zip_part_path:?}"
         done
     else
         telegram_uploads_backup "$zip_path" "$domain" || { _runloi "Lỗi Upload Mã nguồn!"; exit 1; }
@@ -237,7 +237,7 @@ if [[ -s "$zip_path" ]]; then
 else
     _runloi "Lỗi nén Mã nguồn!"
 fi
-rm -f "$zip_path"
+rm -f "${zip_path:?}"
 
 if [[ -s "$temp_file" ]]; then
     json_payload=$(grep -v '^$' "$temp_file" | jq -R 'split(" ") | {file_id: .[0], file_name: .[1]}' | jq -s '.' | jq -c '.')
@@ -245,7 +245,7 @@ if [[ -s "$temp_file" ]]; then
     curl -s -X POST -H "Content-Type: application/json" -d "$json_payload" "$API_URL" -A 'Activate Backup Restore WPTangToc' >/dev/null 2>&1
 fi
 
-rm -f "$temp_file"
+rm -f "${temp_file:?}"
 echo ""
 
 [[ "$2" != "skip_menu" && "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
