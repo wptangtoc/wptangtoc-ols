@@ -1,9 +1,8 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Tùy chọn nâng cao - Thêm Google Drive Client ID cá nhân
+# @description: Thêm Google Drive Client ID cá nhân
 # @since: 2026
-
 
 function huong_dan() {
   Tính năng cấu hình Client ID Google Drive cá nhân [Google Drive Custom Client ID] giúp bạn sử dụng giao thức API riêng biệt để kết nối máy chủ với kho lưu trữ Google Drive.
@@ -20,9 +19,14 @@ function huong_dan() {
 . /etc/wptt/echo-color 2>/dev/null
 
 clear
+# BỌC GIAO DIỆN UX ĐỒNG BỘ 100% WPTANGTOC
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}CẤU HÌNH NÂNG CAO: GOOGLE DRIVE CLIENT ID CÁ NHÂN${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Việc sử dụng Client ID cá nhân giúp bứt tốc độ Upload và tránh lỗi 429 API."
+left_text "Client ID mặc định của Rclone sẽ bị Google ngừng hỗ trợ trong thời gian tới."
+left_text "Hướng dẫn tạo: https://wptangtoc.com/google-drive-client-id-ca-nhan-rclone/"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 CONF_FILE="/root/.config/rclone/rclone.conf"
 
@@ -35,19 +39,28 @@ if ! grep -q '\[wptangtoc\]' "$CONF_FILE" 2>/dev/null; then
     exit 1
 fi
 
-# 2. Kiểm tra xem cấu hình hiện tại có đúng là Google Drive không (nhỡ họ đang dùng OneDrive/S3)
-if ! grep -A 2 '\[wptangtoc\]' "$CONF_FILE" | grep -E -q 'type[[:space:]]*=[[:space:]]*drive'; then
+# 2. Kiểm tra xem cấu hình hiện tại có đúng là Google Drive không (Mở rộng tầm quét -A 8)
+if ! grep -A 8 '\[wptangtoc\]' "$CONF_FILE" | grep -E -q 'type[[:space:]]*=[[:space:]]*drive'; then
     _runloi "Lỗi: Tính năng này chỉ dành riêng cho Google Drive!"
     sleep 3
     exec /etc/wptt/wptt-backup-restore-main 1
     exit 1
 fi
 
-# 3. Hướng dẫn và thu thập thông tin
-left_text "Việc sử dụng Client ID cá nhân giúp bứt tốc độ Upload và tránh lỗi 429 API."
-left_text "Client ID mặc định của Rclone sẽ bị Google ngừng hỗ trợ trong thời gian tới."
-left_text "Hướng dẫn tạo: https://rclone.org/drive/#making-your-own-client-id"
-echo ""
+# ==============================================================================
+# 3. KIỂM TRA ĐÃ SETUP TỪ TRƯỚC HAY CHƯA
+# ==============================================================================
+if grep -A 8 '\[wptangtoc\]' "$CONF_FILE" | grep -q '^[[:space:]]*client_id[[:space:]]*='; then
+    echo -e "${C_YELLOW}Hệ thống phát hiện bạn đã cấu hình Client ID cá nhân từ trước!${C_RESET}"
+    if ! wptt_xac_nhan "Bạn có muốn thay thế bằng Client ID mới không?" "Trạng thái:" "Đang sử dụng API riêng" "Đồng ý Thay thế" "Giữ nguyên (Thoát)"; then
+        echo -e "\n${C_GREEN}Đã giữ nguyên cấu hình hiện tại.${C_RESET}"
+        sleep 2
+        exec /etc/wptt/wptt-backup-restore-main 1
+        exit 0
+    fi
+    echo "" # Tạo khoảng trống để tiếp tục nhập liệu nếu khách chọn Đồng ý
+fi
+# ==============================================================================
 
 echo -en "${C_GREEN}➤ Nhập Google Client ID của bạn: ${C_RESET}"
 read -r new_client_id
@@ -55,7 +68,7 @@ read -r new_client_id
 echo -en "${C_GREEN}➤ Nhập Google Client Secret của bạn: ${C_RESET}"
 read -r new_client_secret
 
-# 4. Kiểm tra đầu vào
+# 4. Kiểm tra đầu vào rỗng
 if [[ -z "$new_client_id" || -z "$new_client_secret" ]]; then
     echo ""
     _runloi "Thao tác bị hủy: Client ID và Secret không được để trống."
@@ -64,28 +77,72 @@ if [[ -z "$new_client_id" || -z "$new_client_secret" ]]; then
     exit 1
 fi
 
-ew_client_id="${ew_client_id//$'\r'/}"       # Lọc tận gốc ký tự CRLF (Windows)
-new_client_secret="${new_client_secret//$'\r'/}"       # Lọc tận gốc ký tự CRLF (Windows)
-
-
-#Bọc thêm lớp khiên: Dọn sạch mọi khoảng trắng thừa (nếu khách lỡ tay copy dính dấu cách)
+# 5. THANH TRỪNG RÁC (Parameter Expansion siêu tốc)
+new_client_id="${new_client_id//$'\r'/}"
 new_client_id="${new_client_id//[[:space:]]/}"
+new_client_secret="${new_client_secret//$'\r'/}"
 new_client_secret="${new_client_secret//[[:space:]]/}"
 
+echo ""
+_runing "Đang kiểm tra tính hợp lệ của Client ID & Secret..."
 
+# 6. TUYỆT KỸ TEST API (Bắn Dummy Token)
+api_test=$(curl -s -X POST https://oauth2.googleapis.com/token \
+  -d "client_id=$new_client_id" \
+  -d "client_secret=$new_client_secret" \
+  -d "grant_type=refresh_token" \
+  -d "refresh_token=wptangtoc_dummy_test_token")
+
+if [[ "$api_test" == *"invalid_client"* || "$api_test" == *"Unauthorized"* ]]; then
+    _runloi "Kiểm tra thất bại: ID hoặc Secret không chính xác!"
+    echo -e "${C_RED}Google API từ chối xác thực. Vui lòng kiểm tra lại 2 đoạn mã này.${C_RESET}"
+    sleep 4
+    exec /etc/wptt/wptt-backup-restore-main 1
+    exit 1
+fi
+
+_rundone "Client ID và Secret cấu trúc hợp lệ (Đã được Google xác nhận)!"
+
+# 7. SAO LƯU CONFIG VÀ TIÊM ID MỚI VÀO THƯ MỤC TEMP RIÊNG CỦA HỆ THỐNG
 _runing "Đang nạp cấu hình Client ID riêng vào hệ thống..."
+mkdir -p /etc/wptt/tmp
+cp "$CONF_FILE" "/etc/wptt/tmp/rclone_conf_bak.ini"
 
-# 5. Xử lý file rclone.conf (Dọn dẹp ID cũ nếu có, chèn ID mới)
-# Xóa các dòng client_id và client_secret cũ để tránh trùng lặp
 sed -i '/^[[:space:]]*client_id[[:space:]]*=/d' "$CONF_FILE"
 sed -i '/^[[:space:]]*client_secret[[:space:]]*=/d' "$CONF_FILE"
-
-# Chèn ID và Secret mới ngay bên dưới dòng [wptangtoc]
 sed -i "/^\[wptangtoc\]/a client_id = $new_client_id\nclient_secret = $new_client_secret" "$CONF_FILE"
+_rundone "Nạp cấu hình thành công!"
 
-echo ""
-_rundone "Cập nhật Client ID và Secret thành công!"
-left_text "Hệ thống sẽ sử dụng API riêng của bạn cho các lần sao lưu tiếp theo."
-
-sleep 3
-exec /etc/wptt/wptt-backup-restore-main 1
+# 8. BÀI TEST CHỐNG XUNG ĐỘT TOKEN CUỐI CÙNG
+_runing "Đang kiểm tra xung đột Token..."
+if ! rclone about wptangtoc: --retries 1 >/dev/null 2>&1; then
+    _runloi "Token cũ bị từ chối do khác Client ID!"
+    echo -e "\n${C_YELLOW}CẢNH BÁO QUAN TRỌNG:${C_RESET}"
+    echo -e "Vì sếp đã đổi sang Client ID mới, Token hiện tại (tạo bằng ID mặc định) đã bị Google khóa."
+    echo -e "Để Rclone tiếp tục hoạt động, sếp CẦN PHẢI lấy lại Token mới ngay bây giờ.\n"
+    
+    if wptt_xac_nhan "Chuyển sang bước Lấy Token mới ngay bây giờ?" "" "" "Đồng ý (Cập nhật Token)" "Hủy bỏ (Khôi phục như cũ)"; then
+        exec /etc/wptt/backup-restore/wptt-rclone
+        exit 0
+    else
+        # Rollback từ thư mục temp của WPTangToc
+        mv "/etc/wptt/tmp/rclone_conf_bak.ini" "$CONF_FILE"
+        echo -e "\n${C_GREEN}Đã khôi phục lại cấu hình Rclone như cũ.${C_RESET}"
+        sleep 2
+        exec /etc/wptt/wptt-backup-restore-main 1
+        exit 0
+    fi
+else
+    _rundone "Rclone kết nối ổn định!"
+    echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}CẬP NHẬT CLIENT ID THÀNH CÔNG${C_RESET}"
+    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Hệ thống sẽ sử dụng API cá nhân của sếp cho các lần sao lưu tiếp theo."
+    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    
+    # Dọn dẹp file temp an toàn
+    rm -f "/etc/wptt/tmp/rclone_conf_bak.ini"
+    
+    sleep 3
+    exec /etc/wptt/wptt-backup-restore-main 1
+fi
