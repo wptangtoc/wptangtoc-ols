@@ -4,7 +4,7 @@
 # @since: 2026
 
 NAME=$1
-ngay=$2
+so_ban=$2
 RCLONE_CONF="/root/.config/rclone/rclone.conf"
 
 # Kiểm tra trạng thái kích hoạt Cloud
@@ -40,14 +40,33 @@ if rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
 fi
 
 # ==============================================================================
-# HÀM XÓA FILE (TÁI SỬ DỤNG CHO 1 HOẶC NHIỀU WEBSITE)
+# HÀM XÓA FILE (GIỮ LẠI SỐ BẢN MỚI NHẤT)
 # ==============================================================================
 xoa_backup_cu() {
   local domain="$1"
-  # Quét danh sách file quá hạn (Fix Regex chuẩn hóa tất cả các đuôi mở rộng)
-  danh_sach_file_het_han=($(rclone ls "wptangtoc:$CLOUD_DIR/$domain" --min-age "${ngay}d" 2>/dev/null | awk '{print $2}' | grep -E '\.(zip|sql|sql\.gz|tar\.gz|tar\.zst|sql\.zst)$'))
   
-  for file in "${danh_sach_file_het_han[@]}"; do
+  # Lấy toàn bộ file, sắp xếp theo thời gian sửa đổi (Mới nhất nằm trên cùng)
+  # Format rclone lsl: size date time filename => Dùng awk '{print $NF}' để hốt tên file
+  local all_files=$(rclone lsl "wptangtoc:$CLOUD_DIR/$domain" 2>/dev/null | sort -r -k2,3 | awk '{print $NF}')
+  
+  # Tách thành 2 mảng: Mã nguồn và Database để đảm bảo giữ đủ số lượng cho từng loại
+  local source_files=($(echo "$all_files" | grep -E '\.(zip|tar\.gz|tar\.zst)$')) #quét file mã nguồn
+  local db_files=($(echo "$all_files" | grep -E '\.(sql|sql\.gz|sql\.zst)$')) #quét file database
+  
+  local files_to_delete=()
+  
+  # Nếu số file Mã nguồn lớn hơn số bản quy định, từ vị trí $so_ban trở đi để xoá
+  if [[ ${#source_files[@]} -gt $so_ban ]]; then
+    files_to_delete+=("${source_files[@]:$so_ban}")
+  fi
+  
+  # Tương tự với Database
+  if [[ ${#db_files[@]} -gt $so_ban ]]; then
+    files_to_delete+=("${db_files[@]:$so_ban}")
+  fi
+  
+  # Duyệt danh sách "tử ngục" và bóp cò
+  for file in "${files_to_delete[@]}"; do
     if [[ -n "$file" ]]; then
       # Truyền linh hoạt các cờ xóa (flags) tùy thuộc vào từng nền tảng Cloud
       if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
@@ -64,16 +83,16 @@ xoa_backup_cu() {
 # ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
   # Quét toàn bộ vhost nếu chọn All
-	for filepath in /etc/wptt/vhost/.*.conf; do
-		[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-		domain="${filepath##*/}" #cắt hết / ở phía truớc chỉ dữ giá trị / ở sau còn dữ lại như: .wptangtoc.com.conf
-		domain="${domain%.conf}" #cắt .conf ở phía sau => còn: .wptangtoc.com
-		domain="${domain#.}" #cắt . ở phía truớc => còn wptangtoc.com
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-		if [[ "$domain" != ?*.?* ]]; then #yêu cầu phải có dấu . trong domain thì mới gọi là domain đúng, nếu không có . thì continue nhảy qua for 
-			continue
-		fi
+    if [[ "$domain" != ?*.?* ]]; then
+      continue
+    fi
     if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
       xoa_backup_cu "$domain"
     fi
