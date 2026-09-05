@@ -93,9 +93,10 @@ telegram_uploads_backup() {
     local success=0
     
     while (( attempt <= max_retries && success == 0 )); do
-        # Vá lỗi SC2155
         local response
-        response=$(curl -4 -s -S -X POST "$worker_url" \
+
+		#--connect-timeout 10 --max-time 300 dùng tránh tình trạng uploads quá lâu, bị treo tiến trình vĩnh viễn
+        response=$(curl -4 -s -S --connect-timeout 10 --max-time 300 -X POST "$worker_url" \
             -F document=@"${file_path}" \
             -F parse_mode='Markdown' \
             -F caption="${caption}" \
