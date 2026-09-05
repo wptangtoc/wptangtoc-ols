@@ -1,4 +1,5 @@
 #!/bin/bash
+set -o pipefail
 umask 077
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
@@ -289,50 +290,55 @@ else
   PV_CMD="cat"
 fi
 
+
 echo ""
+
+# 1. Định nghĩa trước biến đường dẫn file để tránh lặp code (Quy tắc DRY)
 if [[ "$sql_gz" = '1' ]]; then
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip >"/usr/local/backup-website/$NAME/$NAME$times.sql.gz"
+	DB_OUTPUT="/usr/local/backup-website/$NAME/$NAME$times.sql.gz"
 elif [[ "$sql_gz" = '2' ]]; then
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd >"/usr/local/backup-website/$NAME/$NAME$times.sql.zst"
+	DB_OUTPUT="/usr/local/backup-website/$NAME/$NAME$times.sql.zst"
 else
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" >"/usr/local/backup-website/$NAME/$NAME$times.sql"
+	DB_OUTPUT="/usr/local/backup-website/$NAME/$NAME$times.sql"
 fi
 
+# 2. Thực thi lệnh Dump vào đường ống (Pipeline)
+if [[ "$sql_gz" = '1' ]]; then
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip > "$DB_OUTPUT"
+elif [[ "$sql_gz" = '2' ]]; then
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd > "$DB_OUTPUT"
+else
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" > "$DB_OUTPUT"
+fi
+
+# 3. BẮT NGAY MÃ LỖI CỦA PIPELINE (Sức mạnh của pipefail)
+db_backup_status=$?
+
+# Dọn dẹp giao diện và file tạm
 echo -ne "\033[1A\r\033[K"
 echo -ne "\033[1A\r\033[K"
-rm -rf "${TEMP_CNF:?}"
+rm -f "$TEMP_CNF" 2>/dev/null
 
-unset check_file_error_database
-if [[ $sql_gz = '1' ]]; then
-  check_file_error_database=$(du -c /usr/local/backup-website/"$NAME"/"$NAME""$times".sql.gz | awk '{print $1}' | sed '1d')
-  if ((${check_file_error_database:-0} < 3)); then
-    tuanxacnhandb="0"
-    _runloi "$sao_luu_database website $NAME"
-    rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}""${times:?}".sql.gz
-  fi
-elif [[ $sql_gz = '2' ]]; then
-  check_file_error_database=$(du -c /usr/local/backup-website/"$NAME"/"$NAME""$times".sql.zst | awk '{print $1}' | sed '1d')
-  if ((${check_file_error_database:-0} < 3)); then
-    tuanxacnhandb="0"
-    _runloi "$sao_luu_database website $NAME"
-    rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}""${times:?}".sql.zst
-  fi
+# 4. Phân xử Thành / Bại sòng phẳng chỉ bằng 1 khối IF duy nhất
+if [ $db_backup_status -eq 0 ] && [ -f "$DB_OUTPUT" ]; then
+	# Thành công: Chmod nâng cao bảo mật và báo Done
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 "$DB_OUTPUT" 2>/dev/null 
+	_rundone "$sao_luu_database website $NAME"
+	tuanxacnhandb="1"
 else
-  check_file_error_database=$(du -c /usr/local/backup-website/"$NAME"/"$NAME""$times".sql | awk '{print $1}' | sed '1d')
-  if ((${check_file_error_database:-0} < 3)); then
-    tuanxacnhandb="0"
-    _runloi "$sao_luu_database website $NAME"
-    rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}""${times:?}".sql
-  fi
+	# Thất bại: Đứt mắt xích dump, báo Lỗi và dọn dẹp rác
+	tuanxacnhandb="0"
+	_runloi "$sao_luu_database website $NAME"
+
+  # Cảnh báo mã lỗi chi tiết để SysAdmin dễ debug
+  # echo "   -> Chi tiết: Mã lỗi hệ thống ($db_backup_status)" 
+
+  # Xóa file rác sinh ra do tiến trình dump bị lỗi giữa chừng
+  rm -f "$DB_OUTPUT" 2>/dev/null
 fi
 
-if [[ -f /usr/local/backup-website/$NAME/$NAME$times.sql || -f /usr/local/backup-website/$NAME/$NAME$times.sql.gz || -f /usr/local/backup-website/$NAME/$NAME$times.sql.zst ]]; then
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 /usr/local/backup-website/"$NAME"/"$NAME$times".sql* 2>/dev/null #chmod 600 nâng cao bảo mật chỉ quyền tài khoản root mới đuợc phép đọc và ghi còn lại sẽ không có quyền xem
-  _rundone "$sao_luu_database website $NAME"
-  tuanxacnhandb="1"
-else
-  _runloi "$sao_luu_database website $NAME"
-fi
+
+
 
 _runing "$sao_luu_ma_nguon website $NAME"
 echo ''

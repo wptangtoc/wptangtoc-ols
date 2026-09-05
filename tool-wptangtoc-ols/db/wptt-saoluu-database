@@ -356,53 +356,50 @@ echo ""
 # ==================================================================
 # BƯỚC 2: THỰC THI DUMP DATABASE
 # ==================================================================
-
-if [[ $sql_gz = '1' ]]; then
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz"
-elif [[ $sql_gz = '2' ]]; then
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst"
+# 1. Định nghĩa trước Output File để tránh lặp lại code (Quy tắc DRY)
+if [[ "$sql_gz" = '1' ]]; then
+	DB_OUTPUT="/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz"
+elif [[ "$sql_gz" = '2' ]]; then
+	DB_OUTPUT="/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst"
 else
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" >"/usr/local/backup-website/$NAME/$NAME$timedate.sql"
+	DB_OUTPUT="/usr/local/backup-website/$NAME/$NAME$timedate.sql"
 fi
 
+# 2. Thực thi lệnh Dump vào ống nước (Pipeline)
+if [[ "$sql_gz" = '1' ]]; then
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip > "$DB_OUTPUT"
+elif [[ "$sql_gz" = '2' ]]; then
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd > "$DB_OUTPUT"
+else
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" > "$DB_OUTPUT"
+fi
+
+# 3. LƯỚI ĐIỆN CHECK LỖI: Bắt ngay mã lỗi của Pipeline nhờ có set -o pipefail
+db_backup_status=$?
+
+# Dọn dẹp giao diện (Xóa dòng thừa)
 echo -ne "\033[1A\r\033[K"
 echo -ne "\033[1A\r\033[K"
 
-rm -rf "${TEMP_CNF:?}"
+# 4. Xóa file cấu hình chứa Pass DB ngay lập tức (Bỏ bẫy :? đi cho an toàn)
+rm -f "$TEMP_CNF" 2>/dev/null
 
-if [[ ! -f /usr/local/backup-website/$NAME/$NAME$timedate.sql && ! -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz && ! -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.zst ]]; then
-  _runloi "$sao_luu_database website $NAME"
-fi
-
-if [[ $sql_gz = '1' ]]; then
-  check_file_error=$(du -c /usr/local/backup-website/"$NAME"/"$NAME""$timedate".sql.gz | awk '{print $1}' | sed '1d')
-  if ((${check_file_error:-0} < 3)); then
-    _runloi "$sao_luu_database website $NAME"
-    $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}""${timedate:?}".sql.gz
-    return 2>/dev/null
-    exit
-  fi
-elif [[ $sql_gz = '2' ]]; then
-  check_file_error=$(du -c /usr/local/backup-website/"$NAME"/"$NAME""$timedate".sql.zst | awk '{print $1}' | sed '1d')
-  if ((${check_file_error:-0} < 3)); then
-    _runloi "$sao_luu_database website $NAME"
-    $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}""${timedate:?}".sql.gz
-    return 2>/dev/null
-    exit
-  fi
+# 5. check lỗi
+if [ $db_backup_status -eq 0 ] && [ -f "$DB_OUTPUT" ]; then
+	# Nếu Bash báo mã 0 (Thành công hoàn toàn) VÀ file có tồn tại
+	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 "$DB_OUTPUT" 2>/dev/null 
+	_rundone "$sao_luu_database website $NAME"
 else
-  check_file_error=$(du -c /usr/local/backup-website/"$NAME"/"$NAME""$timedate".sql | awk '{print $1}' | sed '1d')
-  if ((${check_file_error:-0} < 3)); then
-    _runloi "$sao_luu_database website $NAME"
-    $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}""${timedate:?}".sql
-    return 2>/dev/null
-    exit
-  fi
+	# Nếu có bất kỳ mắt xích nào gãy (Mã lỗi khác 0)
+	_runloi "$sao_luu_database website $NAME"
+	echo "   -> [BÁO ĐỘNG] Lệnh sao lưu thất bại với mã lỗi (Exit Status): $db_backup_status"
+
+  # Dọn dẹp cục nợ (file rác) do dump lỗi sinh ra
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f "$DB_OUTPUT" 2>/dev/null
+
+  # Kích hoạt chốt chặn an toàn: Ngắt script, không làm tiếp bước mã nguồn
+  return 2>/dev/null || exit 1
 fi
-
-
-  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 /usr/local/backup-website/"$NAME"/"$NAME$timedate".sql* 2>/dev/null #chmod 600 nâng cao bảo mật chỉ quyền tài khoản root mới đuợc phép đọc và ghi còn lại sẽ không có quyền xem
-_rundone "$sao_luu_database website $NAME"
 
 checkdathietlap=$(grep -q '\[wptangtoc\]' /root/.config/rclone/rclone.conf 2>/dev/null && echo 1)
 if [[ $checkdathietlap ]]; then
