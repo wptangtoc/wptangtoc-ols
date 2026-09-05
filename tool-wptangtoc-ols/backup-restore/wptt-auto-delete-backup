@@ -4,16 +4,15 @@
 # @since: 2026
 
 function huong_dan() {
-  Tính năng tự động xóa file backup hết hạn là một chức năng cho phép hệ thống tự động loại bỏ các bản sao lưu website cũ hoặc không còn cần thiết sau một khoảng thời gian nhất định hoặc khi chúng đã đạt đến [tuổi thọ] được định sẵn.
+  Tính năng tự động xóa file backup cũ tại ổ cứng máy chủ [Local] theo số lượng bản sao lưu.
 
-  Nói đơn giản, bạn thiết lập quy tắc [ví dụ: chỉ giữ lại các bản sao lưu trong 30 ngày gần nhất]. Khi một bản sao lưu vượt quá giới hạn này, hệ thống sẽ tự động xóa nó đi.
+  Nói đơn giản, bạn thiết lập quy tắc [ví dụ: chỉ giữ lại 10 bản sao lưu mới nhất]. Hệ thống sẽ tự động quét, bảo vệ 10 bản mới này và chỉ xóa những bản cũ hơn vượt quá giới hạn.
 
-  Lợi ích chính:
+  Lưu ý quan trọng: "1 Bản" ở đây được hiểu là một bộ sao lưu hoàn chỉnh, bao gồm 1 file Mã Nguồn [.zip/.tar] VÀ 1 file Database [.sql]. Nếu bạn chọn giữ 10 bản, hệ thống sẽ giữ lại đúng 10 file Mã nguồn và 10 file Database tương ứng.
 
-  * Tiết kiệm dung lượng lưu trữ: Ngăn chặn việc các bản sao lưu cũ tích tụ và chiếm hết không gian đĩa.
-  * Quản lý bản sao lưu hiệu quả: Giữ cho kho lưu trữ backup gọn gàng, dễ tìm kiếm khi cần.
-  * Tối ưu chi phí: Giảm chi phí lưu trữ, đặc biệt khi sử dụng các dịch vụ lưu trữ đám mây tính theo dung lượng.
-  = >Đây là một tính năng rất hữu ích và thường có trong các phần mềm sao lưu chuyên nghiệp,
+  Lợi ích:
+  * Chống Full Disk: Ngăn chặn triệt để tình trạng file backup sinh ra liên tục làm đầy ổ cứng khiến VPS bị treo, sập database.
+  * Quản lý khoa học: Luôn có một số lượng mốc thời gian cố định để lựa chọn khi cần khôi phục.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -24,11 +23,11 @@ function huong_dan() {
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Thiết lập Tự động xóa File Backup cũ${C_RESET}"
+center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Thiết lập Tự động dọn dẹp Backup Local${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# BẢNG THỐNG KÊ CÁC DOMAIN ĐÃ KÍCH HOẠT AUTO DELETE
+# BẢNG THỐNG KÊ CÁC DOMAIN ĐÃ KÍCH HOẠT AUTO DELETE LOCAL
 # ==============================================================================
 box_inner_width=${box_inner_width:-71}
 active_list=()
@@ -37,38 +36,45 @@ if [ "$(ls -A /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ];
 	for filepath in /etc/wptt/vhost/.*.conf; do
 		[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-		domain="${filepath##*/}" #cắt hết / ở phía truớc chỉ dữ giá trị / ở sau còn dữ lại như: .wptangtoc.com.conf
-		domain="${domain%.conf}" #cắt .conf ở phía sau => còn: .wptangtoc.com
-		domain="${domain#.}" #cắt . ở phía truớc => còn wptangtoc.com
+		domain="${filepath##*/}"
+		domain="${domain%.conf}"
+		domain="${domain#.}"
 
-		if [[ "$domain" != ?*.?* ]]; then #yêu cầu phải có dấu . trong domain thì mới gọi là domain đúng, nếu không có . thì continue nhảy qua for 
+		if [[ "$domain" != ?*.?* ]]; then
 			continue
 		fi
-    path="/etc/cron.d/delete$domain.cron"
+        
+        # Trả lại tên file theo chuẩn cũ để tương thích ngược
+		path="/etc/cron.d/delete$domain.cron"
 
-    if [[ -f "$path" ]]; then
-      # Lấy số phút mmin từ file bash và tính ra số ngày
-      checktuan0=$(cat "/etc/wptt-auto/$domain-delete-backup" 2>/dev/null | sed 's/.*-mmin +\([0-9]*\).*/\1/' | awk '{print $NF}' | grep -o '[0-9]\+')
-      checktuan=$((checktuan0 / 60 / 24))
-
-      domain_padded=$(printf "%-25s" "$domain")
-      active_list+=("${C_BOLD_WHITE}${domain_padded}${C_RESET} : Xóa file cũ hơn ${C_YELLOW}${checktuan} ngày${C_RESET}")
-    fi
-  done
+		if [[ -f "$path" ]]; then
+            # Hỗ trợ lấy thông số từ cả cấu trúc code mới (số bản) và code cũ (số phút)
+            if grep -q "wptt-auto-delete-local-backup" "/etc/wptt-auto/$domain-delete-backup" 2>/dev/null; then
+                so_ban_luu_hien_tai=$(cat "/etc/wptt-auto/$domain-delete-backup" 2>/dev/null | awk '{print $NF}' | grep -o '[0-9]\+')
+                domain_padded=$(printf "%-25s" "$domain")
+                active_list+=("${C_BOLD_WHITE}${domain_padded}${C_RESET} : Luôn giữ lại ${C_YELLOW}${so_ban_luu_hien_tai} bản${C_RESET} mới nhất")
+            else
+                domain_padded=$(printf "%-25s" "$domain")
+                active_list+=("${C_BOLD_WHITE}${domain_padded}${C_RESET} : Đang dùng cấu hình xóa theo ngày cũ")
+            fi
+		fi
+	done
 fi
 
-# Check ALL WEBSITE
 if [[ -f /etc/cron.d/delete-backup-all-website-wptt-ols-local.cron ]]; then
-  checktuan0=$(cat /etc/wptt-auto/all-delete-backup-het-han-local 2>/dev/null | sed 's/.*-mmin +\([0-9]*\).*/\1/' | awk '{print $NF}' | grep -o '[0-9]\+')
-  checktuan=$((checktuan0 / 60 / 24))
-
-  domain_padded=$(printf "%-25s" "[Toàn bộ Website]")
-  active_list+=("${C_YELLOW}${domain_padded}${C_RESET} : Xóa file cũ hơn ${C_YELLOW}${checktuan} ngày${C_RESET}")
+    if grep -q "wptt-auto-delete-local-backup" "/etc/wptt-auto/all-delete-backup-het-han-local" 2>/dev/null; then
+        so_ban_luu_hien_tai=$(cat /etc/wptt-auto/all-delete-backup-het-han-local 2>/dev/null | awk '{print $NF}' | grep -o '[0-9]\+')
+        domain_padded=$(printf "%-25s" "[Toàn bộ Website]")
+        active_list+=("${C_YELLOW}${domain_padded}${C_RESET} : Luôn giữ lại ${C_YELLOW}${so_ban_luu_hien_tai} bản${C_RESET} mới nhất")
+    else
+        domain_padded=$(printf "%-25s" "[Toàn bộ Website]")
+        active_list+=("${C_YELLOW}${domain_padded}${C_RESET} : Đang dùng cấu hình xóa theo ngày cũ")
+    fi
 fi
 
 if [[ ${#active_list[@]} -gt 0 ]]; then
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}DANH SÁCH ĐÃ THIẾT LẬP TỰ ĐỘNG XÓA BACKUP CŨ${C_RESET}"
+  center_text "${C_YELLOW}DANH SÁCH ĐÃ THIẾT LẬP TỰ ĐỘNG DỌN DẸP BACKUP LOCAL${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   for item in "${active_list[@]}"; do
     left_text "$item" 2
@@ -77,7 +83,7 @@ if [[ ${#active_list[@]} -gt 0 ]]; then
 fi
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH (CHỈ HIỂN THỊ DOMAIN CHƯA KÍCH HOẠT)
+# HÀM MENU LỌC THÔNG MINH
 # ==============================================================================
 function lua_chon_NAME() {
   unset NAME selects
@@ -101,7 +107,7 @@ function lua_chon_NAME() {
   fi
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "${C_YELLOW}Tất cả domain trên hệ thống đều đã được cấu hình tự động xóa backup!${C_RESET}"
+    echo -e "${C_YELLOW}Tất cả domain trên hệ thống đều đã được cấu hình tự động dọn dẹp backup!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-backup-restore-main 1
   fi
@@ -109,7 +115,7 @@ function lua_chon_NAME() {
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  local title_text="Lựa chọn website muốn thiết lập tự động xóa backup cũ:"
+  local title_text="Lựa chọn website muốn thiết lập tự động dọn dẹp backup cũ:"
   local len=$(echo -n "$title_text" | awk '{print length($0)}')
   local pad_r=$((box_inner_width - len - 2))
   [[ $pad_r -lt 0 ]] && pad_r=0
@@ -200,55 +206,59 @@ if [[ "$NAME" != 'Tất cả website' ]]; then
 fi
 
 # ==============================================================================
-# NHẬP VÀ XÁC NHẬN SỐ NGÀY LƯU TRỮ
+# NHẬP VÀ XÁC NHẬN SỐ LƯỢNG BẢN SAO LƯU (VERSIONING)
 # ==============================================================================
 echo ""
+echo -e "(${C_GREEN}1 Bản backup = 1 file Mã nguồn + 1 file Database${C_RESET})"
+echo ""
 while true; do
-  echo -en "${C_CYAN}Nhập số ngày lưu trữ file backup (Ví dụ: 10, 30, 60): ${C_RESET}"
-  read -r ngay
-  if [[ ! "$ngay" =~ ^[1-9][0-9]*$ ]]; then
-    echo -e "${C_RED}❌ Lỗi: Số ngày không hợp lệ! Vui lòng nhập số nguyên dương lớn hơn 0.${C_RESET}"
+  echo -en "${C_CYAN}Nhập số lượng bản backup muốn giữ lại ở Local (Ví dụ: 3, 5, 10): ${C_RESET}"
+  read -r so_ban
+  if [[ ! "$so_ban" =~ ^[1-9][0-9]*$ ]]; then
+    echo -e "${C_RED}❌ Lỗi: Số lượng không hợp lệ! Vui lòng nhập số nguyên dương lớn hơn 0.${C_RESET}"
   else
     break
   fi
 done
 
-phut=$((ngay * 60 * 24))
-
 echo ""
-msg_xacnhan="Bạn muốn tự động xóa các file backup cũ hơn ${C_YELLOW}$ngay ngày${C_RESET}?"
+msg_xacnhan="Bạn muốn tự động xóa file dư thừa, luôn giữ lại ${C_YELLOW}$so_ban bản mới nhất${C_RESET} ở Local?"
 if wptt_xac_nhan "$msg_xacnhan" "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$NAME${C_RESET}" "" "Đồng ý Thiết lập" "Hủy bỏ"; then
 
   mkdir -p /etc/wptt-auto
 
   # ==============================================================================
-  # GHI FILE CẤU HÌNH VÀ CRON
+  # GHI FILE CẤU HÌNH VÀ CRON (TƯƠNG THÍCH NGƯỢC)
   # ==============================================================================
-  _runing "Đang khởi tạo chu kỳ Cronjob tự động dọn dẹp..."
+  _runing "Đang khởi tạo chu kỳ Cronjob tự động dọn dẹp Local..."
 
   if [[ "$NAME" == 'Tất cả website' ]]; then
     cat >"/etc/wptt-auto/all-delete-backup-het-han-local" <<END
 #!/bin/bash
-ionice -c 3 nice -n 19 find /usr/local/backup-website -maxdepth 2 -type f -mmin +$phut -delete 2>/dev/null
+/bin/bash /etc/wptt/backup-restore/wptt-auto-delete-local-backup "$NAME" $so_ban
 END
     chmod 700 /etc/wptt-auto/all-delete-backup-het-han-local
 
     cat >"/etc/cron.d/delete-backup-all-website-wptt-ols-local.cron" <<END
-0 2 * * * root /etc/wptt-auto/all-delete-backup-het-han-local >/dev/null 2>&1
+0 2 * * * root /bin/bash /etc/wptt-auto/all-delete-backup-het-han-local >/dev/null 2>&1
+
 END
+    chmod 644 "/etc/cron.d/delete-backup-all-website-wptt-ols-local.cron"
   else
     cat >"/etc/wptt-auto/$NAME-delete-backup" <<END
 #!/bin/bash
-ionice -c 3 nice -n 19 find /usr/local/backup-website/$NAME -maxdepth 1 -type f -mmin +$phut -delete 2>/dev/null
+/bin/bash /etc/wptt/backup-restore/wptt-auto-delete-local-backup $NAME $so_ban
 END
     chmod 700 "/etc/wptt-auto/$NAME-delete-backup"
 
     cat >"/etc/cron.d/delete$NAME.cron" <<END
-0 2 * * * root /etc/wptt-auto/$NAME-delete-backup >/dev/null 2>&1
+0 2 * * * root /bin/bash /etc/wptt-auto/$NAME-delete-backup >/dev/null 2>&1
+
 END
+    chmod 644 "/etc/cron.d/delete$NAME.cron"
   fi
 
-  # Khởi động lại Cron daemon
+  # Khởi động lại Cron daemon (Kèm logic tạo Symlink cho Ubuntu y hệt phiên bản cũ)
   if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
     if [[ "$NAME" == 'Tất cả website' ]]; then
       ln -sf /etc/cron.d/delete-backup-all-website-wptt-ols-local.cron /etc/cron.d/delete-backup-all-website-wptt-ols-local_cron 2>/dev/null
@@ -261,18 +271,15 @@ END
     systemctl restart crond.service
   fi
 
-  echo "Thiết lập tự động xóa backup hết hạn $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  echo "Thiết lập tự động dọn dẹp backup Local $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
   _rundone "Cấu hình Cronjob thành công"
 
-  # ==============================================================================
-  # BẢNG TÓM TẮT THÀNH CÔNG (UX BO CONG - ĐỒNG BỘ VIỀN CYAN)
-  # ==============================================================================
   echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_GREEN}THIẾT LẬP TỰ ĐỘNG XÓA BACKUP THÀNH CÔNG${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
   left_text "Website        : ${C_YELLOW}$NAME${C_RESET}"
-  left_text "Thời gian lưu  : ${C_YELLOW}$ngay ngày${C_RESET}"
+  left_text "Số bản giữ lại : Luôn giữ ${C_YELLOW}$so_ban bản mới nhất${C_RESET}"
 
   if [[ "$NAME" == 'Tất cả website' ]]; then
     left_text "Khu vực quét   : /usr/local/backup-website/*"
@@ -282,7 +289,8 @@ END
 
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   echo -e "${C_CYAN}Ghi chú:${C_RESET} Cứ vào lúc ${C_GREEN}2 giờ sáng hàng ngày${C_RESET}, hệ thống sẽ tự động quét."
-  echo -e "Các file backup cũ hơn ${C_YELLOW}$ngay ngày${C_RESET} sẽ bị loại bỏ để giải phóng ổ cứng."
+  echo -e "Chỉ những file vượt quá ${C_YELLOW}giới hạn $so_ban bản${C_RESET} sẽ bị loại bỏ để giải phóng ổ cứng."
+  echo -e "(${C_GREEN}1 Bản = 1 file Mã nguồn + 1 file Database${C_RESET})"
 
 else
   echo -e "${C_YELLOW}Đã hủy thao tác thiết lập Auto Delete.${C_RESET}"
