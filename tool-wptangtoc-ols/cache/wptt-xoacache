@@ -122,237 +122,287 @@ if [[ -z "$plugins_active" ]]; then
 fi
 
 echo "$don_dep $toan_bo cache website $NAME:"
+
+# ----------------- OPCACHE -----------------
 _runing "$don_dep Cache OpCache"
 . /etc/wptt/cache/lib-opcache-clear
 wptt_xoa_opcache "$NAME"
-_rundone "$don_dep Cache OpCache"
+if [ $? -eq 0 ]; then
+  _rundone "$don_dep Cache OpCache"
+else
+  _runloi "$don_dep Cache OpCache"
+fi
 
+# ----------------- WP OBJECT CACHE -----------------
 _runing "$don_dep WP object cache"
 /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp cache flush --path="$path2" --allow-root >/dev/null 2>&1
-_rundone "$don_dep WP object cache"
+if [ $? -eq 0 ]; then
+  _rundone "$don_dep WP object cache"
+else
+  _runloi "$don_dep WP object cache"
+fi
 
-##bắt đầu xoá cache redis/valkey/keydb
-#if systemctl is-active --quiet valkey 2>/dev/null; then
-#  ACTIVE_CACHE="Valkey"
-#  CLI_TOOL="valkey-cli"
-#  SOCKET_PATH="/var/run/valkey/valkey.sock"
-#elif systemctl is-active --quiet keydb 2>/dev/null; then
-#  ACTIVE_CACHE="KeyDB"
-#  CLI_TOOL="keydb-cli"
-#  SOCKET_PATH="/var/run/keydb/keydb.sock"
-#elif systemctl is-active --quiet redis 2>/dev/null; then
-#  ACTIVE_CACHE="Redis"
-#  CLI_TOOL="redis-cli"
-#  SOCKET_PATH="/var/run/redis/redis.sock"
-#fi
-
-#if [[ -S "$SOCKET_PATH" ]]; then
-#  PING_CMD="$CLI_TOOL -s $SOCKET_PATH ping"
-#  FLUSH_CMD="$CLI_TOOL -s $SOCKET_PATH flushall"
-#else
-#  # Fallback nếu ai đó lỡ cấu hình TCP thủ công
-#  PING_CMD="$CLI_TOOL ping"
-#  FLUSH_CMD="$CLI_TOOL flushall"
-#fi
-
-#if [ "$($PING_CMD 2>/dev/null)" = "PONG" ]; then
-#  _runing "$don_dep cache $ACTIVE_CACHE"
-#  # ( echo "flushall" ) | redis-cli >/dev/null 2>&1
-#  $FLUSH_CMD >/dev/null 2>&1
-#  _rundone "$don_dep cache $ACTIVE_CACHE"
-#fi
-
-##két thức xoá cache redis/valkey/keydb
-
-#if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-#  duong_path_memcached_config="/etc/memcached.conf"
-#else
-#  duong_path_memcached_config="/etc/sysconfig/memcached"
-#fi
-
-#if [[ -f $duong_path_memcached_config ]]; then
-#  if [ "$(systemctl is-active memcached.service)" == "active" ]; then
-#    #cải tiến xoá memcached dùng socat nó không bị kẹt như nc
-#    _runing "$don_dep cache Memcached"
-#    # echo "flush_all" | nc -U /var/run/memcached/memcached.sock >/dev/null 2>&1
-#    echo "flush_all" | socat - UNIX-CONNECT:/var/run/memcached/memcached.sock >/dev/null 2>&1
-#    _rundone "$don_dep cache Memcached"
-#  fi
-#fi
-
-pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/litespeed-cache"
-if [[ $(echo "$plugins_active" | grep 'litespeed-cache') ]]; then
+# ----------------- LITESPEED CACHE -----------------
+if grep -q 'litespeed-cache' <<< "$plugins_active"; then
   _runing "$don_dep cache LiteSpeed cache"
 
   # 1. Chạy lệnh WP-CLI lần 1 (Thử bằng DNS thật)
   purge_output=$(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-purge all --path="$path2" --allow-root 2>&1)
 
-  # 2. Bắt lỗi DNS (Tên miền chưa trỏ IP)
-  if [[ "$purge_output" == *"cURL error 6"* ]] || [[ "$purge_output" == *"Could not resolve host"* ]] || [[ "$purge_output" == *"cURL error 7"* ]]; then
-
-    # --- KÍCH HOẠT KỊCH BẢN FAKE DNS ---
-
-    # Thêm tên miền vào /etc/hosts trỏ về localhost.
-    # Mẹo: Gắn thêm tag '#wptt_dns_local_clear_cache' ở cuối để lát nữa xóa cho an toàn và chính xác.
-    echo "127.0.0.1 $NAME www.$NAME #wptt_dns_local_clear_cache" >>/etc/hosts
-
-    # Chạy lại lệnh purge lần 2 (Lúc này cURL sẽ nhìn thấy IP 127.0.0.1 và bỏ qua DNS public)
-    purge_output_retry=$(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-purge all --path="$path2" --allow-root 2>&1)
-
-    # DỌN DẸP: Xóa ngay dòng Fake DNS vừa thêm vào để trả lại nguyên trạng cho hệ thống
+  # 2. Nếu dính lỗi cURL (Bao gồm cả lỗi 6, 7 DNS và lỗi 28 Timeout)
+  if [[ "$purge_output" == *"cURL error"* ]] || [[ "$purge_output" == *"Could not resolve"* ]]; then #xác định website chưa trỏ dns chuẩn xác vào máy chủ
+    
+    # --- KÍCH HOẠT FAKE DNS BẰNG IP THẬT CỦA MÁY CHỦ ---
+    # Lấy IP LAN/Public chính của VPS thay vì dùng 127.0.0.1 để tránh lỗi Listener của OLS
+    SERVER_IP=$(ip -4 route get 8.8.8.8 | awk '{print $7}' | head -n 1)
+    
+    echo "$SERVER_IP $NAME www.$NAME #wptt_dns_local_clear_cache" >>/etc/hosts
+    
+    # Chạy lại lệnh purge lần 2
+    purge_output=$(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-purge all --path="$path2" --allow-root 2>&1)
+    
+    # Dọn dẹp trả lại nguyên trạng file hosts
     sed -i '/#wptt_dns_local_clear_cache/d' /etc/hosts
+  fi
 
-    # Kiểm tra kết quả lần 2
-    if [[ "$purge_output_retry" == *"cURL error"* ]] || [[ "$purge_output_retry" == *"Could not resolve"* ]]; then
-      _runloi "$don_dep cache LiteSpeed cache"
-      echo "   -> Lỗi: Đã dùng DNS ảo (localhost) nhưng vẫn không thể xóa cache cho '$NAME'."
-      echo "   -> Chi tiết: $purge_output_retry"
+  # 3. ĐÁNH GIÁ KẾT QUẢ & KÍCH HOẠT FALLBACK VẬT LÝ
+  if [[ "$purge_output" == *"cURL error"* ]] || [[ "$purge_output" == *"Could not resolve"* ]]; then
+    
+    # --- CÚ ĐẤM THÉP: XÓA FILE CACHE VẬT LÝ NẾU WP-CLI VẪN THẤT BẠI ---
+    # (Đảm bảo cache được dọn dẹp 100% kể cả khi web bị lỗi mạng/đứt DNS)
+    if [[ -d "/usr/local/lsws/$NAME/lscache" ]]; then
+      rm -rf "/usr/local/lsws/$NAME/lscache/"* 2>/dev/null
+      _rundone "$don_dep cache LiteSpeed cache (Bằng File vật lý)"
+    elif [[ -d "/usr/local/lsws/cachedata" ]]; then
+      rm -rf "/usr/local/lsws/cachedata/"* 2>/dev/null
+      _rundone "$don_dep cache LiteSpeed cache (Bằng File vật lý)"
     else
-      _rundone "$don_dep cache LiteSpeed cache"
+      _runloi "$don_dep cache LiteSpeed cache"
+      echo "   -> Lỗi Timeout/DNS: WP-CLI thất bại và không tìm thấy thư mục lscache."
+      echo "   -> Chi tiết: $purge_output"
     fi
 
   else
-    # Nếu lần 1 không dính lỗi DNS, ta check xem có báo Success (Thành công) không
-    if [[ "$purge_output" == *"Success"* ]] || [ $? -eq 0 ]; then
-      _rundone "$don_dep cache LiteSpeed cache"
-    else
-      _runloi "$don_dep cache LiteSpeed cache"
-      echo "   -> Lỗi không xác định: $purge_output"
-    fi
+    # Nếu không còn chữ cURL error thì là thành công
+    _rundone "$don_dep cache LiteSpeed cache"
   fi
 
-  if [[ -f /usr/local/lsws/$NAME/html/wp-content/object-cache.php ]]; then
-    if [[ $(cat /usr/local/lsws/"$NAME"/html/wp-content/object-cache.php | grep 'litespeed_conf') ]]; then
-      if [[ -f $duong_dan_config_redis || -f $duong_path_memcached_config || -d /usr/local/lsmcd ]]; then
+  # Object cache chỉ kiểm tra khi litespeed-cache thực sự active
+  if [[ -f "/usr/local/lsws/$NAME/html/wp-content/object-cache.php" ]]; then
+    if grep -q 'litespeed_conf' "/usr/local/lsws/$NAME/html/wp-content/object-cache.php" 2>/dev/null; then
+      if [[ -f "$duong_dan_config_redis" || -f "$duong_path_memcached_config" || -d "/usr/local/lsmcd" ]]; then
         _runing "$don_dep Object Cache"
         /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'LiteSpeed\Purge::purge_all_object();' --allow-root --path="$path2" >/dev/null 2>&1
-        _rundone "$don_dep Object Cache"
+        if [ $? -eq 0 ]; then
+          _rundone "$don_dep Object Cache"
+        else
+          _runloi "$don_dep Object Cache"
+        fi
       fi
     fi
   fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'swift-performance-lite') ]]; then
-  _runing "$don_dep cache swift preformance lite"
+# ----------------- SWIFT PERFORMANCE LITE -----------------
+if grep -q 'swift-performance-lite' <<< "$plugins_active"; then
+  _runing "$don_dep cache swift performance lite"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp sp_clear_all_cache --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache swift preformance lite"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache swift performance lite"
+  else
+    _runloi "$don_dep cache swift performance lite"
+  fi
   swift_clear=1
 fi
 
+# ----------------- SWIFT PERFORMANCE PRO -----------------
 if [[ -z "$swift_clear" ]]; then
-  if [[ $(echo "$plugins_active" | grep 'swift-performance') ]]; then
-    _runing "$don_dep cache swift preformance pro"
+  if grep -q 'swift-performance' <<< "$plugins_active"; then
+    _runing "$don_dep cache swift performance pro"
     /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp sp_clear_all_cache --allow-root --path="$path2" >/dev/null 2>&1
-    _rundone "$don_dep cache swift preformance pro"
+    if [ $? -eq 0 ]; then
+      _rundone "$don_dep cache swift performance pro"
+    else
+      _runloi "$don_dep cache swift performance pro"
+    fi
   fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-rocket') ]]; then
+# ----------------- WP ROCKET -----------------
+if grep -q 'wp-rocket' <<< "$plugins_active"; then
   _runing "$don_dep cache wp rocket"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'rocket_clean_domain();' --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache wp rocket"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache wp rocket"
+  else
+    _runloi "$don_dep cache wp rocket"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'elementor') ]]; then
+# ----------------- ELEMENTOR -----------------
+if grep -q 'elementor' <<< "$plugins_active"; then
   _runing "$don_dep cache elementor"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp elementor flush_css --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache elementor"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache elementor"
+  else
+    _runloi "$don_dep cache elementor"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'w3-total-cache') ]]; then
+# ----------------- W3 TOTAL CACHE -----------------
+if grep -q 'w3-total-cache' <<< "$plugins_active"; then
   _runing "$don_dep cache w3-total-cache"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'w3tc_pgcache_flush();' --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache w3-total-cache"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache w3-total-cache"
+  else
+    _runloi "$don_dep cache w3-total-cache"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'cache-enabler') ]]; then
+# ----------------- CACHE ENABLER -----------------
+if grep -q 'cache-enabler' <<< "$plugins_active"; then
   _runing "$don_dep cache cache-enabler"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'Cache_Enabler::clear_total_cache();' --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache cache-enabler"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache cache-enabler"
+  else
+    _runloi "$don_dep cache cache-enabler"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'autoptimize') ]]; then
+# ----------------- AUTOPTIMIZE -----------------
+if grep -q 'autoptimize' <<< "$plugins_active"; then
   _runing "$don_dep cache autoptimize"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'autoptimizeCache::clearall();' --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache autoptimize"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache autoptimize"
+  else
+    _runloi "$don_dep cache autoptimize"
+  fi
 fi
 
-if [[ -f /etc/wptt/.cloudflare/wptt-$NAME.ini || -f /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf || $(echo "$plugins_active" | grep 'cloudflare') ]]; then
+# ----------------- CLOUDFLARE -----------------
+if [[ -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf" ]] || grep -q 'cloudflare' <<< "$plugins_active"; then
   unset TRACE_OUTPUT
   TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
-  # Kiểm tra output có chứa các key đặc trưng của Cloudflare không
-  if [[ $(echo "$plugins_active" | grep 'cloudflare') ]]; then
+  
+  if grep -q 'cloudflare' <<< "$plugins_active"; then
     _runing "$don_dep cache cloudflare apo"
     /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval '$apo_api = new \CF\WordPress\Hooks(); $apo_api->purgeCacheEverything();' --allow-root --path="$path2" >/dev/null 2>&1
-    . /etc/wptt/cache/cloudflare-cdn-cache-xoa "$NAME" >/dev/null 2>&1
-    _rundone "$don_dep cache cloudflare apo"
+    if [ $? -eq 0 ]; then
+      . /etc/wptt/cache/cloudflare-cdn-cache-xoa "$NAME" >/dev/null 2>&1
+	  cloudflare_cdn_apo='1'
+      _rundone "$don_dep cache cloudflare apo"
+    else
+      _runloi "$don_dep cache cloudflare apo"
+    fi
   fi
 
-  if grep -Eqi 'cloudflare|cf-ray' <<< "$TRACE_OUTPUT"; then #check xem có đang sử dụng CDN cloudflare không
-	  #xoá cache cloudflare cdn page cache
-	  if [[ -f /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf ]]; then
-		  _runing "$don_dep cache cloudflare CDN"
-		  . /etc/wptt/cache/cloudflare-cdn-cache-xoa "$NAME" >/dev/null 2>&1
-		  _rundone "$don_dep cache cloudflare CDN"
+
+  if [[ -z "$cloudflare_cdn_apo" ]];then
+	  if grep -Eqi 'cloudflare|cf-ray' <<< "$TRACE_OUTPUT"; then 
+		  if [[ -f /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf ]]; then
+			  _runing "$don_dep cache cloudflare CDN"
+			  . /etc/wptt/cache/cloudflare-cdn-cache-xoa "$NAME" >/dev/null 2>&1
+			  if [ $? -eq 0 ]; then
+				  _rundone "$don_dep cache cloudflare CDN"
+			  else
+				  _runloi "$don_dep cache cloudflare CDN"
+			  fi
+		  fi
 	  fi
+  fi
 
-    # if [[ -f /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf ]];then
-    # 	_runing "$don_dep cache cloudflare"
-    # 	. /etc/wptt/cache/cloudflare-cdn-cache-xoa $NAME >/dev/null 2>&1
-    # 	_rundone "$don_dep cache cloudflare"
-    # fi
+fi
+
+# ----------------- FLYING PRESS -----------------
+if grep -q 'flying-press' <<< "$plugins_active"; then
+  _runing "$don_dep cache Flying Press"
+  /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp flying-press purge-everything --allow-root --path="$path2" >/dev/null 2>&1
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache Flying Press"
+  else
+    _runloi "$don_dep cache Flying Press"
   fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'flying-press') ]]; then
-  _runing "$don_dep cache Flying Press"
-  # wp eval 'FlyingPress\Purge::purge_cached_pages();' --allow-root --path="$path2" >/dev/null 2>&1
-  /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp flying-press purge-everything --allow-root --path="$path2" >/dev/null 2>&1
-
-  # wp eval 'FlyingPress\Purge::purge_entire_cache();' --allow-root --path="$path2" >/dev/null 2>&1
-  _runing "$don_dep cache Flying Press"
-fi
-
-if [[ $(echo "$plugins_active" | grep 'wp-optimize') ]]; then
+# ----------------- WP-OPTIMIZE -----------------
+if grep -q 'wp-optimize' <<< "$plugins_active"; then
   _runing "$don_dep cache wp-optimize"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval '$wpoptimize_cache_commands = new WP_Optimize_Cache_Commands(); $wpoptimize_cache_commands->purge_page_cache();' --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache wp-optimize"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache wp-optimize"
+  else
+    _runloi "$don_dep cache wp-optimize"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'breeze') ]]; then
+# ----------------- BREEZE -----------------
+if grep -q 'breeze' <<< "$plugins_active"; then
   _runing "$don_dep cache breeze"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval "do_action('breeze_clear_all_cache');" --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache breeze"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache breeze"
+  else
+    _runloi "$don_dep cache breeze"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'flyingproxy') ]]; then
+# ----------------- FLYINGPROXY -----------------
+if grep -q 'flyingproxy' <<< "$plugins_active"; then
   _runing "$don_dep cache flyingproxy"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval "FlyingProxy\Purge::invalidate();" --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache flyingproxy"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache flyingproxy"
+  else
+    _runloi "$don_dep cache flyingproxy"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-fastest-cache') ]]; then
+# ----------------- WP FASTEST CACHE -----------------
+if grep -q 'wp-fastest-cache' <<< "$plugins_active"; then
   _runing "$don_dep cache wp-fastest-cache"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp fastest-cache clear all --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache wp-fastest-cache"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache wp-fastest-cache"
+  else
+    _runloi "$don_dep cache wp-fastest-cache"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-performance') ]]; then
+# ----------------- WP PERFORMANCE -----------------
+if grep -q 'wp-performance' <<< "$plugins_active"; then
   _runing "$don_dep cache WP Performance"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp wpp flush --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache WP Performance"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache WP Performance"
+  else
+    _runloi "$don_dep cache WP Performance"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wptangtoc') && -f $path2/wp-content/plugins/wptangtoc/class/Cache.php ]]; then
+# ----------------- WPTANGTOC -----------------
+if grep -q 'wptangtoc' <<< "$plugins_active" && [[ -f "$path2/wp-content/plugins/wptangtoc/class/Cache.php" ]]; then
   _runing "$don_dep cache WPTangToc"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval "WPTangToc\Preload::purge_all_cache_wptangtoc();" --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache WPTangToc"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache WPTangToc"
+  else
+    _runloi "$don_dep cache WPTangToc"
+  fi
 fi
 
-if [[ $(echo "$plugins_active" | grep 'wp-super-cache') ]]; then
+# ----------------- WP SUPER CACHE -----------------
+if grep -q 'wp-super-cache' <<< "$plugins_active"; then
   _runing "$don_dep cache WP Super Cache"
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'global $file_prefix, $supercachedir;if ( empty( $supercachedir ) && function_exists( "get_supercache_dir" ) ) {$supercachedir = get_supercache_dir();}wp_cache_clean_cache( $file_prefix );' --allow-root --path="$path2" >/dev/null 2>&1
-  _rundone "$don_dep cache WP Super Cache"
+  if [ $? -eq 0 ]; then
+    _rundone "$don_dep cache WP Super Cache"
+  else
+    _runloi "$don_dep cache WP Super Cache"
+  fi
 fi
 
 
@@ -365,3 +415,4 @@ check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wptt-cache-main 1
 fi
+
