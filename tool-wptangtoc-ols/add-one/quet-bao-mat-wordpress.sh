@@ -3,9 +3,8 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @description: Quét lỗ hổng bảo mật & Mã độc WordPress 
+# @description: Quét lỗ hổng bảo mật & Mã độc WordPress
 # @since: 2026
-
 
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -31,27 +30,30 @@ fi
 # XỬ LÝ VÒNG LẶP CHO "TẤT CẢ WEBSITE"
 # ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
-	for filepath in /etc/wptt/vhost/.*.conf; do
-		[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-		domain="${filepath##*/}"
-		domain="${domain%.conf}"
-		domain="${domain#.}"
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-		if [[ "$domain" == ?*.?* ]]; then
-			path_html="/usr/local/lsws/$domain/html"
-			# Chỉ quét các website là WordPress
-			if [[ -f "$path_html/wp-config.php" ]]; then
-				echo -e "\n${C_YELLOW}➜ Đang tiến hành quét bảo mật hàng loạt: ${C_GREEN}$domain${C_RESET}"
-				# SỬ DỤNG BASH ĐỂ TRÁNH TRÀN BIẾN MÔI TRƯỜNG
-				bash /etc/wptt/add-one/quet-bao-mat-wordpress.sh "$domain" "skip_menu"
-			fi
-		fi
-	done
-	[[ "$2" != "skip_menu" && "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
-	exit 0
+    if [[ "$domain" == ?*.?* ]]; then
+      path_html="/usr/local/lsws/$domain/html"
+      # Chỉ quét các website là WordPress
+      if [[ -f "$path_html/wp-config.php" ]]; then
+        echo -e "\n${C_YELLOW}➜ Đang tiến hành quét bảo mật hàng loạt: ${C_GREEN}$domain${C_RESET}"
+        # SỬ DỤNG BASH ĐỂ TRÁNH TRÀN BIẾN MÔI TRƯỜNG
+        bash /etc/wptt/add-one/quet-bao-mat-wordpress.sh "$domain" "skip_menu"
+      fi
+    fi
+  done
+  [[ "$2" != "skip_menu" && "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
+  exit 0
 fi
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && { [[ "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1; exit 0; }
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
+  exit 0
+}
 
 # ==============================================================================
 # ĐIỀU KIỆN KIỂM TRA ĐẦU VÀO
@@ -100,7 +102,8 @@ if [[ "$lock_down" == "1" ]]; then
 fi
 
 sed -i "/VULN_API_PROVIDER/d" "$wp_config"
-sed -i "/<?php/a define( 'VULN_API_PROVIDER', 'wordfence' );" "$wp_config"
+# Sử dụng phạm vi 1,/pattern/ để giới hạn
+sed -i "0,/<?php/s/<?php/<?php\ndefine( 'VULN_API_PROVIDER', 'wordfence' );/" "$wp_config"
 
 # 3. THỰC THI QUÉT LỖ HỔNG (WORDFENCE VULNERABILITY SCANNER)
 echo -e "\n${C_CYAN}➜ Đang quét lỗ hổng Plugin/Theme/Core bằng dữ liệu Wordfence...${C_RESET}"
@@ -124,10 +127,10 @@ echo -e "\n${C_CYAN}➜ Đang truy quét mã độc (Backdoor/Base64) bằng lõ
 malware_files=$(grep -Rn --include=\*.php -E "eval\s*\(\s*base64_decode|eval\s*\(\s*gzinflate|base64_decode\s*\(\s*str_rot13|shell_exec\s*\(|system\s*\(|passthru\s*\(" "/usr/local/lsws/$NAME/html/wp-content")
 
 if [[ -n "$malware_files" ]]; then
-    echo -e "${C_RED}[!] CẢNH BÁO BẢO MẬT: Phát hiện các đoạn code khả nghi (Có thể là Backdoor/Webshell):${C_RESET}"
-    echo "$malware_files" | awk -F: '{print "   - Bị nghi ngờ tại file: " $1 " (Dòng " $2 ")"}'
+  echo -e "${C_RED}[!] CẢNH BÁO BẢO MẬT: Phát hiện các đoạn code khả nghi (Có thể là Backdoor/Webshell):${C_RESET}"
+  echo "$malware_files" | awk -F: '{print "   - Bị nghi ngờ tại file: " $1 " (Dòng " $2 ")"}'
 else
-    echo -e "${C_GREEN}✔ An toàn: Không phát hiện các hàm mã độc phổ biến trong thư mục wp-content.${C_RESET}"
+  echo -e "${C_GREEN}✔ An toàn: Không phát hiện các hàm mã độc phổ biến trong thư mục wp-content.${C_RESET}"
 fi
 
 # 6. DỌN DẸP & ĐÓNG KHÓA LẠI (RESTORE)
