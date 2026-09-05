@@ -113,42 +113,76 @@ sed -i '/^[[:space:]]*client_secret[[:space:]]*=/d' "$CONF_FILE"
 sed -i "/^\[wptangtoc\]/a client_id = $new_client_id\nclient_secret = $new_client_secret" "$CONF_FILE"
 _rundone "Nạp cấu hình thành công!"
 
-# 8. BÀI TEST CHỐNG XUNG ĐỘT TOKEN CUỐI CÙNG
+# 8. BÀI TEST CHỐNG XUNG ĐỘT TOKEN VÀ HỖ TRỢ LẤY TOKEN MỚI TRỰC TIẾP
 _runing "Đang kiểm tra xung đột Token..."
 if ! rclone about wptangtoc: --retries 1 >/dev/null 2>&1; then
-    _runloi "Token cũ bị từ chối do khác Client ID!"
+    _runloi "Token cũ bị từ chối do không khớp với Client ID mới!"
     
-    # BẢO VỆ HỆ THỐNG: Rollback ngay lập tức về cấu hình cũ đang hoạt động
-    mv "/etc/wptt/tmp/rclone_conf_bak.ini" "$CONF_FILE"
+    echo -e "\n${C_YELLOW}YÊU CẦU ĐỒNG BỘ TOKEN (BẮT BUỘC):${C_RESET}"
+    echo -e "Để sử dụng API cá nhân, bạn phải cung cấp mã Token mới tương ứng với ID này."
+    echo -e "Hãy mở CMD/Terminal trên ${C_YELLOW}MÁY TÍNH CÁ NHÂN${C_RESET} và chạy lệnh dưới đây:"
     
-    echo -e "\n${C_YELLOW}CẢNH BÁO QUAN TRỌNG:${C_RESET}"
-    echo -e "Vì bạn đã nạp Client ID mới, Token hiện tại đã bị Google từ chối truy cập."
-    echo -e "Hệ thống đã tự động khôi phục lại cấu hình Rclone cũ để đảm bảo Backup đêm nay không bị lỗi.\n"
-    
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}HƯỚNG DẪN XỬ LÝ CHUẨN NHẤT${C_RESET}"
+    # In sẵn lệnh có kẹp ID và Secret để khách chỉ việc Copy
     echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Để dùng Client ID cá nhân mượt mà nhất, sếp hãy cài đặt lại từ đầu theo 3 bước:"
-    left_text "1. Lưu lại Client ID và Client Secret sếp vừa tạo."
-    left_text "2. Ra ngoài Menu Backup, chạy tính năng [Hủy đăng ký Google Drive]."
-    left_text "3. Chạy lại tính năng [Thiết lập Backup Google Drive] và sau điền ID/Secret mới vào."
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    center_text "${C_YELLOW}rclone authorize \"drive\" --drive-client-id \"$new_client_id\" --drive-client-secret \"$new_client_secret\"${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    echo -e "Trình duyệt sẽ mở ra. Bấm [Nâng cao] -> [Tiếp tục] để cấp quyền và copy mã Token.\n"
     
-    echo -en "${C_GREEN}➤ Ấn phím Enter bất kỳ để quay lại Menu Backup... ${C_RESET}"
-    read -r
-    exec /etc/wptt/wptt-backup-restore-main 1
-    exit 0
-else
-    _rundone "Rclone kết nối ổn định!"
-    echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}CẬP NHẬT CLIENT ID THÀNH CÔNG${C_RESET}"
-    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Hệ thống sẽ sử dụng API cá nhân của sếp cho các lần sao lưu tiếp theo."
-    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    echo -en "${C_GREEN}➤ Dán TOÀN BỘ mã Token mới của bạn vào đây [0=Hủy và Khôi phục cũ]: ${C_RESET}"
+    read -r checkid
     
-    # Dọn dẹp file temp an toàn
-    rm -f "/etc/wptt/tmp/rclone_conf_bak.ini"
+    if [[ "$checkid" == "0" || -z "$checkid" ]]; then
+        mv "/etc/wptt/tmp/rclone_conf_bak.ini" "$CONF_FILE"
+        echo -e "\n${C_RED}Đã hủy thao tác. Khôi phục lại cấu hình Rclone cũ an toàn!${C_RESET}"
+        rm -f "/etc/wptt/tmp/rclone_conf_bak.ini"
+        sleep 2
+        exec /etc/wptt/wptt-backup-restore-main 1
+        exit 0
+    fi
+
+    # Hút nốt các dòng còn lại trong bộ đệm (Nếu khách dán khối nhiều dòng)
+    while read -r -t 0.1 extra_line; do
+      checkid="$checkid$extra_line"
+    done
+
+    checkid="${checkid//$'\r'/}"
     
-    sleep 3
-    exec /etc/wptt/wptt-backup-restore-main 1
+    _runing "Đang giải mã và kết nối Token mới..."
+    
+    # Bóc tách chuẩn Token y hệt cơ chế gốc
+    clean_token=$(echo "$checkid" | sed 's/.*Paste the following into your remote machine --->//Ig' | sed 's/<---End paste.*//Ig' | tr -d '\n\r ')
+    if [[ "$clean_token" == eyJ* ]]; then
+      decoded_token=$(echo "$clean_token" | base64 -d 2>/dev/null)
+      clean_token=$(echo "$decoded_token" | sed 's/^{"token":"//' | sed 's/"}$//')
+      clean_token="${clean_token//\\\"/\"}"
+    fi
+    
+    # Tiêm Token mới vào file config
+    sed -i '/^[[:space:]]*token[[:space:]]*=/d' "$CONF_FILE"
+    sed -i "/^client_secret =/a token = $clean_token" "$CONF_FILE"
+    
+    # Test lại sau khi đã thay máu Token
+    if ! rclone about wptangtoc: --retries 1 >/dev/null 2>&1; then
+        _runloi "Token mới vẫn bị từ chối hoặc sai định dạng!"
+        mv "/etc/wptt/tmp/rclone_conf_bak.ini" "$CONF_FILE"
+        echo -e "${C_RED}Hệ thống đã tự động khôi phục lại cấu hình Rclone cũ.${C_RESET}"
+        rm -f "/etc/wptt/tmp/rclone_conf_bak.ini"
+        sleep 3
+        exec /etc/wptt/wptt-backup-restore-main 1
+        exit 1
+    fi
 fi
+
+_rundone "Rclone kết nối API độc quyền thành công!"
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}CẬP NHẬT CLIENT ID THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Hệ thống sẽ sử dụng API cá nhân của bạn cho các lần sao lưu tiếp theo."
+left_text "Đảm bảo tốc độ Upload tối đa và không bao giờ bị lỗi 403 Rate Limit."
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+# Dọn dẹp file temp an toàn
+rm -f "/etc/wptt/tmp/rclone_conf_bak.ini"
+
+sleep 3
+exec /etc/wptt/wptt-backup-restore-main 1
