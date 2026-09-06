@@ -5,16 +5,16 @@
 # @since: 2026
 
 function huong_dan() {
-  Tính năng tự động xóa file backup cũ trên đám mây [OneDrive, Google Drive, S3] theo số lượng bản sao lưu.
+  Tính năng tự động dọn dẹp file backup cũ trên đám mây [OneDrive, Google Drive, S3] theo số lượng bản sao lưu.
 
   Nói đơn giản, bạn thiết lập quy tắc [ví dụ: chỉ giữ lại 10 bản sao lưu mới nhất]. Hệ thống sẽ tự động quét, bảo vệ 10 bản mới này và chỉ xóa những bản cũ hơn vượt quá giới hạn.
 
   Lưu ý quan trọng: "1 Bản" ở đây được hiểu là một bộ sao lưu hoàn chỉnh, bao gồm 1 file Mã Nguồn [.zip/.tar] VÀ 1 file Database [.sql]. Nếu bạn chọn giữ 10 bản, hệ thống sẽ giữ lại đúng 10 file Mã nguồn và 10 file Database tương ứng.
 
   Lợi ích VƯỢT TRỘI so với xóa theo ngày:
-  * An toàn tuyệt đối: Giả sử Cloud của bạn hết dung lượng hoặc API hết hạn không thể tải bản mới lên. Hệ thống sẽ KHÔNG xóa các bản cũ đi [vì số lượng file chưa vượt quá 10 bản]. Bạn luôn có "phao cứu sinh".
+  * An toàn tuyệt đối: Giả sử Cloud của bạn hết dung lượng hoặc API hết hạn không thể tải bản mới lên. Hệ thống sẽ KHÔNG xóa các bản cũ đi. Bạn luôn có "phao cứu sinh".
   * Tiết kiệm dung lượng: Ngăn chặn tích tụ rác quá mức giới hạn đã định.
-  * Quản lý khoa học: Luôn có một số lượng mốc thời gian cố định để lựa chọn khi cần khôi phục.
+  * Ưu tiên thông minh: Cấu hình của riêng từng Website sẽ luôn được ưu tiên cao nhất, không bị ghi đè bởi cấu hình "Tất cả website".
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -49,7 +49,7 @@ if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$RCLONE_CONF
 elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$RCLONE_CONF" 2>/dev/null; then
   cloud_name="S3 Storage"
   CLOUD_DIR="wptangtoc-ols-backup"
-elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+elif rclone --config="$RCLONE_CONF" lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
   CLOUD_DIR="wptangtoc-ols-backup"
 fi
 
@@ -69,20 +69,34 @@ if [[ -d /etc/wptt/vhost ]];then
 		if [[ "$domain" != ?*.?* ]]; then
 			continue
 		fi
-		path="/etc/cron.d/delete-google-driver-$domain.cron"
+		
+        # Hỗ trợ check cả bản cũ và bản mới
+        NAME_CRON=${domain//[.]/_}
+        path_cu="/etc/cron.d/delete-google-driver-$domain.cron"
+        path_moi="/etc/cron.d/delete_gdrive_${NAME_CRON}"
 
-		if [[ -f "$path" ]]; then
-			so_ban_luu_hien_tai=$(cat "/etc/wptt-auto/$domain-delete-backup-google-driver" 2>/dev/null | awk '{print $NF}' | grep -o '[0-9]\+')
-			domain_padded=$(printf "%-25s" "$domain")
-			active_list+=("${C_BOLD_WHITE}${domain_padded}${C_RESET} : Luôn giữ lại ${C_YELLOW}${so_ban_luu_hien_tai} bản${C_RESET} mới nhất")
+		if [[ -f "$path_cu" || -f "$path_moi" ]]; then
+            if grep -q "wptt-auto-delete-google-driver-backup" "/etc/wptt-auto/$domain-delete-backup-google-driver" 2>/dev/null; then
+			    so_ban_luu_hien_tai=$(cat "/etc/wptt-auto/$domain-delete-backup-google-driver" 2>/dev/null | awk '{print $NF}' | grep -o '[0-9]\+')
+			    domain_padded=$(printf "%-25s" "$domain")
+			    active_list+=("${C_BOLD_WHITE}${domain_padded}${C_RESET} : Luôn giữ lại ${C_YELLOW}${so_ban_luu_hien_tai} bản${C_RESET} mới nhất")
+            else
+                domain_padded=$(printf "%-25s" "$domain")
+			    active_list+=("${C_BOLD_WHITE}${domain_padded}${C_RESET} : Đang dùng cấu hình xóa theo ngày cũ")
+            fi
 		fi
 	done
 fi
 
-if [[ -f /etc/cron.d/delete-google-driver-all-website-wptt-ols.cron ]]; then
-  so_ban_luu_hien_tai=$(cat /etc/wptt-auto/delete-backup-google-driver-all-website 2>/dev/null | awk '{print $NF}' | grep -o '[0-9]\+')
-  domain_padded=$(printf "%-25s" "[Toàn bộ Website]")
-  active_list+=("${C_YELLOW}${domain_padded}${C_RESET} : Luôn giữ lại ${C_YELLOW}${so_ban_luu_hien_tai} bản${C_RESET} mới nhất")
+if [[ -f /etc/cron.d/delete-google-driver-all-website-wptt-ols.cron || -f /etc/cron.d/delete_gdrive_all_website ]]; then
+    if grep -q "wptt-auto-delete-google-driver-backup" "/etc/wptt-auto/delete-backup-google-driver-all-website" 2>/dev/null; then
+        so_ban_luu_hien_tai=$(cat /etc/wptt-auto/delete-backup-google-driver-all-website 2>/dev/null | awk '{print $NF}' | grep -o '[0-9]\+')
+        domain_padded=$(printf "%-25s" "[Toàn bộ Website]")
+        active_list+=("${C_YELLOW}${domain_padded}${C_RESET} : Luôn giữ lại ${C_YELLOW}${so_ban_luu_hien_tai} bản${C_RESET} mới nhất")
+    else
+        domain_padded=$(printf "%-25s" "[Toàn bộ Website]")
+        active_list+=("${C_YELLOW}${domain_padded}${C_RESET} : Đang dùng cấu hình xóa theo ngày cũ")
+    fi
 fi
 
 if [[ ${#active_list[@]} -gt 0 ]]; then
@@ -93,15 +107,18 @@ if [[ ${#active_list[@]} -gt 0 ]]; then
     left_text "$item" 2
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  echo -e "${C_GREEN}Cơ chế Ưu tiên:${C_RESET} Thiết lập của ${C_YELLOW}Website cụ thể${C_RESET} luôn đè lên thiết lập ${C_YELLOW}[Tất cả Website]${C_RESET}."
+  echo -e "${C_CYAN}VD:${C_RESET} Đặt 'Tất cả' giữ 5 bản, 'wptangtoc.com' giữ 15 bản ➜ wptangtoc.com sẽ được giữ 15 bản.\n"
 fi
 
 # ==============================================================================
-# HÀM MENU LỌC THÔNG MINH
+# HÀM MENU LỌC THÔNG MINH (NÂNG CẤP UX ĐỒNG LOẠT)
 # ==============================================================================
 function lua_chon_NAME() {
   unset NAME selects
   selects=()
 
+  # 1. Thu thập danh sách domain đơn lẻ
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     local domain="${filepath##*/}"
@@ -109,13 +126,18 @@ function lua_chon_NAME() {
     domain="${domain#.}"
 
     if [[ "$domain" == ?*.?* ]]; then
-      if [[ ! -f "/etc/cron.d/delete-google-driver-$domain.cron" ]]; then
+      local NAME_CRON=${domain//[.]/_}
+      if [[ ! -f "/etc/cron.d/delete-google-driver-$domain.cron" && ! -f "/etc/cron.d/delete_gdrive_${NAME_CRON}" ]]; then
         selects+=("$domain")
       fi
     fi
   done
 
-  if [[ ! -f /etc/cron.d/delete-google-driver-all-website-wptt-ols.cron ]]; then
+  # Sắp xếp mảng domain lẻ theo A-Z
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  # 2. Thu thập và nhét "Tất cả website" xuống cuối mảng
+  if [[ ! -f /etc/cron.d/delete-google-driver-all-website-wptt-ols.cron && ! -f /etc/cron.d/delete_gdrive_all_website ]]; then
     selects+=("Tất cả website")
   fi
 
@@ -125,8 +147,7 @@ function lua_chon_NAME() {
     exec /etc/wptt/wptt-backup-restore-main 1
   fi
 
-  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
-
+  # 3. Vẽ UI Menu
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   local title_text="Lựa chọn website muốn thiết lập tự động dọn dẹp trên Cloud:"
   local len=$(echo -n "$title_text" | awk '{print length($0)}')
@@ -141,17 +162,35 @@ function lua_chon_NAME() {
   echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
   local i=1
-  for domain in "${selects[@]}"; do
+  local total_items=${#selects[@]}
+
+  for (( idx=0; idx<total_items; idx++ )); do
+    local domain="${selects[$idx]}"
+    
     if [[ "$domain" == "Tất cả website" ]]; then
+      # Vẽ viền phân cách UX nếu có domain lẻ ở phía trên
+      if [[ $idx -gt 0 ]]; then
+        echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      fi
+      
+      # Hiển thị chữ "Tất cả website" tiêu chuẩn màu vàng
       local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_YELLOW}%s${C_RESET}" "$i" "$domain")
+      local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     else
+      # Dòng hiển thị Domain lẻ bình thường màu trắng
       local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+      local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     fi
-    local clean_text=$(printf "  %3d) %s" "$i" "$domain")
-    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    local pad=$((box_inner_width - item_len))
-    [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
@@ -224,7 +263,6 @@ fi
 echo ""
 echo -e "(${C_GREEN}1 Bản backup = 1 file Mã nguồn + 1 file Database${C_RESET})"
 echo ""
-echo ""
 while true; do
 	echo -en "${C_CYAN}Nhập số lượng bản backup muốn giữ lại trên $cloud_name (Ví dụ: 7, 10, 30): ${C_RESET}"
 	read -r so_ban
@@ -242,30 +280,34 @@ if wptt_xac_nhan "$msg_xacnhan" "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$N
   mkdir -p /etc/wptt-auto
 
   # ==============================================================================
-  # GHI FILE CẤU HÌNH VÀ CRON
+  # GHI FILE CẤU HÌNH VÀ CRON (TƯƠNG THÍCH NGƯỢC)
   # ==============================================================================
   _runing "Đang khởi tạo chu kỳ Cronjob tự động dọn dẹp Cloud..."
 
   if [[ "$NAME" == 'Tất cả website' ]]; then
     cat >"/etc/wptt-auto/delete-backup-google-driver-all-website" <<END
 #!/bin/bash
-nice -n 19 /bin/bash /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup "$NAME" $so_ban
+/bin/bash /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup "$NAME" $so_ban
 END
     chmod 700 /etc/wptt-auto/delete-backup-google-driver-all-website
 
     cat >"/etc/cron.d/delete-google-driver-all-website-wptt-ols.cron" <<END
-0 3 * * * root /etc/wptt-auto/delete-backup-google-driver-all-website >/dev/null 2>&1
+0 3 * * * root /bin/bash /etc/wptt-auto/delete-backup-google-driver-all-website >/dev/null 2>&1
+
 END
+    chmod 644 "/etc/cron.d/delete-google-driver-all-website-wptt-ols.cron"
   else
     cat >"/etc/wptt-auto/$NAME-delete-backup-google-driver" <<END
 #!/bin/bash
-nice -n 19 /bin/bash /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup $NAME $so_ban
+/bin/bash /etc/wptt/backup-restore/wptt-auto-delete-google-driver-backup $NAME $so_ban
 END
     chmod 700 "/etc/wptt-auto/$NAME-delete-backup-google-driver"
 
     cat >"/etc/cron.d/delete-google-driver-$NAME.cron" <<END
-0 3 * * * root /etc/wptt-auto/$NAME-delete-backup-google-driver >/dev/null 2>&1
+0 3 * * * root /bin/bash /etc/wptt-auto/$NAME-delete-backup-google-driver >/dev/null 2>&1
+
 END
+    chmod 644 "/etc/cron.d/delete-google-driver-$NAME.cron"
   fi
 
   # Khởi động lại Cron daemon
