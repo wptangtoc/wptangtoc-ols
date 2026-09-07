@@ -367,8 +367,30 @@ fi
 list_ssl_domain_all=$(cat "/tmp/ssl-$NAME.txt" | sort -u | uniq | sed '/^$/d' | sed 's/^/-d /g' | tr -s '\n' ' ')
 duong_dan_docroot_web=$(cat "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" | grep 'docRoot' | awk '{print $2}' | head -1)
 
+
+LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
+
+
+# Đếm số dòng log TRƯỚC KHI chạy
+LINE_START=0
+[[ -f "$LOG_FILE" ]] && LINE_START=$(wc -l < "$LOG_FILE")
+
 # LỆNH THỰC THI CERTBOT
 certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --expand --webroot -w "${duong_dan_docroot_web}" "$list_ssl_domain_all" >/dev/null 2>&1
+
+
+LINE_END=0
+[[ -f "$LOG_FILE" ]] && LINE_END=$(wc -l < "$LOG_FILE")
+LINES_NEW=$((LINE_END - LINE_START))
+
+# Đề phòng file log bị hệ thống cắt (Rotate) giữa chừng khiến LINE_END nhỏ hơn
+if (( LINES_NEW <= 0 )); then
+	LINES_NEW=150 
+fi
+
+# LẤY ĐÚNG ĐOẠN LOG CỦA PHIÊN CHẠY VỪA RỒI
+# $RECENT_LOG là chuẩn hoá log 100% của phiên chạy
+RECENT_LOG=$(tail -n "$LINES_NEW" "$LOG_FILE" 2>/dev/null)
 
 # Sửa file Vhost (Bóc tách SSL cũ tự ký và đè SSL thật)
 if [[ -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" ]]; then
@@ -426,11 +448,8 @@ if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && 
   if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" ]]; then
     echo "Chứng chỉ đã được tải về nhưng cấu hình Web Server không nhận diện đúng HTTPS."
   else
-    LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
-    IS_BANNED=0
-
 		# 1. Quét log tìm lỗi "Ký tự không hợp lệ" (Invalid Character / Punycode)
-		INVALID_CHAR_MSG=$(tail -n 300 "$LOG_FILE" 2>/dev/null | grep "$NAME" | grep -E -i "rejectedIdentifier|Invalid identifiers requested|Domain name contains an invalid character" | tail -n 1)
+		INVALID_CHAR_MSG=$(echo "$RECENT_LOG" | grep -E -i "rejectedIdentifier|Invalid identifiers requested|Domain name contains an invalid character" | tail -n 1)
 
 		if [[ -n "$INVALID_CHAR_MSG" ]]; then
 			echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -447,48 +466,105 @@ if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" || ("$http_status" -ne 200 && 
 			left_text " - ${C_GREEN}Giải pháp:${C_RESET} Bạn không thể cài SSL Free cho tên miền này. Vui lòng" 2
 			left_text "   kiểm tra lại tên miền hoặc sử dụng chứng chỉ SSL trả phí (Tự ký)." 2
 			echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
+			echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+			read -r _
 			[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
 			return 1 2>/dev/null || exit 1
 		fi
 
+
+
+		# Quét log tìm lỗi "Không thể truy cập file xác thực (Unauthorized / 404 / 403)"
+		UNAUTHORIZED_MSG=$(echo "$RECENT_LOG" | grep -E -i "unauthorized|Invalid response from|404 Not Found|403 Forbidden" | tail -n 1)
+		if [[ -n "$UNAUTHORIZED_MSG" ]]; then
+			echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+			center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: KHÔNG THỂ ĐỌC FILE XÁC THỰC (UNAUTHORIZED)${C_RESET}"
+			echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+			left_text "  Tên miền báo lỗi : ${C_YELLOW}$NAME${C_RESET}" 2
+			left_text "  Mã lỗi Certbot   : ${C_BOLD_WHITE}Unauthorized / Invalid response${C_RESET}" 2
+			echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+			left_text " ${C_YELLOW}NGUYÊN NHÂN & CÁCH GIẢI QUYẾT TỪ HỆ THỐNG:${C_RESET}" 2
+			left_text " - Let's Encrypt đã kết nối được tới máy chủ của bạn, nhưng khi" 2
+			left_text "   tìm đọc file xác thực thì bị chặn lại (Lỗi 403) hoặc không" 2
+			left_text "   tìm thấy file (Lỗi 404)." 2
+			left_text " - ${C_RED}Thủ phạm thường gặp nhất:${C_RESET}" 2
+			left_text "   1. File ${C_YELLOW}.htaccess${C_RESET} của bạn có mã chặn truy cập thư mục ẩn." 2
+			left_text "   2. Bạn đang bật Tường lửa WAF (Cloudflare/Wordfence) chặn Bot." 2
+			left_text " - ${C_GREEN}Giải pháp tự khắc phục:${C_RESET}" 2
+			left_text "   Tạm thời xoá hết nội dung file ${C_YELLOW}.htaccess${C_RESET}," 2
+			left_text "   hoặc tắt các plugin bảo mật/Cloudflare WAF rồi thử cài lại SSL." 2
+			left_text "   (Cài xong SSL thì Khôi phục lại nội dung file .htaccess lại như cũ)." 2
+			echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+			echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+			read -r _
+			[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+			return 1 2>/dev/null || exit 1
+		fi
+
+		TIMEOUT_MSG=$(echo "$RECENT_LOG" | grep -E -i "Timeout after connect|Timeout during connect|Connection refused" | tail -n 1)
+		if [[ -n "$TIMEOUT_MSG" ]]; then
+			echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+			center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: HỆ THỐNG BỊ CHẶN KẾT NỐI (TIMEOUT/FIREWALL)${C_RESET}"
+			echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+			left_text "  Tên miền báo lỗi : ${C_YELLOW}$NAME${C_RESET}" 2
+			left_text "  Mã lỗi Certbot   : ${C_BOLD_WHITE}Timeout after connect / Connection refused${C_RESET}" 2
+			echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+			left_text " ${C_YELLOW}NGUYÊN NHÂN VÀ CÁCH GIẢI QUYẾT TỪ HỆ THỐNG:${C_RESET}" 2
+			left_text " - Máy chủ Let's Encrypt (đặt tại Mỹ) đang cố gắng truy cập vào file" 2
+			left_text "   xác thực trên website của bạn qua Port 80 nhưng bị chặn đứng lại." 2
+			left_text " - ${C_RED}Thủ phạm chính:${C_RESET} Đa số do nhà cung cấp VPS/Hosting của bạn đang" 2
+			left_text "   bật tính năng \"Tường lửa cứng\" chặn toàn bộ IP quốc tế truy cập vào," 2
+			left_text "   hoặc Port 80 đang bị chặn từ phía nhà mạng." 2
+			left_text " - ${C_GREEN}Giải pháp dứt điểm:${C_RESET}" 2
+			left_text "   1. Liên hệ ngay với bộ phận kỹ thuật / chỗ bạn mua VPS." 2
+			left_text "   2. Gửi yêu cầu: \"Vui lòng tắt Tường lửa chặn IP quốc tế hoặc" 2
+			left_text "      mở Port 80/443 ra quốc tế để tôi cài SSL Let's Encrypt\"." 2
+			left_text "   3. Sau khi họ hỗ trợ mở xong, bạn hãy quay lại đây cài tiếp." 2
+			echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+			echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+			read -r _
+			[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+			return 1 2>/dev/null || exit 1
+		fi
+
+
+
     # Quét log để tìm mã lỗi Rate Limit
-    LIMIT_MSG=$(tail -n 300 "$LOG_FILE" 2>/dev/null | grep -E -i "rateLimited|too many certificates" | tail -n 1)
+	if echo "$RECENT_LOG" | grep -Eqi "rateLimited|too many certificates|too many failed authorizations"; then
+			# Soi trực tiếp vào khối log để tìm chi tiết nguyên nhân, không sợ rớt dòng
+			if echo "$RECENT_LOG" | grep -qi "too many certificates already issued"; then
+				BAN_REASON="Cài trùng lặp quá nhiều (Giới hạn 5 lần / tuần)."
+				WAIT_TIME="Vui lòng chờ hệ thống mở khóa (Tối đa 7 ngày)."
+			elif echo "$RECENT_LOG" | grep -qi "too many failed authorizations"; then
+				BAN_REASON="Xác thực lỗi quá nhiều lần (Giới hạn 5 lần / giờ)."
+				WAIT_TIME="Hãy đợi đúng 1 tiếng đồng hồ nữa rồi thử lại."
+			elif echo "$RECENT_LOG" | grep -qi "Certificates per Registered Domain"; then
+				BAN_REASON="Vượt giới hạn chứng chỉ tên miền (50 lần/tuần)."
+				WAIT_TIME="Phải đợi Let's Encrypt reset lại quota trong tuần tới."
+			else
+				BAN_REASON="Vi phạm chính sách chống Spam API của Let's Encrypt."
+				WAIT_TIME="Vui lòng thử lại sau vài giờ hoặc vài ngày."
+			fi
 
-    if [[ -n "$LIMIT_MSG" ]]; then
-      IS_BANNED=1
-
-      if echo "$LIMIT_MSG" | grep -qi "too many certificates already issued"; then
-        BAN_REASON="Cài trùng lặp quá nhiều (Giới hạn 5 lần / tuần)."
-        WAIT_TIME="Vui lòng chờ hệ thống mở khóa (Tối đa 7 ngày)."
-      elif echo "$LIMIT_MSG" | grep -qi "too many failed authorizations"; then
-        BAN_REASON="Xác thực lỗi quá nhiều lần (Giới hạn 5 lần / giờ)."
-        WAIT_TIME="Hãy đợi đúng 1 tiếng đồng hồ nữa rồi thử lại."
-      elif echo "$LIMIT_MSG" | grep -qi "Certificates per Registered Domain"; then
-        BAN_REASON="Vượt giới hạn chứng chỉ tên miền (50 lần/tuần)."
-        WAIT_TIME="Phải đợi Let's Encrypt reset lại quota trong tuần tới."
-      else
-        BAN_REASON="Vi phạm chính sách chống Spam API của Let's Encrypt."
-        WAIT_TIME="Vui lòng thử lại sau vài giờ hoặc vài ngày."
-      fi
-
-      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: TÊN MIỀN BỊ KHÓA SSL TẠM THỜI${C_RESET}"
-      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "  Tên miền bị chặn : ${C_YELLOW}$NAME${C_RESET}" 2
-      left_text "  Nguyên nhân      : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
-      left_text "  Cách xử lý       : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
-      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text " ${C_YELLOW}GIẢI THÍCH & LỜI KHUYÊN TỪ HỆ THỐNG:${C_RESET}" 2
-      left_text " - Let's Encrypt giới hạn số lần tạo SSL để chống lạm dụng tài nguyên." 2
-      left_text " - Hệ thống ghi nhận tên miền này đã chạm ngưỡng giới hạn (do thử" 2
-      left_text "   cài lại quá nhiều lần hoặc xác thực thất bại liên tục)." 2
-      left_text " - ${C_RED}KHÔNG thử cài lại ngay lúc này${C_RESET} để tránh bị khóa lâu hơn." 2
-      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
-      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
-      return 1 2>/dev/null || exit 1
-    fi
+			echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+			center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: TÊN MIỀN BỊ KHÓA SSL TẠM THỜI${C_RESET}"
+			echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+			left_text "  Tên miền bị chặn : ${C_YELLOW}$NAME${C_RESET}" 2
+			left_text "  Nguyên nhân      : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
+			left_text "  Cách xử lý       : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
+			echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+			left_text " ${C_YELLOW}GIẢI THÍCH & LỜI KHUYÊN TỪ HỆ THỐNG:${C_RESET}" 2
+			left_text " - Let's Encrypt giới hạn số lần tạo SSL để chống lạm dụng tài nguyên." 2
+			left_text " - Hệ thống ghi nhận tên miền này đã chạm ngưỡng giới hạn (do thử" 2
+			left_text "   cài lại quá nhiều lần hoặc xác thực thất bại liên tục)." 2
+			left_text " - ${C_RED}KHÔNG thử cài lại ngay lúc này${C_RESET} để tránh bị khóa lâu hơn." 2
+			echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+			echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+			read -r _
+			[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+			return 1 2>/dev/null || exit 1
+	fi
 
     # Lựa chọn xem file log nếu lỗi không phải do Rate Limit
     echo -e "\nBạn có thể kiểm tra chi tiết nguyên nhân lỗi tại file log: ${C_YELLOW}$LOG_FILE${C_RESET}"
