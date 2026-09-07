@@ -72,7 +72,7 @@ if [[ $check ]]; then
 
     # Copy file gốc của hệ thống
     cp -rf /etc/skel/. /usr/local/lsws/"$NAME"
-    chown "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/.*
+    find /usr/local/lsws/"$NAME" -maxdepth 1 -name ".*" ! -name "." ! -name ".." -exec chown "$User_name_vhost":"$User_name_vhost" {} +
 
     chown -R root:wptangtoc-ols /etc/wptt-user
     chmod -R 750 /etc/wptt-user
@@ -89,6 +89,11 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     echo "alias 1='/etc/wptt-user/wptt-status'" >>/usr/local/lsws/"$NAME"/.bashrc
     echo "/etc/wptt-user/wptt-status" >>/usr/local/lsws/"$NAME"/.bashrc
     echo "export EDITOR=vi" >>/usr/local/lsws/"$NAME"/.bashrc
+    echo "export LANG=en_US.UTF-8" >>/usr/local/lsws/"$NAME"/.bashrc
+    echo "export LC_ALL=en_US.UTF-8" >>/usr/local/lsws/"$NAME"/.bashrc
+    
+    # Bơm biến môi trường PATH vào lồng
+    echo 'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"' >>/usr/local/lsws/"$NAME"/.bashrc
 
     # -----------------------------------------------------------------
     # SÁT CHIÊU ENTERPRISE: XÂY DỰNG CHROOT JAIL
@@ -96,14 +101,18 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     JAIL_PATH="/usr/local/lsws/$NAME"
     echo "Đang đúc hệ điều hành thu nhỏ (Chroot Jail) cho $User_name_vhost..."
 
-    # Nắn quyền chuỗi thư mục cha
+    # Nắn quyền chuỗi thư mục cha (Bọc thép OpenSSH)
+    chown root:root /usr
+    chmod 755 /usr
+    chown root:root /usr/local
+    chmod 755 /usr/local
     chown root:root /usr/local/lsws
     chmod 755 /usr/local/lsws
     chown root:root "$JAIL_PATH"
     chmod 755 "$JAIL_PATH"
 
     # =================================================================
-    # [VÁ LỖI OLS NAMESPACE] Phá Namespace trước khi đập bỏ lồng cũ
+    # Phá Namespace trước khi đập bỏ lồng cũ
     # =================================================================
     OLS_NS_PATH="/var/lsns/*/$NAME"
     if ls "$OLS_NS_PATH" 1>/dev/null 2>&1; then
@@ -113,7 +122,6 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
       rm -rf /var/lsns/*/"${NAME:?}" 2>/dev/null || true
     fi
 
-    # Ultimate cleanup phòng hờ
     grep "$JAIL_PATH" /proc/mounts | awk '{print $2}' | sort -r | while read -r mp; do
       umount -fl "$mp" 2>/dev/null || true
     done
@@ -125,9 +133,12 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     # 2. Đổ móng chuẩn kiến trúc AlmaLinux 9 / Ubuntu
     mkdir -p "$JAIL_PATH"/usr/{bin,sbin,lib,lib64}
     mkdir -p "$JAIL_PATH"/{dev,etc,tmp,dev/pts,logs}
+    
+    # Ép quyền cho các thư mục base bên trong Jail
+    chmod 755 "$JAIL_PATH"/usr "$JAIL_PATH"/usr/bin "$JAIL_PATH"/usr/sbin "$JAIL_PATH"/usr/lib "$JAIL_PATH"/usr/lib64
+    chmod 755 "$JAIL_PATH"/dev "$JAIL_PATH"/dev/pts "$JAIL_PATH"/etc
     chmod 1777 "$JAIL_PATH"/tmp
 
-    # [TÍNH NĂNG LOGS] Phân quyền độc quyền cho thư mục Logs Vhost
     if grep -q '^accesslog' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf; then
       mkdir -p "$JAIL_PATH"/logs
       chown nobody:"$User_name_vhost" "$JAIL_PATH"/logs
@@ -146,7 +157,7 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     mknod -m 666 "$JAIL_PATH"/dev/tty c 5 0 >/dev/null 2>&1 || true
     mknod -m 666 "$JAIL_PATH"/dev/ptmx c 5 2 >/dev/null 2>&1 || true
 
-    # 3. Hàm Bốc Thuốc
+    # 3. Hàm Bốc Thuốc (Đã vá quyền)
     copy_to_jail() {
       local src="$1"
       local dest="$src"
@@ -155,9 +166,24 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
       if [[ "$dest" == /bin/* ]]; then dest="/usr/bin/${dest#/bin/}"; fi
       if [[ "$dest" == /sbin/* ]]; then dest="/usr/sbin/${dest#/sbin/}"; fi
 
-      mkdir -p "$JAIL_PATH$(dirname "$dest")"
+      local dir="$JAIL_PATH$(dirname "$dest")"
+      mkdir -p "$dir"
+      chmod 755 "$dir" 2>/dev/null
       cp -L "$src" "$JAIL_PATH$dest" 2>/dev/null
+      chmod 755 "$JAIL_PATH$dest" 2>/dev/null
     }
+
+    # Bơm PHP Binary chuẩn xác để giữ nguyên đường dẫn php.ini
+    REAL_PHP=$(readlink -f /usr/bin/php 2>/dev/null)
+    if [[ -n "$REAL_PHP" && -f "$REAL_PHP" ]]; then
+      copy_to_jail "$REAL_PHP"
+      LIBS=$(ldd "$REAL_PHP" 2>/dev/null | grep -oE '/[^ ]+')
+      for LIB in $LIBS; do copy_to_jail "$LIB"; done
+      
+      mkdir -p "$JAIL_PATH/usr/bin" "$JAIL_PATH/bin"
+      ln -sf "$REAL_PHP" "$JAIL_PATH/usr/bin/php"
+      ln -sf "$REAL_PHP" "$JAIL_PATH/bin/php"
+    fi
 
     # 4. Bơm công cụ cho IT
     COMMANDS=(
@@ -165,7 +191,7 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
       "/usr/bin/mysql" "/usr/bin/mariadb" "/usr/bin/curl" "/usr/bin/clear" "/usr/bin/touch" "/bin/touch"
       "/usr/bin/grep" "/usr/bin/tail" "/usr/bin/vi" "/usr/bin/nano" "/usr/bin/stat" "/usr/bin/tar" "/usr/bin/head" "/usr/bin/openssl"
       "/usr/bin/sed" "/usr/bin/awk" "/usr/bin/cut" "/usr/bin/tr" "/usr/bin/wc" "/usr/bin/gzip" "/usr/bin/du" "/usr/bin/nice" "/usr/bin/ionice"
-      "/usr/bin/tput" "/usr/bin/php" "/usr/bin/find" "/usr/bin/xargs" "/usr/bin/chmod" "/usr/bin/mktemp" "/usr/bin/sleep" "/usr/bin/chown" "/usr/bin/nl"
+      "/usr/bin/tput" "/usr/bin/find" "/usr/bin/xargs" "/usr/bin/chmod" "/usr/bin/mktemp" "/usr/bin/sleep" "/usr/bin/chown" "/usr/bin/nl"
       "/usr/bin/wget" "/usr/bin/env" "/usr/bin/date" "/usr/bin/which" "/usr/bin/mysqldump" "/usr/bin/mariadb-dump" "/usr/bin/stty" "/usr/bin/zcat" "/usr/bin/top"
       "/usr/bin/less" "/usr/bin/more" "/usr/bin/jq" "/usr/bin/base64" "/usr/bin/bc"
     )
@@ -187,10 +213,16 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
       fi
     done
 
-    # [VÁ LỖI BẢO MẬT] Tước bỏ quyền SUID/SGID khỏi lồng
+    # Bơm thông điệp lỗi và ngôn ngữ của MariaDB để tránh cảnh báo rác
+    mkdir -p "$JAIL_PATH"/usr/share/mariadb "$JAIL_PATH"/usr/share/mysql
+    cp -a /usr/share/mariadb/* "$JAIL_PATH"/usr/share/mariadb/ 2>/dev/null || true
+    cp -a /usr/share/mysql/* "$JAIL_PATH"/usr/share/mysql/ 2>/dev/null || true
+    chmod -R 755 "$JAIL_PATH"/usr/share/mariadb "$JAIL_PATH"/usr/share/mysql 2>/dev/null || true
+
+    # Tước bỏ quyền SUID/SGID khỏi lồng
     chmod -R a-s "$JAIL_PATH"/bin "$JAIL_PATH"/sbin "$JAIL_PATH"/usr "$JAIL_PATH"/lib "$JAIL_PATH"/lib64 2>/dev/null || true
 
-    # Bơm PHP
+    # Bơm Cấu hình & Modules PHP
     PHP_INI=$(php -i 2>/dev/null | grep 'Loaded Configuration File' | awk '{print $NF}')
     PHP_SCAN_DIR=$(php -i 2>/dev/null | grep 'Scan this dir for additional .ini files' | awk '{print $NF}')
     PHP_EXT_DIR=$(php -i 2>/dev/null | grep '^extension_dir' | awk '{print $3}')
@@ -223,6 +255,13 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
 
     cp -L /etc/resolv.conf "$JAIL_PATH"/etc/ >/dev/null 2>&1 || true
     cp -L /etc/nsswitch.conf "$JAIL_PATH"/etc/ >/dev/null 2>&1 || true
+    
+    cp -L /etc/hosts "$JAIL_PATH"/etc/ >/dev/null 2>&1 || true
+    cp -L /etc/my.cnf "$JAIL_PATH"/etc/ >/dev/null 2>&1 || true
+    cp -Lr /etc/my.cnf.d "$JAIL_PATH"/etc/ >/dev/null 2>&1 || true
+    
+    chmod 644 "$JAIL_PATH"/etc/resolv.conf "$JAIL_PATH"/etc/nsswitch.conf "$JAIL_PATH"/etc/hosts "$JAIL_PATH"/etc/my.cnf 2>/dev/null || true
+    chmod -R 755 "$JAIL_PATH"/etc/my.cnf.d 2>/dev/null || true
 
     # BƠM CHỨNG CHỈ BẢO MẬT (CA CERTIFICATES)
     mkdir -p "$JAIL_PATH"/etc/pki/tls/certs "$JAIL_PATH"/etc/ssl/certs "$JAIL_PATH"/etc/pki/ca-trust/extracted/pem
@@ -231,18 +270,33 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     cp -Lr /etc/pki/ca-trust/extracted/pem/* "$JAIL_PATH"/etc/pki/ca-trust/extracted/pem/ 2>/dev/null || true
     cp -L /etc/pki/tls/openssl.cnf "$JAIL_PATH"/etc/pki/tls/ 2>/dev/null || true
     cp -L /etc/ssl/openssl.cnf "$JAIL_PATH"/etc/ssl/ 2>/dev/null || true
+    chmod -R a+rX "$JAIL_PATH"/etc/pki "$JAIL_PATH"/etc/ssl 2>/dev/null || true
 
     mkdir -p "$JAIL_PATH"/usr/share/terminfo
+    chmod 755 "$JAIL_PATH"/usr/share "$JAIL_PATH"/usr/share/terminfo 2>/dev/null || true
     cp -a /usr/share/terminfo/* "$JAIL_PATH"/usr/share/terminfo/ 2>/dev/null || true
     echo 'export TERM=xterm-256color' >>"$JAIL_PATH"/.bashrc
 
+    # Bơm dữ liệu múi giờ để PHP không văng lỗi
+    mkdir -p "$JAIL_PATH"/usr/share/zoneinfo
+    chmod 755 "$JAIL_PATH"/usr/share/zoneinfo 2>/dev/null || true
+    cp -a /usr/share/zoneinfo/* "$JAIL_PATH"/usr/share/zoneinfo/ 2>/dev/null || true
+    cp -L /etc/localtime "$JAIL_PATH"/etc/ 2>/dev/null || true
+
     # Từ điển
     mkdir -p "$JAIL_PATH"/usr/lib/locale "$JAIL_PATH"/usr/share/locale "$JAIL_PATH"/usr/lib64/gconv
+    chmod 755 "$JAIL_PATH"/usr/lib/locale "$JAIL_PATH"/usr/share/locale "$JAIL_PATH"/usr/lib64/gconv 2>/dev/null || true
     cp -a /usr/lib/locale/* "$JAIL_PATH"/usr/lib/locale/ 2>/dev/null || true
     cp -a /usr/share/locale/en_US* "$JAIL_PATH"/usr/share/locale/ 2>/dev/null || true
     cp -a /usr/lib64/gconv/* "$JAIL_PATH"/usr/lib64/gconv/ 2>/dev/null || true
 
-    # Nối ống nước Database
+    # [BẢN VÁ TRỌNG TÂM: MỞ ĐƯỜNG MÁU CHO WP-CLI]
+    # Rà quét và dẹp bỏ quyền 700 do Root Umask sinh ra ở các thư mục trung gian
+    # Mở cửa cho env chui qua ngóc ngách để gọi PHP
+    find "$JAIL_PATH/usr" -type d -exec chmod 755 {} + 2>/dev/null || true
+    find "$JAIL_PATH/opt" -type d -exec chmod 755 {} + 2>/dev/null || true
+
+    # Nối ống nước Database và khoan thủng quyền đọc socket
     if grep -qi "ubuntu" /etc/*release 2>/dev/null; then
       DEFAULT_SOCK="/run/mysqld/mysqld.sock"
     else
@@ -251,17 +305,27 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     REAL_SOCK=$(mariadb -N -e "select @@socket;" 2>/dev/null || echo "$DEFAULT_SOCK")
 
     if [ -S "$REAL_SOCK" ]; then
-      mkdir -p "$JAIL_PATH"$(dirname "$REAL_SOCK")
-      touch "$JAIL_PATH""$REAL_SOCK"
+      SOCK_DIR=$(dirname "$REAL_SOCK")
+      mkdir -p "$JAIL_PATH$SOCK_DIR"
+      
+      chmod 755 "$JAIL_PATH/var" "$JAIL_PATH/var/lib" "$JAIL_PATH/run" 2>/dev/null || true
+      chmod 755 "$JAIL_PATH$SOCK_DIR" 2>/dev/null || true
+      
+      touch "$JAIL_PATH$REAL_SOCK"
       mount --bind "$REAL_SOCK" "$JAIL_PATH$REAL_SOCK"
+      
+      ln -sf "$REAL_SOCK" "$JAIL_PATH/tmp/mysql.sock" 2>/dev/null || true
     fi
 
-    # Phân quyền User
+    # Phân quyền User (Đảm bảo ai cũng đọc được)
     grep "^root:" /etc/passwd >"$JAIL_PATH"/etc/passwd
     grep "^$User_name_vhost:" /etc/passwd | sed "s|$JAIL_PATH|/|g" >>"$JAIL_PATH"/etc/passwd
+    chmod 644 "$JAIL_PATH"/etc/passwd
+
     grep "^root:" /etc/group >"$JAIL_PATH"/etc/group
     grep "^wptangtoc-ols:" /etc/group >>"$JAIL_PATH"/etc/group
     grep "^$User_name_vhost:" /etc/group >>"$JAIL_PATH"/etc/group
+    chmod 644 "$JAIL_PATH"/etc/group
 
     # =======================================================
     # BƠM HỆ SINH THÁI MENU (KỸ THUẬT MOUNT FILE ĐƠN LẺ)
@@ -269,15 +333,15 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     mkdir -p "$JAIL_PATH"/etc/wptt-user
     chmod 755 "$JAIL_PATH"/etc
 
-    # [VÁ LỖI BẢO MẬT] Ngăn chặn user ghi đè vào file Vhost .conf của Root
+    # Ngăn chặn user ghi đè vào file Vhost .conf của Root
     chown root:wptangtoc-ols /etc/wptt/vhost/."$NAME".conf
     chmod 640 /etc/wptt/vhost/."$NAME".conf
 
-    # KỸ THUẬT ĐIÊU KHẮC: MOUNT FILE VHOST RA NÔNG HƠN (Tăng bảo mật ẩn danh trong Jail)
+    # KỸ THUẬT ĐIÊU KHẮC: MOUNT FILE VHOST RA NÔNG HƠN
     touch "$JAIL_PATH"/etc/."$NAME".conf
     mount --bind /etc/wptt/vhost/."$NAME".conf "$JAIL_PATH"/etc/."$NAME".conf
 
-    # Copy chìa khóa AES (Bảo tồn quyền 440 siêu bảo mật)
+    # Copy chìa khóa AES
     mkdir -p "$JAIL_PATH"/etc/wptt-aes
     if [[ -f /etc/wptt-aes/.wptt_salt.bin ]]; then
       cp -f /etc/wptt-aes/.wptt_salt.bin "$JAIL_PATH"/etc/wptt-aes/
@@ -293,8 +357,9 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     touch "$JAIL_PATH"/usr/bin/wptangtoc-user 2>/dev/null || true
     mount --bind /usr/bin/wptangtoc-user "$JAIL_PATH"/usr/bin/wptangtoc-user
 
-    # Inception OpenSSH
+    # Inception OpenSSH (Vá quyền đọc chéo trong lồng)
     mkdir -p "$JAIL_PATH"/usr/local/lsws
+    chmod 755 "$JAIL_PATH"/usr/local "$JAIL_PATH"/usr/local/lsws 2>/dev/null || true
     ln -s / "$JAIL_PATH"/usr/local/lsws/"$NAME" 2>/dev/null || true
 
     # -----------------------------------------------------------------
@@ -305,7 +370,7 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     chown "$User_name_vhost":"$User_name_vhost" "$CRON_JAIL_FILE"
     chmod 600 "$CRON_JAIL_FILE"
 
-    # Đúc lệnh Fake Crontab (Hoạt động mượt mà 100%)
+    # Đúc lệnh Fake Crontab
     cat <<'EOF' >"$JAIL_PATH"/usr/bin/crontab
 #!/bin/bash
 USER_CRON="/.cron_spool"
@@ -332,7 +397,7 @@ fi
 EOF
     chmod 755 "$JAIL_PATH"/usr/bin/crontab
 
-    # Khởi tạo Script đồng bộ Cron hệ thống (Luôn ghi đè để cập nhật thuật toán mới)
+    # Khởi tạo Script đồng bộ Cron hệ thống
     SYNC_SCRIPT="/etc/wptt/wptt-cron-jail-sync.sh"
     cat <<'EOF' >"$SYNC_SCRIPT"
 #!/bin/bash
@@ -363,7 +428,6 @@ for path in /etc/wptt/vhost/.*.conf; do
                 cmd=$(echo "$line" | cut -d' ' -f6-)
                 if [[ -n "$sched" && -n "$cmd" ]]; then
                     cmd_escaped=$(echo "$cmd" | sed "s/'/'\\\\''/g")
-                    # Dùng /usr/sbin/chroot kết hợp env để bơm biến môi trường PATH vào lồng
                     echo "$sched root /usr/sbin/chroot --userspec=$User_name_vhost:$User_name_vhost $JAIL /usr/bin/env HOME=/ PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '$cmd_escaped'" >> "$CRON_D"
                 fi
             done < "$SPOOL"
@@ -374,7 +438,6 @@ for path in /etc/wptt/vhost/.*.conf; do
     fi
 done
 
-# Tự động hủy diệt bot nếu không còn lồng ảo nào
 if [[ "$HAS_ACTIVE_JAILS" -eq 0 ]]; then
     rm -f /etc/cron.d/wptt-cron-jail-sync
     rm -f /etc/wptt/wptt-cron-jail-sync.sh
@@ -430,7 +493,7 @@ EOF
   left_text "Tài khoản USERNAME: $User_name_vhost"
   left_text "PassWord: ***************** (bạn vừa thiết lập vừa nãy)"
   port_ssh=$(grep -E '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
-  port_ssh=${port_ssh:-22} # Trả về 22 nếu kết quả rỗng
+  port_ssh=${port_ssh:-22}
 
   ip=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
   left_text "Truy cập vào ssh  : ssh -p $port_ssh $User_name_vhost@$ip"
@@ -451,12 +514,10 @@ if [[ -z "$check" ]]; then
   echo "Tắt đăng nhập username domain $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
   _runing "$tat $dang_nhap domain user"
 
-  # 1. Khóa tài khoản và Diệt tiến trình User
   usermod -L -s /sbin/nologin "$User_name_vhost" >/dev/null 2>&1
   pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 || true
   usermod -R wptangtoc-ols "$User_name_vhost" >/dev/null 2>&1
 
-  # Cấp quyền lại cho Root
   chmod 600 /etc/wptt/vhost/."$NAME".conf
   chown root:root /etc/wptt/vhost/."$NAME".conf
 
@@ -469,18 +530,15 @@ if [[ -z "$check" ]]; then
     chmod 700 /usr/bin/wptangtoc-user
   fi
 
-  # Dọn dẹp SSH
   sed -i -e "/^#begin-WPTT_JAIL_$User_name_vhost/,/^#end-WPTT_JAIL_$User_name_vhost$/d" /etc/ssh/sshd_config 2>/dev/null || true
   sed -i "/# WPTT_JAIL_$User_name_vhost/,+6d" /etc/ssh/sshd_config 2>/dev/null || true
   systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
 
-  # Xóa Cronjob trên máy chủ của user này
   domain_safe="${NAME//./_}"
   rm -f "/etc/cron.d/wpttjail_${domain_safe:?}" 2>/dev/null || true
 
   JAIL_PATH="/usr/local/lsws/$NAME"
 
-  # 2. Xé toạc Namespace OLS (Sát thủ gây kẹt mount)
   OLS_NS_PATH="/var/lsns/*/$NAME"
   if ls "$OLS_NS_PATH" 1>/dev/null 2>&1; then
     fuser -k -9 "$OLS_NS_PATH"/* "$OLS_NS_PATH"/*/mnt 2>/dev/null || true
@@ -489,7 +547,6 @@ if [[ -z "$check" ]]; then
     rm -rf /var/lsns/*/"${NAME:?}" 2>/dev/null || true
   fi
 
-  # 3. Rút toàn bộ ống nối WPTangToc
   if [[ -d "$JAIL_PATH" ]]; then
     umount -fl "$JAIL_PATH/etc/.$NAME.conf" 2>/dev/null || true
     umount -fl "$JAIL_PATH/etc/wptt-user" 2>/dev/null || true
@@ -506,12 +563,10 @@ if [[ -z "$check" ]]; then
     umount -fl "$JAIL_PATH$REAL_SOCK" 2>/dev/null || true
   fi
 
-  # 4. Ultimate Cleanup: Quét và gỡ tất cả mount point còn sót lại
   grep "$JAIL_PATH" /proc/mounts | awk '{print $2}' | sort -r | while read -r mp; do
     umount -fl "$mp" 2>/dev/null || true
   done
 
-  # 5. Đập bỏ lồng (Giữ lại thư mục logs)
   rm -rf "${JAIL_PATH:?}"/{bin,lib,lib64,sbin,usr,dev,etc,tmp,var}
 
   tuong_thich_nhom_litespeed="nobody"
@@ -525,7 +580,6 @@ if [[ -z "$check" ]]; then
     chmod 750 "$JAIL_PATH"/logs
   fi
 
-  # Restart lại OLS để trả lại socket mượt mà
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
   _rundone "$tat $dang_nhap domain user"
