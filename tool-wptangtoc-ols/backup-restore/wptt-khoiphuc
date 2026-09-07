@@ -55,6 +55,8 @@ fi
 # ==============================================================================
 # 1. CHỌN BẢN SAO LƯU MÃ NGUỒN (SOURCE CODE)
 # ==============================================================================
+cd
+
 if [[ ! "$(ls -A /usr/local/backup-website/"$NAME"/ 2>/dev/null)" && ! "$(ls -A /usr/local/lsws/"$NAME"/backup-website 2>/dev/null)" ]]; then
   echo -e "\n${C_YELLOW}⚠️ $khong_co_file_backup_nao_ton_tai${C_RESET}"
   echo "Vui lòng upload file backup của bạn vào: /usr/local/backup-website/$NAME/"
@@ -292,6 +294,34 @@ wptt_abort_db_injection() {
 # KHÔI PHỤC DATABASE (ATOMIC BLUE/GREEN SWAP)
 # ==============================================================================
 echo ""
+
+
+# 4h00: Website bị lỗi giao diện, quyết định lấy bản backup lúc 1h sáng ra để khôi phục.
+# 14h01 - 14h15: Hệ thống bắt đầu bơm file backup vào cái DB_TEMP ở chế độ nền. Trong đúng 15 phút này, vì là "Zero-Downtime", website hiện tại của sếp vẫn đang sống và vẫn nhận khách bình thường.
+# Có 5 ông khách vào chốt đơn, thanh toán qua Momo/VNPay/Paypad thành công, tiền đã nhảy vào tài khoản ngân hàng của doanh nghiệp.
+# 14h16: Việc import DB_TEMP hoàn tất. Lệnh RENAME TABLE chém xuống tráo đổi Database trong 1 mili-giây.
+# HẬU QUẢ: Cơ sở dữ liệu bị lùi về mốc 1h sáng. 5 đơn hàng vừa thanh toán lúc 14h10 bay màu không để lại một dấu vết nào trên website
+
+# ==============================================================================
+# BẬT CHẾ ĐỘ BẢO TRÌ THÔNG MINH (CÓ CHỮ KÝ CHỐNG KẸT)
+# ==============================================================================
+MAINTENANCE_FILE="/usr/local/lsws/$NAME/html/.maintenance"
+unset bao_tri_restore_atomic
+if [[ -f "$MAINTENANCE_FILE" ]]; then
+    # 1. Nếu file đã tồn tại, kiểm tra xem có chữ ký của WPTT không?
+    if grep -q "wptt_auto_maintenance" "$MAINTENANCE_FILE" 2>/dev/null; then
+        # File này là tàn dư do lần Restore trước bị sập nguồn để lại -> Mình nhận trách nhiệm dọn dẹp
+        bao_tri_restore_atomic='1'
+    fi
+    # Nếu không có chữ ký -> Do khách hàng tự tạo -> Giữ nguyên cờ = 0 (Bypass)
+else
+    # 2. Nếu file chưa tồn tại, check xem có phải WooCommerce không để bật
+    if [[ -d "/usr/local/lsws/$NAME/wp-content/plugins/woocommerce" ]]; then
+        echo '<?php $upgrading = time(); // wptt_auto_maintenance ?>' > "$MAINTENANCE_FILE"
+        chown "$User_name_vhost":"$User_name_vhost" "$MAINTENANCE_FILE" 2>/dev/null
+        bao_tri_restore_atomic='1'
+    fi
+fi
 
 password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
 [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
@@ -632,15 +662,6 @@ if [[ -f $wp_config_php_path ]]; then
   _rundone "Kết nối dữ liệu website $NAME"
 fi
 
-if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
-  . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
-fi
-
-if [[ -n "$NAME" && -d "/usr/local/lsws/$NAME/luucache" ]]; then
-	_runing "$don_dep cache lscache"
-	rm -rf /usr/local/lsws/"${NAME:?}"/luucache
-	_rundone "$don_dep cache lscache"
-fi
 
 # ==============================================================================
 # DỌN DẸP CONFIG CŨ TRONG VHOST
@@ -692,6 +713,24 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.php [L]
 </IfModule>
 # END WordPress' >"/usr/local/lsws/$NAME/html/.htaccess"
+fi
+
+
+# Tắt chế độ bảo trì để mở cửa đón khách trở lại
+if [[ -n "$bao_tri_restore_atomic" ]];then
+	if [[ -f "/usr/local/lsws/$NAME/html/.maintenance" ]]; then
+		rm -f "/usr/local/lsws/$NAME/html/.maintenance"
+	fi
+fi
+
+if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
+  . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
+fi
+
+if [[ -n "$NAME" && -d "/usr/local/lsws/$NAME/luucache" ]]; then
+	_runing "$don_dep cache lscache"
+	rm -rf /usr/local/lsws/"${NAME:?}"/luucache
+	_rundone "$don_dep cache lscache"
 fi
 
 #xoá opcache cache
