@@ -18,7 +18,7 @@ function huong_dan() {
 . /etc/wptt/core-functions 2>/dev/null
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}CHUYỂN VÙNG DỮ LIỆU ➜ Đóng gói & Rsync sang Server mới${C_RESET}"
+center_text "${C_YELLOW}CHUYỂN WEBSITE ➜ Đóng gói & Rsync sang Server mới${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 while true; do
@@ -141,8 +141,6 @@ fi
 # [CẢI TIẾN] Thu thập danh sách Domain và Đúc màng lọc OS thông minh
 # =================================================================
 
-# FILE_TAM=$(mktemp)
-
 RSYNC_domain_all=()
 RSYNC_EXCLUDES=() # Khởi tạo mảng trống
 
@@ -150,20 +148,18 @@ if [[ -d /etc/wptt/vhost ]]; then
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-    domain="${filepath##*/}" #cắt hết / ở phía truớc chỉ dữ giá trị / ở sau còn dữ lại như: .wptangtoc.com.conf
-    domain="${domain%.conf}" #cắt .conf ở phía sau => còn: .wptangtoc.com
-    domain="${domain#.}"     #cắt . ở phía truớc => còn wptangtoc.com
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-    if [[ "$domain" != ?*.?* ]]; then #yêu cầu phải có dấu . trong domain thì mới gọi là domain đúng, nếu không có . thì continue nhảy qua for
+    if [[ "$domain" != ?*.?* ]]; then
       continue
     fi
 
     path="/usr/local/lsws/$domain/html"
-    i=1
     if [[ -d "$path" ]]; then
 
       RSYNC_domain_all+=("/usr/local/lsws/$domain")
-      # echo "/usr/local/lsws/$domain" >>"$FILE_TAM"
 
       # Bơm màng lọc loại bỏ Chroot Jail cho riêng domain này
       RSYNC_EXCLUDES+=(
@@ -194,11 +190,11 @@ fi
 for filepath in /etc/wptt/vhost/.*.conf; do
   [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-  NAME="${filepath##*/}" #cắt hết / ở phía truớc chỉ dữ giá trị / ở sau còn dữ lại như: .wptangtoc.com.conf
-  NAME="${NAME%.conf}"   #cắt .conf ở phía sau => còn: .wptangtoc.com
-  NAME="${NAME#.}"       #cắt . ở phía truớc => còn wptangtoc.com
+  NAME="${filepath##*/}"
+  NAME="${NAME%.conf}"
+  NAME="${NAME#.}"
 
-  if [[ "$NAME" != ?*.?* ]]; then #yêu cầu phải có dấu . trong NAME thì mới gọi là NAME đúng, nếu khônng có thì continue nhảy qua for
+  if [[ "$NAME" != ?*.?* ]]; then
     continue
   fi
 
@@ -209,10 +205,12 @@ for filepath in /etc/wptt/vhost/.*.conf; do
     continue
   fi
 
-  domain_all=($(find /usr/local/lsws/"$NAME"/html -type f -name 'wp-config.php'))
+  domain_all=()
+  # [BẢN VÁ] Dùng readarray để bọc mảng tuyệt đối an toàn với dấu cách
+  readarray -t domain_all < <(find /usr/local/lsws/"$NAME"/html -type f -name 'wp-config.php')
+  
   for entry in "${domain_all[@]}"; do
     path=$(echo "$entry" | sed 's/\/wp-config.php//g')
-    i=1
 
     #bypass website gốc
     thumuc=$(echo "$path" | cut -f7 -d '/')
@@ -230,6 +228,8 @@ for filepath in /etc/wptt/vhost/.*.conf; do
 
       TEMP_CNF=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
       chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+      
+      # [BẢN VÁ] Bổ sung single-transaction cho Subfolder để chống Lock Table
       cat >"$TEMP_CNF" <<EOF
 [client]
 user=${DB_User_web}
@@ -242,6 +242,7 @@ default-character-set=utf8mb4
 quick
 quote-names
 max_allowed_packet=1G
+single-transaction
 EOF
       trap "rm -f ${TEMP_CNF}" EXIT
 
@@ -251,10 +252,6 @@ EOF
     fi
   done
 done
-
-# list_ssl_domain_all=$(cat "$FILE_TAM" | sort -u | uniq | sed '/^$/d' | sed 's/ $//g' | tr -s '\n' ' ')
-
-# rm -f "${FILE_TAM:?}" #xoá file tạm
 
 #bắt đầu check rsync đã cài đặt vào hệ thống hay chưa
 missing_tools='rsync'
@@ -284,6 +281,24 @@ echo -e "${C_CYAN}Vui lòng nhập mật khẩu SSH của Server đích khi đư
 
 rsync -avzh "${RSYNC_EXCLUDES[@]}" -e "ssh -p $Port -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null" "${RSYNC_domain_all[@]}" root@"$IP":/usr/local/lsws
 
+# [BẢN VÁ] Bẫy lỗi Rsync nếu sai pass hoặc rớt mạng
+if [[ $? -ne 0 ]]; then
+  echo -e "\n${C_RED}❌ LỖI NGHIÊM TRỌNG: Quá trình truyền tải Rsync thất bại!${C_RESET}"
+  echo -e "${C_YELLOW}Nguyên nhân có thể do: Sai mật khẩu SSH, Port $Port bị chặn, hoặc rớt mạng.${C_RESET}"
+  echo -e "Vui lòng kiểm tra lại thông tin Server đích và chạy lại lệnh.\n"
+  
+  # Dọn dẹp rác (Tất cả file SQL đã tạo ra trên toàn hệ thống)
+  rm -f /usr/local/lsws/"${Website_chinh:-}"/html/danh-sach-website-wptangtoc-ols.txt 2>/dev/null
+  for d in "${RSYNC_domain_all[@]}"; do
+    find "$d/html" -name "giatuan-wptangtoc.sql" -type f -delete 2>/dev/null
+  done
+  
+  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r _
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
+  exit 1
+fi
+
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT QUÁ TRÌNH TRUYỀN TẢI DỮ LIỆU${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -292,12 +307,103 @@ echo -e "${C_GREEN}├───────────────────�
 left_text "${C_BOLD_WHITE}CÔNG VIỆC CẦN LÀM TIẾP THEO:${C_RESET}" 2
 left_text "  1. Đăng nhập vào Server MỚI ($IP)." 2
 left_text "  2. Truy cập Menu WPTangToc OLS." 2
-left_text "  3. Chọn mục: ${C_YELLOW}Chuyển website (27)${C_RESET} ➜ ${C_YELLOW}GET nhận (5)${C_RESET}." 2
-left_text "  4. Chờ hệ thống tự động Import." 2
+left_text "  3. Chọn mục: ${C_YELLOW}Chuyển website (27)${C_RESET} ➜ ${C_YELLOW}GET nhận (4)${C_RESET}." 2
+left_text "  4. Chờ hệ thống tự động Import Toàn Bộ Website." 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+echo -en "${C_GREEN}Xác nhận bên Server mới đã thực thi lệnh GET xong: Nhấn phím [Enter]${C_RESET}"
 read -r _
 
-# echo "sang bên server mới hãy gõ lệnh: curl -sO https://wptangtoc.com/share/wptt-rsync-move && bash wptt-rsync-move"
-# echo "Lưu ý: Nếu đang ở status wptangtoc ols hoặc menu chính thì hãy ấn nút 0 hoặc ctrl + c để thoát ra rồi mới nhập lệnh trên"
+# Dọn dẹp rác sau khi Rsync thành công
+rm -f /usr/local/lsws/"${Website_chinh:-}"/html/danh-sach-website-wptangtoc-ols.txt 2>/dev/null
+for d in "${RSYNC_domain_all[@]}"; do
+  find "$d/html" -name "giatuan-wptangtoc.sql" -type f -delete 2>/dev/null
+done
+
+# =================================================================
+# [MODULE MỚI] GHOST MIGRATION - CẤU HÌNH PROXY HÀNG LOẠT
+# =================================================================
+echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BƯỚC CHUYỂN GIAO: KÍCH HOẠT GHOST MIGRATION (PROXY NGƯỢC)${C_RESET}"
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_BOLD_WHITE}TẠI SAO BẠN NÊN BẬT TÍNH NĂNG NÀY?${C_RESET}" 2
+left_text "1. Chống rớt đơn: Mạng Internet (WiFi, 4G) cần 2-24h để cập nhật DNS mới." 2
+left_text "   Proxy sẽ bẻ lái khách đi lạc ở IP cũ sang Server MỚI ngay lập tức." 2
+left_text "2. Quay xe khẩn cấp: Nếu website trên Server MỚI gặp lỗi bất ngờ, bạn" 2
+left_text "   chỉ cần TẮT Proxy, website sẽ lập tức chạy lại bằng dữ liệu an toàn" 2
+left_text "   đang có trên Server CŨ này (như chưa hề có cuộc chia chân)!" 2
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_BOLD_WHITE}HƯỚNG DẪN TẮT / GỠ BỎ PROXY:${C_RESET}" 2
+left_text "- Khi muốn QUAY XE do lỗi, hoặc khi DNS ĐÃ CẬP NHẬT XONG (sau 24h)." 2
+left_text "- Vào Menu: ${C_YELLOW}Add-ons ➜ Thiết lập Proxy ngược${C_RESET} ➜ Chọn tên miền và GỠ BỎ." 2
+left_text "- Lưu ý: Chỉ xóa các website ở máy chủ CŨ này khi mọi thứ đã chạy hoàn hảo." 2
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if wptt_xac_nhan "Server MỚI đã nhận TẤT CẢ dữ liệu xong chưa? Bật Proxy ngay bây giờ?" "Traffic của toàn bộ website sẽ chuyển hướng sang $IP ngay lập tức." "" "Đã xong - Bật Proxy" "Bỏ qua"; then
+  
+  _runing "Đang thiết lập Động cơ Bóng ma (Ghost Proxy) cho TOÀN BỘ WEBSITE..."
+
+  # Vòng lặp cài đặt Proxy cho từng Domain
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}" 
+    domain="${domain%.conf}" 
+    domain="${domain#.}"     
+
+    if [[ "$domain" != ?*.?* ]]; then
+      continue
+    fi
+
+    # 1. Ghi cấu hình Proxy LiteSpeed luỹ đẳng
+    sed -i -e "/^extprocessor ${domain}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
+    
+    echo "
+extprocessor ${domain}proxy {
+  type                    proxy
+  address                 $IP:80
+  maxConns                2000
+  initTimeout             90
+  retryTimeout            20
+  respBuffer              0
+}
+" >>/usr/local/lsws/conf/httpd_config.conf
+
+    # 2. Xử lý file .htaccess của tên miền
+    HTACCESS_FILE="/usr/local/lsws/$domain/html/.htaccess"
+    if [[ -d "/usr/local/lsws/$domain/html" ]]; then
+      touch "$HTACCESS_FILE"
+      
+      sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' "$HTACCESS_FILE" #luỹ đẳng
+      
+      TMP_PROXY=$(mktemp)
+      cat <<EOF > "$TMP_PROXY"
+#begin-proxy-wptangtoc
+RewriteCond %{REQUEST_URI} !.*well-known.*\$ [NC]
+RewriteRule ^(.*)\$ http://${domain}proxy/\$1 [P,L,E=PROXY-HOST:www.${domain}]
+#end-proxy-wptangtoc
+EOF
+      
+      cat "$HTACCESS_FILE" >> "$TMP_PROXY"
+      cat "$TMP_PROXY" > "$HTACCESS_FILE"
+      rm -f "$TMP_PROXY"
+    fi
+  done
+
+  _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
+  wptt_smart_reload_lsws >/dev/null 2>&1
+  
+  _rundone "Cửa nôm (Ghost Proxy) đã được kích hoạt thành công!"
+  echo -e "\n${C_GREEN}Toàn bộ website trên máy chủ hiện đang hoạt động như các Trạm trung chuyển.${C_RESET}"
+  echo -e "${C_YELLOW}Bây giờ bạn có thể thong thả trỏ IP DNS về máy chủ mới mà không sợ rớt đơn hàng!${C_RESET}\n"
+  
+  echo -e "${C_RED}LƯU Ý QUAN TRỌNG: KHÔNG ĐƯỢC xóa các website ở máy chủ cũ ngay bây giờ!${C_RESET}"
+  echo -e "${C_RED}Hãy chờ an toàn ít nhất 24h để DNS thế giới cập nhật hết sang IP mới rồi mới tiến hành xóa.${C_RESET}\n"
+
+else
+  echo -e "\n${C_YELLOW}Đã bỏ qua thiết lập Ghost Proxy.${C_RESET}"
+  echo -e "Toàn bộ website ở máy chủ cũ vẫn hoạt động độc lập bình thường.\n"
+fi
+
+echo -en "${C_GREEN}Nhấn phím [Enter] để kết thúc...${C_RESET}"
+read -r _
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
