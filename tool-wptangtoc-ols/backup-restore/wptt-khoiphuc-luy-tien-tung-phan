@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin;then
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
@@ -119,13 +119,13 @@ for val in "${selects_code[@]}"; do
   full_name="${val}-wptt-luy-tien-tung-phan-core.zip"
   suffix_date=$(echo "$val" | sed "s/^$NAME//g" | awk -F'_' '{print $(NF-1)"_"$(NF)}')
   uploads_name="${NAME}-${suffix_date}-wptt-luy-tien-wp-uploads-dir.zip"
-  
+
   if [[ -f "/usr/local/backup-website/$NAME/$full_name" ]]; then
     fsize=$(du -ch "/usr/local/backup-website/$NAME/$full_name" "/usr/local/backup-website/$NAME/$uploads_name" 2>/dev/null | tail -n 1 | awk '{print $1}')
   else
     fsize=$(du -ch "/usr/local/lsws/$NAME/backup-website/$full_name" "/usr/local/lsws/$NAME/backup-website/$uploads_name" 2>/dev/null | tail -n 1 | awk '{print $1}')
   fi
-  
+
   display_name="${val} (Core + Uploads)"
   item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} [${C_GREEN}%-7s${C_RESET}] ${C_BOLD_WHITE}%s${C_RESET}" "$i" "${fsize:-???}" "$display_name")
   clean_row=$(printf "  %3d) [%-7s] %s" "$i" "${fsize:-???}" "$display_name")
@@ -249,10 +249,10 @@ clear
 echo "Khôi phục lũy tiến website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 wptt_abort_db_injection() {
-    _runloi "$1"
-    sleep 2
-    [[ "$2" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
-    return 2>/dev/null || exit 1
+  _runloi "$1"
+  sleep 2
+  [[ "$2" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+  return 2>/dev/null || exit 1
 }
 
 # ==============================================================================
@@ -260,25 +260,39 @@ wptt_abort_db_injection() {
 # ==============================================================================
 echo ""
 
-MAINTENANCE_FILE="/usr/local/lsws/$NAME/html/.maintenance"
-unset bao_tri_restore_atomic
-if [[ -f "$MAINTENANCE_FILE" ]]; then
-    # 1. Nếu file đã tồn tại, kiểm tra xem có chữ ký của WPTT không?
+if [[ -f /usr/local/lsws/"$NAME"/html/wp-load.php ]]; then #xác định có phải đang chạy WordPress hay không.
+  MAINTENANCE_FILE="/usr/local/lsws/$NAME/html/.maintenance"
+  unset bao_tri_restore_atomic
+
+  LIST_PLUGIN_BAO_TRI="/etc/wptt/backup-restore/plugins-bao-tri.txt"
+
+  if [[ -f "$MAINTENANCE_FILE" ]]; then
+    # Kịch bản kẹt file từ lần sập trước
     if grep -q "wptt_auto_maintenance" "$MAINTENANCE_FILE" 2>/dev/null; then
-        # File này là tàn dư do lần Restore trước bị sập nguồn để lại -> Mình nhận trách nhiệm dọn dẹp
-        bao_tri_restore_atomic='1'
+      bao_tri_restore_atomic='1'
     fi
-    # Nếu không có chữ ký -> Do khách hàng tự tạo -> Giữ nguyên cờ = 0 (Bypass)
-else
-    # 2. Nếu file chưa tồn tại, check xem có phải WooCommerce không để bật
-    if [[ -d "/usr/local/lsws/$NAME/wp-content/plugins/woocommerce" ]]; then
-        echo '<?php $upgrading = time(); // wptt_auto_maintenance ?>' > "$MAINTENANCE_FILE"
+  else
+    # 2. Rà soát Plugin từ file danh sách
+    PLUGINS_DIR="/usr/local/lsws/$NAME/html/wp-content/plugins"
+
+    # Đọc file an toàn (Bỏ qua dòng trống và dòng comment)
+    while read -r plugin_name || [[ -n "$plugin_name" ]]; do
+      # Xóa khoảng trắng thừa 2 đầu
+      plugin_name=$(echo "$plugin_name" | xargs)
+
+      # Bỏ qua nếu dòng trống hoặc bắt đầu bằng dấu #
+      [[ -z "$plugin_name" || "$plugin_name" == \#* ]] && continue
+
+      # Nếu thư mục plugin tồn tại -> Bật bảo trì và thoát lặp ngay lập tức
+      if [[ -d "$PLUGINS_DIR/$plugin_name" ]]; then
+        echo '<?php $upgrading = time(); // wptt_auto_maintenance ?>' >"$MAINTENANCE_FILE"
         chown "$User_name_vhost":"$User_name_vhost" "$MAINTENANCE_FILE" 2>/dev/null
         bao_tri_restore_atomic='1'
-    fi
+        break
+      fi
+    done <"$LIST_PLUGIN_BAO_TRI"
+  fi
 fi
-
-
 
 password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
 [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
@@ -316,41 +330,53 @@ _runing "$khoi_phuc_database website $NAME"
 # Tích hợp Import ngầm Tối giản (Chỉ lấy trạng thái lỗi/thành công)
 if [[ "$duong_dan_thu_path_sql" == *".sql.zst" ]]; then
   [[ -z $(command -v zstd 2>/dev/null) ]] && dnf install zstd -y -q >/dev/null 2>&1
-  ( echo "$INIT_SQL"; zstd -d -q <"$duong_dan_thu_path_sql" 2>/dev/null; echo "$END_SQL"; ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP" --ssl-verify-server-cert=false 2>/dev/null
+  (
+    echo "$INIT_SQL"
+    zstd -d -q <"$duong_dan_thu_path_sql" 2>/dev/null
+    echo "$END_SQL"
+  ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP" --ssl-verify-server-cert=false 2>/dev/null
 elif [[ "$duong_dan_thu_path_sql" == *".sql.gz" ]]; then
-  ( echo "$INIT_SQL"; zcat "$duong_dan_thu_path_sql" 2>/dev/null; echo "$END_SQL"; ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP" --ssl-verify-server-cert=false 2>/dev/null
+  (
+    echo "$INIT_SQL"
+    zcat "$duong_dan_thu_path_sql" 2>/dev/null
+    echo "$END_SQL"
+  ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP" --ssl-verify-server-cert=false 2>/dev/null
 else
-  ( echo "$INIT_SQL"; cat "$duong_dan_thu_path_sql" 2>/dev/null; echo "$END_SQL"; ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP" --ssl-verify-server-cert=false 2>/dev/null
+  (
+    echo "$INIT_SQL"
+    cat "$duong_dan_thu_path_sql" 2>/dev/null
+    echo "$END_SQL"
+  ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP" --ssl-verify-server-cert=false 2>/dev/null
 fi
 
 IMPORT_STATUS=$?
 
 if [[ $IMPORT_STATUS -eq 0 ]]; then
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; CREATE DATABASE \`${DB_TRASH}\`;" 2>/dev/null
-    OLD_TABLES=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -B -e "SHOW TABLES IN \`${DB_Name_web}\`;" 2>/dev/null)
-    NEW_TABLES=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -B -e "SHOW TABLES IN \`${DB_TEMP}\`;" 2>/dev/null)
-    RENAME_QUERY="RENAME TABLE "
-    if [[ -n "$OLD_TABLES" ]]; then
-        for t in $OLD_TABLES; do RENAME_QUERY+="\`${DB_Name_web}\`.\`$t\` TO \`${DB_TRASH}\`.\`$t\`, "; done
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; CREATE DATABASE \`${DB_TRASH}\`;" 2>/dev/null
+  OLD_TABLES=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -B -e "SHOW TABLES IN \`${DB_Name_web}\`;" 2>/dev/null)
+  NEW_TABLES=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -B -e "SHOW TABLES IN \`${DB_TEMP}\`;" 2>/dev/null)
+  RENAME_QUERY="RENAME TABLE "
+  if [[ -n "$OLD_TABLES" ]]; then
+    for t in $OLD_TABLES; do RENAME_QUERY+="\`${DB_Name_web}\`.\`$t\` TO \`${DB_TRASH}\`.\`$t\`, "; done
+  fi
+  if [[ -n "$NEW_TABLES" ]]; then
+    for t in $NEW_TABLES; do RENAME_QUERY+="\`${DB_TEMP}\`.\`$t\` TO \`${DB_Name_web}\`.\`$t\`, "; done
+  fi
+  if [[ "$RENAME_QUERY" != "RENAME TABLE " ]]; then
+    RENAME_QUERY=${RENAME_QUERY%, }
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "$RENAME_QUERY;" 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
     fi
-    if [[ -n "$NEW_TABLES" ]]; then
-        for t in $NEW_TABLES; do RENAME_QUERY+="\`${DB_TEMP}\`.\`$t\` TO \`${DB_Name_web}\`.\`$t\`, "; done
-    fi
-    if [[ "$RENAME_QUERY" != "RENAME TABLE " ]]; then
-        RENAME_QUERY=${RENAME_QUERY%, }
-        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "$RENAME_QUERY;" 2>/dev/null
-        if [[ $? -eq 0 ]]; then
-            mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
-        fi
-    else
-        mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
-    fi
-	echo -en "\033[1A\033[2K\033[1A\r"
-	_rundone "$khoi_phuc_database website $NAME"
+  else
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
+  fi
+  echo -en "\033[1A\033[2K\033[1A\r"
+  _rundone "$khoi_phuc_database website $NAME"
 else
-	mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
-	echo -en "\033[1A\033[2K\033[1A\r"
-	_runloi "$khoi_phuc_database website $NAME (Có lỗi xảy ra, DB giữ nguyên)"
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
+  echo -en "\033[1A\033[2K\033[1A\r"
+  _runloi "$khoi_phuc_database website $NAME (Có lỗi xảy ra, DB giữ nguyên)"
 fi
 rm -f "${TEMP_CNF_ROOT}"
 
@@ -367,11 +393,11 @@ uploads_zip="/usr/local/backup-website/$NAME/$NAME-${check_time_restore_thang_na
 
 free_space_kb=$(df -P -B1024 /usr/local/lsws/"$NAME" | awk 'NR==2 {print $4}')
 unzipped_size_kb=$(unzip -Zt "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{print $3}' | awk '{printf "%d", $1/1024}')
-[[ -z "$unzipped_size_kb" || "$unzipped_size_kb" -eq 0 ]] && unzipped_size_kb=$(( $(du -k "$duong_dan_thu_muc_ma_nguon" | cut -f1) * 3 ))
+[[ -z "$unzipped_size_kb" || "$unzipped_size_kb" -eq 0 ]] && unzipped_size_kb=$(($(du -k "$duong_dan_thu_muc_ma_nguon" | cut -f1) * 3))
 
 if [[ -f "$uploads_zip" ]]; then
-    uploads_size_kb=$(unzip -Zt "$uploads_zip" 2>/dev/null | awk '{print $3}' | awk '{printf "%d", $1/1024}')
-    [[ -n "$uploads_size_kb" ]] && unzipped_size_kb=$((unzipped_size_kb + uploads_size_kb))
+  uploads_size_kb=$(unzip -Zt "$uploads_zip" 2>/dev/null | awk '{print $3}' | awk '{printf "%d", $1/1024}')
+  [[ -n "$uploads_size_kb" ]] && unzipped_size_kb=$((unzipped_size_kb + uploads_size_kb))
 fi
 
 required_space_kb=$((unzipped_size_kb * 15 / 10))
@@ -381,7 +407,8 @@ thuc_thi_giai_nen() {
 
   if [[ "$file_code" == *.zip ]]; then
     if ! command -v unzip &>/dev/null; then
-      if [ -f /etc/redhat-release ]; then dnf install unzip -y -q >/dev/null 2>&1 || yum install unzip -y -q >/dev/null 2>&1;
+      if [ -f /etc/redhat-release ]; then
+        dnf install unzip -y -q >/dev/null 2>&1 || yum install unzip -y -q >/dev/null 2>&1
       elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install unzip -y -q >/dev/null 2>&1; fi
     fi
 
@@ -408,7 +435,7 @@ thuc_thi_giai_nen() {
           unzip -oq "$uploads_zip" -d "$target_dir"/ 2>/dev/null
         fi
       fi
-      
+
       check_time_restore_nam_thang_uploads=$(echo "$duong_dan_thu_muc_ma_nguon" | cut -f6 -d '/' | grep "^$NAME" | sed "s/^$NAME//g" | sed 's/-wptt-luy-tien-tung-phan-core//g' | cut -f1 -d '.' | awk -F'_' '{print $(NF)"/"$(NF-1)}')
       unzip -oq "$duong_dan_thu_muc_ma_nguon" "wp-content/uploads/$check_time_restore_nam_thang_uploads/*" -d "$target_dir"/ 2>/dev/null
     fi
@@ -418,24 +445,24 @@ thuc_thi_giai_nen() {
 _runing "$giai_nen $ma_nguon website $NAME"
 if command -v pv &>/dev/null; then echo ""; fi
 
-if (( free_space_kb > required_space_kb )); then
+if ((free_space_kb > required_space_kb)); then
   THU_MUC_TAM="/usr/local/lsws/$NAME/html_temp_wptt"
   rm -rf "$THU_MUC_TAM" && mkdir -p "$THU_MUC_TAM"
-  
+
   thuc_thi_giai_nen "$THU_MUC_TAM"
   if command -v pv &>/dev/null; then echo -en "\033[1A\033[2K\033[1A\r"; fi
-  
+
   if [[ -f "$THU_MUC_TAM/wp-load.php" ]]; then
     if [[ -f "/usr/local/lsws/${NAME}/html/.htaccess" && ! -f "$THU_MUC_TAM/.htaccess" ]]; then
-        cp -p "/usr/local/lsws/${NAME}/html/.htaccess" "$THU_MUC_TAM/" 2>/dev/null
+      cp -p "/usr/local/lsws/${NAME}/html/.htaccess" "$THU_MUC_TAM/" 2>/dev/null
     fi
 
     if [[ -f "/usr/local/lsws/${NAME}/html/wp-content/.htaccess" && ! -f "$THU_MUC_TAM/wp-content/.htaccess" ]]; then
-        cp -p "/usr/local/lsws/${NAME}/html/wp-content/.htaccess" "$THU_MUC_TAM/wp-content" 2>/dev/null
+      cp -p "/usr/local/lsws/${NAME}/html/wp-content/.htaccess" "$THU_MUC_TAM/wp-content" 2>/dev/null
     fi
 
     if [[ -f "/usr/local/lsws/${NAME}/html/wp-config.php" && ! -f "$THU_MUC_TAM/wp-config.php" ]]; then
-        cp -p "/usr/local/lsws/${NAME}/html/wp-config.php" "$THU_MUC_TAM/" 2>/dev/null
+      cp -p "/usr/local/lsws/${NAME}/html/wp-config.php" "$THU_MUC_TAM/" 2>/dev/null
     fi
 
     THU_MUC_CHINH="/usr/local/lsws/${NAME}/html"
@@ -452,18 +479,19 @@ except Exception:
 " >/dev/null 2>&1
 
     if [[ $? -eq 0 ]]; then
-        rm -rf "${THU_MUC_TAM:?}"
+      rm -rf "${THU_MUC_TAM:?}"
     else
-        mv "$THU_MUC_CHINH" "${THU_MUC_CHINH}_old_trash" 2>/dev/null
-        mv "$THU_MUC_TAM" "$THU_MUC_CHINH" 2>/dev/null
-        rm -rf "${THU_MUC_CHINH:?}_old_trash"
+      mv "$THU_MUC_CHINH" "${THU_MUC_CHINH}_old_trash" 2>/dev/null
+      mv "$THU_MUC_TAM" "$THU_MUC_CHINH" 2>/dev/null
+      rm -rf "${THU_MUC_CHINH:?}_old_trash"
     fi
 
     _rundone "$giai_nen $ma_nguon website $NAME"
   else
     _runloi "Lỗi giải nén! Đã hủy bỏ thao tác để bảo vệ toàn vẹn mã nguồn gốc."
     rm -rf "$THU_MUC_TAM"
-    flock -u 200; exec 200>&-
+    flock -u 200
+    exec 200>&-
     rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME:?}.lock" 2>/dev/null
     exit 1
   fi
@@ -471,11 +499,12 @@ else
   if [[ "$file_code" == *.zip ]]; then
     if ! unzip -t "$duong_dan_thu_muc_ma_nguon" >/dev/null 2>&1; then
       _runloi "Lỗi: File .zip bị hỏng! Bảo lưu nguyên vẹn mã nguồn cũ."
-      flock -u 200; exec 200>&-
+      flock -u 200
+      exec 200>&-
       exit 1
     fi
   fi
-  
+
   if wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
     rm -rf /usr/local/lsws/"${NAME:?}"/html/*
   fi
@@ -516,12 +545,11 @@ else
   echo -e "${C_YELLOW}Không tìm thấy file wp-config.php (Có thể đây không phải WordPress).${C_RESET}"
 fi
 
-
 # Tắt chế độ bảo trì để mở cửa đón khách trở lại
-if [[ -n "$bao_tri_restore_atomic" ]];then
-	if [[ -f "/usr/local/lsws/$NAME/html/.maintenance" ]]; then
-		rm -f "/usr/local/lsws/$NAME/html/.maintenance"
-	fi
+if [[ -n "$bao_tri_restore_atomic" ]]; then
+  if [[ -f "/usr/local/lsws/$NAME/html/.maintenance" ]]; then
+    rm -f "/usr/local/lsws/$NAME/html/.maintenance"
+  fi
 fi
 
 if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
@@ -534,8 +562,8 @@ if [[ -n "$NAME" && -d "/usr/local/lsws/${NAME}/luucache" ]]; then
   _rundone "Dọn dẹp LSCache hoàn tất"
 fi
 
-if [[ ! -f /usr/local/lsws/"$NAME"/html/.htaccess ]] || [[ -z $(cat /usr/local/lsws/"$NAME"/html/.htaccess) ]];then
-	echo '# BEGIN WordPress
+if [[ ! -f /usr/local/lsws/"$NAME"/html/.htaccess ]] || [[ -z $(cat /usr/local/lsws/"$NAME"/html/.htaccess) ]]; then
+  echo '# BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
