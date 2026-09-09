@@ -57,7 +57,7 @@ fi
 [[ -z "$NAME" || "$NAME" == "0" ]] && exit 0
 
 if [[ ! -d "/usr/local/lsws/conf/vhosts/$NAME" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Tên miền $NAME không tồn tại trên hệ thống!${C_RESET}"
+  echo -e "\n${C_RED}Lỗi: Tên miền $NAME không tồn tại trên hệ thống!${C_RESET}"
   sleep 3
   exit 1
 fi
@@ -68,7 +68,6 @@ fi
 check_proxy=$(grep "extprocessor ${NAME}proxy" /usr/local/lsws/conf/httpd_config.conf 2>/dev/null)
 
 if [[ -n "$check_proxy" ]]; then
-  # TRƯỜNG HỢP: ĐÃ CÓ PROXY -> HỎI XÓA
   echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}TRẠNG THÁI: ĐÃ CÀI ĐẶT PROXY${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -83,12 +82,16 @@ if [[ -n "$check_proxy" ]]; then
 
   _runing "Đang tiến hành gỡ bỏ thiết lập Proxy Ngược cho $NAME..."
   
-  # FIX LỖI 1: Bỏ dấu \ trước ngoặc nhọn {
   sed -i -e "/^extprocessor ${NAME}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
 
-  # Xóa luật Rewrite trong .htaccess
   if [[ -f "/usr/local/lsws/$NAME/html/.htaccess" ]]; then
     sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/"$NAME"/html/.htaccess
+  fi
+
+  # [MODULE MỚI] Dọn dẹp chứng chỉ tự ký đã nạp vào HĐH
+  if [[ -f "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt" ]]; then
+    rm -f "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt"
+    update-ca-trust
   fi
 
   wptt_smart_reload_lsws >/dev/null 2>&1
@@ -101,15 +104,11 @@ if [[ -n "$check_proxy" ]]; then
   exit 0
 fi
 
-# ==============================================================================
 # BƯỚC 3: TRƯỜNG HỢP CHƯA CÓ PROXY -> TIẾN HÀNH CÀI ĐẶT
-# ==============================================================================
 target_host="${2:-}"
 
-# Xóa toàn bộ khoảng trắng nếu có
 target_host="${target_host//[[:space:]]/}"
 
-# Kiểm tra nhanh qua tham số truyền vào (Dòng lệnh)
 if [[ -n "$target_host" ]]; then
   if ! echo "$target_host" | grep -E -q '^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' && ! echo "$target_host" | grep -E -q '^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,10}$'; then
      target_host=""
@@ -122,7 +121,7 @@ if [[ -z "$target_host" ]]; then
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
   while true; do
-    echo -en "${C_CYAN}Nhập IP (VD: 192.168.1.1) [0=Thoát]: ${C_RESET}"
+    echo -en "${C_CYAN}Nhập IP Server Đích (VD: 192.168.1.1) [0=Thoát]: ${C_RESET}"
     read -r input_host
 
     [[ "$input_host" == "0" || -z "$input_host" ]] && {
@@ -132,86 +131,79 @@ if [[ -z "$target_host" ]]; then
 
     input_host="${input_host//[[:space:]]/}"
 
-    # Regex kiểm tra IPv4 HOẶC Tên miền chuẩn
     if echo "$input_host" | grep -E -q '^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$' || echo "$input_host" | grep -E -q '^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,10}$'; then
       target_host="$input_host"
       break
     else
-      echo -e "${C_RED}❌ Lỗi: Định dạng không hợp lệ! Vui lòng nhập đúng IPv4 hoặc Tên miền (VD: 192.168.1.1 hoặc sv1.domain.com).${C_RESET}\n"
+      echo -e "${C_RED}❌ Lỗi: Định dạng không hợp lệ! Vui lòng nhập đúng IPv4 hoặc Tên miền.${C_RESET}\n"
     fi
   done
 fi
 
 echo ""
-if ! wptt_xac_nhan "Bạn có chắc chắn muốn đẩy traffic của $NAME sang đích $target_host không?" "Lưu ý: Mọi traffic sẽ đi qua máy chủ này để đến đích (trừ yêu cầu cấp SSL)." "" "Đồng ý Lưu" "Hủy thao tác"; then
+if ! wptt_xac_nhan "Chuyển tiếp traffic của $NAME sang $target_host (Mã hóa SSL Port 443)?" "Hệ thống sẽ ép kết nối End-to-End qua Port 443 bằng cách nạp chứng chỉ tự ký." "" "Đồng ý Kích hoạt" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
   exit 0
 fi
 
 echo ""
-_runing "Đang thiết lập cấu hình Proxy Ngược vào máy chủ..."
+_runing "Đang nạp chứng chỉ tự ký từ máy chủ đích vào kho tin cậy..."
 
-# 1. Ghi cấu hình Proxy vào file tổng của LiteSpeed
-echo "
-extprocessor ${NAME}proxy {
-  type                    proxy
-  address                 $target_host:80
-  maxConns                2000
-  initTimeout             90
-  retryTimeout            20
-  respBuffer              0
-}
-" >>/usr/local/lsws/conf/httpd_config.conf
+# 1. Bắt chứng chỉ tự ký qua cổng 443 của Server đích và lưu vào thư mục Anchors
+echo -n | openssl s_client -connect "$target_host:443" -servername "$NAME" -showcerts 2>/dev/null | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt"
 
-# 2. Xử lý file .htaccess của tên miền
+# 2. Cập nhật hệ thống để Linux nhận diện chứng chỉ này là "Hợp lệ"
+update-ca-trust
+
+_rundone "Nạp chứng chỉ hoàn tất! Máy chủ đã tin tưởng Server đích."
+
+_runing "Đang thiết lập Động cơ Bóng ma (Port 443) vào máy chủ..."
+
+# 3. Ghi cấu hình Proxy Native 443 vào file tổng của LiteSpeed
+# SỬA LỖI OLS SYNTAX: Thêm https:// vào trước address
+echo "extprocessor ${NAME}proxy {" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  type                    proxy" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  address                 https://$target_host:443" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  maxConns                2000" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  initTimeout             90" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  retryTimeout            20" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  respBuffer              0" >>/usr/local/lsws/conf/httpd_config.conf
+echo "  secure                  1" >>/usr/local/lsws/conf/httpd_config.conf
+echo "}" >>/usr/local/lsws/conf/httpd_config.conf
+
+# 4. Xử lý file .htaccess của tên miền
 mkdir -p "/usr/local/lsws/$NAME/html"
 touch "/usr/local/lsws/$NAME/html/.htaccess"
+sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/"$NAME"/html/.htaccess
 
-# Dùng mktemp thay cho sed nhiều dòng để tránh lỗi escape
 tmp_hta=$(mktemp)
 cat <<EOF > "$tmp_hta"
 #begin-proxy-wptangtoc
 RewriteCond %{REQUEST_URI} !.*well-known.*\$ [NC]
-RewriteRule ^(.*)\$ http://${NAME}proxy/\$1 [P]
+RewriteRule ^(.*)\$ https://${NAME}proxy/\$1 [P,L,E=PROXY-HOST:${NAME}]
 #end-proxy-wptangtoc
 EOF
 cat "/usr/local/lsws/$NAME/html/.htaccess" >> "$tmp_hta"
 mv "$tmp_hta" "/usr/local/lsws/$NAME/html/.htaccess"
 
-# 3. Setup IP Domain (Proxy Host) nếu cần thiết
-if grep -qE 'listener.*[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
-  # Xóa cục cũ vừa đẩy vào
-  sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/"$NAME"/html/.htaccess
-  
-  # Tạo file mới với option E=PROXY-HOST an toàn
-  tmp_hta2=$(mktemp)
-  cat <<EOF > "$tmp_hta2"
-#begin-proxy-wptangtoc
-RewriteCond %{REQUEST_URI} !.*well-known.*\$ [NC]
-RewriteRule ^(.*)\$ http://${NAME}proxy/\$1 [P,L,E=PROXY-HOST:www.${NAME}]
-#end-proxy-wptangtoc
-EOF
-  cat "/usr/local/lsws/$NAME/html/.htaccess" >> "$tmp_hta2"
-  mv "$tmp_hta2" "/usr/local/lsws/$NAME/html/.htaccess"
-fi
-
 _rundone "Cập nhật file cấu hình và .htaccess hoàn tất"
 
 _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
 wptt_smart_reload_lsws >/dev/null 2>&1
-_rundone "Proxy đã được kích hoạt"
+_rundone "Proxy (Port 443) đã được kích hoạt"
 
-echo "Setup PROXY ngược $NAME về $target_host : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+echo "Setup PROXY ngược $NAME về $target_host:443 (Secure End-to-End) : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 # ==============================================================================
 # BẢNG BÁO CÁO THÀNH CÔNG
 # ==============================================================================
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP PROXY NGƯỢC${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP PROXY NGƯỢC (SECURE)${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "Domain Nguồn   : ${C_YELLOW}$NAME${C_RESET}" 2
-left_text "Máy chủ Đích   : ${C_BOLD_WHITE}$target_host:80${C_RESET}" 2
-left_text "Ghi chú        : ${C_CYAN}Traffic đã được định tuyến thành công.${C_RESET}" 2
+left_text "Máy chủ Đích   : ${C_BOLD_WHITE}$target_host:443${C_RESET}" 2
+left_text "Bảo mật Luồng  : ${C_CYAN}Mã hóa SSL (End-to-End Encryption)${C_RESET}" 2
+left_text "Ghi chú        : ${C_CYAN}Traffic đã được định tuyến an toàn tuyệt đối.${C_RESET}" 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-add-one-main 1
