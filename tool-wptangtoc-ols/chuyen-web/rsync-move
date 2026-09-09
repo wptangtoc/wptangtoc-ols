@@ -321,7 +321,7 @@ for d in "${RSYNC_domain_all[@]}"; do
 done
 
 # =================================================================
-# [MODULE MỚI] GHOST MIGRATION - CẤU HÌNH PROXY HÀNG LOẠT
+# [MODULE MỚI] GHOST MIGRATION - CẤU HÌNH PROXY HÀNG LOẠT (NATIVE 443)
 # =================================================================
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}BƯỚC CHUYỂN GIAO: KÍCH HOẠT GHOST MIGRATION (PROXY NGƯỢC)${C_RESET}"
@@ -339,9 +339,9 @@ left_text "- Vào Menu: ${C_YELLOW}Add-ons ➜ Thiết lập Proxy ngược${C_R
 left_text "- Lưu ý: Chỉ xóa các website ở máy chủ CŨ này khi mọi thứ đã chạy hoàn hảo." 2
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if wptt_xac_nhan "Server MỚI đã nhận TẤT CẢ dữ liệu xong chưa? Bật Proxy ngay bây giờ?" "Traffic của toàn bộ website sẽ chuyển hướng sang $IP ngay lập tức." "" "Đã xong - Bật Proxy" "Bỏ qua"; then
+if wptt_xac_nhan "Server MỚI đã nhận TẤT CẢ dữ liệu xong chưa? Bật Proxy ngay bây giờ?" "Traffic của toàn bộ website sẽ chuyển hướng sang $IP (Mã hóa SSL 443)." "" "Đã xong - Bật Proxy" "Bỏ qua"; then
   
-  _runing "Đang thiết lập Động cơ Bóng ma (Ghost Proxy) cho TOÀN BỘ WEBSITE..."
+  _runing "Đang nạp chứng chỉ và thiết lập Động cơ Bóng ma (Port 443) cho TOÀN BỘ WEBSITE..."
 
   # Vòng lặp cài đặt Proxy cho từng Domain
   for filepath in /etc/wptt/vhost/.*.conf; do
@@ -354,21 +354,26 @@ if wptt_xac_nhan "Server MỚI đã nhận TẤT CẢ dữ liệu xong chưa? B�
       continue
     fi
 
-    # 1. Ghi cấu hình Proxy LiteSpeed luỹ đẳng
+    # 1. Bắt chứng chỉ tự ký của TỪNG DOMAIN qua mạng và lưu vào Anchors
+    echo -n | openssl s_client -connect "$IP:443" -servername "$domain" -showcerts 2>/dev/null | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > "/etc/pki/ca-trust/source/anchors/${domain}_wptt_proxy.crt"
+
+    # 2. Ghi cấu hình Proxy LiteSpeed luỹ đẳng
     sed -i -e "/^extprocessor ${domain}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
     
+    # Bơm cấu hình HTTPS Address và Secure 1
     echo "
 extprocessor ${domain}proxy {
   type                    proxy
-  address                 $IP:80
+  address                 https://$IP:443
   maxConns                2000
   initTimeout             90
   retryTimeout            20
   respBuffer              0
+  secure                  1
 }
 " >>/usr/local/lsws/conf/httpd_config.conf
 
-    # 2. Xử lý file .htaccess của tên miền
+    # 3. Xử lý file .htaccess của tên miền
     HTACCESS_FILE="/usr/local/lsws/$domain/html/.htaccess"
     if [[ -d "/usr/local/lsws/$domain/html" ]]; then
       touch "$HTACCESS_FILE"
@@ -379,7 +384,7 @@ extprocessor ${domain}proxy {
       cat <<EOF > "$TMP_PROXY"
 #begin-proxy-wptangtoc
 RewriteCond %{REQUEST_URI} !.*well-known.*\$ [NC]
-RewriteRule ^(.*)\$ http://${domain}proxy/\$1 [P,L,E=PROXY-HOST:www.${domain}]
+RewriteRule ^(.*)\$ https://${domain}proxy/\$1 [P,L,E=PROXY-HOST:${domain}]
 #end-proxy-wptangtoc
 EOF
       
@@ -389,10 +394,13 @@ EOF
     fi
   done
 
+  # 4. Cập nhật hệ thống để Linux nhận diện TẤT CẢ các chứng chỉ vừa nạp
+  update-ca-trust
+
   _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
   wptt_smart_reload_lsws >/dev/null 2>&1
   
-  _rundone "Cửa nôm (Ghost Proxy) đã được kích hoạt thành công!"
+  _rundone "Cửa nôm (Ghost Proxy - Secure End-to-End) đã được kích hoạt thành công!"
   echo -e "\n${C_GREEN}Toàn bộ website trên máy chủ hiện đang hoạt động như các Trạm trung chuyển.${C_RESET}"
   echo -e "${C_YELLOW}Bây giờ bạn có thể thong thả trỏ IP DNS về máy chủ mới mà không sợ rớt đơn hàng!${C_RESET}\n"
   
