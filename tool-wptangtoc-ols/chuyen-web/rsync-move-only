@@ -301,22 +301,32 @@ if wptt_xac_nhan "Server MỚI đã nhận dữ liệu thành công chưa? Bật
   
   _runing "Đang nạp chứng chỉ tự ký từ máy chủ đích vào kho tin cậy..."
 
-  # 1. Bắt chứng chỉ tự ký qua cổng 443 của Server đích và lưu vào thư mục Anchors
-  echo -n | openssl s_client -connect "$IP:443" -servername "$NAME" -showcerts 2>/dev/null | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt"
+  # [CẢI TIẾN FAIL-SAFE]: Validate chứng chỉ bằng openssl x509 trước khi lưu
+  if ! echo -n | openssl s_client -connect "$IP:443" -servername "$NAME" -showcerts 2>/dev/null | openssl x509 -outform PEM > "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt" 2>/dev/null; then
+    
+    _runloi "Lấy chứng chỉ TLS thất bại! (Port 443 đích có thể bị chặn hoặc chưa sẵn sàng)"
+    echo -e "${C_YELLOW}CẢNH BÁO: Đã HỦY quá trình cấu hình Proxy ngược để đảm bảo an toàn cho website.${C_RESET}"
+    
+    # Dọn dẹp file rác nếu lệnh tạo ra file trống
+    rm -f "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt"
+    
+    # Đặt cờ không xóa web vì Proxy chưa được bật
+    SKIP_DELETE=0
+    
+  else
+    # 2. Cập nhật hệ thống để Linux nhận diện chứng chỉ
+    update-ca-trust
 
-  # 2. Cập nhật hệ thống để Linux nhận diện chứng chỉ
-  update-ca-trust
+    _rundone "Nạp chứng chỉ hoàn tất! Máy chủ đã tin tưởng Server đích."
 
-  _rundone "Nạp chứng chỉ hoàn tất! Máy chủ đã tin tưởng Server đích."
+    _runing "Đang thiết lập Động Ghost Proxy (Port 443) cho $NAME..."
 
-  _runing "Đang thiết lập Động Ghost Proxy (Port 443) cho $NAME..."
-
-  # 3. Ghi cấu hình Proxy vào file tổng của LiteSpeed
-  # Xóa cấu hình cũ (nếu có) để tránh lỗi trùng lặp
-  sed -i -e "/^extprocessor ${NAME}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
-  
-  # Chèn cấu hình HTTPS Address và Secure 1
-  echo "
+    # 3. Ghi cấu hình Proxy vào file tổng của LiteSpeed
+    # Xóa cấu hình cũ (nếu có) để tránh lỗi trùng lặp
+    sed -i -e "/^extprocessor ${NAME}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
+    
+    # Chèn cấu hình HTTPS Address và Secure 1
+    echo "
 extprocessor ${NAME}proxy {
   type                    proxy
   address                 https://$IP:443
@@ -328,41 +338,42 @@ extprocessor ${NAME}proxy {
 }
 " >>/usr/local/lsws/conf/httpd_config.conf
 
-  # 4. Xử lý file .htaccess của tên miền
-  HTACCESS_FILE="/usr/local/lsws/$NAME/html/.htaccess"
-  if [[ -d "/usr/local/lsws/$NAME/html" ]]; then
-    touch "$HTACCESS_FILE"
-    
-    # Dọn dẹp luật proxy cũ (nếu có)
-    sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' "$HTACCESS_FILE"
-    
-    # Tạo file tạm để nhét luật Proxy (Sử dụng HTTPS và E=PROXY-HOST chuẩn)
-    TMP_PROXY=$(mktemp)
-    cat <<EOF > "$TMP_PROXY"
+    # 4. Xử lý file .htaccess của tên miền
+    HTACCESS_FILE="/usr/local/lsws/$NAME/html/.htaccess"
+    if [[ -d "/usr/local/lsws/$NAME/html" ]]; then
+      touch "$HTACCESS_FILE"
+      
+      # Dọn dẹp luật proxy cũ (nếu có)
+      sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' "$HTACCESS_FILE"
+      
+      # Tạo file tạm để nhét luật Proxy (Sử dụng HTTPS và E=PROXY-HOST chuẩn)
+      TMP_PROXY=$(mktemp)
+      cat <<EOF > "$TMP_PROXY"
 #begin-proxy-wptangtoc
 RewriteCond %{REQUEST_URI} !.*well-known.*\$ [NC]
 RewriteRule ^(.*)\$ https://${NAME}proxy/\$1 [P,L,E=PROXY-HOST:${NAME}]
 #end-proxy-wptangtoc
 EOF
-    
-    # Nối nội dung cũ vào dưới file tạm, sau đó ghi đè ngược lại
-    cat "$HTACCESS_FILE" >> "$TMP_PROXY"
-    cat "$TMP_PROXY" > "$HTACCESS_FILE"
-    rm -f "$TMP_PROXY"
-  fi
+      
+      # Nối nội dung cũ vào dưới file tạm, sau đó ghi đè ngược lại
+      cat "$HTACCESS_FILE" >> "$TMP_PROXY"
+      cat "$TMP_PROXY" > "$HTACCESS_FILE"
+      rm -f "$TMP_PROXY"
+    fi
 
-  _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
-  wptt_smart_reload_lsws >/dev/null 2>&1
-  
-  _rundone "Ghost Proxy (Secure End-to-End) đã được kích hoạt thành công!"
-  echo -e "\n${C_GREEN}Website $NAME hiện đang hoạt động như một Trạm trung chuyển.${C_RESET}"
-  echo -e "${C_YELLOW}Bây giờ bạn có thể trỏ IP DNS về máy chủ mới mà không sợ rớt đơn hàng!${C_RESET}\n"
-  
-  echo -e "${C_RED}LƯU Ý QUAN TRỌNG: KHÔNG ĐƯỢC xóa website này ở máy chủ cũ ngay bây giờ!${C_RESET}"
-  echo -e "${C_RED}Hãy chờ an toàn ít nhất 24h để DNS thế giới cập nhật hết sang IP mới rồi mới tiến hành xóa web.${C_RESET}\n"
-  
-  # Cắm cờ khóa lệnh Xóa
-  SKIP_DELETE=1
+    _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
+    wptt_smart_reload_lsws >/dev/null 2>&1
+    
+    _rundone "Ghost Proxy (Secure End-to-End) đã được kích hoạt thành công!"
+    echo -e "\n${C_GREEN}Website $NAME hiện đang hoạt động như một Trạm trung chuyển.${C_RESET}"
+    echo -e "${C_YELLOW}Bây giờ bạn có thể trỏ IP DNS về máy chủ mới mà không sợ rớt đơn hàng!${C_RESET}\n"
+    
+    echo -e "${C_RED}LƯU Ý QUAN TRỌNG: KHÔNG ĐƯỢC xóa website này ở máy chủ cũ ngay bây giờ!${C_RESET}"
+    echo -e "${C_RED}Hãy chờ an toàn ít nhất 24h để DNS thế giới cập nhật hết sang IP mới rồi mới tiến hành xóa web.${C_RESET}\n"
+    
+    # Cắm cờ khóa lệnh Xóa
+    SKIP_DELETE=1
+  fi
 
 else
   echo -e "\n${C_YELLOW}Đã bỏ qua thiết lập Ghost Proxy.${C_RESET}"

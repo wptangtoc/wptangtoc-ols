@@ -283,7 +283,7 @@ rsync -avzh "${RSYNC_EXCLUDES[@]}" -e "ssh -p $Port -o StrictHostKeyChecking=acc
 
 # [BẢN VÁ] Bẫy lỗi Rsync nếu sai pass hoặc rớt mạng
 if [[ $? -ne 0 ]]; then
-  echo -e "\n${C_RED}LỖI NGHIÊM TRỌNG: Quá trình truyền tải Rsync thất bại!${C_RESET}"
+  echo -e "\n${C_RED}❌ LỖI NGHIÊM TRỌNG: Quá trình truyền tải Rsync thất bại!${C_RESET}"
   echo -e "${C_YELLOW}Nguyên nhân có thể do: Sai mật khẩu SSH, Port $Port bị chặn, hoặc rớt mạng.${C_RESET}"
   echo -e "Vui lòng kiểm tra lại thông tin Server đích và chạy lại lệnh.\n"
   
@@ -321,7 +321,7 @@ for d in "${RSYNC_domain_all[@]}"; do
 done
 
 # =================================================================
-# [MODULE MỚI] GHOST MIGRATION - CẤU HÌNH PROXY HÀNG LOẠT (NATIVE 443)
+# [MODULE MỚI] GHOST MIGRATION - CẤU HÌNH PROXY HÀNG LOẠT (NATIVE 443 + FAIL-SAFE)
 # =================================================================
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}BƯỚC CHUYỂN GIAO: KÍCH HOẠT GHOST MIGRATION (PROXY NGƯỢC)${C_RESET}"
@@ -343,6 +343,8 @@ if wptt_xac_nhan "Server MỚI đã nhận TẤT CẢ dữ liệu xong chưa? B�
   
   _runing "Đang nạp chứng chỉ và thiết lập Động cơ Bóng ma (Port 443) cho TOÀN BỘ WEBSITE..."
 
+  proxy_success_count=0
+
   # Vòng lặp cài đặt Proxy cho từng Domain
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -354,8 +356,13 @@ if wptt_xac_nhan "Server MỚI đã nhận TẤT CẢ dữ liệu xong chưa? B�
       continue
     fi
 
-    # 1. Bắt chứng chỉ tự ký của TỪNG DOMAIN qua mạng và lưu vào Anchors
-    echo -n | openssl s_client -connect "$IP:443" -servername "$domain" -showcerts 2>/dev/null | sed -ne '/-BEGIN CERTIFICATE-/,/-END CERTIFICATE-/p' > "/etc/pki/ca-trust/source/anchors/${domain}_wptt_proxy.crt"
+    # 1. Bắt chứng chỉ tự ký của TỪNG DOMAIN qua mạng và Validate (CẢI TIẾN FAIL-SAFE)
+    if ! echo -n | openssl s_client -connect "$IP:443" -servername "$domain" -showcerts 2>/dev/null | openssl x509 -outform PEM > "/etc/pki/ca-trust/source/anchors/${domain}_wptt_proxy.crt" 2>/dev/null; then
+      echo -e "${C_YELLOW}CẢNH BÁO: Lấy chứng chỉ TLS cho $domain thất bại! (Port 443 bị chặn hoặc chưa sẵn sàng). Bỏ qua Proxy cho tên miền này.${C_RESET}"
+      # Dọn dẹp file rác
+      rm -f "/etc/pki/ca-trust/source/anchors/${domain}_wptt_proxy.crt"
+      continue # Bỏ qua, tiếp tục cấu hình domain tiếp theo
+    fi
 
     # 2. Ghi cấu hình Proxy LiteSpeed luỹ đẳng
     sed -i -e "/^extprocessor ${domain}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
@@ -392,20 +399,26 @@ EOF
       cat "$TMP_PROXY" > "$HTACCESS_FILE"
       rm -f "$TMP_PROXY"
     fi
+    ((proxy_success_count++))
   done
 
-  # 4. Cập nhật hệ thống để Linux nhận diện TẤT CẢ các chứng chỉ vừa nạp
-  update-ca-trust
+  # 4. Cập nhật hệ thống để Linux nhận diện TẤT CẢ các chứng chỉ vừa nạp thành công
+  if [[ $proxy_success_count -gt 0 ]]; then
+    update-ca-trust
 
-  _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
-  wptt_smart_reload_lsws >/dev/null 2>&1
-  
-  _rundone "Ghost Proxy - Secure End-to-End đã được kích hoạt thành công!"
-  echo -e "\n${C_GREEN}Toàn bộ website trên máy chủ hiện đang hoạt động như các Trạm trung chuyển.${C_RESET}"
-  echo -e "${C_YELLOW}Bây giờ bạn có thể thong thả trỏ IP DNS về máy chủ mới mà không sợ rớt đơn hàng!${C_RESET}\n"
-  
-  echo -e "${C_RED}LƯU Ý QUAN TRỌNG: KHÔNG ĐƯỢC xóa các website ở máy chủ cũ ngay bây giờ!${C_RESET}"
-  echo -e "${C_RED}Hãy chờ an toàn ít nhất 24h để DNS thế giới cập nhật hết sang IP mới rồi mới tiến hành xóa.${C_RESET}\n"
+    _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
+    wptt_smart_reload_lsws >/dev/null 2>&1
+    
+    _rundone "Cửa nôm (Ghost Proxy - Secure End-to-End) đã được kích hoạt thành công cho $proxy_success_count website!"
+    echo -e "\n${C_GREEN}Các website thành công hiện đang hoạt động như các Trạm trung chuyển.${C_RESET}"
+    echo -e "${C_YELLOW}Bây giờ bạn có thể thong thả trỏ IP DNS về máy chủ mới mà không sợ rớt đơn hàng!${C_RESET}\n"
+    
+    echo -e "${C_RED}LƯU Ý QUAN TRỌNG: KHÔNG ĐƯỢC xóa các website ở máy chủ cũ ngay bây giờ!${C_RESET}"
+    echo -e "${C_RED}Hãy chờ an toàn ít nhất 24h để DNS thế giới cập nhật hết sang IP mới rồi mới tiến hành xóa.${C_RESET}\n"
+  else
+    echo -e "\n${C_RED}❌ LỖI: Không thể thiết lập Proxy cho bất kỳ website nào do lỗi kết nối hoặc chứng chỉ!${C_RESET}"
+    echo -e "${C_YELLOW}Toàn bộ website ở máy chủ cũ vẫn hoạt động độc lập bình thường.${C_RESET}\n"
+  fi
 
 else
   echo -e "\n${C_YELLOW}Đã bỏ qua thiết lập Ghost Proxy.${C_RESET}"
