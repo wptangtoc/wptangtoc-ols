@@ -10,6 +10,9 @@
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
+# Dọn dẹp rác Staging nếu script bị hủy ngang
+trap "rm -rf /etc/wptt/tmp/wptt-core-clean-staging" EXIT
+
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}BẢO MẬT & PHỤC HỒI ➜ Clean Mã Nguồn (Reinstall WordPress)${C_RESET}"
@@ -17,324 +20,345 @@ echo -e "${C_CYAN}╰───────────────────�
 
 NAME=$1
 if [[ -z "$NAME" ]]; then
-  . /etc/wptt/tenmien-only-website-by-wordpress
+  . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
   lua_chon_NAME "Clean mã nguồn"
 fi
 
 [[ "$NAME" == "0" || -z "$NAME" ]] && { [[ -z "$1" ]] && exec /usr/bin/wptangtoc 1 || exit 1; }
 
-path_conf="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$path_conf" ]]; then
-  echo -e "\n${C_RED}Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 2
-  exit 1
-fi
-
-if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
-  echo -e "\n${C_RED}Lỗi: Domain rỗng. Hủy bỏ lệnh!${C_RESET}"
-  exit 1
-fi
-
-echo "Reinstall WordPress Clean mã nguồn website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-. "/etc/wptt/vhost/.$NAME.conf"
-path="/usr/local/lsws/$NAME/html"
-
 # ==============================================================================
-# KHỞI TẠO WP-CLI SỚM ĐỂ CHUẨN BỊ QUÉT MÃ ĐỘC
+# HÀM: CHUẨN BỊ GÓI CORE STAGING (TẢI 1 LẦN DÙNG N NHIỀU LẦN)
 # ==============================================================================
-. /etc/wptt/php/php-cli-domain-config "$NAME"
-WP_EXEC="/sbin/runuser -u $User_name_vhost -- /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
-
-# ==============================================================================
-# BƯỚC QUÉT SƠ BỘ (PRE-SCAN) TRƯỚC KHI TẨY RỬA
-# ==============================================================================
-echo -e "${C_CYAN}Đang tiến hành trinh sát và phân tích mã độc trước khi dọn dẹp...${C_RESET}"
-
-# 1. Quét file PHP bị sửa đổi trong 7 ngày qua
-MODIFIED_FILES=$(find "$path/wp-content/plugins" "$path/wp-content/themes" -type f -name "*.php" -mtime -7 2>/dev/null)
-
-# 2. Checksum Core Plugins (Lọc lấy thông báo có chữ 'File' để bỏ qua lỗi Premium Plugins)
-CHECKSUM_WARNINGS=$($WP_EXEC plugin verify-checksums --all --path="$path" 2>&1 | grep -i "Warning: File")
-
-if [[ -n "$MODIFIED_FILES" || -n "$CHECKSUM_WARNINGS" ]]; then
-  echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}BÁO CÁO TRINH SÁT: PHÁT HIỆN DẤU HIỆU KHẢ NGHI${C_RESET}"
-  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+function chuan_bi_core_staging() {
+  _runing "Đang tải gói Core WordPress sạch về kho lưu trữ tạm (Staging)..."
+  rm -rf /etc/wptt/tmp/wptt-core-clean-staging
+  mkdir -p /etc/wptt/tmp/wptt-core-clean-staging
   
-  if [[ -n "$MODIFIED_FILES" ]]; then
-    left_text " ${C_YELLOW}1. File PHP bị sửa đổi trong 7 ngày qua (Thường là Backdoor):${C_RESET}" 2
-    echo "$MODIFIED_FILES" | head -n 8 | while read -r line; do
-      left_text "    - ${line#"$path"/}" 2
-    done
-    [[ $(echo "$MODIFIED_FILES" | wc -l) -gt 8 ]] && left_text "    ... (và $(($(echo "$MODIFIED_FILES" | wc -l) - 8)) file khác đang bị ẩn)" 2
+  # Tải core không kèm wp-content, dùng quyền root để tải cho nhanh
+  if ! wp core download --skip-content --force --path="/etc/wptt/tmp/wptt-core-clean-staging" --allow-root >/dev/null 2>&1; then
+    _runloi "Tải gói Core WordPress thất bại! Vui lòng kiểm tra kết nối mạng."
+    exit 1
+  fi
+  _rundone "Chuẩn bị gói Core WordPress (Staging) thành công"
+}
+
+# ==============================================================================
+# HÀM XỬ LÝ LÕI: CLEAN MÃ NGUỒN CHO 1 DOMAIN
+# ==============================================================================
+function xuly_clean_website() {
+  local domain_clean="$1"
+  local path_conf="/etc/wptt/vhost/.$domain_clean.conf"
+  
+  if [[ ! -f "$path_conf" ]]; then
+    echo -e "\n${C_RED}Lỗi: Tên miền $domain_clean không tồn tại trên hệ thống này!${C_RESET}"
+    return 1
+  fi
+
+  if ! wptt_kha_dung_de_xoa_xac_thuc "$domain_clean"; then
+    echo -e "\n${C_RED}Lỗi: Domain rỗng hoặc không hợp lệ. Hủy bỏ!${C_RESET}"
+    return 1
+  fi
+
+  echo -e "\n${C_CYAN}==============================================================================${C_RESET}"
+  center_text "${C_YELLOW}ĐANG XỬ LÝ WEBSITE: $domain_clean${C_RESET}"
+  echo -e "${C_CYAN}==============================================================================\n${C_RESET}"
+
+  echo "Reinstall WordPress Clean mã nguồn website $domain_clean : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+  # Load cấu hình của từng website
+  . "/etc/wptt/vhost/.$domain_clean.conf"
+  local path="/usr/local/lsws/$domain_clean/html"
+
+  . /etc/wptt/php/php-cli-domain-config "$domain_clean"
+  
+  WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" -d memory_limit=512M /usr/local/bin/wp )
+
+  echo -e "${C_CYAN}Đang tiến hành trinh sát và phân tích mã độc trước khi dọn dẹp...${C_RESET}"
+
+  local MODIFIED_FILES
+  MODIFIED_FILES=$(find "$path/wp-content/plugins" "$path/wp-content/themes" -type f -name "*.php" -mtime -7 2>/dev/null)
+
+  local CHECKSUM_WARNINGS
+  CHECKSUM_WARNINGS=$("${WP_EXEC[@]}" plugin verify-checksums --all --path="$path" 2>&1 | grep -i "Warning: File")
+
+  if [[ -n "$MODIFIED_FILES" || -n "$CHECKSUM_WARNINGS" ]]; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}BÁO CÁO TRINH SÁT: PHÁT HIỆN DẤU HIỆU KHẢ NGHI${C_RESET}"
     echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    if [[ -n "$MODIFIED_FILES" ]]; then
+      left_text " ${C_YELLOW}1. File PHP bị sửa đổi trong 7 ngày qua (Thường là Backdoor):${C_RESET}" 2
+      echo "$MODIFIED_FILES" | head -n 8 | while read -r line; do
+        left_text "    - ${line#"$path"/}" 2
+      done
+      [[ $(echo "$MODIFIED_FILES" | wc -l) -gt 8 ]] && left_text "    ... (và $(($(echo "$MODIFIED_FILES" | wc -l) - 8)) file khác đang bị ẩn)" 2
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    fi
+
+    if [[ -n "$CHECKSUM_WARNINGS" ]]; then
+      left_text " ${C_YELLOW}2. Plugin bị sai lệch mã nguồn so với kho WordPress.org:${C_RESET}" 2
+      echo "$CHECKSUM_WARNINGS" | head -n 8 | while read -r line; do
+        clean_warn=$(echo "$line" | sed 's/Warning: //g')
+        left_text "    - $clean_warn" 2
+      done
+      [[ $(echo "$CHECKSUM_WARNINGS" | wc -l) -gt 8 ]] && left_text "    ... (và $(($(echo "$CHECKSUM_WARNINGS" | wc -l) - 8)) file khác đã bị biến đổi)" 2
+    fi
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  else
+    echo -e "${C_GREEN}✔ Trinh sát hoàn tất: Chưa phát hiện file PHP sửa đổi gần đây hoặc sai lệch Checksum!${C_RESET}\n"
   fi
 
-  if [[ -n "$CHECKSUM_WARNINGS" ]]; then
-    left_text " ${C_YELLOW}2. Plugin bị sai lệch mã nguồn so với kho WordPress.org:${C_RESET}" 2
-    echo "$CHECKSUM_WARNINGS" | head -n 8 | while read -r line; do
-      clean_warn=$(echo "$line" | sed 's/Warning: //g')
-      left_text "    - $clean_warn" 2
+  # Bước tắt Lock Down
+  unset lock_down_duoc_tat_khi_run
+  if [[ -n "$lock_down" ]]; then
+    lock_down_duoc_tat_khi_run=1
+    _runing "Đang tạm tắt tính năng Lock Down để thao tác file..."
+    . /etc/wptt/bao-mat/wptt-lock-down "$domain_clean" off >/dev/null 2>&1
+    sed -i '/lock_down/d' "/etc/wptt/vhost/.$domain_clean.conf"
+    _rundone "Tắt Lock Down thành công"
+  fi
+
+  _runing "Đang xóa Core cũ và các file rác gốc..."
+  rm -rf "${path:?}/wp-admin" "${path:?}/wp-includes"
+  rm -f "${path:?}/php.ini" "${path:?}/user.ini"
+
+  if [[ -d "$path/wp-content/plugins/devvn-quick-search" ]]; then
+    find "$path" -maxdepth 1 -type f -name "*.php" ! -name "wp-config.php" ! -name "search.php" -delete
+  else
+    find "$path" -maxdepth 1 -type f -name "*.php" ! -name "wp-config.php" -delete
+  fi
+  _rundone "Xóa Core và file rác hoàn tất"
+
+  _runing "Đang Rsync cập nhật Core WordPress mới nhất từ Staging..."
+  
+  # Rsync file từ kho tạm an toàn vào thẳng mã nguồn
+  rsync -a /etc/wptt/tmp/wptt-core-clean-staging/ "$path/"
+  
+  # Khôi phục phân quyền chuẩn OLS cho các thư mục vừa được copy
+  local owner_group
+  owner_group=$(stat -c '%U:%G' "$path/wp-config.php" 2>/dev/null || stat -c '%U:%G' "$path")
+  chown -R "$owner_group" "$path/wp-admin" "$path/wp-includes" "$path"/*.php
+  
+  "${WP_EXEC[@]}" core update-db --path="$path" >/dev/null 2>&1
+  
+  if [[ ! -f "$path/wp-load.php" ]]; then
+    echo -e "${C_RED}❌ Khôi phục Core WP thất bại cho $domain_clean${C_RESET}"
+    return 1
+  fi
+  _rundone "Phục hồi Core WordPress siêu tốc thành công"
+
+  _runing "Đang dọn dẹp và tái tạo thư mục Ngôn ngữ (Languages)..."
+  if [[ -d "$path/wp-content/languages" ]]; then
+    find "$path/wp-content/languages" -type f \( -name "*.php" -o -name "*.php[34578]" -o -name "*.phtml" -o -name "*.phps" -o -name "*.sh" -o -name "*.cgi" -o -name "*.pl" -o -name "*.shtml" \) ! -name "index.php" -delete
+    rm -rf "${path:?}/wp-content/languages/plugins"
+    rm -rf "${path:?}/wp-content/languages/themes"
+    rm -f "${path:?}/wp-content/languages/"*.po "${path:?}/wp-content/languages/"*.mo "${path:?}/wp-content/languages/"*.json
+  fi
+
+  mkdir -p "$path/wp-content/languages"
+  "${WP_EXEC[@]}" language core update --path="$path" >/dev/null 2>&1
+  "${WP_EXEC[@]}" language plugin update --all --path="$path" >/dev/null 2>&1
+  "${WP_EXEC[@]}" language theme update --all --path="$path" >/dev/null 2>&1
+  [[ ! -f "$path/wp-content/languages/index.php" ]] && echo '<?php' >"$path/wp-content/languages/index.php"
+  _rundone "Làm sạch và tái tạo gói Ngôn ngữ hoàn tất"
+
+  local FAILED_PLUGINS=""
+  local FAILED_THEMES=""
+
+  _runing "Đang tải lại thư viện Plugins (Có thể mất vài phút)..."
+  local plugins_list=$("${WP_EXEC[@]}" plugin list --field=name --path="$path" 2>/dev/null)
+  if [[ -n "$plugins_list" ]]; then
+    for plugin in $plugins_list; do
+      if ! "${WP_EXEC[@]}" plugin install "$plugin" --force --path="$path" >/dev/null 2>&1; then
+        FAILED_PLUGINS+="$plugin, "
+      fi
     done
-    [[ $(echo "$CHECKSUM_WARNINGS" | wc -l) -gt 8 ]] && left_text "    ... (và $(($(echo "$CHECKSUM_WARNINGS" | wc -l) - 8)) file khác đã bị biến đổi)" 2
   fi
-  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-else
-  echo -e "${C_GREEN}✔ Trinh sát hoàn tất: Chưa phát hiện file PHP sửa đổi gần đây hoặc sai lệch Checksum!${C_RESET}\n"
-fi
+  _rundone "Xử lý tải lại Plugins hoàn tất"
 
-# ==============================================================================
-# CẢNH BÁO XÁC NHẬN AN TOÀN TRƯỚC KHI RA TAY
-# ==============================================================================
-echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}CẢNH BÁO: TẨY RỬA MÃ NGUỒN${C_RESET}"
-echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "  Hành động này sẽ XÓA SẠCH core WordPress và tải lại bản mới." 2
-left_text "  Các Plugin/Theme miễn phí sẽ được tải lại tự động." 2
-left_text "  ${C_YELLOW}Tất cả file lạ nằm ngoài cấu trúc chuẩn sẽ bị tiêu diệt!${C_RESET}" 2
-echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
-if ! wptt_xac_nhan "Dựa vào báo cáo trên, bạn có CHẮC CHẮN muốn Clean mã nguồn website ($NAME)?" "" "" "Đồng ý Tẩy Rửa" "Hủy thao tác"; then
-  echo -e "${C_YELLOW}Đã hủy thao tác. Website vẫn giữ nguyên.${C_RESET}\n"
-  sleep 1
-  exit 0
-fi
-echo ""
-
-# ==============================================================================
-# BƯỚC 1: XÓA LOCK DOWN & CÀI ĐẶT MÔI TRƯỜNG
-# ==============================================================================
-unset lock_down_duoc_tat_khi_run
-if [[ -n "$lock_down" ]]; then
-	lock_down_duoc_tat_khi_run=1
-	_runing "Đang tạm tắt tính năng Lock Down để thao tác file..."
-	# . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1
-	. /etc/wptt/bao-mat/wptt-lock-down "$NAME" off >/dev/null 2>&1
-	sed -i '/lock_down/d' "/etc/wptt/vhost/.$NAME.conf"
-	_rundone "Tắt Lock Down thành công"
-fi
-
-# Cài đặt PHP Zip nếu thiếu
-if ! php -m | grep -q 'zip'; then
-  _runing "Đang cài đặt thư viện PHP Zip bổ trợ..."
-  phien_ban_php_cli_hien_tai=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
-  . /etc/wptt/php/install-php-zip "$phien_ban_php_cli_hien_tai" >/dev/null 2>&1
-  _rundone "Cài đặt PHP Zip thành công"
-fi
-
-# ==============================================================================
-# BƯỚC 2: XÓA MÃ NGUỒN CORE & FILE RÁC
-# ==============================================================================
-_runing "Đang xóa Core cũ và các file rác gốc..."
-rm -rf "${path:?}/wp-admin" "${path:?}/wp-includes"
-rm -f "${path:?}/php.ini" "${path:?}/user.ini"
-
-if [[ -d "$path/wp-content/plugins/devvn-quick-search" ]]; then
-  find "$path" -maxdepth 1 -type f -name "*.php" ! -name "wp-config.php" ! -name "search.php" -delete
-else
-  find "$path" -maxdepth 1 -type f -name "*.php" ! -name "wp-config.php" -delete
-fi
-_rundone "Xóa Core và file rác hoàn tất"
-
-# ==============================================================================
-# BƯỚC 3: TẢI LẠI CORE, THEME & PLUGIN (BÓC TÁCH LỖI BẢN QUYỀN)
-# ==============================================================================
-_runing "Đang tải và cập nhật Core WordPress mới nhất..."
-"${WP_EXEC[@]}" core download --skip-content --force --path="$path" >/dev/null 2>&1
-"${WP_EXEC[@]}" core update-db --path="$path" >/dev/null 2>&1
-if [[ ! -f $path/wp-load.php ]];then
-	echo "Download không thành công mã nguồn WP"
-	exit;
-fi
-_rundone "Phục hồi Core WordPress thành công"
-
-# ==============================================================================
-# BƯỚC 3.5: LÀM SẠCH VÀ TÁI TẠO THƯ MỤC LANGUAGES (BẮT MÃ ĐỘC ẨN)
-# ==============================================================================
-_runing "Đang dọn dẹp và tái tạo thư mục Ngôn ngữ (Languages)..."
-
-if [[ -d "$path/wp-content/languages" ]]; then
-  # 1. Băm nát toàn bộ các file thực thi (PHP, Bash, Perl...) bị lén giấu vào thư mục này
-  find "$path/wp-content/languages" -type f \( -name "*.php" -o -name "*.php[34578]" -o -name "*.phtml" -o -name "*.phps" -o -name "*.sh" -o -name "*.cgi" -o -name "*.pl" -o -name "*.shtml" \) ! -name "index.php" -delete
-
-  # 2. Xóa các thư mục dịch thuật mặc định để ép tải lại bản mới (Giữ lại thư mục loco nếu khách dùng Loco Translate)
-  rm -rf "${path:?}/wp-content/languages/plugins"
-  rm -rf "${path:?}/wp-content/languages/themes"
-  rm -f "${path:?}/wp-content/languages/"*.po "${path:?}/wp-content/languages/"*.mo "${path:?}/wp-content/languages/"*.json
-fi
-
-mkdir -p "$path/wp-content/languages"
-
-# 3. Dùng WP-CLI ép kéo lại toàn bộ gói ngôn ngữ chuẩn từ máy chủ WordPress.org
-"${WP_EXEC[@]}" language core update --path="$path" >/dev/null 2>&1
-"${WP_EXEC[@]}" language plugin update --all --path="$path" >/dev/null 2>&1
-"${WP_EXEC[@]}" language theme update --all --path="$path" >/dev/null 2>&1
-
-# 4. Rải index.php rỗng làm khiên bảo vệ chống Directory Listing
-[[ ! -f "$path/wp-content/languages/index.php" ]] && echo '<?php' >"$path/wp-content/languages/index.php"
-
-_rundone "Làm sạch và tái tạo gói Ngôn ngữ hoàn tất"
-
-# Khai báo biến lưu các Plugin/Theme không tải được
-FAILED_PLUGINS=""
-FAILED_THEMES=""
-
-_runing "Đang tải lại thư viện Plugins (Có thể mất vài phút)..."
-plugins_list=$("${WP_EXEC[@]}" plugin list --field=name --path="$path" 2>/dev/null)
-if [[ -n "$plugins_list" ]]; then
-  for plugin in $plugins_list; do
-    # Tải từng cái để bóc tách lỗi
-    if ! $WP_EXEC plugin install "$plugin" --force --path="$path" >/dev/null 2>&1; then
-      FAILED_PLUGINS+="$plugin, "
-    fi
-  done
-fi
-_rundone "Xử lý tải lại Plugins hoàn tất"
-
-_runing "Đang tải lại giao diện Themes (Có thể mất vài phút)..."
-themes_list=$("${WP_EXEC[@]}" theme list --field=name --path="$path" 2>/dev/null)
-if [[ -n "$themes_list" ]]; then
-  for theme in $themes_list; do
-    if ! "${WP_EXEC[@]}" theme install "$theme" --force --path="$path" >/dev/null 2>&1; then
-      FAILED_THEMES+="$theme, "
-    fi
-  done
-fi
-_rundone "Xử lý tải lại Themes hoàn tất"
-
-# Lọc bỏ dấu phẩy cuối chuỗi
-FAILED_PLUGINS=${FAILED_PLUGINS%, }
-FAILED_THEMES=${FAILED_THEMES%, }
-
-# ==============================================================================
-# BƯỚC 4: DỌN DẸP CACHE, CRON RÁC & DROP-INS
-# ==============================================================================
-_runing "Đang dọn dẹp Cache ảo, Cronjob lạ và Drop-ins..."
-rm -rf "${path:?}/wp-content/cache" "/usr/local/lsws/${NAME:?}/luucache"
-
-"${WP_EXEC[@]}" cron event list --allow-root --path="$path" 2>/dev/null | grep 'vtpost_login_daily' | awk '{ print $1 }' | xargs -I % "${WP_EXEC[@]}" cron event delete % --path="$path" >/dev/null 2>&1
-
-rm -f "${path:?}/wp-content/advanced-cache.php" "${path:?}/wp-content/object-cache.php"
-
-if [[ -f "$path/wp-content/db.php" ]]; then
-  if ! grep -qi "sqlite" "$path/wp-content/db.php"; then
-    rm -f "${path:?}/wp-content/db.php"
+  _runing "Đang tải lại giao diện Themes (Có thể mất vài phút)..."
+  local themes_list=$("${WP_EXEC[@]}" theme list --field=name --path="$path" 2>/dev/null)
+  if [[ -n "$themes_list" ]]; then
+    for theme in $themes_list; do
+      if ! "${WP_EXEC[@]}" theme install "$theme" --force --path="$path" >/dev/null 2>&1; then
+        FAILED_THEMES+="$theme, "
+      fi
+    done
   fi
-fi
+  _rundone "Xử lý tải lại Themes hoàn tất"
 
-if [[ -d "$path/wp-content/mu-plugins" ]]; then
-  find "$path/wp-content/mu-plugins" -type f -name "*.php" -delete
-fi
+  FAILED_PLUGINS=${FAILED_PLUGINS%, }
+  FAILED_THEMES=${FAILED_THEMES%, }
 
-# Xóa index.php của Theme cha
-checkchild=$($WP_EXEC theme list --path="$path" 2>/dev/null | grep -c 'parent')
-if [[ "$checkchild" != "1" ]]; then
-  name_theme=$($WP_EXEC theme status --path="$path" 2>/dev/null | grep 'A' | head -1 | awk '{print $2}')
-  rm -f "${path:?}/wp-content/themes/${name_theme:?}/index.php"
-fi
-_rundone "Dọn dẹp tệp tin rác bảo mật thành công"
+  _runing "Đang dọn dẹp Cache ảo, Cronjob lạ và Drop-ins..."
+  rm -rf "${path:?}/wp-content/cache" "/usr/local/lsws/${domain_clean:?}/luucache"
+
+  "${WP_EXEC[@]}" cron event list --allow-root --path="$path" 2>/dev/null | grep 'vtpost_login_daily' | awk '{ print $1 }' | xargs -I % "${WP_EXEC[@]}" cron event delete % --path="$path" >/dev/null 2>&1
+
+  rm -f "${path:?}/wp-content/advanced-cache.php" "${path:?}/wp-content/object-cache.php"
+
+  if [[ -f "$path/wp-content/db.php" ]]; then
+    if ! grep -qi "sqlite" "$path/wp-content/db.php"; then
+      rm -f "${path:?}/wp-content/db.php"
+    fi
+  fi
+
+  if [[ -d "$path/wp-content/mu-plugins" ]]; then
+    find "$path/wp-content/mu-plugins" -type f -name "*.php" -delete
+  fi
+
+  local checkchild=$("${WP_EXEC[@]}" theme list --path="$path" 2>/dev/null | grep -c 'parent')
+  if [[ "$checkchild" != "1" ]]; then
+    local name_theme=$("${WP_EXEC[@]}" theme list --status=active --field=name --path="$path" 2>/dev/null | head -1)
+    if [[ -n "$name_theme" ]]; then
+      rm -f "${path:?}/wp-content/themes/${name_theme}/index.php"
+    fi
+  fi
+  _rundone "Dọn dẹp tệp tin rác bảo mật thành công"
+
+  _runing "Đang quét mã độc và rải index.php bảo vệ thư mục Uploads..."
+  find "$path/wp-content/uploads" -type f \( -name "*.php" -o -name "*.php[34578]" -o -name "*.phtml" -o -name "*.phps" -o -name "*.sh" -o -name "*.cgi" -o -name "*.pl" -o -name "*.shtml" \) -delete
+  find "$path/wp-content" -type f -name ".htaccess" -delete
+
+  echo '<?php' >"$path/wp-content/uploads/index.php"
+  echo '<?php' >"$path/wp-content/index.php"
+  echo '<?php' >"$path/wp-content/themes/index.php"
+  echo '<?php' >"$path/wp-content/plugins/index.php"
+
+  find "$path/wp-content/uploads" -type d -print0 | while IFS= read -r -d '' dir; do
+    [[ ! -f "$dir/index.php" ]] && echo '<?php' >"$dir/index.php"
+  done
+  _rundone "Quét mã độc Uploads và rải khiên bảo vệ hoàn tất"
+
+  local check_config_malware=$(grep -Ei "eval\(|base64_decode|gzinflate|str_rot13" "$path/wp-config.php" 2>/dev/null)
+  if [[ -n "$check_config_malware" ]]; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}BÁO ĐỘNG ĐỎ: NGHI NGỜ MÃ ĐỘC TRONG WP-CONFIG.PHP${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Hệ thống phát hiện các hàm nhạy cảm (eval, base64) bị nhúng" 2
+    left_text "  vào file cấu hình lõi của WordPress." 2
+    left_text "  Bạn PHẢI MỞ FILE: ${C_YELLOW}$path/wp-config.php${C_RESET}" 2
+    left_text "  để kiểm tra và xóa thủ công các đoạn code mã hóa lạ." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    sleep 4
+  fi
+
+  _runing "Đang làm mới cấu hình Salt"
+  (/etc/wptt/wordpress/thay-salt "$domain_clean" >/dev/null 2>&1)
+  _rundone "Đang làm mới cấu hình Salt"
+
+  _runing "Đang làm mới cấu hình htaccess"
+  (/etc/wptt/wptt-htaccess-reset "$domain_clean" >/dev/null 2>&1)
+  _rundone "làm mới cấu hình htaccess"
+
+  _runing "Đang làm mới Cache"
+  (/etc/wptt/cache/wptt-xoacache "$domain_clean" >/dev/null 2>&1)
+  _rundone "Đang làm mới Cache"
+
+  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT TẨY RỬA MÃ NGUỒN (CLEAN CORE)${C_RESET}"
+  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Website xử lý : ${C_YELLOW}$domain_clean${C_RESET}" 2
+  left_text "  Trạng thái    : ${C_GREEN}Đã bóc tách mã độc & Tải lại file chuẩn${C_RESET}" 2
+  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  if [[ -n "$FAILED_PLUGINS" || -n "$FAILED_THEMES" ]]; then
+    echo -e "\n${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}CHÚ Ý: YÊU CẦU CAN THIỆP THỦ CÔNG${C_RESET}"
+    echo -e "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Các tiện ích sau là hàng Bản quyền (Premium) hoặc đã bị xóa" 2
+    left_text "  khỏi kho WordPress, nên hệ thống KHÔNG THỂ tải lại tự động:" 2
+    echo -e "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if [[ -n "$FAILED_PLUGINS" ]]; then
+      left_text "  ${C_RED}Plugins lỗi :${C_RESET} ${C_BOLD_WHITE}$FAILED_PLUGINS${C_RESET}" 2
+    fi
+    if [[ -n "$FAILED_THEMES" ]]; then
+      left_text "  ${C_RED}Themes lỗi  :${C_RESET} ${C_BOLD_WHITE}$FAILED_THEMES${C_RESET}" 2
+    fi
+
+    echo -e "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  ${C_CYAN}Giải pháp:${C_RESET} Bạn vui lòng tải file .zip chính chủ của các" 2
+    left_text "  mục trên, giải nén và upload thủ công vào thư mục wp-content." 2
+    echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  fi
+
+  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}DANH SÁCH QUẢN TRỊ VIÊN (ADMINISTRATOR)${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Hãy kiểm tra thật kỹ bảng dưới đây. Nếu thấy User lạ," 2
+  left_text "  hacker đã cài cắm lại. Vui lòng truy cập WP-Admin và xóa ngay!" 2
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+  "${WP_EXEC[@]}" user list --role=administrator --fields=ID,user_login,user_email --path="$path" 2>/dev/null | awk -F'\t' '
+    NR==1 { printf "  \033[1;36m%-5s | %-20s | %-30s\033[0m\n", "ID", "USERNAME", "EMAIL"; print "  ------------------------------------------------------------" }
+    NR>1  { printf "  %-5s | %-20s | %-30s\n", $1, $2, $3 }
+  '
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  if [[ $lock_down_duoc_tat_khi_run ]]; then
+    . /etc/wptt/bao-mat/wptt-lock-down "$domain_clean" on >/dev/null 2>&1
+  fi
+}
 
 # ==============================================================================
-# BƯỚC 5: QUÉT MÃ ĐỘC VÀ RẢI INDEX BẢO VỆ
+# QUYẾT ĐỊNH LUỒNG CHẠY (1 WEBSITE HAY TẤT CẢ)
 # ==============================================================================
-_runing "Đang quét mã độc và rải index.php bảo vệ thư mục Uploads..."
-find "$path/wp-content/uploads" -type f \( -name "*.php" -o -name "*.php[34578]" -o -name "*.phtml" -o -name "*.phps" -o -name "*.sh" -o -name "*.cgi" -o -name "*.pl" -o -name "*.shtml" \) -delete
-find "$path/wp-content" -type f -name ".htaccess" -delete
 
-echo '<?php' >"$path/wp-content/uploads/index.php"
-echo '<?php' >"$path/wp-content/index.php"
-echo '<?php' >"$path/wp-content/themes/index.php"
-echo '<?php' >"$path/wp-content/plugins/index.php"
-
-find "$path/wp-content/uploads" -type d -print0 | while IFS= read -r -d '' dir; do
-  [[ ! -f "$dir/index.php" ]] && echo '<?php' >"$dir/index.php"
-done
-_rundone "Quét mã độc Uploads và rải khiên bảo vệ hoàn tất"
-
-# ==============================================================================
-# BƯỚC 6: KIỂM TRA WP-CONFIG.PHP
-# ==============================================================================
-check_config_malware=$(grep -Ei "eval\(|base64_decode|gzinflate|str_rot13" "$path/wp-config.php" 2>/dev/null)
-if [[ -n "$check_config_malware" ]]; then
-  echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}BÁO ĐỘNG ĐỎ: NGHI NGỜ MÃ ĐỘC TRONG WP-CONFIG.PHP${C_RESET}"
+if [[ "$NAME" == "Tất cả website" ]]; then
+  echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}CẢNH BÁO: TẨY RỬA MÃ NGUỒN HÀNG LOẠT${C_RESET}"
   echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "  Hệ thống phát hiện các hàm nhạy cảm (eval, base64) bị nhúng" 2
-  left_text "  vào file cấu hình lõi của WordPress." 2
-  left_text "  Bạn PHẢI MỞ FILE: ${C_YELLOW}$path/wp-config.php${C_RESET}" 2
-  left_text "  để kiểm tra và xóa thủ công các đoạn code mã hóa lạ." 2
+  left_text "  Hành động này sẽ XÓA SẠCH core và cài lại cho TOÀN BỘ website." 2
+  left_text "  Các Plugin/Theme miễn phí sẽ được tải lại tự động." 2
+  left_text "  ${C_YELLOW}Tất cả file lạ nằm ngoài cấu trúc chuẩn sẽ bị tiêu diệt!${C_RESET}" 2
   echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  sleep 4
-fi
 
-# ==============================================================================
-# BƯỚC 7: RESET CẤU HÌNH PHỤ
-# ==============================================================================
-_runing "Đang làm mới cấu hình Salt"
-(etc/wptt/wordpress/thay-salt "$NAME" >/dev/null 2>&1)
-_rundone "Đang làm mới cấu hình Salt"
-
-
-_runing "Đang làm mới cấu hình htaccess"
-(/etc/wptt/wptt-htaccess-reset "$NAME" >/dev/null 2>&1)
-_rundone "làm mới cấu hình htaccess"
-_runing "Đang làm mới Cache"
-(/etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1)
-_rundone "Đang làm mới Cache"
-
-# ==============================================================================
-# BÁO CÁO KẾT QUẢ VÀ TÀI KHOẢN ADMIN
-# ==============================================================================
-echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}HOÀN TẤT TẨY RỬA MÃ NGUỒN (CLEAN CORE)${C_RESET}"
-echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "  Website xử lý : ${C_YELLOW}$NAME${C_RESET}" 2
-left_text "  Trạng thái    : ${C_GREEN}Đã bóc tách mã độc & Tải lại file chuẩn${C_RESET}" 2
-echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-
-# ==============================================================================
-# CẢNH BÁO PLUGIN/THEME BẢN QUYỀN KHÔNG THỂ TẢI LẠI
-# ==============================================================================
-if [[ -n "$FAILED_PLUGINS" || -n "$FAILED_THEMES" ]]; then
-  echo -e "\n${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}CHÚ Ý: YÊU CẦU CAN THIỆP THỦ CÔNG${C_RESET}"
-  echo -e "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "  Các tiện ích sau là hàng Bản quyền (Premium) hoặc đã bị xóa" 2
-  left_text "  khỏi kho WordPress, nên hệ thống KHÔNG THỂ tải lại tự động:" 2
-  echo -e "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-
-  if [[ -n "$FAILED_PLUGINS" ]]; then
-    left_text "  ${C_RED}Plugins lỗi :${C_RESET} ${C_BOLD_WHITE}$FAILED_PLUGINS${C_RESET}" 2
+  if ! wptt_xac_nhan "Bạn có CHẮC CHẮN muốn Clean mã nguồn cho TẤT CẢ website không?" "" "" "Đồng ý Tẩy Rửa Toàn Bộ" "Hủy thao tác"; then
+    echo -e "${C_YELLOW}Đã hủy thao tác. Hệ thống vẫn giữ nguyên.${C_RESET}\n"
+    sleep 1
+    exit 0
   fi
-  if [[ -n "$FAILED_THEMES" ]]; then
-    left_text "  ${C_RED}Themes lỗi  :${C_RESET} ${C_BOLD_WHITE}$FAILED_THEMES${C_RESET}" 2
+  echo ""
+
+  # Khởi tạo gói Staging một lần duy nhất vào /etc/wptt/tmp
+  chuan_bi_core_staging
+
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}" 
+    domain="${domain%.conf}" 
+    domain="${domain#.}"     
+
+    if [[ "$domain" != ?*.?* ]]; then
+      continue
+    fi
+    # Gọi hàm xử lý cho từng website
+    xuly_clean_website "$domain"
+  done
+else
+  # Xử lý 1 website duy nhất đã chọn (Vẫn có cảnh báo trinh sát bên trong hàm)
+  echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}CẢNH BÁO: TẨY RỬA MÃ NGUỒN${C_RESET}"
+  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "  Hành động này sẽ XÓA SẠCH core WordPress và tải lại bản mới." 2
+  left_text "  Các Plugin/Theme miễn phí sẽ được tải lại tự động." 2
+  left_text "  ${C_YELLOW}Tất cả file lạ nằm ngoài cấu trúc chuẩn sẽ bị tiêu diệt!${C_RESET}" 2
+  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  if ! wptt_xac_nhan "Bạn có CHẮC CHẮN muốn Clean mã nguồn website ($NAME)?" "" "" "Đồng ý Tẩy Rửa" "Hủy thao tác"; then
+    echo -e "${C_YELLOW}Đã hủy thao tác. Website vẫn giữ nguyên.${C_RESET}\n"
+    sleep 1
+    exit 0
   fi
-
-  echo -e "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "  ${C_CYAN}Giải pháp:${C_RESET} Bạn vui lòng tải file .zip chính chủ của các" 2
-  left_text "  mục trên, giải nén và upload thủ công vào thư mục wp-content." 2
-  echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  echo ""
+  
+  # Khởi tạo gói Staging vào /etc/wptt/tmp
+  chuan_bi_core_staging
+  
+  xuly_clean_website "$NAME"
 fi
 
-# ==============================================================================
-# DANH SÁCH ADMINISTRATOR (PHÒNG HACKER TẠO USER ẨN)
-# ==============================================================================
-echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}DANH SÁCH QUẢN TRỊ VIÊN (ADMINISTRATOR)${C_RESET}"
-echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "  Hãy kiểm tra thật kỹ bảng dưới đây. Nếu thấy User lạ," 2
-left_text "  hacker đã cài cắm lại. Vui lòng truy cập WP-Admin và xóa ngay!" 2
-echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-
-# Render list Admin có format cột
-$WP_EXEC user list --role=administrator --fields=ID,user_login,user_email --path="$path" 2>/dev/null | awk -F'\t' '
-  NR==1 { printf "  \033[1;36m%-5s | %-20s | %-30s\033[0m\n", "ID", "USERNAME", "EMAIL"; print "  ------------------------------------------------------------" }
-  NR>1  { printf "  %-5s | %-20s | %-30s\n", $1, $2, $3 }
-'
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
-if [[ $lock_down_duoc_tat_khi_run ]];then
-. /etc/wptt/bao-mat/wptt-lock-down "$NAME" on >/dev/null 2>&1
-fi
-
+echo -en "${C_GREEN}Nhấn phím [Enter] để kết thúc...${C_RESET}"
+read -r _
+[[ -z "$1" ]] && exec /usr/bin/wptangtoc 1 || exit 1] && exec /usr/bin/wptangtoc 1 || exit 1
