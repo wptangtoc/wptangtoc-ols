@@ -26,7 +26,7 @@ fi
 . /etc/wptt/core-functions 2>/dev/null
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
-stty iutf8 #từ latin1 sang utf8, nhiều khi anh em dùng bộ gõ tiếng việt: dùng à â nó thêm \xc3 hay \xa9 ... tương thích với bộ gõ tiếng việt telex khi nhập domain
+stty iutf8 
 
 NAME=$1
 if [[ $NAME = "98" ]]; then
@@ -41,13 +41,9 @@ if [[ -z "$NAME" ]]; then
   lua_chon_NAME "Thay đổi domain"
 fi
 
-#để nếu nhập số 0 sẽ thoát
 if [[ "$NAME" = "0" || -z "$NAME" ]]; then
   exec /etc/wptt/wptt-domain-main 1
 fi
-
-#Biến NAME là domain cũ
-#biến NAME2 là domain mới
 
 unset lock_down
 . /etc/wptt/vhost/."$NAME".conf
@@ -61,14 +57,14 @@ fi
 read -rp "Nhập domain hoac subdomain bạn muốn thêm và sao chép vào
     ($vi_du: wptangtoc.com, abc.wptangtoc.com ...) [0=$exit_thoat]: " NAME2
 
-#để nếu nhập số 0 sẽ thoát
 if [[ "$NAME2" = "0" || -z "$NAME2" ]]; then
   exec /etc/wptt/wptt-domain-main 1
 fi
 
-NAME2="${NAME2,,}" # biến viết hoa thành viết thuờng
 
-#chuyển domain punycode
+
+NAME2="${NAME2,,}"
+
 NAME2=$(php /etc/wptt/domain/punycode.php "$NAME2" 2>/dev/null)
 if [[ -z $NAME2 ]]; then
   clear
@@ -80,6 +76,24 @@ if [[ -z $NAME2 ]]; then
   return 2>/dev/null
   exit
 fi
+
+
+REGEX_DOMAIN="^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$"
+REGEX_IP="^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+
+# Kiểm tra: Nếu KHÔNG khớp Domain VÀ KHÔNG khớp IPv4 thì văng lỗi
+if [[ ! "$NAME2" =~ $REGEX_DOMAIN ]] && [[ ! "$NAME2" =~ $REGEX_IP ]]; then
+  echo -e "\n${C_RED}Lỗi: Tên miền hoặc IP chứa ký tự không hợp lệ hoặc sai cấu trúc.${C_RESET}"
+  [[ "${1:-}" == "98" ]] && {
+
+  echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu quản lý domain...${C_RESET}"
+  read -r _
+
+    exec /etc/wptt/wptt-domain-main 1
+  }
+  return 2>/dev/null || exit 1
+fi
+
 
 path2="/etc/wptt/vhost/.$NAME2.conf"
 if [[ -f "$path2" ]]; then
@@ -93,13 +107,12 @@ if [[ -f "$path2" ]]; then
   exit
 fi
 
-#kiem tra phan loai bo http:// va www
 if [[ "$NAME2" == *"://"* ]]; then
   NAME2=$(echo "$NAME2" | cut -f3 -d '/')
 fi
 
 if [[ "$NAME2" == www.* ]]; then
-  NAME2="${NAME2#www.}" #loại bỏ www. ở đầu
+  NAME2="${NAME2#www.}"
 fi
 
 # =================================================================
@@ -107,7 +120,6 @@ fi
 # =================================================================
 JAIL_PATH="/usr/local/lsws/$NAME"
 
-# 1. Tháo Jail thủ công (Nếu có)
 if [[ -d "$JAIL_PATH/etc/wptt" ]]; then
   umount -fl "$JAIL_PATH/etc/wptt" 2>/dev/null || true
   umount -fl "$JAIL_PATH/etc/wptt-user" 2>/dev/null || true
@@ -117,7 +129,6 @@ if [[ -d "$JAIL_PATH/etc/wptt" ]]; then
   umount -fl "$JAIL_PATH$REAL_SOCK" 2>/dev/null || true
 fi
 
-# 2. Xé toạc Namespace (nsfs) của OpenLiteSpeed
 OLS_NS_PATH="/var/lsns/*/$NAME"
 if ls "$OLS_NS_PATH" 1>/dev/null 2>&1; then
   fuser -k -9 "$OLS_NS_PATH"/* "$OLS_NS_PATH"/*/mnt 2>/dev/null || true
@@ -126,13 +137,13 @@ if ls "$OLS_NS_PATH" 1>/dev/null 2>&1; then
   rm -rf /var/lsns/*/"${NAME:?}" 2>/dev/null || true
 fi
 
-# 3. Dọn sạch rác Socket cũ để tránh lỗi 503 cho domain mới
 NAMEPHP=${NAME//[-._]/}
 rm -f /tmp/lshttpd/"${NAMEPHP:?}".sock*
 # =================================================================
 
-mv /usr/local/lsws/conf/vhosts/"$NAME" /usr/local/lsws/conf/vhosts/"$NAME2"
+_runing "Đang tiến hành chuyển đổi dữ liệu sang tên miền $NAME2"
 
+mv /usr/local/lsws/conf/vhosts/"$NAME" /usr/local/lsws/conf/vhosts/"$NAME2"
 mv /usr/local/lsws/"$NAME" /usr/local/lsws/"$NAME2"
 
 vhosts=($(ls -At /usr/local/lsws/conf/vhosts/"$NAME2"))
@@ -141,14 +152,14 @@ for vhost in "${vhosts[@]}"; do
 done
 
 mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME".conf /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
-mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME".conf0 /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf0
-mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME.conf0,v" /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2.conf0,v"
+mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME".conf0 /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf0 2>/dev/null
+mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME.conf0,v" /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2.conf0,v" 2>/dev/null
 
 if [[ -f /usr/local/lsws/conf/vhosts/$NAME2/$NAME.conf.bak ]]; then
   mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME".conf.bak /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf.bak
 fi
 
-mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME".conf.txt /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf.txt
+mv /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME".conf.txt /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf.txt 2>/dev/null
 
 if [[ -f /usr/local/lsws/$NAME2/html/robots.txt ]]; then
   sed -i "s/$NAME/$NAME2/g" /usr/local/lsws/"$NAME2"/html/robots.txt
@@ -162,11 +173,8 @@ fi
 sed -i -e "/^#begin-WPTT_JAIL_$User_name_vhost/,/^#end-WPTT_JAIL_$User_name_vhost$/d" /etc/ssh/sshd_config 2>/dev/null || true
 
 pkill -9 -u "$User_name_vhost" >/dev/null 2>&1
-
-# 2. Xóa sạch lịch trình Cron cá nhân của User (nếu có)
 crontab -r -u "$User_name_vhost" >/dev/null 2>&1
 
-# 3. Quét và diệt sạch / File rác trong thư mục tạm
 find /tmp -user "$User_name_vhost" -delete >/dev/null 2>&1
 find /dev/shm -user "$User_name_vhost" -delete >/dev/null 2>&1
 find /var/tmp -user "$User_name_vhost" -delete >/dev/null 2>&1
@@ -178,8 +186,8 @@ if [[ $(cat /etc/group | grep '^wptangtoc-ols:') ]]; then
 fi
 
 kiem_tra_ton_tai_nhom_con_thanh_vien_khac_khong=$(cat /etc/group | grep '^wptangtoc-ols:' | grep ',')
-if [[ -z "$kiem_tra_ton_tai_nhom_con_thanh_vien_khac_khong" ]]; then #check không còn thành viên nào tồn tại
-  groupdel wptangtoc-ols >/dev/null 2>&1                             #xoá hẳn nhóm wptangtoc-ols
+if [[ -z "$kiem_tra_ton_tai_nhom_con_thanh_vien_khac_khong" ]]; then 
+  groupdel wptangtoc-ols >/dev/null 2>&1
   chmod -R 700 /etc/wptt
   chown root:root /etc/wptt
   chown root:root /etc/wptt/vhost
@@ -201,7 +209,7 @@ if [[ -f /usr/local/lsws/$NAME2/.bashrc ]]; then
   rm -f /usr/local/lsws/"${NAME2:?}"/.bash_logout
 fi
 
-if [[ -n $User_name_vhost && -d /home/$User_name_vhost ]]; then #bọc chắc chắn $$User_name_vhost phải có giá trị thì mới clear
+if [[ -n $User_name_vhost && -d /home/$User_name_vhost ]]; then 
   rm -rf /home/"${User_name_vhost:?}"
 fi
 
@@ -211,19 +219,15 @@ fi
 random_suffix_USER=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 3)
 USER=${NAME2//[-._]/$random_suffix_USER}
 
-#ky tu toi da là 32 ký tự user trong linux
-check_ky_tu=${#USER} #đeêmếm kyý tuự uúuseẻ name
+check_ky_tu=${#USER}
 if ((check_ky_tu > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
 
-# Tạo User nhưng KHÔNG cấp mật khẩu (Tài khoản bị khóa đăng nhập mặc định)
 useradd -m -d "/usr/local/lsws/$NAME2" -s /sbin/nologin "$USER" >/dev/null 2>&1
 
 if ! id "$USER" &>/dev/null; then
   random=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 3)
   USER=${NAME2//[-._]/$random}
-
-  USER="${USER,,}" # biến viết hoa thành viết thuờng
-
+  USER="${USER,,}" 
   check_ky_tu2=${#USER}
   if ((check_ky_tu2 > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
   useradd -m -d "/usr/local/lsws/$NAME2" -s /sbin/nologin "$USER" >/dev/null 2>&1
@@ -236,7 +240,6 @@ if ! id "$USER" &>/dev/null; then
   exit 1
 fi
 
-# Chốt chặn bảo mật bổ sung: Khóa hẳn password (L) để vô hiệu hóa hoàn toàn mọi nỗ lực login
 usermod -L "$USER" >/dev/null 2>&1
 
 sed -i '/wptangtoc/d' /usr/local/lsws/"$NAME2"/.bashrc
@@ -251,7 +254,6 @@ work_cpucore='1024'
 cpucore=$(grep -c ^processor /proc/cpuinfo)
 max_client=$(expr $work_cpucore \* "$cpucore" \* 2)
 
-#xoa cau hinh server
 sed -i "/${NAME:?} ${NAME:?}/d" /usr/local/lsws/conf/httpd_config.conf
 sed -i -e '/^virtualhost '"${NAME:?}"'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
 echo "virtualhost $NAME2 {
@@ -270,7 +272,6 @@ sed -i "/listener http/a map 		$NAME2 $NAME2" /usr/local/lsws/conf/httpd_config.
 
 mv /etc/wptt/vhost/."$NAME".conf /etc/wptt/vhost/."$NAME2".conf
 
-#thay username vhost để sau này phân quyền cho chuẩn
 sed -i '/User_name_vhost/d' /etc/wptt/vhost/."$NAME2".conf
 sed -i '/Duong_Dan_thu_muc_web/d' /etc/wptt/vhost/."$NAME2".conf
 
@@ -279,61 +280,56 @@ echo "Duong_Dan_thu_muc_web=/usr/local/lsws/$NAME2/html" >>/etc/wptt/vhost/."$NA
 
 . /etc/wptt/.wptt.conf
 
-# -------------------------------------------------------------
-# XỬ LÝ SEARCH & REPLACE CHO CẢ MARIA-DB & SQLITE
-# -------------------------------------------------------------
+# =================================================================
+# [KIẾN TRÚC MỚI] XỬ LÝ SEARCH & REPLACE AN TOÀN VỚI QUYỀN NON-ROOT
+# =================================================================
 if [[ -f /usr/local/lsws/$NAME2/html/wp-load.php ]]; then
-  . /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null #dùng phiên bản PHP của website gốc
+  . /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
   if [[ -z $phien_ban_php_domain_thuc_thi ]]; then
     phien_ban_php_domain_thuc_thi=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+' | sed 's/\.//')
   fi
   PHP_EXEC="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  
+  # Tạo mảng lệnh giả lập User web để chạy WP-CLI (Bảo mật tuyệt đối, chống backdoor PHP)
+  WP_CLI_RUN="runuser -u $USER -- $PHP_EXEC -d memory_limit=512M /usr/local/bin/wp"
 
   IS_SQLITE=0
   if [[ -f "/usr/local/lsws/$NAME2/html/wp-content/db.php" ]] && grep -q -i "sqlite" "/usr/local/lsws/$NAME2/html/wp-content/db.php"; then
     IS_SQLITE=1
-    # Kích hoạt AST Driver cho SQLite
-    /usr/local/bin/wp config set WP_SQLITE_AST_DRIVER true --raw --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
-    /usr/local/bin/wp config set DB_ENGINE "'sqlite'" --raw --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+    $WP_CLI_RUN config set WP_SQLITE_AST_DRIVER true --raw --type=constant --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+    $WP_CLI_RUN config set DB_ENGINE "'sqlite'" --raw --type=constant --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
   fi
 
-  # Replace Tên miền cũ -> Tên miền mới
-  $PHP_EXEC /usr/local/bin/wp search-replace "//${NAME}" "//${NAME2}" --path="/usr/local/lsws/$NAME2/html" --allow-root --all-tables >/dev/null 2>&1
-  # Replace Đường dẫn vật lý cũ -> Đường dẫn vật lý mới
-  $PHP_EXEC /usr/local/bin/wp search-replace "/usr/local/lsws/${NAME}/html" "/usr/local/lsws/${NAME2}/html" --path="/usr/local/lsws/$NAME2/html" --allow-root --all-tables >/dev/null 2>&1
+  # Replace Tên miền cũ -> Tên miền mới bằng quyền User
+  $WP_CLI_RUN search-replace "//${NAME}" "//${NAME2}" --path="/usr/local/lsws/$NAME2/html" --all-tables --quiet >/dev/null 2>&1
+  # Replace Đường dẫn vật lý cũ -> Đường dẫn vật lý mới bằng quyền User
+  $WP_CLI_RUN search-replace "/usr/local/lsws/${NAME}/html" "/usr/local/lsws/${NAME2}/html" --path="/usr/local/lsws/$NAME2/html" --all-tables --quiet >/dev/null 2>&1
 
   if [[ $IS_SQLITE -eq 1 ]]; then
-    # Dọn rác transient cũ
-    $PHP_EXEC /usr/local/bin/wp transient delete --all --allow-root --path="/usr/local/lsws/$NAME2/html" >/dev/null 2>&1
+    $WP_CLI_RUN transient delete --all --path="/usr/local/lsws/$NAME2/html" >/dev/null 2>&1
 
-    # Diệt bóng ma URL bằng VACUUM
     if [[ -f "/usr/local/lsws/$NAME2/html/wp-content/database/.ht.sqlite" ]]; then
       sqlite3 "/usr/local/lsws/$NAME2/html/wp-content/database/.ht.sqlite" "VACUUM;" >/dev/null 2>&1
     fi
 
-    # Tắt AST Driver
-    /usr/local/bin/wp config delete WP_SQLITE_AST_DRIVER --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
-    /usr/local/bin/wp config delete DB_ENGINE --type=constant --allow-root --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+    $WP_CLI_RUN config delete WP_SQLITE_AST_DRIVER --type=constant --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
+    $WP_CLI_RUN config delete DB_ENGINE --type=constant --path="/usr/local/lsws/$NAME2/html" --quiet 2>/dev/null
 
-    # Trả lại quyền sở hữu để không lỗi đăng nhập
     chown -R "$USER":"$USER" "/usr/local/lsws/$NAME2/html/wp-content/database" 2>/dev/null
     find "/usr/local/lsws/$NAME2/html/wp-content/database" -type f -print0 2>/dev/null | xargs -0 chmod 644 2>/dev/null
   fi
 
-  # Xóa Cache sau khi Replace xong
-  $PHP_EXEC /usr/local/bin/wp cache flush --allow-root --path="/usr/local/lsws/$NAME2/html" >/dev/null 2>&1
+  $WP_CLI_RUN cache flush --path="/usr/local/lsws/$NAME2/html" --quiet >/dev/null 2>&1
 fi
-# -------------------------------------------------------------
+# =================================================================
 
 mkdir -p /usr/local/backup-website/"$NAME2"
-
 mkdir -p /etc/wptt-ssl-tu-ky/"$NAME2"
 cd /etc/wptt-ssl-tu-ky/"$NAME2" || exit
 openssl req -new -newkey rsa:2048 -nodes -keyout "$NAME2".key -out "$NAME2".csr -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$NAME2/emailAddress=admin@example.com" >/dev/null 2>&1
 openssl x509 -req -in "$NAME2".csr -signkey "$NAME2".key -out cert.crt -days 3650 >/dev/null 2>&1
 
-if [[ "$NAME" = "$Website_chinh" ]]; then #thay domain chính
-  #end khởi tạo ssl tự ký
+if [[ "$NAME" = "$Website_chinh" ]]; then
   sed -i "/keyFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/certFile/d" /usr/local/lsws/conf/httpd_config.conf
   sed -i "/CACertFile/d" /usr/local/lsws/conf/httpd_config.conf
@@ -344,7 +340,6 @@ if [[ "$NAME" = "$Website_chinh" ]]; then #thay domain chính
   echo "Website_chinh=$NAME2" >>/etc/wptt/.wptt.conf
 fi
 
-#chuyển về ssl tự ký
 sed -i -e '/^vhssl /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
 echo "vhssl  {
   keyFile                 /etc/wptt-ssl-tu-ky/$NAME2/$NAME2.key
@@ -378,16 +373,25 @@ enableQuic              1
 fi
 
 chmod 755 /usr/local/lsws/"$NAME2"
-chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/html
-chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/backup-website
+ionice -c 3 nice -n 19 chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/html 2>/dev/null
+ionice -c 3 nice -n 19 chown -R "$USER":"$USER" /usr/local/lsws/"$NAME2"/backup-website 2>/dev/null
 
-chown "$USER":"$USER" /usr/local/lsws/"$NAME2"/.*
+if [[ -d /usr/local/lsws/$NAME2/.lsns ]];then
+  ionice -c 3 nice -n 19 chown -Rh "$USER":"$USER" /usr/local/lsws/"$NAME2"/.lsns 2>/dev/null
+fi
+
+# [VÁ LỖI BẪY CHOWN .*] Xóa lệnh .* cũ, chỉ đổi quyền chính xác các file ẩn (trừ . và ..)
+find "/usr/local/lsws/$NAME2" -maxdepth 1 -name ".*" ! -name "." ! -name ".." -exec chown -R "$USER":"$USER" {} + 2>/dev/null
+
+# Khởi tạo lại không gian tmp bảo mật
+mkdir -p "/usr/local/lsws/$NAME2/.wptt_tmp"
+ionice -c 3 nice -n 19 chown -R "$USER":"$USER" "/usr/local/lsws/$NAME2/.wptt_tmp" 2>/dev/null
+chmod 700 "/usr/local/lsws/$NAME2/.wptt_tmp" 2>/dev/null
 
 chown root:root /usr/local/lsws/"$NAME2"
 
-# mv /usr/local/backup-website/$NAME /usr/local/backup-website/$NAME2
-check_thu_muc_backup=$(ls /usr/local/backup-website/"$NAME" | grep '.zip$\|.sql$\|.sql.gz$\|.zst$\|.tar.gz$')
-if [[ $check_thu_muc_backup ]]; then
+check_thu_muc_backup=$(ls /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.zip$\|.sql$\|.sql.gz$\|.zst$\|.tar.gz$')
+if [[ -n "$check_thu_muc_backup" ]]; then
   echo "$xac_nhan $ban_co_muon $xoa $thu_muc backup website $cua website $NAME? "
   prompt="$nhap_lua_chon_cua_ban [1-2]: "
   dongy2="n"
@@ -399,12 +403,10 @@ if [[ $check_thu_muc_backup ]]; then
       dongy2="y"
       break
       ;;
-
     2)
       dongy2="n"
       break
       ;;
-
     $((${#options[@]} + 1)))
       printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
       break
@@ -423,10 +425,9 @@ if [[ $check_thu_muc_backup ]]; then
   fi
 fi
 
-#update user vhosts
 sed -i '/extUser/d' /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
 sed -i '/extGroup/d' /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
-sed -i "/instances/a extGroup                 $USER" /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
+sed -i "/instances/a extGroup                  $USER" /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
 sed -i "/instances/a extUser                 $USER" /usr/local/lsws/conf/vhosts/"$NAME2"/"$NAME2".conf
 
 echo '# BEGIN WordPress
@@ -443,15 +444,39 @@ RewriteRule . /index.php [L]
 
 echo "Thay đổi domain website $NAME sang website $NAME2 : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-#xoá domain trong wp-config.php
-
 if [[ -f /usr/local/lsws/$NAME2/html/wp-config.php ]]; then
   sed -i "/WP_SITEURL/d" /usr/local/lsws/"$NAME2"/html/wp-config.php
   sed -i "/WP_HOME/d" /usr/local/lsws/"$NAME2"/html/wp-config.php
 fi
 
-#ánh xạ thư mục
 ln -s /usr/local/lsws/"$NAME2" /home/"$NAME2" 2>/dev/null
+
+# =================================================================
+# [ĐỒNG BỘ WP-CRON] Cập nhật lịch trình Cron (User & Đường dẫn)
+# =================================================================
+old_cron="/etc/cron.d/wp-cron-job-${NAME}.cron"
+new_cron="/etc/cron.d/wp-cron-job-${NAME2}.cron"
+old_ubuntu_cron="/etc/cron.d/wp-cron-job-${NAME//[.]/_}_cron"
+new_ubuntu_cron="/etc/cron.d/wp-cron-job-${NAME2//[.]/_}_cron"
+
+if [[ -f "$old_cron" ]]; then
+  mv -f "$old_cron" "$new_cron" 2>/dev/null
+  rm -f "$old_ubuntu_cron" 2>/dev/null
+
+  # Dùng Regex đếm cột bọc thép để đổi tên User tại vị trí số 6
+  sed -i -E "s/^([[:space:]]*([^[:space:]]+[[:space:]]+){5})$User_name_vhost([[:space:]]+)/\1$USER\3/" "$new_cron"
+  
+  # Đổi toàn bộ chuỗi đường dẫn thư mục và tên file lock
+  sed -i "s|/usr/local/lsws/${NAME}/|/usr/local/lsws/${NAME2}/|g" "$new_cron"
+  
+  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+    ln -sf "$new_cron" "$new_ubuntu_cron"
+    systemctl restart cron.service >/dev/null 2>&1
+  else
+    systemctl restart crond.service >/dev/null 2>&1
+  fi
+fi
+# =================================================================
 
 wptt_smart_reload_lsws >/dev/null 2>&1
 
@@ -471,7 +496,7 @@ EOF
 
 systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
 
-echo "$hoan_tat $thay_doi domain $NAME sang $NAME2"
+_rundone "Hoàn tất thay đổi dữ liệu sang tên miền $NAME2"
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
