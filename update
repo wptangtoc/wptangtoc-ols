@@ -148,3 +148,147 @@ fi
 mkdir -p /etc/wptt/tmp
 chmod 700 /etc/wptt/tmp
 
+
+
+
+
+
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+
+TOTAL_WP_SITES=$(ls -1 /etc/wptt/vhost/.*.conf 2>/dev/null | grep -v '^\.\.conf$' | wc -l)
+PRIORITY_CMD="/usr/bin/ionice -c 3 /usr/bin/nice -n 19"
+count_success=0
+
+# Đảm bảo thư mục tmp hệ thống tồn tại cho Master Cron
+mkdir -p /etc/wptt/tmp
+chmod 700 /etc/wptt/tmp
+
+# ==============================================================================
+# TRÍCH XUẤT CHU KỲ "PHÚT" CŨ
+# ==============================================================================
+old_master_phut=$(grep -hoP '^[0-9*,-]+/\K[0-9]+' /etc/cron.d/wptt-master-cron 2>/dev/null | head -n 1)
+
+if [[ "$TOTAL_WP_SITES" -ge 30 ]]; then
+  # ----------------------------------------------------------------------------
+  # MÔ HÌNH 1: MASTER CRON (CHIỀU DỌC)
+  # ----------------------------------------------------------------------------
+  phut="${old_master_phut}"
+  
+  if [[ -z "$phut" ]]; then
+    phut=$(grep -hoP '^[0-9*,-]+/\K[0-9]+' /etc/cron.d/wp-cron-job-*.cron 2>/dev/null | head -n 1)
+  fi
+  
+  if [[ -z "$phut" ]]; then exit 0; fi
+
+  rm -f /etc/cron.d/wp-cron-job-*.cron /etc/cron.d/wp-cron-job-*_cron 2>/dev/null
+  rm -f /etc/cron.d/wptt-master-cron /etc/wptt-auto/wptt-cron-worker.sh 2>/dev/null
+  
+  mkdir -p /etc/wptt-auto
+  WORKER_FILE="/etc/wptt-auto/wptt-cron-worker.sh"
+  MASTER_CRON_FILE="/etc/cron.d/wptt-master-cron"
+
+  cat >"$WORKER_FILE" <<'EOF'
+#!/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  DOMAIN="${filepath##*/}"
+  DOMAIN="${DOMAIN%.conf}"
+  DOMAIN="${DOMAIN#.}"
+
+  wp_config="/usr/local/lsws/$DOMAIN/html/wp-config.php"
+  
+  if [[ -f "$wp_config" ]] && grep -qiE "define\s*\(\s*['\"]DISABLE_WP_CRON['\"]\s*,\s*true\s*\)" "$wp_config" 2>/dev/null; then
+    . "$filepath" 2>/dev/null
+    . /etc/wptt/php/php-cli-domain-config "$DOMAIN" 2>/dev/null
+    
+    [[ -z "$User_name_vhost" || -z "$phien_ban_php_domain_thuc_thi" ]] && continue
+    
+    # HẠ QUYỀN NON-ROOT CHO WP-CLI
+    /usr/bin/ionice -c 3 /usr/bin/nice -n 19 /sbin/runuser -u $User_name_vhost -- /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php -d memory_limit=512M /usr/local/bin/wp cron event run --due-now --path="/usr/local/lsws/$DOMAIN/html" --quiet >/dev/null 2>&1
+    
+    /usr/bin/sleep 1
+  fi
+done
+EOF
+  chmod +x "$WORKER_FILE"
+
+  # [ANTI-SYMLINK] Master Cron chạy quyền Root -> File lock ném vào /etc/wptt/tmp
+  cat >"$MASTER_CRON_FILE" <<END
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*/$phut * * * * root /usr/bin/flock -n /etc/wptt/tmp/wptt_master_cron.lock /bin/bash $WORKER_FILE >/dev/null 2>&1
+END
+
+  count_success=1
+  echo "Tự động Upgrade WP-Cron (Master Cron) - Anti-Symlink Lock: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+else
+  # ----------------------------------------------------------------------------
+  # MÔ HÌNH 2: CRON LẺ PHÂN TÁN (CHIỀU NGANG)
+  # ----------------------------------------------------------------------------
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    
+    [[ "$domain" != ?*.?* ]] && continue
+
+    wp_config="/usr/local/lsws/$domain/html/wp-config.php"
+    cron_file="/etc/cron.d/wp-cron-job-$domain.cron"
+    ubuntu_cron_file="/etc/cron.d/wp-cron-job-${domain//[.]/_}_cron"
+    
+    domain_phut=$(grep -oP '^[0-9*,-]+/\K[0-9]+' "$cron_file" 2>/dev/null | head -n 1)
+    
+    if [[ -z "$domain_phut" ]]; then domain_phut="$old_master_phut"; fi
+    if [[ -z "$domain_phut" ]]; then continue; fi
+    
+    if [[ -f "$wp_config" ]] && grep -qiE "define\s*\(\s*['\"]DISABLE_WP_CRON['\"]\s*,\s*true\s*\)" "$wp_config" 2>/dev/null; then
+      
+      . "$filepath" 2>/dev/null
+      . /etc/wptt/php/php-cli-domain-config "$domain" 2>/dev/null
+      
+      if [[ -z "$User_name_vhost" || -z "$phien_ban_php_domain_thuc_thi" ]]; then continue; fi
+
+      rm -f "$cron_file" "$ubuntu_cron_file" 2>/dev/null
+      
+      # TẠO THƯ MỤC TMP VÀ ÉP QUYỀN USER ĐỂ TRÁNH LỖI FLOCK PERMISSION DENIED
+      mkdir -p "/usr/local/lsws/$domain/tmp"
+      chown "$User_name_vhost" "/usr/local/lsws/$domain/tmp"
+      chmod 700 "/usr/local/lsws/$domain/tmp"
+      
+      offset_minute=$(( RANDOM % domain_phut ))
+      if [[ "$offset_minute" -eq 0 ]]; then cron_time="*/$domain_phut"; else cron_time="${offset_minute}-59/${domain_phut}"; fi
+      
+      offset_second=$(( RANDOM % 60 ))
+      sleep_cmd="/usr/bin/sleep $offset_second && "
+
+      # [ANTI-SYMLINK] Cron lẻ chạy quyền Non-Root -> File lock ném thẳng vào thư mục tmp của User để cô lập quyền
+      cat >"$cron_file" <<END
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+$cron_time * * * * $User_name_vhost $sleep_cmd$PRIORITY_CMD /usr/bin/flock -n /usr/local/lsws/$domain/tmp/.wptt_cron.lock /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php -d memory_limit=512M /usr/local/bin/wp cron event run --due-now --path="/usr/local/lsws/$domain/html" --quiet >/dev/null 2>&1
+END
+      
+      if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then ln -sf "$cron_file" "$ubuntu_cron_file"; fi
+      
+      ((count_success++))
+      sleep 0.1
+    fi
+  done
+  
+  rm -f /etc/cron.d/wptt-master-cron /etc/wptt-auto/wptt-cron-worker.sh 2>/dev/null
+  
+  if [[ $count_success -gt 0 ]]; then
+    echo "Tự động Upgrade WP-Cron (Splaying Ngang) - Anti-Symlink Lock: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  fi
+fi
+
+if [[ $count_success -gt 0 ]]; then
+  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+    systemctl restart cron.service >/dev/null 2>&1
+  else
+    systemctl restart crond.service >/dev/null 2>&1
+  fi
+fi
