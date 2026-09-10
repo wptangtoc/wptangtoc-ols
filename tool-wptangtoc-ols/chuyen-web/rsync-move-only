@@ -24,7 +24,7 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}CHUYỂN WEBSITE ➜ Đóng gói 1 website & Rsync sang Server mới${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-. /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress #chỉ support website WordPress
+. /etc/wptt/tenmien-only-website-by-wordpress #chỉ support website WordPress
 lua_chon_NAME "Rsync chuyển đi"
 
 if [[ "$NAME" = "0" || -z "$NAME" ]]; then
@@ -70,16 +70,27 @@ fi
 
 . /etc/wptt/.wptt.conf
 
+# Đảm bảo két sắt tmp luôn tồn tại
+mkdir -p /etc/wptt/tmp
+chmod 755 /etc/wptt/tmp
+
 path="/usr/local/lsws/$NAME/html"
 
 _runing "Sao lưu database website $NAME"
 
+# ==============================================================================
+# [BẢO MẬT]: CHỈ DÙNG REGEX ĐỌC TEXT PURE. CẤM WP-CLI
+# ==============================================================================
 unset DB_Password_web DB_User_web DB_Name_web
-DB_User_web=$(wp config get DB_USER --path="$path" --allow-root 2>/dev/null)
-DB_Password_web=$(wp config get DB_PASSWORD --path="$path" --allow-root 2>/dev/null)
-DB_Name_web=$(wp config get DB_NAME --path="$path" --allow-root 2>/dev/null)
+wp_config_file="$path/wp-config.php"
 
-if [[ -z "$DB_User_web" ]]; then
+if [[ -f "$wp_config_file" ]]; then
+  DB_User_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_USER['\"]" "$wp_config_file" | head -n 1 | sed -E "s/.*['\"]DB_USER['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
+  DB_Password_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_PASSWORD['\"]" "$wp_config_file" | head -n 1 | sed -E "s/.*['\"]DB_PASSWORD['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
+  DB_Name_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_NAME['\"]" "$wp_config_file" | head -n 1 | sed -E "s/.*['\"]DB_NAME['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
+fi
+
+if [[ -z "$DB_User_web" || -z "$DB_Name_web" ]]; then
   echo "Không xác định được tài khoản database trong wp-config.php"
   check_menu_wptangtoc_active=$1
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
@@ -88,12 +99,13 @@ if [[ -z "$DB_User_web" ]]; then
   return 2>/dev/null
   exit
 fi
+# ==============================================================================
 
 password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
-[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web" #không mã hoá trả tuơng thích nguợc
+[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web" 
 
 TEMP_CNF=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
-chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF" 
 
 cat >"$TEMP_CNF" <<EOF
 [client]
@@ -110,68 +122,79 @@ max_allowed_packet=1G
 single-transaction
 EOF
 trap "rm -f ${TEMP_CNF}" EXIT
-mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" >"$path"/giatuan-wptangtoc.sql
-rm -rf "${TEMP_CNF:?}"
 
-database="$path/giatuan-wptangtoc.sql"
-check_file_error=$(du -c "$database" | awk '{print $1}' | sed '1d')
-if ((${check_file_error:-0} < 10)); then
-  _runloi "Sao lưu database website $NAME"
-  exit
-else
-  _rundone "Sao lưu database website $NAME"
-  echo "$NAME" >/usr/local/lsws/"$NAME"/html/danh-sach-website-wptangtoc-ols.txt
+# ==============================================================================
+# [BẢO MẬT & TỐI ƯU]: DUMP VÀO KÉT SẮT VÀ BẮT LỖI BẰNG EXIT CODE
+# ==============================================================================
+SAFE_DUMP_FILE="/etc/wptt/tmp/${NAME}_giatuan_wptangtoc.sql"
+SAFE_TXT_FILE="/etc/wptt/tmp/danh-sach-${NAME}.txt"
+rm -f "$SAFE_DUMP_FILE" "$SAFE_TXT_FILE"
+
+# Thực thi và bắt lỗi trực tiếp
+if ! mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" > "$SAFE_DUMP_FILE"; then
+  _runloi "Sao lưu database website $NAME (Lỗi thực thi lệnh)"
+  rm -f "$SAFE_DUMP_FILE" "${TEMP_CNF:?}"
+  exit 1
 fi
+rm -f "${TEMP_CNF:?}"
+
+# Check file rỗng bằng hàm chuẩn Bash
+if [[ ! -s "$SAFE_DUMP_FILE" ]]; then
+  _runloi "Sao lưu database website $NAME (Lỗi file rỗng)"
+  rm -f "$SAFE_DUMP_FILE"
+  exit 1
+fi
+
+# Chép qua thư mục đích
+rm -f "${path}/giatuan-wptangtoc.sql" "${path}/danh-sach-website-wptangtoc-ols.txt"
+
+cp "$SAFE_DUMP_FILE" "${path}/giatuan-wptangtoc.sql"
+
+# Tạo file txt ở Két sắt rồi copy sang
+echo "$NAME" > "$SAFE_TXT_FILE"
+cp "$SAFE_TXT_FILE" "${path}/danh-sach-website-wptangtoc-ols.txt"
+
+# [BẢO MẬT TỐI ĐA] Khóa chặt bằng quyền Root 600 chống sửa lén
+chown root:root "${path}/giatuan-wptangtoc.sql" "${path}/danh-sach-website-wptangtoc-ols.txt" 2>/dev/null
+chmod 600 "${path}/giatuan-wptangtoc.sql" "${path}/danh-sach-website-wptangtoc-ols.txt" 2>/dev/null
+
+rm -f "$SAFE_DUMP_FILE" "$SAFE_TXT_FILE"
+_rundone "Sao lưu database website $NAME"
+# ==============================================================================
 
 #subfolder backup database
 if [[ -d /etc/wptt/$NAME-wptt ]]; then
   rm -f /usr/local/lsws/"${NAME:?}"/html/subfolder-wptt.txt
+  SAFE_SUB_TXT="/etc/wptt/tmp/subfolder-${NAME}.txt"
+  rm -f "$SAFE_SUB_TXT"
+
   domain_all=()
-  
   readarray -t domain_all < <(find /usr/local/lsws/"$NAME"/html -type f -name 'wp-config.php')
   
   for entry in "${domain_all[@]}"; do
     path_sub=$(echo "$entry" | sed 's/\/wp-config.php//g')
     i=1
 
-    #bypass website gốc
     thumuc=$(echo "$path_sub" | cut -f7 -d '/')
     if [[ -z "$thumuc" ]]; then
       continue
     fi
 
     if [[ -f "$path_sub/wp-config.php" ]]; then
-      rm -f "${path_sub:?}"/giatuan-wptangtoc.sql
-
+      
       unset DB_Password_web DB_User_web DB_Name_web
-      DB_User_web=$(wp config get DB_USER --path="$path_sub" --allow-root 2>/dev/null)
-      DB_Password_web=$(wp config get DB_PASSWORD --path="$path_sub" --allow-root 2>/dev/null)
-      DB_Name_web=$(wp config get DB_NAME --path="$path_sub" --allow-root 2>/dev/null)
+      wp_config_file_sub="$path_sub/wp-config.php"
 
-      # ==============================================================================
-      # PHƯƠNG ÁN DỰ PHÒNG: Nếu WP-CLI thất bại (Biến bị rỗng), tự động đọc wp-config.php
-      # ==============================================================================
+      DB_User_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_USER['\"]" "$wp_config_file_sub" | head -n 1 | sed -E "s/.*['\"]DB_USER['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
+      DB_Password_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_PASSWORD['\"]" "$wp_config_file_sub" | head -n 1 | sed -E "s/.*['\"]DB_PASSWORD['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
+      DB_Name_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_NAME['\"]" "$wp_config_file_sub" | head -n 1 | sed -E "s/.*['\"]DB_NAME['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
+
       if [[ -z "$DB_User_web" || -z "$DB_Password_web" || -z "$DB_Name_web" ]]; then
-        wp_config_file="$path_sub/wp-config.php"
-
-        if [[ -f "$wp_config_file" ]]; then
-
-          if [[ -z "$DB_User_web" ]]; then
-            DB_User_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_USER['\"]" "$wp_config_file" | head -n 1 | sed -E "s/.*['\"]DB_USER['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
-          fi
-
-          if [[ -z "$DB_Password_web" ]]; then
-            DB_Password_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_PASSWORD['\"]" "$wp_config_file" | head -n 1 | sed -E "s/.*['\"]DB_PASSWORD['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
-          fi
-
-          if [[ -z "$DB_Name_web" ]]; then
-            DB_Name_web=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]DB_NAME['\"]" "$wp_config_file" | head -n 1 | sed -E "s/.*['\"]DB_NAME['\"][[:space:]]*,[[:space:]]*['\"](.*)['\"][[:space:]]*\).*/\1/")
-          fi
-        fi
+        continue
       fi
 
       TEMP_CNF_SUB=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
-      chmod 600 "$TEMP_CNF_SUB" # Chỉ root mới đọc được
+      chmod 600 "$TEMP_CNF_SUB" 
       
       cat >"$TEMP_CNF_SUB" <<EOF
 [client]
@@ -189,35 +212,56 @@ single-transaction
 EOF
       trap "rm -f ${TEMP_CNF_SUB}" EXIT
 
-      rm -f "${path_sub:?}"/giatuan-wptangtoc.sql
-      mariadb-dump --defaults-extra-file="$TEMP_CNF_SUB" "$DB_Name_web" >"$path_sub"/giatuan-wptangtoc.sql
+      SAFE_DUMP_FILE_SUB="/etc/wptt/tmp/sub_${thumuc}_giatuan_wptangtoc.sql"
+      rm -f "$SAFE_DUMP_FILE_SUB"
+      
+      if ! mariadb-dump --defaults-extra-file="$TEMP_CNF_SUB" "$DB_Name_web" > "$SAFE_DUMP_FILE_SUB"; then
+        rm -f "$SAFE_DUMP_FILE_SUB" "${TEMP_CNF_SUB:?}"
+        continue
+      fi
+      rm -f "${TEMP_CNF_SUB:?}"
+      
+      if [[ ! -s "$SAFE_DUMP_FILE_SUB" ]]; then
+        rm -f "$SAFE_DUMP_FILE_SUB"
+        continue
+      fi
+      
+      rm -f "${path_sub:?}/giatuan-wptangtoc.sql"
+      cp "$SAFE_DUMP_FILE_SUB" "${path_sub}/giatuan-wptangtoc.sql"
+      
+      # Khóa quyền root
+      chown root:root "${path_sub}/giatuan-wptangtoc.sql" 2>/dev/null
+      chmod 600 "${path_sub}/giatuan-wptangtoc.sql" 2>/dev/null
+      
+      rm -f "$SAFE_DUMP_FILE_SUB"
 
-      echo "$thumuc" >>/usr/local/lsws/"$NAME"/html/subfolder-wptt.txt
+      echo "$thumuc" >> "$SAFE_SUB_TXT"
     fi
   done
+  
+  if [[ -f "$SAFE_SUB_TXT" ]]; then
+    cp "$SAFE_SUB_TXT" "/usr/local/lsws/${NAME}/html/subfolder-wptt.txt"
+    chown root:root "/usr/local/lsws/${NAME}/html/subfolder-wptt.txt" 2>/dev/null
+    chmod 600 "/usr/local/lsws/${NAME}/html/subfolder-wptt.txt" 2>/dev/null
+    rm -f "$SAFE_SUB_TXT"
+  fi
 fi
 
-#bắt đầu check rsync đã cài đặt vào hệ thống hay chưa
 missing_tools='rsync'
 if ! command -v "$missing_tools" &>/dev/null; then
-  if [ -f /etc/redhat-release ]; then #REDHAT
+  if [ -f /etc/redhat-release ]; then 
     dnf install -y epel-release
     dnf install -y "${missing_tools}"
-  elif [ -f /etc/debian_version ]; then #Ubuntu
+  elif [ -f /etc/debian_version ]; then 
     apt-get update
     apt-get install -y "${missing_tools}"
   fi
 fi
-#end check rsync đã cài đặt vào hệ thống hay chưa
 
-#cho ip vào danh sách trắng csf khi dùng csf
 if command -v csf >/dev/null 2>&1; then
   csf -a "$IP" >/dev/null 2>&1
 fi
 
-# =================================================================
-# Màng lọc thông minh loại bỏ OS files của Chroot Jail
-# =================================================================
 RSYNC_EXCLUDES=(
   "--exclude=/$NAME/bin"
   "--exclude=/$NAME/sbin"
@@ -241,7 +285,6 @@ RSYNC_EXCLUDES=(
 
 echo "Chuyển website rsync only website $NAME vào $IP: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-# Thực thi lệnh Rsync với màng lọc Excludes
 echo -e "${C_CYAN}Vui lòng nhập mật khẩu SSH của Server đích khi được hỏi.${C_RESET}\n"
 rsync -avzh "${RSYNC_EXCLUDES[@]}" -e "ssh -p $Port -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null" /usr/local/lsws/"${NAME:?}" root@"$IP":/usr/local/lsws
 
@@ -251,7 +294,7 @@ if [[ $? -ne 0 ]]; then
   echo -e "Vui lòng kiểm tra lại thông tin Server đích và chạy lại lệnh.\n"
   
   rm -f /usr/local/lsws/"${NAME:?}"/html/danh-sach-website-wptangtoc-ols.txt
-  rm -f "${path:?}"/giatuan-wptangtoc.sql
+  rm -f "${path:?}/giatuan-wptangtoc.sql"
   
   echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
   read -r _
@@ -274,9 +317,8 @@ echo -e "${C_GREEN}╰───────────────────�
 echo -en "${C_GREEN}Xác nhận bên Server mới đã thực thi lệnh trên xong: Nhấn phím [Enter]${C_RESET}"
 read -r _
 
-# Dọn dẹp rác sau khi Rsync
 rm -f /usr/local/lsws/"${NAME:?}"/html/danh-sach-website-wptangtoc-ols.txt
-rm -f "${path:?}"/giatuan-wptangtoc.sql
+rm -f "${path:?}/giatuan-wptangtoc.sql"
 
 # =================================================================
 # CẤU HÌNH PROXY SAU KHI CHUYỂN (GHOST MIGRATION)
@@ -301,31 +343,21 @@ if wptt_xac_nhan "Server MỚI đã nhận dữ liệu thành công chưa? Bật
   
   _runing "Đang nạp chứng chỉ tự ký từ máy chủ đích vào kho tin cậy..."
 
-  # [CẢI TIẾN FAIL-SAFE]: Validate chứng chỉ bằng openssl x509 trước khi lưu
   if ! echo -n | openssl s_client -connect "$IP:443" -servername "$NAME" -showcerts 2>/dev/null | openssl x509 -outform PEM > "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt" 2>/dev/null; then
     
     _runloi "Lấy chứng chỉ TLS thất bại! (Port 443 đích có thể bị chặn hoặc chưa sẵn sàng)"
     echo -e "${C_YELLOW}CẢNH BÁO: Đã HỦY quá trình cấu hình Proxy ngược để đảm bảo an toàn cho website.${C_RESET}"
     
-    # Dọn dẹp file rác nếu lệnh tạo ra file trống
     rm -f "/etc/pki/ca-trust/source/anchors/${NAME}_wptt_proxy.crt"
-    
-    # Đặt cờ không xóa web vì Proxy chưa được bật
     SKIP_DELETE=0
     
   else
-    # 2. Cập nhật hệ thống để Linux nhận diện chứng chỉ
     update-ca-trust
-
     _rundone "Nạp chứng chỉ hoàn tất! Máy chủ đã tin tưởng Server đích."
-
     _runing "Đang thiết lập Động Ghost Proxy (Port 443) cho $NAME..."
 
-    # 3. Ghi cấu hình Proxy vào file tổng của LiteSpeed
-    # Xóa cấu hình cũ (nếu có) để tránh lỗi trùng lặp
     sed -i -e "/^extprocessor ${NAME}proxy {/,/^}$/d" /usr/local/lsws/conf/httpd_config.conf
     
-    # Chèn cấu hình HTTPS Address và Secure 1
     echo "
 extprocessor ${NAME}proxy {
   type                    proxy
@@ -338,15 +370,14 @@ extprocessor ${NAME}proxy {
 }
 " >>/usr/local/lsws/conf/httpd_config.conf
 
-    # 4. Xử lý file .htaccess của tên miền
     HTACCESS_FILE="/usr/local/lsws/$NAME/html/.htaccess"
     if [[ -d "/usr/local/lsws/$NAME/html" ]]; then
+      if [[ -L "$HTACCESS_FILE" ]]; then rm -f "$HTACCESS_FILE"; fi
+      
       touch "$HTACCESS_FILE"
       
-      # Dọn dẹp luật proxy cũ (nếu có)
       sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' "$HTACCESS_FILE"
       
-      # Tạo file tạm để nhét luật Proxy (Sử dụng HTTPS và E=PROXY-HOST chuẩn)
       TMP_PROXY=$(mktemp)
       cat <<EOF > "$TMP_PROXY"
 #begin-proxy-wptangtoc
@@ -355,10 +386,12 @@ RewriteRule ^(.*)\$ https://${NAME}proxy/\$1 [P,L,E=PROXY-HOST:${NAME}]
 #end-proxy-wptangtoc
 EOF
       
-      # Nối nội dung cũ vào dưới file tạm, sau đó ghi đè ngược lại
       cat "$HTACCESS_FILE" >> "$TMP_PROXY"
       cat "$TMP_PROXY" > "$HTACCESS_FILE"
       rm -f "$TMP_PROXY"
+      
+      owner_group=$(stat -c '%U:%G' "/usr/local/lsws/$NAME/html" 2>/dev/null)
+      chown "$owner_group" "$HTACCESS_FILE" 2>/dev/null
     fi
 
     _runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
@@ -371,7 +404,6 @@ EOF
     echo -e "${C_RED}LƯU Ý QUAN TRỌNG: KHÔNG ĐƯỢC xóa website này ở máy chủ cũ ngay bây giờ!${C_RESET}"
     echo -e "${C_RED}Hãy chờ an toàn ít nhất 24h để DNS thế giới cập nhật hết sang IP mới rồi mới tiến hành xóa web.${C_RESET}\n"
     
-    # Cắm cờ khóa lệnh Xóa
     SKIP_DELETE=1
   fi
 
@@ -379,13 +411,9 @@ else
   echo -e "\n${C_YELLOW}Đã bỏ qua thiết lập Ghost Proxy.${C_RESET}"
   echo -e "Website ở máy chủ cũ vẫn hoạt động độc lập bình thường.\n"
   
-  # Cắm cờ cho phép chạy lệnh Xóa
   SKIP_DELETE=0
 fi
 
-# =================================================================
-# LUỒNG XÓA WEBSITE (Có bảo vệ bởi cờ SKIP_DELETE)
-# =================================================================
 if [[ "${SKIP_DELETE:-0}" == "0" ]]; then
   if wptt_xac_nhan "Bạn có muốn XOÁ website $NAME này trên máy chủ CŨ này không?" "Lưu ý: Hành động này sẽ xóa toàn bộ mã nguồn và Database của $NAME." "" "Đồng ý Xóa" "Giữ lại"; then
     . /etc/wptt/domain/wptt-xoa-website "$NAME"
