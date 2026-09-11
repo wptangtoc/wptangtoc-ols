@@ -92,6 +92,96 @@ if [[ -z "$all_for" ]]; then
 fi
 
 # ==============================================================================
+# 3.5. THÁM BÁO DUNG LƯỢNG VÀ HTTP STATUS (PRE-FLIGHT CHECK)
+# ==============================================================================
+_runing "Đang thám báo trạng thái và dung lượng file từ Server cũ..."
+url_zip="http://$NAME/giatuan-wptangtoc.zip"
+url_sql="http://$NAME/giatuan-wptangtoc.sql"
+
+# Vừa lấy Headers Content-Length, vừa soi mã HTTP Code trả về (Tối ưu gọi Curl 1 lần duy nhất)
+headers_zip=$(curl -sIL -w "\nHTTP_CODE:%{http_code}" --insecure --connect-timeout 10 "$url_zip")
+headers_sql=$(curl -sIL -w "\nHTTP_CODE:%{http_code}" --insecure --connect-timeout 10 "$url_sql")
+
+http_code_zip=$(echo "$headers_zip" | grep -i "^HTTP_CODE:" | tail -n 1 | cut -d':' -f2)
+http_code_sql=$(echo "$headers_sql" | grep -i "^HTTP_CODE:" | tail -n 1 | cut -d':' -f2)
+
+kiem_tra_loi_http() {
+  local code="$1"
+  local loai_file="$2"
+
+  if [[ "$code" == "403" ]]; then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "Lỗi 403 Forbidden: Tường lửa máy chủ cũ đã chặn tải $loai_file!"
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_RED}TƯỜNG LỬA CHẶN TRUY CẬP (HTTP 403)${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " Nguyên nhân: Tường lửa (WAF, ModSecurity, cPanel/Plesk) trên máy" 2
+    left_text " chủ cũ của bạn đang cấu hình cấm truy cập hoặc cấm tải trực tiếp" 2
+    left_text " các định dạng nhạy cảm như .zip và .sql qua trình duyệt/URL." 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ${C_GREEN}CÁCH KHẮC PHỤC:${C_RESET}" 2
+    left_text " - Tạm tắt ModSecurity hoặc Firewall trên Panel của máy chủ cũ." 2
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    exit 1
+  elif [[ "$code" == "404" ]]; then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "Lỗi 404 Not Found: Không tìm thấy $loai_file trên máy chủ cũ!"
+    echo -e "${C_YELLOW}Vui lòng kiểm tra lại xem lệnh đóng gói đã chạy thành công trên máy chủ cũ chưa.${C_RESET}"
+    exit 1
+  elif ((code >= 400)); then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "Lỗi HTTP $code: Không thể truy cập $loai_file trên máy chủ cũ!"
+    exit 1
+  elif [[ "$code" == "000" ]]; then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "Lỗi Kết Nối (Timeout): Máy chủ cũ không phản hồi hoặc chặn Ping."
+    exit 1
+  fi
+}
+
+# Quét HTTP Status trước khi check size
+kiem_tra_loi_http "$http_code_sql" "Database (.sql)"
+kiem_tra_loi_http "$http_code_zip" "Mã Nguồn (.zip)"
+
+# Lấy thông số Size để Check Disk
+size_zip=$(echo "$headers_zip" | grep -i "^content-length:" | tail -n 1 | awk '{print $2}' | tr -d '\r')
+size_sql=$(echo "$headers_sql" | grep -i "^content-length:" | tail -n 1 | awk '{print $2}' | tr -d '\r')
+
+[[ -z "$size_zip" ]] && size_zip=0
+[[ -z "$size_sql" ]] && size_sql=0
+
+if ((size_zip > 0 || size_sql > 0)); then
+  # Tính toán tài nguyên: File ZIP tải về + Dung lượng giải nén (ZIP x 3) + File SQL tải về + 500MB (Vùng đệm an toàn)
+  required_bytes=$((size_zip * 4 + size_sql + 524288000))
+  free_space_bytes=$(df -P -B1 /usr/local/lsws | awk 'NR==2 {print $4}')
+
+  if ((free_space_bytes < required_bytes)); then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "CẢNH BÁO: KHÔNG ĐỦ DUNG LƯỢNG Ổ CỨNG ĐỂ CHUYỂN WEB!"
+
+    req_gb=$(awk "BEGIN {printf \"%.2f\", $required_bytes / 1073741824}")
+    free_gb=$(awk "BEGIN {printf \"%.2f\", $free_space_bytes / 1073741824}")
+
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_RED}THÁM BÁO DUNG LƯỢNG THẤT BẠI${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " Máy chủ hiện tại chỉ còn trống : ${C_YELLOW}$free_gb GB${C_RESET}" 2
+    left_text " Tiến trình chuyển web dự kiến cần: ${C_RED}$req_gb GB${C_RESET}" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ${C_GREEN}LỜI KHUYÊN:${C_RESET} Dung lượng VPS của bạn không đủ để chứa và bung nén" 2
+    left_text " website này. Vui lòng ${C_YELLOW}NÂNG CẤP Ổ CỨNG (Upgrade Disk)${C_RESET} hoặc xóa bớt" 2
+    left_text " dữ liệu rác trước khi tiến hành chuyển website để tránh sập MariaDB." 2
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    exit 1
+  fi
+  echo -en "\033[1A\033[2K\r"
+  _rundone "Do thám thành công (Cần ${req_gb:-0}GB | Trống ${free_gb:-0}GB)."
+else
+  echo -en "\033[1A\033[2K\r"
+  _runloi "Không thể đo lường trước dung lượng từ máy chủ cũ (Bỏ qua Pre-flight Check)."
+fi
+
+# ==============================================================================
 # 4. DOWNLOAD BẢN SAO LƯU TỪ SERVER CŨ (GIAO DIỆN UX PRO)
 # ==============================================================================
 echo ""
@@ -106,77 +196,48 @@ rm -f "${duong_dan_thu_muc_sql:?}"
 
 # Hàm tải file tích hợp Progress Bar thông minh
 tai_file_ux() {
-    local url="$1"
-    local output_file="$2"
-    local file_name="$3"
+  local url="$1"
+  local output_file="$2"
+  local file_name="$3"
+  local size_bytes="$4"
 
-    echo -e "${C_CYAN}➜ Đang tải: ${C_BOLD_WHITE}$file_name${C_RESET}"
-    # Lấy Header để check dung lượng file thực tế (Dùng -sIL để bám theo redirect HTTP -> HTTPS)
-    local file_size=$(curl -sIL --insecure "$url" | grep -i "content-length:" | tail -n 1 | awk '{print $2}' | tr -d '\r')
+  echo -e "${C_CYAN}➜ Đang tải: ${C_BOLD_WHITE}$file_name${C_RESET}"
 
-    if command -v pv >/dev/null 2>&1; then
-        if [[ -n "$file_size" && "$file_size" -gt 0 ]]; then
-            # Đã lấy được dung lượng -> Vẽ thanh Bar [====> ] % ETA siêu đẹp
-            curl -sL --insecure "$url" | pv -W -p -e -r -b -a -s "$file_size" > "$output_file"
-        else
-            # Nếu server cũ chặn lấy dung lượng, chỉ hiện tốc độ và số MB
-            curl -sL --insecure "$url" | pv -W -t -r -b -a > "$output_file"
-        fi
+  if command -v pv >/dev/null 2>&1; then
+    if [[ -n "$size_bytes" && "$size_bytes" -gt 0 ]]; then
+      curl -sL --insecure "$url" | pv -W -p -e -r -b -a -s "$size_bytes" >"$output_file"
     else
-        # Fallback xuống progress bar của curl nếu thiếu pv
-        curl -L --insecure -# "$url" -o "$output_file"
+      curl -sL --insecure "$url" | pv -W -t -r -b -a >"$output_file"
     fi
-    echo -en "\033[1A\033[2K\r"
-    echo -en "\033[1A\033[2K\r"
+  else
+    curl -L --insecure -# "$url" -o "$output_file"
+  fi
+  echo -en "\033[1A\033[2K\r"
+  echo -en "\033[1A\033[2K\r"
 }
 
-tai_file_ux "http://$NAME/giatuan-wptangtoc.sql" "$duong_dan_thu_muc_sql" "Database SQL"
+# Truyền luôn dung lượng đã lấy được ở phía trên vào để khỏi tốn thời gian lấy Header lần nữa
+tai_file_ux "$url_sql" "$duong_dan_thu_muc_sql" "Database SQL" "$size_sql"
 
-# KIỂM TRA 3: Soi nội dung tệp SQL xem có bị dính trang HTML báo lỗi/Captcha không
+# KIỂM TRA: Soi nội dung tệp SQL xem có bị dính trang HTML rác (VD: Cloudflare I'm under attack)
 if head -n 10 "$duong_dan_thu_muc_sql" | grep -qiE "<html|<doctype html"; then
-  _runloi "File SQL không hợp lệ hoặc chứa mã rác!"
-  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_RED}LỖI TOÀN VẸN DỮ LIỆU: FILE SQL KHÔNG ĐÚNG ĐỊNH DẠNG${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text " Nguyên nhân: Máy chủ cũ chặn tải file hoặc phản hồi trang HTML" 2
-  left_text " lỗi (403 Forbidden, 500 Internal Error, hoặc chặn Captcha)." 2
-  left_text " File SQL tải về thực chất chỉ là một trang web báo lỗi rác." 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text " ${C_GREEN}CÁCH KHẮC PHỤC:${C_RESET}" 2
-  left_text " - Tạm thời tắt các chế độ chống DDoS (Under Attack) trên CDN máy cũ." 2
-  left_text " - Tạm tắt ModSecurity / Web Application Firewall trên server cũ." 2
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  _runloi "File SQL không hợp lệ hoặc chứa HTML rác!"
   rm -f "${duong_dan_thu_muc:?}" "${duong_dan_thu_muc_sql:?}"
   exit 1
 fi
 
-tai_file_ux "http://$NAME/giatuan-wptangtoc.zip" "$duong_dan_thu_muc" "Mã Nguồn ZIP"
+tai_file_ux "$url_zip" "$duong_dan_thu_muc" "Mã Nguồn ZIP" "$size_zip"
 
-
-
-# KIỂM TRA 2: Soi cấu trúc ZIP xem có bị dính mã Captcha / HTML rác không?
-if ! unzip -tq "$duong_dan_thu_muc" > /dev/null 2>&1; then
-  _runloi "File ZIP bị hỏng hoặc chứa mã rác!"
-  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_RED}LỖI TOÀN VẸN DỮ LIỆU: MÃ NGUỒN KHÔNG PHẢI FILE ZIP${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text " Nguyên nhân: Máy chủ cũ có thể đang bật cơ chế bảo mật" 2
-  left_text " (Cloudflare I'm Under Attack) hoặc giới hạn băng thông..." 2
-  left_text " File tải về thực chất là một trang HTML báo lỗi của máy chủ." 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text " ${C_GREEN}CÁCH KHẮC PHỤC:${C_RESET}" 2
-  left_text " - Tạm thời tắt các chế độ chống DDoS (Under Attack) trên CDN." 2
-  left_text " - Xóa cache DNS/Cloudflare và thử lại." 2
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+# KIỂM TRA: Soi cấu trúc ZIP xem có bị dính mã Captcha / HTML rác không?
+if ! unzip -tq "$duong_dan_thu_muc" >/dev/null 2>&1; then
+  _runloi "File ZIP bị hỏng hoặc chứa mã HTML rác từ Firewall CDN/Cloudflare!"
   rm -f "${duong_dan_thu_muc:?}" "${duong_dan_thu_muc_sql:?}"
   exit 1
 fi
 
 # Kiểm tra File phải TỒN TẠI và CÓ DUNG LƯỢNG (>0 byte)
 if [[ ! -s "$duong_dan_thu_muc" || ! -s "$duong_dan_thu_muc_sql" ]]; then
-  _runloi "Tải dữ liệu thất bại!"
-  echo -e "\n${C_RED}Không thể tìm thấy file Backup trên máy chủ cũ hoặc file bị rỗng 0 byte.${C_RESET}"
-  echo -e "${C_YELLOW}Vui lòng chạy lại lệnh tạo file trên server cũ và thử lại.${C_RESET}"
+  _runloi "Tải dữ liệu thất bại (File rỗng 0 byte)."
   exit 1
 fi
 
@@ -184,11 +245,27 @@ echo -en "\033[1A\033[2K\r"
 _rundone "Tải thành công File SQL và Mã nguồn về thư mục Backup."
 
 # ==============================================================================
-# 5. KHÔI PHỤC DATABASE & MÃ NGUỒN
+# 5. KHÔI PHỤC DATABASE & MÃ NGUỒN (ATOMIC ZERO-DOWNTIME)
 # ==============================================================================
 . "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null
 
-_runing "Đang khởi tạo Database & Import dữ liệu SQL..."
+# ------------------------------------------------------------------------------
+# BẮT ĐẦU CƠ CHẾ LOCKING (CHỐNG ĐỤNG ĐỘ TIẾN TRÌNH)
+# ------------------------------------------------------------------------------
+LOCK_FILE="/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME}.lock"
+exec 200>"$LOCK_FILE"
+
+if ! flock -n 200; then
+  echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}LỖI ĐỤNG ĐỘ TIẾN TRÌNH (LOCKING)${C_RESET}"
+  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website $NAME đang được thao tác bởi một tiến trình Backup/Restore khác!"
+  left_text "Vui lòng chờ tiến trình đó hoàn tất rồi thử lại để tránh hỏng dữ liệu."
+  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  exit 1
+fi
+
+_runing "Đang khởi tạo Database & Import dữ liệu SQL (Nền tảng Tĩnh)..."
 password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
 [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
 
@@ -207,55 +284,196 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
-trap "rm -f ${TEMP_CNF_ROOT}" EXIT
+trap "rm -f ${TEMP_CNF_ROOT}; flock -u 200; exec 200>&-; rm -f ${LOCK_FILE}" EXIT
 
-# Tạo DB và Import
+unset password_database_root database_admin_password
 
-#Nguy cơ Local SQL Injection
-  wptt_abort_db_injection() {
-	  _runloi "$1"
-	  rm -f "${TEMP_CNF_ROOT:?}"
-	  sleep 2
-	  [[ "$2" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
-	  return 2>/dev/null || exit 1
-  }
+# Nguy cơ Local SQL Injection
+wptt_abort_db_injection() {
+  _runloi "$1"
+  rm -f "${TEMP_CNF_ROOT:?}"
+  sleep 2
+  [[ "$2" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
+  return 2>/dev/null || exit 1
+}
 
 [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
 [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
 
-#end nguy cơ local sql Injection
-
-
 password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
-[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web" #không mã hoá trả tuơng thích nguợc
-[[ "$password_database_website_giai_ma" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu USer Database chứa ký tự cấm (khoảng trắng, dấu nháy, backtick...)!" "$1"
+[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
+[[ "$password_database_website_giai_ma" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu User Database chứa ký tự cấm!" "$1"
 
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS ${DB_Name_web}; CREATE DATABASE ${DB_Name_web};"
+# ------------------------------------------------------------------------------
+# BẬT CHẾ ĐỘ BẢO TRÌ (CHỐNG MẤT ĐƠN HÀNG)
+# ------------------------------------------------------------------------------
+if [[ -f /usr/local/lsws/"$NAME"/html/wp-load.php ]]; then
+  MAINTENANCE_FILE="/usr/local/lsws/$NAME/html/.maintenance"
+  unset bao_tri_restore_atomic
+  LIST_PLUGIN_BAO_TRI="/etc/wptt/backup-restore/plugins-bao-tri.txt"
+
+  if [[ -f "$MAINTENANCE_FILE" ]]; then
+    grep -q "wptt_auto_maintenance" "$MAINTENANCE_FILE" 2>/dev/null && bao_tri_restore_atomic='1'
+  else
+    PLUGINS_DIR="/usr/local/lsws/$NAME/html/wp-content/plugins"
+    while read -r plugin_name || [[ -n "$plugin_name" ]]; do
+      plugin_name=$(echo "$plugin_name" | xargs)
+      [[ -z "$plugin_name" || "$plugin_name" == \#* ]] && continue
+      if [[ -d "$PLUGINS_DIR/$plugin_name" ]]; then
+        echo '<?php $upgrading = time(); // wptt_auto_maintenance ?>' >"$MAINTENANCE_FILE"
+        chown "$User_name_vhost":"$User_name_vhost" "$MAINTENANCE_FILE" 2>/dev/null
+        bao_tri_restore_atomic='1'
+        break
+      fi
+    done <"$LIST_PLUGIN_BAO_TRI"
+  fi
+fi
+
+# ------------------------------------------------------------------------------
+# ATOMIC BLUE/GREEN DATABASE SWAP
+# ------------------------------------------------------------------------------
+DB_TEMP="${DB_Name_web}_temp"
+DB_TRASH="${DB_Name_web}_trash"
+
+mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE DATABASE IF NOT EXISTS \`${DB_Name_web}\`;" 2>/dev/null
 mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'; CREATE USER '${DB_User_web}'@'localhost' IDENTIFIED BY '${password_database_website_giai_ma}';"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON ${DB_Name_web}.* TO '${DB_User_web}'@'localhost'; FLUSH PRIVILEGES;"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_Name_web" --force <"$duong_dan_thu_muc_sql"
-rm -f "${TEMP_CNF_ROOT:?}"
-_rundone "Import Database thành công."
+mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "GRANT ALL PRIVILEGES ON \`${DB_Name_web}\`.* TO '${DB_User_web}'@'localhost'; FLUSH PRIVILEGES;"
+mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_TEMP}\`; CREATE DATABASE \`${DB_TEMP}\`;" 2>/dev/null
 
-_runing "Đang giải nén mã nguồn vào không gian Website (Vhost)..."
+INIT_SQL="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET AUTOCOMMIT=0;"
+END_SQL="COMMIT; SET FOREIGN_KEY_CHECKS=1; SET UNIQUE_CHECKS=1; SET AUTOCOMMIT=1;"
 
-if [[ -n "$NAME" ]] ;then
-	if [[ -d /usr/local/lsws/"${NAME}"/html ]] ;then
-		rm -rf /usr/local/lsws/"${NAME:?}"/html/*
-	fi
-	if [[ -d /usr/local/lsws/"${NAME}"/luucache ]] ;then
-		rm -rf /usr/local/lsws/"${NAME:?}"/luucache/*
-	fi
-fi
-
-if [[ -z "$all_for" ]]; then
-  unzip -q -n "$duong_dan_thu_muc" -d /usr/local/lsws/"${NAME:?}"/html/ -x "wptt"
+if command -v pv &>/dev/null; then
+  echo ""
+  (
+    echo "$INIT_SQL"
+    pv -w 78 -f -p -N "Tiến độ DB" "$duong_dan_thu_muc_sql"
+    echo "$END_SQL"
+  ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP"
+  IMPORT_STATUS=$?
+  echo -en "\033[1A\033[2K\033[1A\r"
 else
-  unzip -q -n "$duong_dan_thu_muc" -d /usr/local/lsws/"${NAME:?}"/html/
+  (
+    echo "$INIT_SQL"
+    cat "$duong_dan_thu_muc_sql"
+    echo "$END_SQL"
+  ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" "$DB_TEMP"
+  IMPORT_STATUS=$?
 fi
 
-rm -f /usr/local/lsws/"${NAME:?}"/html/index.html
-_rundone "Giải nén mã nguồn hoàn tất."
+if [[ $IMPORT_STATUS -eq 0 ]]; then
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; CREATE DATABASE \`${DB_TRASH}\`;" 2>/dev/null
+  OLD_TABLES=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -B -e "SHOW TABLES IN \`${DB_Name_web}\`;" 2>/dev/null)
+  NEW_TABLES=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -B -e "SHOW TABLES IN \`${DB_TEMP}\`;" 2>/dev/null)
+  RENAME_QUERY="RENAME TABLE "
+
+  if [[ -n "$OLD_TABLES" ]]; then
+    for t in $OLD_TABLES; do RENAME_QUERY+="\`${DB_Name_web}\`.\`$t\` TO \`${DB_TRASH}\`.\`$t\`, "; done
+  fi
+  if [[ -n "$NEW_TABLES" ]]; then
+    for t in $NEW_TABLES; do RENAME_QUERY+="\`${DB_TEMP}\`.\`$t\` TO \`${DB_Name_web}\`.\`$t\`, "; done
+  fi
+
+  if [[ "$RENAME_QUERY" != "RENAME TABLE " ]]; then
+    RENAME_QUERY=${RENAME_QUERY%, }
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "$RENAME_QUERY;" 2>/dev/null
+    if [[ $? -eq 0 ]]; then
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
+    fi
+  else
+    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_TRASH}\`; DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
+  fi
+  _rundone "Import Database thành công."
+else
+  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
+  _runloi "Lỗi Import Database! Dữ liệu web cũ được giữ nguyên."
+  flock -u 200
+  exec 200>&-
+  rm -f "$LOCK_FILE"
+  rm -f "${TEMP_CNF_ROOT}"
+  exit 1
+fi
+
+rm -f "${TEMP_CNF_ROOT}"
+
+# ------------------------------------------------------------------------------
+# ATOMIC SOURCE CODE SWAP
+# ------------------------------------------------------------------------------
+_runing "Đang giải nén mã nguồn (Chế độ Zero-Downtime)..."
+
+if [[ -n "$lock_down" ]]; then
+  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off
+fi
+
+THU_MUC_TAM="/usr/local/lsws/$NAME/html_temp_wptt"
+rm -rf "$THU_MUC_TAM" && mkdir -p "$THU_MUC_TAM"
+
+if command -v pv &>/dev/null; then
+  echo ""
+  total_files=$(unzip -Z -1 "$duong_dan_thu_muc" 2>/dev/null | wc -l)
+  if [[ -z "$all_for" ]]; then
+    unzip -o "$duong_dan_thu_muc" -d "$THU_MUC_TAM"/ -x "wptt" | pv -w 78 -f -p -l -s "$total_files" -N "Tiến độ ZIP" >/dev/null
+  else
+    unzip -o "$duong_dan_thu_muc" -d "$THU_MUC_TAM"/ | pv -w 78 -f -p -l -s "$total_files" -N "Tiến độ ZIP" >/dev/null
+  fi
+  echo -en "\033[1A\033[2K\033[1A\r"
+else
+  if [[ -z "$all_for" ]]; then
+    unzip -oq "$duong_dan_thu_muc" -d "$THU_MUC_TAM"/ -x "wptt" 2>/dev/null
+  else
+    unzip -oq "$duong_dan_thu_muc" -d "$THU_MUC_TAM"/ 2>/dev/null
+  fi
+fi
+
+if [[ -d "$THU_MUC_TAM" ]]; then
+  # Cứu hộ file cấu hình nếu file ZIP không có
+  if [[ -f "/usr/local/lsws/${NAME}/html/.htaccess" && ! -f "$THU_MUC_TAM/.htaccess" ]]; then
+    cp -p "/usr/local/lsws/${NAME}/html/.htaccess" "$THU_MUC_TAM/" 2>/dev/null
+  fi
+  if [[ -f "/usr/local/lsws/${NAME}/html/wp-config.php" && ! -f "$THU_MUC_TAM/wp-config.php" ]]; then
+    cp -p "/usr/local/lsws/${NAME}/html/wp-config.php" "$THU_MUC_TAM/" 2>/dev/null
+  fi
+
+  THU_MUC_CHINH="/usr/local/lsws/${NAME}/html"
+
+  # Gọi Python RENAME_EXCHANGE (Đảo thư mục trong 1ms)
+  python3 -c "
+import ctypes
+import sys
+try:
+    libc = ctypes.CDLL('libc.so.6')
+    res = libc.renameat2(-100, b'${THU_MUC_CHINH}', -100, b'${THU_MUC_TAM}', 2)
+    if res != 0: sys.exit(1)
+except Exception:
+    sys.exit(1)
+" >/dev/null 2>&1
+
+  if [[ $? -eq 0 ]]; then
+    rm -rf "$THU_MUC_TAM"
+  else
+    # Fallback cho hệ điều hành nhân cũ
+    mv "$THU_MUC_CHINH" "${THU_MUC_CHINH}_old_trash" 2>/dev/null
+    mv "$THU_MUC_TAM" "$THU_MUC_CHINH" 2>/dev/null
+    rm -rf "${THU_MUC_CHINH}_old_trash"
+  fi
+
+  rm -f "/usr/local/lsws/${NAME}/html/index.html"
+  _rundone "Giải nén và chuyển đổi mã nguồn hoàn tất."
+else
+  _runloi "Giải nén thất bại! Hủy bỏ để bảo vệ web cũ."
+  rm -rf "$THU_MUC_TAM"
+  exit 1
+fi
+
+# Tắt bảo trì sau khi hoán đổi xong
+if [[ -n "$bao_tri_restore_atomic" && -f "/usr/local/lsws/$NAME/html/.maintenance" ]]; then
+  rm -f "/usr/local/lsws/$NAME/html/.maintenance"
+fi
+
+# Mở khóa tiến trình
+flock -u 200
+exec 200>&-
+rm -f "$LOCK_FILE"
 
 # ==============================================================================
 # 6. PHÂN QUYỀN VÀ CẤU HÌNH WP-CONFIG
@@ -303,80 +521,78 @@ echo -e "${C_RED}
    ..............::::::::::::::::::..         
   .:::::::::::::................. ${C_RESET}"
 
-  if [[ -z "$all_for" ]]; then
-      echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}HOÀN TẤT ĐƯA WEBSITE '$NAME' VỀ HỆ THỐNG${C_RESET}"
-      echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+if [[ -z "$all_for" ]]; then
+  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT ĐƯA WEBSITE '$NAME' VỀ HỆ THỐNG${C_RESET}"
+  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-      if [[ "$checkdns" != "$ip" ]]; then
-          left_text "${C_YELLOW}HƯỚNG DẪN BƯỚC TIẾP THEO:${C_RESET}" 2
-          left_text "  Bạn vui lòng truy cập trang quản lý Tên miền (Cloudflare...)" 2
+  if [[ "$checkdns" != "$ip" ]]; then
+    left_text "${C_YELLOW}HƯỚNG DẪN BƯỚC TIẾP THEO:${C_RESET}" 2
+    left_text "  Bạn vui lòng truy cập trang quản lý Tên miền (Cloudflare...)" 2
 
-		  #check xem hệ thống có đang dùng ipv6 không nếu có thì print ra
-
-          left_text "  và trỏ IPv4 của tên miền về máy chủ mới: ${C_BOLD_WHITE}$ip${C_RESET}" 2
-		  unset ipv6
-		  if grep -q 'address.*\[ANY\]' /usr/local/lsws/conf/httpd_config.conf; then
-			  ipv6=$(curl -s --connect-timeout 5 --max-time 10 https://ipv6.icanhazip.com)
-			  if [[ -n "$ipv6" ]];then
-				  left_text "  hoặc trỏ IPv6 của tên miền về máy chủ mới: ${C_BOLD_WHITE}$ipv6${C_RESET}" 2
-			  fi
-		  fi
-
-		  unset ssl_xac_thuc_kha_dung
-		  # Chạy ngầm kịch bản check SSL để lấy biến kết quả
-		  . /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$NAME" >/dev/null 2>&1
-		  if [[ "$ssl_xac_thuc_kha_dung" == 'false' ]]; then #xác thực xem website đã có ssl chưa nếu chưa có thì gợi ý để cài ssl
-			  left_text "  Sau đó vào Menu số (3) để cài đặt SSL là xong." 2
-		  fi
-
-
-          echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    #check xem hệ thống có đang dùng ipv6 không nếu có thì print ra
+    left_text "  và trỏ IPv4 của tên miền về máy chủ mới: ${C_BOLD_WHITE}$ip${C_RESET}" 2
+    unset ipv6
+    if grep -q 'address.*\[ANY\]' /usr/local/lsws/conf/httpd_config.conf; then
+      ipv6=$(curl -s --connect-timeout 5 --max-time 10 https://ipv6.icanhazip.com)
+      if [[ -n "$ipv6" ]]; then
+        left_text "  hoặc trỏ IPv6 của tên miền về máy chủ mới: ${C_BOLD_WHITE}$ipv6${C_RESET}" 2
       fi
-      if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]];then #chỉ run kiểm tra khi nếu là mã nguồn WordPress
+    fi
 
-          num_ver_rev_php="${phien_ban_php_domain//./}" #get phiên bản php liền như 82
-          if ! /usr/local/lsws/lsphp"${num_ver_rev_php}"/bin/php -v 2>/dev/null | grep -qi "ionCube"; then 
-              if [[ -f /etc/wptt/ioncube-plugin-list ]]; then
-                  mapfile -t ioncube_plugins_list < <(sed '/^$/d' /etc/wptt/ioncube-plugin-list)
-              else
-                  ioncube_plugins_list=()
-              fi
-              # 2. Đường dẫn chuẩn tới thư mục Plugins của WordPress
-              PLUGIN_DIR="/usr/local/lsws/$NAME/html/wp-content/plugins"
+    unset ssl_xac_thuc_kha_dung
+    # Chạy ngầm kịch bản check SSL để lấy biến kết quả
+    . /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$NAME" >/dev/null 2>&1
+    if [[ "$ssl_xac_thuc_kha_dung" == 'false' ]]; then #xác thực xem website đã có ssl chưa nếu chưa có thì gợi ý để cài ssl
+      left_text "  Sau đó vào Menu số (3) để cài đặt SSL là xong." 2
+    fi
 
-        # 3. Quét kiểm tra nếu thư mục tồn tại và danh sách không rỗng
-        if [[ -d "$PLUGIN_DIR" && ${#ioncube_plugins_list[@]} -gt 0 ]]; then
-            co_plugin_ioncube=0
-            danh_sach_phat_hien=""
-            for plugin_name in "${ioncube_plugins_list[@]}"; do
-                if [[ -d "$PLUGIN_DIR/$plugin_name" ]]; then
-                    co_plugin_ioncube=1
-                    danh_sach_phat_hien+="   - ${C_BOLD_WHITE}$plugin_name${C_RESET}\n"
-                fi
-            done
-
-          # 4. Nếu phát hiện (cờ = 1), in ra cảnh báo khuyên dùng
-          if [[ "$co_plugin_ioncube" -eq 1 ]]; then
-              echo ""
-              print_border_top "$C_YELLOW"
-              center_text "${C_YELLOW}PHÁT HIỆN PLUGIN WordPress YÊU CẦU IONCUBE LOADER${C_RESET}"
-              print_border_mid "$C_YELLOW"
-              left_text "Website ${C_GREEN}$NAME${C_RESET} đang chứa các plugin bị mã hóa:" 2
-              echo -e "${danh_sach_phat_hien}"
-              left_text "${C_YELLOW}Khuyến cáo từ hệ thống:${C_RESET}" 2
-              left_text "Để các plugin này hoạt động mà không gây lỗi 500 (Trắng trang)," 2
-              left_text "hãy vào ${C_BOLD_WHITE}Quản lý PHP -> Cài đặt Extension${C_RESET} và cài đặt module" 2
-              left_text "${C_GREEN}ioncube${C_RESET} cho phiên bản PHP của website này." 2
-              print_border_bot "$C_YELLOW"
-              echo ""
-          fi
-        fi
-          fi
-      fi
-      disk_info=$(df -BG / | awk '$NF=="/"{printf "%d / %d GB (Dùng %s)", $3,$2,$5}')
-      left_text " 1. Dung lượng ổ đĩa : ${C_YELLOW}$disk_info${C_RESET}" 2
-      left_text " 2. Thư mục Backup   : ${C_YELLOW}/usr/local/backup-website/$NAME${C_RESET}" 2
-      left_text " 3. Thư mục Website  : ${C_YELLOW}/usr/local/lsws/$NAME/html${C_RESET}" 2
-      echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   fi
+
+  if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then #chỉ run kiểm tra khi nếu là mã nguồn WordPress
+    num_ver_rev_php="${phien_ban_php_domain//./}"          #get phiên bản php liền như 82
+    if ! /usr/local/lsws/lsphp"${num_ver_rev_php}"/bin/php -v 2>/dev/null | grep -qi "ionCube"; then
+      if [[ -f /etc/wptt/ioncube-plugin-list ]]; then
+        mapfile -t ioncube_plugins_list < <(sed '/^$/d' /etc/wptt/ioncube-plugin-list)
+      else
+        ioncube_plugins_list=()
+      fi
+      # 2. Đường dẫn chuẩn tới thư mục Plugins của WordPress
+      PLUGIN_DIR="/usr/local/lsws/$NAME/html/wp-content/plugins"
+
+      # 3. Quét kiểm tra nếu thư mục tồn tại và danh sách không rỗng
+      if [[ -d "$PLUGIN_DIR" && ${#ioncube_plugins_list[@]} -gt 0 ]]; then
+        co_plugin_ioncube=0
+        danh_sach_phat_hien=""
+        for plugin_name in "${ioncube_plugins_list[@]}"; do
+          if [[ -d "$PLUGIN_DIR/$plugin_name" ]]; then
+            co_plugin_ioncube=1
+            danh_sach_phat_hien+="   - ${C_BOLD_WHITE}$plugin_name${C_RESET}\n"
+          fi
+        done
+
+        # 4. Nếu phát hiện (cờ = 1), in ra cảnh báo khuyên dùng
+        if [[ "$co_plugin_ioncube" -eq 1 ]]; then
+          echo ""
+          print_border_top "$C_YELLOW"
+          center_text "${C_YELLOW}PHÁT HIỆN PLUGIN WordPress YÊU CẦU IONCUBE LOADER${C_RESET}"
+          print_border_mid "$C_YELLOW"
+          left_text "Website ${C_GREEN}$NAME${C_RESET} đang chứa các plugin bị mã hóa:" 2
+          echo -e "${danh_sach_phat_hien}"
+          left_text "${C_YELLOW}Khuyến cáo từ hệ thống:${C_RESET}" 2
+          left_text "Để các plugin này hoạt động mà không gây lỗi 500 (Trắng trang)," 2
+          left_text "hãy vào ${C_BOLD_WHITE}Quản lý PHP -> Cài đặt Extension${C_RESET} và cài đặt module" 2
+          left_text "${C_GREEN}ioncube${C_RESET} cho phiên bản PHP của website này." 2
+          print_border_bot "$C_YELLOW"
+          echo ""
+        fi
+      fi
+    fi
+  fi
+  disk_info=$(df -BG / | awk '$NF=="/"{printf "%d / %d GB (Dùng %s)", $3,$2,$5}')
+  left_text " 1. Dung lượng ổ đĩa : ${C_YELLOW}$disk_info${C_RESET}" 2
+  left_text " 2. Thư mục Backup   : ${C_YELLOW}/usr/local/backup-website/$NAME${C_RESET}" 2
+  left_text " 3. Thư mục Website  : ${C_YELLOW}/usr/local/lsws/$NAME/html${C_RESET}" 2
+  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+fi
