@@ -15,7 +15,7 @@
 
 <h2>🔥 Tại sao bạn nên chọn WPTangToc OLS?</h2>
 <ul>
-    <li>⚡ <b>Hiệu năng xé gió:</b> Tích hợp OpenLiteSpeed, LSPHP tùy biến (nhanh hơn PHP-FPM thuần), Giao thức HTTP/3 QUIC, và tối ưu Object Cache (Redis/Memcached/Valkey) ở mức tầng UNIX Socket sâu nhất.</li>
+    <li>⚡ <b>Hiệu năng xé gió:</b> Tích hợp OpenLiteSpeed, LSPHP tùy biến (nhanh hơn PHP-FPM thuần), Giao thức HTTP/3 QUIC, và tối ưu Object Cache (Redis/Memcached/Valkey/KeyDB) ở mức tầng UNIX Socket sâu nhất.</li>
     <li>🛡️ <b>Bảo mật cô lập:</b> Sử dụng công nghệ <code>PhpSuExec + Chroot + Namespace</code> để giam lỏng (cô lập) từng website. Nếu một trang web trên máy chủ bị hack, hacker cũng vĩnh viễn không thể "cháy lan" sang các trang web khác. nhiều lớp giúp giảm thiểu nguy cơ lây lan mã độc giữa các website.</li>
     <li>🤖 <b>Tự động hóa thông minh:</b> Mọi thao tác cấu hình phức tạp, tối ưu Database, hay quản lý Firewall đều được giải quyết tự động chỉ bằng phím bấm.</li>
     <li>☁️ <b>Bảo vệ dữ liệu toàn diện:</b> Hệ thống sao lưu thông minh vận hành hoàn toàn tự động đóng gói và đẩy thẳng dữ liệu của bạn lên đa nền tảng Cloud (Amazon S3, Google Drive, OneDrive, Telegram, Cloudflare R2...). Giải phóng bạn khỏi nỗi lo rủi ro phần cứng, hỏng ổ cứng... Đảm bảo website luôn có sẵn phương án khôi phục thần tốc trước mọi sự cố hay thảm họa không lường trước.</li>
