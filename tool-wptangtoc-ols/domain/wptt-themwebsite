@@ -113,17 +113,13 @@ fi
 
 NAME="${NAME,,}" # biến viết hoa thành viết thuờng
 # Loại bỏ scheme/www
-# if [[ $(echo "$NAME" | grep '://') ]]; then NAME=$(echo "$NAME" | cut -f3 -d '/'); fi
-# if [[ $(echo "$NAME" | grep '^www\.') ]]; then NAME=$(echo "$NAME" | sed 's/^www.//g'); fi
-
 if [[ "$NAME" == *"://"* ]]; then
   NAME=$(echo "$NAME" | cut -f3 -d '/')
 fi
 
 if [[ "$NAME" == www.* ]]; then
-	NAME="${NAME#www.}" #loại bỏ www. ở đầu
+    NAME="${NAME#www.}" #loại bỏ www. ở đầu
 fi
-
 
 random_suffix_USER=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 3)
 USER=${NAME//[-._]/$random_suffix_USER}
@@ -417,8 +413,8 @@ TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
 chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
-user=${database_admin_username}
-password=${password_database_root}
+user="${database_admin_username}"
+password="${password_database_root}"
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
@@ -441,6 +437,57 @@ mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e
 rm -rf "${TEMP_CNF_ROOT:?}"
 _rundone "${them:-Khởi tạo thành công} database ${cho:-cho website} $NAME"
 
+
+#end ACL
+if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL valkey, redis, keydb (biến lưu trong /etc/wptt/.wptt.conf)
+    # BỔ SUNG: TỰ ĐỘNG KHỞI TẠO ACL OBJECT CACHE NẾU ĐANG HOẠT ĐỘNG
+    active_cache="Chưa cài đặt"
+    socket_path="Không có"
+    cache_cli=""
+
+    if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then 
+        active_cache="Valkey"; socket_path="/var/run/valkey/valkey.sock"; cache_cli="valkey-cli"
+    elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then 
+        active_cache="KeyDB"; socket_path="/var/run/keydb/keydb.sock"; cache_cli="keydb-cli"
+    elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then 
+        active_cache="Redis"; socket_path="/var/run/redis/redis.sock"; cache_cli="redis-cli"
+    fi
+
+    redis_acl_user=""
+    raw_redis_pass=""
+    redis_acl_pass_luu=""
+
+    if [[ "$active_cache" != "Chưa cài đặt" && -n "$cache_cli" ]]; then
+        _runing "Khởi tạo tài khoản Object Cache (ACL) cho $NAME..."
+
+        # CHECK LỖI 1: File Socket có thực sự tồn tại để kết nối không?
+        if [[ ! -S "$socket_path" ]]; then
+            echo -en "\033[1A\033[2K\r"
+            _runloi "Lỗi: Dịch vụ $active_cache đang chạy nhưng mất file Socket!"
+        else
+            redis_acl_user=$(openssl rand -hex 12)
+            raw_redis_pass=$(openssl rand -hex 16)
+            redis_acl_pass_luu=$(wptt_ma_hoa "$raw_redis_pass")
+
+            raw_master_pass=""
+            [[ -n "$REDIS_MASTER_PASS" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
+
+            # CHECK LỖI 2: Đảm bảo Master Password được giải mã thành công
+            if [[ -z "$raw_master_pass" ]]; then
+                _runloi "Lỗi: Không thể giải mã Master Password của Object Cache!"
+                redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
+            else
+                # CHECK LỖI 3: Thực thi lệnh và bắt kết quả (Exit Status)
+                if $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_redis_pass" "~*" +@all -flushall -flushdb >/dev/null 2>&1; then
+                    _rundone "Khởi tạo thành công tài khoản Object Cache (ACL) cho $NAME"
+                else
+                    _runloi "Lỗi: Hệ thống $active_cache từ chối tạo User (Sai Master Pass)!"
+                    redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
+                fi
+            fi
+        fi
+    fi
+fi
 # ==============================================================================
 # LƯU CẤU HÌNH VÀ RELOAD
 # ==============================================================================
@@ -454,6 +501,12 @@ DB_Password_web='${password_database_website_ma_hoa_luu_tru}'
 Duong_Dan_thu_muc_web=/usr/local/lsws/$NAME/html
 User_name_vhost=$USER
 phien_ban_php_domain=$php_version" >"/etc/wptt/vhost/.$NAME.conf"
+
+# Lưu thêm biến Object Cache nếu được tạo
+if [[ -n "$redis_acl_user" && -n "$redis_acl_pass_luu" ]]; then
+    echo "redis_acl_user='$redis_acl_user'" >>"/etc/wptt/vhost/.$NAME.conf"
+    echo "redis_acl_pass='$redis_acl_pass_luu'" >>"/etc/wptt/vhost/.$NAME.conf"
+fi
 
 chown root:root "/etc/wptt/vhost/.$NAME.conf"
 chmod 600 "/etc/wptt/vhost/.$NAME.conf"
@@ -589,6 +642,16 @@ center_text "${C_BOLD_WHITE}Tài khoản database được biên chế cho websi
 left_text "DB Name      : ${C_YELLOW}$database${C_RESET}" 2
 left_text "DB User      : ${C_YELLOW}$username${C_RESET}" 2
 left_text "DB Password  : ${C_YELLOW}$password${C_RESET}" 2
+
+# In thông tin Object Cache ra màn hình nếu có cài đặt
+if [[ -n "$redis_acl_user" && -n "$raw_redis_pass" ]]; then
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+center_text "${C_BOLD_WHITE}Tài khoản Object Cache ($active_cache)${C_RESET}"
+left_text "Host / Path  : ${C_YELLOW}$socket_path${C_RESET}" 2
+left_text "Username     : ${C_YELLOW}$redis_acl_user${C_RESET}" 2
+left_text "Password     : ${C_YELLOW}$raw_redis_pass${C_RESET}" 2
+fi
+
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 disk_info=$(df -BG | awk '$NF=="/"{printf "%d/%dGB (%s)", $3,$2,$5}')
 ram_info=$(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)", $3,$2,$3*100/$2 }')
@@ -626,20 +689,6 @@ if [[ "$checkdns" != "$ip" ]]; then
 fi
 
 echo "Thêm website $NAME thời gian: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-# if [[ -n "$download_api" && "$1" != '98' ]]; then
-#   if [[ -f /etc/wptt/add-one/check.sh ]]; then
-#     if [[ $email_check_downtime && $telegram_id ]]; then
-#       . /etc/wptt/add-one/check.sh "$telegram_id" "$telegram_api" "$email" >/dev/null 2>&1
-#     fi
-#     if [[ -z $email_check_downtime && $telegram_id ]]; then
-#       . /etc/wptt/add-one/check.sh "$telegram_id" "$telegram_api" >/dev/null 2>&1
-#     fi
-#     if [[ $email_check_downtime && -z $telegram_id ]]; then
-#       . /etc/wptt/add-one/check.sh "$email_check_downtime" >/dev/null 2>&1
-#     fi
-#   fi
-# fi
 
 if [[ "${1:-}" == "98" ]];then
 echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Menu quản lý domain...${C_RESET}"

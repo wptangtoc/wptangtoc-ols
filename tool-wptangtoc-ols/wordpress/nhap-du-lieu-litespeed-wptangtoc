@@ -219,32 +219,59 @@ if [[ -d "$pathcheckplugin" ]]; then
     duong_path_memcached_config="/etc/sysconfig/memcached"
   fi
 
-  if systemctl is-active --quiet valkey 2>/dev/null; then
-    ACTIVE_CACHE="Valkey"
-    CLI_TOOL="valkey-cli"
-    SOCKET_PATH="/var/run/valkey/valkey.sock"
-  elif systemctl is-active --quiet keydb 2>/dev/null; then
-    ACTIVE_CACHE="KeyDB"
-    CLI_TOOL="keydb-cli"
-    SOCKET_PATH="/var/run/keydb/keydb.sock"
-  elif systemctl is-active --quiet redis 2>/dev/null; then
-    ACTIVE_CACHE="Redis"
-    CLI_TOOL="redis-cli"
-    SOCKET_PATH="/var/run/redis/redis.sock"
-  fi
+	# ==============================================================================
+  # NHẬN DIỆN ENGINE & CHUẨN BỊ LỆNH PING CÓ ACL
+  # ==============================================================================
+  # Giải mã Master Pass để dùng cho lệnh PING vượt ải bảo mật
+	raw_master_pass=""
+	[[ -n "$REDIS_MASTER_PASS" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
 
-  if [[ -S "$SOCKET_PATH" ]]; then
-    PING_CMD="$CLI_TOOL -s $SOCKET_PATH ping"
-  else
-    # Fallback nếu ai đó lỡ cấu hình TCP thủ công
-    PING_CMD="$CLI_TOOL ping"
-  fi
+	# Tối ưu: Bổ sung check cả hậu tố -server cho chính xác tuyệt đối
+	if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
+		ACTIVE_CACHE="Valkey"
+		CLI_TOOL="valkey-cli"
+		SOCKET_PATH="/var/run/valkey/valkey.sock"
+	elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
+		ACTIVE_CACHE="KeyDB"
+		CLI_TOOL="keydb-cli"
+		SOCKET_PATH="/var/run/keydb/keydb.sock"
+	elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+		ACTIVE_CACHE="Redis"
+		CLI_TOOL="redis-cli"
+		SOCKET_PATH="/var/run/redis/redis.sock"
+	fi
 
-  if [ "$($PING_CMD 2>/dev/null)" = "PONG" ]; then #kiểm tra xem thưc redis/valkey/keydb có hoạt động cái nào không
-    /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-port 0 --allow-root --path="$path" >/dev/null 2>&1
-    /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object true --allow-root --path="$path" >/dev/null 2>&1
-    /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-kind 1 --allow-root --path="$path" >/dev/null 2>&1
-    /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-host "$SOCKET_PATH" --allow-root --path="$path" >/dev/null 2>&1
+	# SỬ DỤNG MẢNG (ARRAY) CHO LỆNH PING: Tránh lỗi rớt biến nếu mật khẩu có ký tự đặc biệt
+	if [[ -S "$SOCKET_PATH" ]]; then
+		if [[ -n "$raw_master_pass" ]]; then
+			PING_CMD=("$CLI_TOOL" "-s" "$SOCKET_PATH" "-a" "$raw_master_pass" "--no-auth-warning" "ping")
+		else
+			PING_CMD=("$CLI_TOOL" "-s" "$SOCKET_PATH" "ping")
+		fi
+	else
+		# Fallback nếu ai đó lỡ cấu hình TCP thủ công
+		if [[ -n "$raw_master_pass" ]]; then
+			PING_CMD=("$CLI_TOOL" "-a" "$raw_master_pass" "--no-auth-warning" "ping")
+		else
+			PING_CMD=("$CLI_TOOL" "ping")
+		fi
+	fi
+
+	# KÍCH HOẠT VÀ NẠP CẤU HÌNH LSCache
+	# Lưu ý: Bọc thêm tr -d '\r' để dọn dẹp ký tự xuống dòng rác (nếu có) từ kết quả PONG
+	if [ "$("${PING_CMD[@]}" 2>/dev/null | tr -d '\r')" = "PONG" ]; then 
+		/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-port 0 --allow-root --path="$path" >/dev/null 2>&1
+		/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object true --allow-root --path="$path" >/dev/null 2>&1
+		/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-kind 1 --allow-root --path="$path" >/dev/null 2>&1
+		/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-host "$SOCKET_PATH" --allow-root --path="$path" >/dev/null 2>&1
+
+		if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL
+			pass_show=$(wptt_giai_ma "$redis_acl_pass")
+			if [[ -n "$redis_acl_user" && -n "$pass_show" ]]; then
+				/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-user "$redis_acl_user" --allow-root --path="$path" >/dev/null 2>&1
+				/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-pswd "$pass_show" --allow-root --path="$path" >/dev/null 2>&1
+			fi
+		fi
 
   else
     if [[ -f $duong_path_memcached_config ]]; then #nếu như memcached đã được cài, mà redis/valkey/keydb không support thì sẽ triển khai memcached
@@ -255,7 +282,7 @@ if [[ -d "$pathcheckplugin" ]]; then
     fi
   fi
 
-  if [ "$($PING_CMD 2>/dev/null)" = "PONG" ] || [[ -f $duong_path_memcached_config ]]; then        #kiểm tra xem thưc redis/valkey/keydb có hoạt động cái nào không
+  if [ "$("${PING_CMD[@]}" 2>/dev/null | tr -d '\r')" = "PONG" ] || [[ -f $duong_path_memcached_config ]]; then        #kiểm tra xem thưc redis/valkey/keydb có hoạt động cái nào không
     if [[ -f /usr/local/lsws/$NAME/html/wp-config.php ]]; then                                     #file wp-config.php tồn tại, xác định
       if [[ $(cat /usr/local/lsws/"$NAME"/html/wp-config.php | grep WP_CACHE_KEY_SALT) = '' ]]; then #không có cấu hình WP_CACHE_KEY_SALT, xác định
         sed -i "/define( 'WP_CACHE_KEY_SALT'/d" /usr/local/lsws/"$NAME"/html/wp-config.php && sed -i "/^define( 'NONCE_SALT'/a define( 'WP_CACHE_KEY_SALT', '$NAME' );" /usr/local/lsws/"$NAME"/html/wp-config.php
@@ -264,7 +291,7 @@ if [[ -d "$pathcheckplugin" ]]; then
     fi
   fi
 
-  if [ ! "$($PING_CMD 2>/dev/null)" = "PONG" ] && [[ ! -f $duong_path_memcached_config ]]; then
+  if [ ! "$("${PING_CMD[@]}" 2>/dev/null | tr -d '\r')" = "PONG" ] && [[ ! -f $duong_path_memcached_config ]]; then
     /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object false --allow-root --path="$path" >/dev/null 2>&1
     /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp litespeed-option set object-host '' --allow-root --path="$path" >/dev/null 2>&1
   fi

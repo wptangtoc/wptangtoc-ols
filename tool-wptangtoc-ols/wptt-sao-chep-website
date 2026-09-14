@@ -424,8 +424,8 @@ TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
 chmod 600 "$TEMP_CNF_ROOT"
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
-user=${database_admin_username}
-password=${password_database_root}
+user="${database_admin_username}"
+password="${password_database_root}"
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
@@ -625,6 +625,70 @@ DB_Password_web='${password_database_website_ma_hoa_luu_tru}'
 Duong_Dan_thu_muc_web=/usr/local/lsws/$NAME2/html
 User_name_vhost=$USER
 phien_ban_php_domain=$phien_ban_php_domain" >/etc/wptt/vhost/."$NAME2".conf
+
+
+
+#ACL bảo mật redis, valkey, keydb
+if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL valkey, redis, keydb (biến lưu trong /etc/wptt/.wptt.conf)
+    # BỔ SUNG: TỰ ĐỘNG KHỞI TẠO ACL OBJECT CACHE NẾU ĐANG HOẠT ĐỘNG
+    active_cache="Chưa cài đặt"
+    socket_path="Không có"
+    cache_cli=""
+
+    if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then 
+        active_cache="Valkey"; socket_path="/var/run/valkey/valkey.sock"; cache_cli="valkey-cli"
+    elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then 
+        active_cache="KeyDB"; socket_path="/var/run/keydb/keydb.sock"; cache_cli="keydb-cli"
+    elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then 
+        active_cache="Redis"; socket_path="/var/run/redis/redis.sock"; cache_cli="redis-cli"
+    fi
+
+    redis_acl_user=""
+    raw_redis_pass=""
+    redis_acl_pass_luu=""
+
+    if [[ "$active_cache" != "Chưa cài đặt" && -n "$cache_cli" ]]; then
+        # CHECK LỖI 1: File Socket có thực sự tồn tại để kết nối không?
+        if [[ ! -S "$socket_path" ]]; then
+            echo -en "\033[1A\033[2K\r"
+            _runloi "Lỗi: Dịch vụ $active_cache đang chạy nhưng mất file Socket!"
+        else
+            redis_acl_user=$(openssl rand -hex 12)
+            raw_redis_pass=$(openssl rand -hex 16)
+            redis_acl_pass_luu=$(wptt_ma_hoa "$raw_redis_pass")
+
+            raw_master_pass=""
+            [[ -n "$REDIS_MASTER_PASS" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
+
+            # CHECK LỖI 2: Đảm bảo Master Password được giải mã thành công
+            if [[ -z "$raw_master_pass" ]]; then
+                redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
+            else
+                # CHECK LỖI 3: Thực thi lệnh và bắt kết quả (Exit Status)
+                if $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_redis_pass" "~*" +@all -flushall -flushdb >/dev/null 2>&1; then
+									:
+                else
+                    redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
+                fi
+            fi
+        fi
+    fi
+fi
+
+if [[ -n "$redis_acl_user" && -n "$redis_acl_pass_luu" ]]; then
+    echo "redis_acl_user='$redis_acl_user'" >>"/etc/wptt/vhost/.$NAME2.conf"
+    echo "redis_acl_pass='$redis_acl_pass_luu'" >>"/etc/wptt/vhost/.$NAME2.conf"
+fi
+
+
+if [[ -d /usr/local/lsws/$NAME2/wp-content/litespeed-cache ]];then
+	"$PHP_EXEC" /usr/local/bin/wp litespeed-option set object-user "$redis_acl_user" --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+	"$PHP_EXEC" /usr/local/bin/wp litespeed-option set object-pswd "$raw_redis_pass" --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+fi
+
+unset redis_acl_user raw_redis_pass
+#ACL bảo mật redis, valkey, keydb
+
 
 chown root:root /etc/wptt/vhost/."$NAME2".conf
 chmod 600 /etc/wptt/vhost/."$NAME2".conf
