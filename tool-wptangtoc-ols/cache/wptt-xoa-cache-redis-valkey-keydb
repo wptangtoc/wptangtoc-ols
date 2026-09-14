@@ -1,6 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Tính năng xóa Object Cache là công cụ dọn dẹp bộ nhớ đệm RAM [Redis/Valkey/KeyDB] của website.
@@ -23,6 +24,7 @@ if [[ -z "$ngon_ngu" ]]; then
   ngon_ngu='vi'
 fi
 . "/etc/wptt/lang/$ngon_ngu.sh"
+. /etc/wptt/core-functions 2>/dev/null # Bắt buộc nạp thư viện để dùng hàm wptt_giai_ma
 
 # ==============================================================================
 # 1. KIỂM TRA TRẠNG THÁI VÀ ĐỊNH DANH ENGINE (REDIS / VALKEY / KEYDB)
@@ -52,14 +54,28 @@ if [[ -z "$ACTIVE_CACHE" ]]; then
   return 2>/dev/null || exit 1
 fi
 
-# Thiết lập lệnh Ping và Flush dựa trên Socket hoặc TCP
-if [[ -S "$SOCKET_PATH" ]]; then
-  PING_CMD="$CLI_TOOL -s $SOCKET_PATH ping"
-  FLUSH_CMD="$CLI_TOOL -s $SOCKET_PATH flushall"
-else
-  PING_CMD="$CLI_TOOL ping"
-  FLUSH_CMD="$CLI_TOOL flushall"
-fi
+# ==============================================================================
+# BỔ SUNG: HÀM BỌC (WRAPPER) XỬ LÝ LỆNH CLI TƯƠNG THÍCH KIẾN TRÚC ACL MASTER
+# ==============================================================================
+master_pass=""
+[[ -n "$REDIS_MASTER_PASS" ]] && master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
+
+# Hàm thực thi lệnh Redis/Valkey CLI thông minh (Tự động chèn mật khẩu nếu có)
+cache_exec() {
+    if [[ -S "$SOCKET_PATH" ]]; then
+        if [[ -n "$master_pass" ]]; then
+            "$CLI_TOOL" -s "$SOCKET_PATH" -a "$master_pass" --no-auth-warning "$@"
+        else
+            "$CLI_TOOL" -s "$SOCKET_PATH" "$@"
+        fi
+    else
+        if [[ -n "$master_pass" ]]; then
+            "$CLI_TOOL" -a "$master_pass" --no-auth-warning "$@"
+        else
+            "$CLI_TOOL" "$@"
+        fi
+    fi
+}
 
 # ==============================================================================
 # 2. KHỞI TẠO GIAO DIỆN VÀ MENU LỰA CHỌN
@@ -82,20 +98,20 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
   center_text "${C_YELLOW}DASHBOARD THAO TÁC HÀNG LOẠT${C_RESET}"
   print_border_mid
   left_text "▪ Tổng số   : ${C_GREEN}$tong_so_web website (Toàn bộ Server)${C_RESET}" 2
-  left_text "▪ Nhiệm vụ  : ${C_GREEN}Clear All RAM $ACTIVE_CACHE (FlushAll)${C_RESET}" 2
+  left_text "▪ Nhiệm vụ  : ${C_GREEN}Clear All RAM $ACTIVE_CACHE (FlushAll ACL)${C_RESET}" 2
   print_border_bot
   echo ""
 
-  # Kiểm tra sống còn trước khi nổ bom
-  if [ "$($PING_CMD 2>/dev/null)" = "PONG" ]; then
+  # Kiểm tra sống còn trước khi nổ bom (Gọi qua hàm bọc để vượt ải Mật khẩu)
+  if [ "$(cache_exec ping 2>/dev/null | tr -d '\r')" = "PONG" ]; then
     _runing "$don_dep toàn bộ bộ nhớ Cache $ACTIVE_CACHE"
     
-    # Kích nổ bom hạt nhân dọn sạch RAM trong 1 nốt nhạc
-    $FLUSH_CMD >/dev/null 2>&1
+    # Kích nổ bom hạt nhân dọn sạch RAM bằng quyền Master
+    cache_exec flushall >/dev/null 2>&1
     
     _rundone "$don_dep toàn bộ bộ nhớ Cache $ACTIVE_CACHE"
   else
-    echo -e "${C_RED}❌ Dịch vụ $ACTIVE_CACHE không phản hồi, không thể dọn dẹp!${C_RESET}"
+    echo -e "${C_RED}❌ Dịch vụ $ACTIVE_CACHE không phản hồi hoặc Mật khẩu Master bị sai!${C_RESET}"
     sleep 2
   fi
 
@@ -115,7 +131,7 @@ fi
 # 4. NHÁNH THỰC THI ĐỘC LẬP (MỘT WEBSITE) => DÙNG WP-CLI BẮN TỈA
 # ==============================================================================
 # Đảm bảo Engine vẫn sống trước khi gọi WP-CLI
-if [ "$($PING_CMD 2>/dev/null)" != "PONG" ]; then
+if [ "$(cache_exec ping 2>/dev/null | tr -d '\r')" != "PONG" ]; then
   echo -e "\n${C_RED}❌ Dịch vụ $ACTIVE_CACHE không phản hồi. Vui lòng kiểm tra lại.${C_RESET}"
   sleep 2
   [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
@@ -128,6 +144,7 @@ _runing "$don_dep Object Cache cho $NAME"
 . /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
 WP_PATH="/usr/local/lsws/$NAME/html"
 
+# Bắn tỉa độc lập qua WP-CLI (WP tự lấy thông tin kết nối từ wp-config.php)
 /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp cache flush --path="$WP_PATH" >/dev/null 2>&1
 
 _rundone "$don_dep Object Cache cho $NAME"
