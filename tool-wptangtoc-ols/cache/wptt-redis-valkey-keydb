@@ -18,13 +18,13 @@ function huong_dan() {
 . /etc/wptt/core-functions 2>/dev/null
 
 # =========================================================================
-# HÀM RENDER DANH SÁCH ACL
+# HÀM RENDER DANH SÁCH ACL VÀ CẤP PHÁT DATABASE CÔ LẬP
 # =========================================================================
 function in_thong_tin_acl_cho_khach() {
   # CHẶN NGAY TỪ ĐẦU NẾU CHƯA CÀI ĐẶT
   if [[ "$socket_path" == "Không có" || "$active_cache" == "Chưa cài đặt" ]]; then
     echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_YELLOW}THÔNG TIN KẾT NỐI OBJECT CACHE (ACL)${C_RESET}"
+    center_text "${C_YELLOW}THÔNG TIN KẾT NỐI OBJECT CACHE (ACL & DB)${C_RESET}"
     echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "  ${C_RED}Hệ thống hiện chưa cài đặt Object Cache.${C_RESET}" 2
     left_text "  Vui lòng cài đặt Engine (Valkey/KeyDB/Redis) để tạo tài khoản!" 2
@@ -33,7 +33,7 @@ function in_thong_tin_acl_cho_khach() {
   fi
 
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}THÔNG TIN KẾT NỐI OBJECT CACHE (ACL)${C_RESET}"
+  center_text "${C_YELLOW}THÔNG TIN KẾT NỐI OBJECT CACHE (ACL & DB CÔ LẬP)${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "  Để kích hoạt Cache, bạn vui lòng sử dụng chính xác các thông số bên dưới:" 2
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -57,24 +57,51 @@ function in_thong_tin_acl_cho_khach() {
     domain="${domain%.conf}"
     domain="${domain#.}"
     
-    unset redis_acl_user redis_acl_pass User_name_vhost
+    unset redis_acl_user redis_acl_pass redis_db_id User_name_vhost
     source "$filepath" 2>/dev/null
     local pass_show=""
 
+    # 1. TẠO TÀI KHOẢN MỚI HOẶC BỔ SUNG DB_ID NẾU CHƯA CÓ
     if [[ -z "$redis_acl_user" || -z "$redis_acl_pass" ]]; then
         local redis_acl_user=$(openssl rand -hex 12)
         local raw_pass=$(openssl rand -hex 16)
         redis_acl_pass=$(wptt_ma_hoa "$raw_pass")
         
+        # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
+        local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
+        redis_db_id=1
+        while echo "$used_ids" | grep -qw "$redis_db_id"; do
+            ((redis_db_id++))
+            if [[ $redis_db_id -gt 999 ]]; then redis_db_id=999; break; fi
+        done
+        # ------------------------------------------------
+        
         echo "redis_acl_user='$redis_acl_user'" >> "$filepath"
         echo "redis_acl_pass='$redis_acl_pass'" >> "$filepath"
+        echo "redis_db_id='$redis_db_id'" >> "$filepath"
         
+        # Mở khóa +flushdb cho plugin
         if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
             $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" +@all -flushall +flushdb >/dev/null 2>&1
         fi
         pass_show="$raw_pass"
     else
         pass_show=$(wptt_giai_ma "$redis_acl_pass")
+        
+        # Cập nhật DB ID cho các website cũ chưa được chia lô
+        if [[ -z "$redis_db_id" ]]; then
+            # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
+            local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
+            redis_db_id=1
+            while echo "$used_ids" | grep -qw "$redis_db_id"; do
+                ((redis_db_id++))
+                if [[ $redis_db_id -gt 999 ]]; then redis_db_id=999; break; fi
+            done
+            # ------------------------------------------------
+            echo "redis_db_id='$redis_db_id'" >> "$filepath"
+        fi
+
+        # Cập nhật lại quyền +flushdb
         if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
             $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$pass_show" "~*" +@all -flushall +flushdb >/dev/null 2>&1
         fi
@@ -82,8 +109,9 @@ function in_thong_tin_acl_cho_khach() {
 
     if [[ -n "$redis_acl_user" && -n "$pass_show" ]]; then
       left_text "Website: ${C_GREEN}$domain${C_RESET}" 2
-      left_text "   - Username : ${C_BOLD_WHITE}$redis_acl_user${C_RESET}" 2
-      left_text "   - Password : ${C_YELLOW}$pass_show${C_RESET}" 2
+      left_text "   - Username    : ${C_BOLD_WHITE}$redis_acl_user${C_RESET}" 2
+      left_text "   - Password    : ${C_YELLOW}$pass_show${C_RESET}" 2
+			left_text "   - Database ID : ${C_CYAN}${redis_db_id}${C_RESET}" 2
       echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
       found=1
     fi
@@ -95,10 +123,10 @@ function in_thong_tin_acl_cho_khach() {
   else
     echo -en "\033[1A\033[2K\r" 
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -e "\n${C_GREEN}HƯỚNG DẪN ĐIỀN VÀO LITESPEED CACHE:${C_RESET}"
+    echo -e "\n${C_GREEN}HƯỚNG DẪN ĐIỀN VÀO LITESPEED CACHE / WP-REDIS:${C_RESET}"
     echo -e "1. Bật Object Cache: ${C_YELLOW}ON${C_RESET} | Method: ${C_YELLOW}Redis${C_RESET}"
     echo -e "2. Host: ${C_YELLOW}$socket_path${C_RESET} | Port: ${C_YELLOW}0${C_RESET}"
-    echo -e "3. Copy Username/Password. ${C_RED}(Đổi số tại Redis Database ID nếu có nhiều web!)${C_RESET}"
+    echo -e "3. Copy Username/Password và điền đúng số ID Database ở trên."
   fi
 }
 
@@ -141,7 +169,7 @@ left_text "  ${C_CYAN}1)${C_RESET} ${C_BOLD_WHITE}Valkey${C_RESET} (Khuyên dùn
 left_text "  ${C_CYAN}2)${C_RESET} ${C_BOLD_WHITE}KeyDB${C_RESET}  (Tối ưu ép xung Đa luồng cho VPS nhiều Core)" 2
 if ! $is_alma_10; then left_text "  ${C_CYAN}3)${C_RESET} ${C_BOLD_WHITE}Redis${C_RESET}  (Phiên bản truyền thống)" 2; fi
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "  ${C_CYAN}4)${C_RESET} ${C_YELLOW}Xem thông tin Tài khoản ACL các Website đang chạy${C_RESET}" 2
+left_text "  ${C_CYAN}4)${C_RESET} ${C_YELLOW}Xem thông tin Tài khoản ACL & Database ID${C_RESET}" 2
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 while true; do
@@ -205,7 +233,7 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     fi
     _rundone "Cài đặt Package $display_name"
 
-    _runing "Cấu hình bảo mật Unix Socket + Admin Requirepass..."
+    _runing "Cấu hình bảo mật Unix Socket + Admin Requirepass + Databases 1000..."
 
     # TẠO VÀ LƯU MASTER PASSWORD VÀO FILE .wptt.conf GỐC (MÃ HÓA)
     . /etc/wptt/.wptt.conf 2>/dev/null
@@ -217,6 +245,7 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     fi
     dec_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
     
+    # [TỐI ƯU CÔ LẬP]: Bơm databases 1000 để mở rộng quỹ đất lưu trữ riêng biệt
     echo -e "\n# WPTangToc Optimize
 port 0
 unixsocket /var/run/$name_service/$name_service.sock
@@ -224,6 +253,7 @@ unixsocketperm 777
 requirepass \"$dec_master_pass\"
 maxmemory 128mb
 maxmemory-policy allkeys-lfu
+databases 1000
 save \"\"
 appendonly no
 tcp-keepalive 60" >>"$duong_dan_config_redis"
@@ -250,7 +280,7 @@ tcp-keepalive 60" >>"$duong_dan_config_redis"
     (/etc/wptt/monit >/dev/null 2>&1)
     (/etc/wptt/cache/object-cache-optimize-tune >/dev/null 2>&1)
 
-    _rundone "Cấu hình bảo mật Unix Socket + Admin Requirepass..."
+    _rundone "Cấu hình bảo mật Unix Socket + Admin Requirepass + Databases 1000..."
     
     # FIX LỖI: Cập nhật lại 2 biến trạng thái để hàm in_thong_tin_acl_cho_khach chạy mượt mà
     active_cache="$name_service"
@@ -261,7 +291,7 @@ tcp-keepalive 60" >>"$duong_dan_config_redis"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "Engine        : ${C_YELLOW}$display_name${C_RESET}" 2
     left_text "Chế độ        : ${C_GREEN}Unix Socket + Admin ACL Master${C_RESET}" 2
-    left_text "Đường dẫn     : ${C_CYAN}$socket_path${C_RESET}" 2
+    left_text "Cô lập Dữ liệu: ${C_GREEN}Đã kích hoạt 1000 Database ID độc lập${C_RESET}" 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
     
     in_thong_tin_acl_cho_khach
@@ -296,6 +326,7 @@ else
         if [[ -f "$vhost_file" ]]; then
             sed -i '/^redis_acl_user=/d' "$vhost_file"
             sed -i '/^redis_acl_pass=/d' "$vhost_file"
+            sed -i '/^redis_db_id=/d' "$vhost_file"
         fi
     done
 
