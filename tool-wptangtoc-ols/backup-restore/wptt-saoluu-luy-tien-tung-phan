@@ -123,28 +123,28 @@ if [[ $NAME = 'Tất cả website' ]]; then
   before_optimize_full_all=$(du -hs /usr/local/backup-website)
 
   if [[ -d /etc/wptt/vhost ]];then
-	  for filepath in /etc/wptt/vhost/.*.conf; do
-		  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-		  domain="${filepath##*/}"
-		  domain="${domain%.conf}"
-		  domain="${domain#.}"
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
 
-		  if [[ "$domain" != ?*.?* ]]; then continue; fi
-		  
+      if [[ "$domain" != ?*.?* ]]; then continue; fi
+      
       path_html="/usr/local/lsws/$domain/html/wp-load.php"
-		  path_uploads_dir_nam="/usr/local/lsws/$domain/html/wp-content/uploads/$date_nam"
-		  i=1
-		  if [[ -f "$path_html" && -d $path_uploads_dir_nam ]]; then
-			  . /etc/wptt/backup-restore/wptt-saoluu-luy-tien-tung-phan "$domain" "$ggdriver" "$ggdriver2"
-		  fi
-	  done
+      path_uploads_dir_nam="/usr/local/lsws/$domain/html/wp-content/uploads/$date_nam"
+      i=1
+      if [[ -f "$path_html" && -d $path_uploads_dir_nam ]]; then
+        . /etc/wptt/backup-restore/wptt-saoluu-luy-tien-tung-phan "$domain" "$ggdriver" "$ggdriver2"
+      fi
+    done
   fi
 
   # [UX ĐỈNH CAO] - ĐÁ CHẠY NỀN LẤY DUNG LƯỢNG ALL BẤT ĐỒNG BỘ
   if [[ $ggdriver = '1998' ]]; then
-	  FILE_TEMP_CLOUD_SIZE_ALL=$(mktemp -p "/etc/wptt/tmp" wptt_rclone_XXXXXX.cnf)
-	  ( rclone about wptangtoc: 2>/dev/null > "$FILE_TEMP_CLOUD_SIZE_ALL" ) &
-	  PID_CLOUD_SIZE_ALL=$!
+    FILE_TEMP_CLOUD_SIZE_ALL=$(mktemp -p "/etc/wptt/tmp" wptt_rclone_XXXXXX.cnf)
+    ( rclone about wptangtoc: 2>/dev/null > "$FILE_TEMP_CLOUD_SIZE_ALL" ) &
+    PID_CLOUD_SIZE_ALL=$!
   fi
 
   check_menu_wptangtoc_active=$1
@@ -154,13 +154,13 @@ if [[ $NAME = 'Tất cả website' ]]; then
     echo "==================================================================="
     echo "Hoàn tất backup $sao_luu_tat_ca_website (Lũy Tiến)"
     echo "==================================================================="
-	for filepath in /etc/wptt/vhost/.*.conf; do
-		[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-		domain="${filepath##*/}"
-		domain="${domain%.conf}"
-		domain="${domain#.}"
-		if [[ "$domain" != ?*.?* ]]; then continue; fi
-		
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+      if [[ "$domain" != ?*.?* ]]; then continue; fi
+      
       path="/usr/local/lsws/$domain/html"
       i=1
 
@@ -220,6 +220,48 @@ if [[ $NAME = 'Tất cả website' ]]; then
   exit
 fi
 
+# ==============================================================================
+# BẮT ĐẦU CƠ CHẾ LOCKING (CHỐNG ĐỤNG ĐỘ TIẾN TRÌNH BACKUP)
+# ==============================================================================
+if [[ -n "$NAME" && "$NAME" != "Tất cả website" && "$NAME" != "98" ]]; then
+  # 1. Định nghĩa file khóa riêng biệt cho từng domain
+  LOCK_FILE="/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME}.lock"
+
+  # 2. Gán File Descriptor 200 cho file khóa này
+  exec 200>"$LOCK_FILE"
+
+  # 3. Thử lấy khóa (Non-blocking với -n)
+  if ! flock -n 200; then
+    echo ""
+    echo "========================================================================="
+    _runloi "Lỗi Đụng Độ Tiến Trình"
+    echoDo "Website $NAME đang được thao tác bởi một tiến trình khác (Backup/Restore)."
+    echoDo "Vui lòng chờ tiến trình đó hoàn tất rồi thử lại để tránh hỏng dữ liệu!"
+    echo "Sao lưu website $NAME luỹ tiến nhưng bị xung đột: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    echo "========================================================================="
+
+    check_menu_wptangtoc_active=$1
+    if [[ $check_menu_wptangtoc_active = "98" || -z "$check_menu_wptangtoc_active" ]]; then
+      sleep 3
+      exec /etc/wptt/wptt-backup-restore-main 1
+    fi
+    return 2>/dev/null || exit 1
+  fi
+fi
+# ==============================================================================
+# KẾT THÚC CƠ CHẾ LOCKING
+# ==============================================================================
+
+times=$(date +%Hgio\_%d\_%m\_%Y)
+
+# LỚP KHIÊN BẢO VỆ: Bắt sự kiện Ctrl+C để dọn rác và thoát ngay lập tức
+trap 'echo -e "\n\n${C_RED}⚠️ Tiến trình sao lưu bị hủy đột ngột bởi người dùng (Ctrl+C)!${C_RESET}"; \
+      rm -f /usr/local/backup-website/${NAME:?}/${NAME}${times}* 2>/dev/null; \
+      exec 200>&-; \
+      rm -f /etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME:?}.lock 2>/dev/null; \
+      exit 130' SIGINT
+
+
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
@@ -242,7 +284,6 @@ fi
 
 pathcheck="/usr/local/backup-website/$NAME"
 before_optimize=$(du -hs "$pathcheck" | sed 's/\t//g' | cut -f1 -d '/')
-times=$(date +%Hgio\_%d\_%m\_%Y)
 . /etc/wptt/.wptt.conf
 . /etc/wptt/vhost/."$NAME".conf
 cd /usr/local/lsws/"$NAME"/html || exit 1
@@ -301,21 +342,21 @@ echo ""
 
 # 1. Định nghĩa trước biến đường dẫn file để tránh lặp code (Quy tắc DRY)
 if [[ "$sql_gz" = '1' ]]; then
-	FILE_DB="$NAME$times.sql.gz"
+  FILE_DB="$NAME$times.sql.gz"
 elif [[ "$sql_gz" = '2' ]]; then
-	FILE_DB="$NAME$times.sql.zst"
+  FILE_DB="$NAME$times.sql.zst"
 else
-	FILE_DB="$NAME$times.sql"
+  FILE_DB="$NAME$times.sql"
 fi
 DB_OUTPUT="/usr/local/backup-website/$NAME/$FILE_DB"
 
 # 2. Thực thi lệnh Dump vào đường ống (Pipeline)
 if [[ "$sql_gz" = '1' ]]; then
-	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip > "$DB_OUTPUT"
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup gzip > "$DB_OUTPUT"
 elif [[ "$sql_gz" = '2' ]]; then
-	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd > "$DB_OUTPUT"
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zstd > "$DB_OUTPUT"
 else
-	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" > "$DB_OUTPUT"
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup bash -c "$PV_CMD" > "$DB_OUTPUT"
 fi
 
 # 3. BẮT NGAY MÃ LỖI CỦA PIPELINE (Sức mạnh của pipefail)
@@ -328,247 +369,259 @@ rm -f "$TEMP_CNF" 2>/dev/null
 
 # 4. Phân xử Thành / Bại sòng phẳng chỉ bằng 1 khối IF duy nhất
 if [ $db_backup_status -eq 0 ] && [ -f "$DB_OUTPUT" ]; then
-	# Thành công: Chmod nâng cao bảo mật và báo Done
-	$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 "$DB_OUTPUT" 2>/dev/null 
-	_rundone "$sao_luu_database website $NAME"
-	tuanxacnhandb="1"
+  # Thành công: Chmod nâng cao bảo mật và báo Done
+  $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 "$DB_OUTPUT" 2>/dev/null 
+  _rundone "$sao_luu_database website $NAME"
+  tuanxacnhandb="1"
 else
-	# Thất bại: Đứt mắt xích dump, báo Lỗi và dọn dẹp rác
-	tuanxacnhandb="0"
-	_runloi "$sao_luu_database website $NAME"
+  # Thất bại: Đứt mắt xích dump, báo Lỗi và dọn dẹp rác
+  tuanxacnhandb="0"
+  _runloi "$sao_luu_database website $NAME"
   rm -f "$DB_OUTPUT" 2>/dev/null
 fi
 
 
-
-
-_runing "$sao_luu_ma_nguon website $NAME"
+_runing "$sao_luu_ma_nguon website $NAME (Lũy tiến)"
 echo ''
-cd /usr/local/lsws/"$NAME"/html && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -r /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip * -x "wp-content/uploads/*" -x "wp-content/ai1wm-backups/*" -x "wp-content/cache/*" -x "wp-content/updraft/*" -x "wp-content/ai1wm-backups/*" -x "error_log" -x "wp-content/debug.log" -x "wp-content/uploads/backupbuddy_backups/*" -x "wp-content/backups-dup-pro/*" -x "wp-content/backups-dup-lite/*" #luy tuyen core
+
+src_backup_status=1
+
+cd /usr/local/lsws/"$NAME"/html && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -r /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip * -x "wp-content/uploads/*" -x "wp-content/ai1wm-backups/*" -x "wp-content/cache/*" -x "wp-content/updraft/*" -x "wp-content/ai1wm-backups/*" -x "error_log" -x "wp-content/debug.log" -x "wp-content/uploads/backupbuddy_backups/*" -x "wp-content/backups-dup-pro/*" -x "wp-content/backups-dup-lite/*"
+src_backup_status=$?
+
+echo -ne "\033[1A\r\033[K"
+echo -ne "\033[1A\r\033[K"
 
 unset tuanxacnhan tao_file_dir_uploads_full
-if [[ -f /usr/local/backup-website/$NAME/$NAME$times-wptt-luy-tien-tung-phan-core.zip ]]; then
+if [[ $src_backup_status -eq 0 && -f /usr/local/backup-website/$NAME/$NAME$times-wptt-luy-tien-tung-phan-core.zip ]]; then
   _rundone "$sao_luu_ma_nguon website $NAME"
   tuanxacnhan="1"
-else
-  _runloi "$sao_luu_ma_nguon website $NAME"
-fi
+  
+  # TIẾP TỤC XỬ LÝ UPLOADS NẾU CORE NÉN THÀNH CÔNG
+  date_thang_nam=$(date +"%m_%Y")
+  date_thang=$(date +"%m")
+  date_nam=$(date +"%Y")
+  if [[ ! -f /usr/local/backup-website/$NAME/$NAME-${date_thang_nam}-wptt-luy-tien-wp-uploads-dir.zip ]]; then #một tháng chỉ 1 lần thôi uploads full dir
+    tao_file_dir_uploads_full=1
+    cd /usr/local/lsws/"$NAME"/html && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -q -r /usr/local/backup-website/"$NAME"/"$NAME"-"${date_thang_nam}"-wptt-luy-tien-wp-uploads-dir.zip wp-content/uploads/*
+  fi
 
-date_thang_nam=$(date +"%m_%Y")
-date_thang=$(date +"%m")
-date_nam=$(date +"%Y")
-if [[ ! -f /usr/local/backup-website/$NAME/$NAME-${date_thang_nam}-wptt-luy-tien-wp-uploads-dir.zip ]]; then #một tháng chỉ 1 lần thôi uploads full dir
-  tao_file_dir_uploads_full=1
-  cd /usr/local/lsws/"$NAME"/html && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -r /usr/local/backup-website/"$NAME"/"$NAME"-"${date_thang_nam}"-wptt-luy-tien-wp-uploads-dir.zip wp-content/uploads/*
-fi
+  if [[ -d /usr/local/lsws/"$NAME"/html/wp-content/uploads/"$date_nam"/"$date_thang" && $(ls -At /usr/local/lsws/"$NAME"/html/wp-content/uploads/"$date_nam"/"$date_thang" 2>/dev/null) ]]; then
+    cd /usr/local/lsws/"$NAME"/html && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -q -r /usr/local/backup-website/"$NAME"/"$NAME"-"${times}"-wptt-luy-tien-uploads-thang-hien-huu.zip wp-content/uploads/"$date_nam"/"$date_thang"/*
+  fi
 
-if [[ -d /usr/local/lsws/"$NAME"/html/wp-content/uploads/"$date_nam"/"$date_thang" && $(ls -At /usr/local/lsws/"$NAME"/html/wp-content/uploads/"$date_nam"/"$date_thang") ]]; then
-  cd /usr/local/lsws/"$NAME"/html && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -r /usr/local/backup-website/"$NAME"/"$NAME"-"${times}"-wptt-luy-tien-uploads-thang-hien-huu.zip wp-content/uploads/"$date_nam"/"$date_thang"/*
-fi
-
-# Merge file zip: mã nguồn và thư mục uploads luỹ tiến
-if [[ -d /usr/local/lsws/$NAME/html/wp-content/uploads/$date_nam/$date_thang && $(ls -At /usr/local/lsws/"$NAME"/html/wp-content/uploads/"$date_nam"/"$date_thang") ]]; then
-  temp_dir_backup=$(mktemp -d /etc/wptt/tmp/XXXXXX)
-  unzip -oq /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip -d "$temp_dir_backup"
-  unzip -oq /usr/local/backup-website/"$NAME"/"$NAME"-"${times}"-wptt-luy-tien-uploads-thang-hien-huu.zip -d "$temp_dir_backup"
-  cd "$temp_dir_backup" && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -r /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip *
-  cd || exit
-  rm -rf "${temp_dir_backup:?}"
-  rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}"-"${times:?}"-wptt-luy-tien-uploads-thang-hien-huu.zip
-fi
+  # Merge file zip: mã nguồn và thư mục uploads luỹ tiến
+  if [[ -d /usr/local/lsws/$NAME/html/wp-content/uploads/$date_nam/$date_thang && $(ls -At /usr/local/lsws/"$NAME"/html/wp-content/uploads/"$date_nam"/"$date_thang" 2>/dev/null) ]]; then
+    temp_dir_backup=$(mktemp -d /etc/wptt/tmp/XXXXXX)
+    unzip -oq /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip -d "$temp_dir_backup"
+    unzip -oq /usr/local/backup-website/"$NAME"/"$NAME"-"${times}"-wptt-luy-tien-uploads-thang-hien-huu.zip -d "$temp_dir_backup"
+    cd "$temp_dir_backup" && $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup zip -q -r /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip *
+    cd || exit
+    rm -rf "${temp_dir_backup:?}"
+    rm -f /usr/local/backup-website/"${NAME:?}"/"${NAME:?}"-"${times:?}"-wptt-luy-tien-uploads-thang-hien-huu.zip
+  fi
 
   $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 /usr/local/backup-website/"$NAME"/"$NAME"-"${date_thang_nam}"-wptt-luy-tien-wp-uploads-dir.zip 2>/dev/null
   $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip 2>/dev/null
 
+else
+  _runloi "$sao_luu_ma_nguon website $NAME"
+  tuanxacnhan="0"
+  rm -f /usr/local/backup-website/"$NAME"/"$NAME""$times"-wptt-luy-tien-tung-phan-core.zip 2>/dev/null
+fi
+
+
 checkdathietlap=$(grep -q '\[wptangtoc\]' ~/.config/rclone/rclone.conf 2>/dev/null && echo 1)
 if [[ $checkdathietlap ]]; then
-  if [[ "$ggdriver" != "1998" ]]; then
-    if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' ~/.config/rclone/rclone.conf 2>/dev/null; then
-      drive_name='OneDrive'
-    elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' ~/.config/rclone/rclone.conf 2>/dev/null; then
-      drive_name='S3 Storage'
-    else
-      drive_name='Google Drive'
-    fi
-    echo "$ban_co_muon file backup uploads ${drive_name}?"
-
-    prompt="$nhap_lua_chon_cua_ban [1-2]: "
-    uploads="n"
-    options=("$dong_y" "$khong_dong_y")
-    PS3="$prompt"
-    select opt in "${options[@]}"; do
-      case "$REPLY" in
-      1) uploads="y"; break ;;
-      2) uploads="n"; break ;;
-      *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
-      esac
-    done
-  fi
-  
-  if [[ "$uploads" = "y" || "$ggdriver" = "1998" ]]; then
-
-    _runing "File backup uploads $drive_name"
-    
-    # Xử lý Bucket Name S3
-    CLOUD_DIR="wptangtoc_ols_backup"
-    if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' /root/.config/rclone/rclone.conf 2>/dev/null; then
-      CLOUD_DIR="wptangtoc-ols-backup"
-    elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
-      CLOUD_DIR="wptangtoc-ols-backup"
-    fi
-
-    # -------------------------------------------------------------
-    # BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE)
-    # -------------------------------------------------------------
-    TOTAL_CORES=$(nproc 2>/dev/null || echo 1)
-    TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-
-    if (( TOTAL_CORES <= 2 )) || (( TOTAL_RAM_MB <= 2048 )); then
-        OPT_TRANSFERS=2
-        OPT_CHUNK="32M"
-    else
-        OPT_TRANSFERS=4
-        OPT_CHUNK="64M"
-    fi
-
-	# 1. Khởi tạo mảng cấu hình tiêu chuẩn (Bung hết sức mạnh cho mọi Cloud)
-RCLONE_OPTS=(
-    "--transfers=$OPT_TRANSFERS"
-    "--checkers=$OPT_TRANSFERS"
-    "--drive-chunk-size=$OPT_CHUNK" 
-    "--s3-upload-concurrency=$OPT_TRANSFERS"
-    "--contimeout" "60s"
-    "--timeout" "300s"
-    "--retries" "5"
-    "--log-level" "ERROR"
-)
-
-# 2. Phân tích loại Cloud và cấu hình hiện tại
-RCLONE_CONF="/root/.config/rclone/rclone.conf"
-is_google_drive="n"
-has_custom_id="n"
-
-if grep -q '^\[wptangtoc\]' "$RCLONE_CONF" 2>/dev/null; then
-    # Lấy chính xác tham số type của remote [wptangtoc]
-    cloud_type=$(grep -A 8 '^\[wptangtoc\]' "$RCLONE_CONF" | grep -E '^[[:space:]]*type[[:space:]]*=' | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
-    
-    if [[ "$cloud_type" == "drive" ]]; then
-        is_google_drive="y"
-        # Nếu đúng là GDrive, soi tiếp xem có Client ID riêng không
-        if grep -A 8 '^\[wptangtoc\]' "$RCLONE_CONF" | grep -E -q '^[[:space:]]*client_id[[:space:]]*='; then
-            has_custom_id="y"
-        fi
-    fi
-fi
-
-# 3.Chỉ áp dụng khi đúng là Google Drive VÀ xài API dùng chung
-if [[ "$is_google_drive" == "y" && "$has_custom_id" == "n" ]]; then
-    RCLONE_OPTS+=(
-        "--tpslimit=5"
-        "--drive-pacer-min-sleep=10ms"
-    )
-fi
-
-
-    if [[ "$ggdriver" == "1998" ]]; then
-        # 2. Nhồi thêm tham số có khoảng trắng vào Mảng cực kỳ an toàn
-        if (( TOTAL_CORES == 1 )); then OPT_TRANSFERS=1; fi
-    fi
-
-    # =============================================================
-    # HÀM UPLOAD GIAO DIỆN CHUẨN UX (KẾT HỢP PV + RCAT + AUTO CLEAN)
-    # =============================================================
-    function wptt_upload_luy_tien_ux() {
-        local src_file="$1"
-        local dest_dir="$2"
-        local file_type="$3"
-        local fname
-        fname=$(basename "$src_file")
-
-        if [[ "$ggdriver" == "1998" ]]; then
-            # 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
-            $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" >/dev/null 2>&1
-        else
-            if command -v pv &>/dev/null; then
-                local fsize
-                fsize=$(du -b "$src_file" | cut -f1)
-                # 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
-                pv -s "$fsize" -N "Upload $file_type" -p -t -e -r -b -w 90 "$src_file" | rclone rcat "$dest_dir/$fname" "${RCLONE_OPTS[@]}"
-                echo -en "\033[1A\033[2K\r"
-            else
-                # 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
-                rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" --progress --stats-one-line
-                echo -en "\033[1A\033[2K\r"
-            fi
-        fi
-    }
-
-    echo "" # Tạo một dòng trống cho giao diện thoáng đãng
-
-    # BẮT ĐẦU GÁN TÊN FILE & ĐẨY CLOUD O(1)
-    FILE_CORE="$NAME$times-wptt-luy-tien-tung-phan-core.zip"
-    
-    # 1. Đẩy Mã nguồn cốt lõi (Core)
-    wptt_upload_luy_tien_ux "/usr/local/backup-website/$NAME/$FILE_CORE" "wptangtoc:$CLOUD_DIR/$NAME" "Lõi Mã Nguồn"
-
-    # 2. Đẩy Thư mục Ảnh (Nếu có tạo file full mới tháng này)
-    if [[ $tao_file_dir_uploads_full = '1' ]]; then
-      wptt_upload_luy_tien_ux "/usr/local/backup-website/$NAME/$NAME-${date_thang_nam}-wptt-luy-tien-wp-uploads-dir.zip" "wptangtoc:$CLOUD_DIR/$NAME" "Thư Mục Ảnh"
-    fi
-
-    # 3. Đẩy Database
-    wptt_upload_luy_tien_ux "/usr/local/backup-website/$NAME/$FILE_DB" "wptangtoc:$CLOUD_DIR/$NAME" "Database"
-
-    # KIỂM TRA TỒN TẠI O(1) - KHÔNG QUÉT FULL THƯ MỤC CHẬM CHẠP
-    check_core=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME/$FILE_CORE" 2>/dev/null)
-    check_db=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME/$FILE_DB" 2>/dev/null)
-
-    if [[ -n "$check_core" || -n "$check_db" ]]; then
-      kiem_tra_xem_file_da_uploads="OK"
-      _rundone "File backup uploads $drive_name"
-      
-      #CHẠY NỀN LẤY DUNG LƯỢNG NGAY SAU KHI UPLOAD XONG
-  	  FILE_TEMP_CLOUD_SIZE=$(mktemp -p "/etc/wptt/tmp" wptt_rclone_XXXXXX.cnf)
-      ( rclone about wptangtoc: 2>/dev/null > "$FILE_TEMP_CLOUD_SIZE" ) &
-      PID_CLOUD_SIZE=$!
-
-    else
-      kiem_tra_xem_file_da_uploads=""
-      _runloi "File backup uploads $drive_name"
-    fi
-
-    if ! [[ "$ggdriver2" = "1998" || "$ggdriver2" = "12345" ]]; then
-      if [[ -n "$kiem_tra_xem_file_da_uploads" ]]; then
-        echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây $drive_name không?"
-        prompt="$nhap_lua_chon_cua_ban [1-2]: "
-        clearfile="n"
-        options=("$dong_y" "$khong_dong_y")
-        PS3="$prompt"
-        select opt in "${options[@]}"; do
-          case "$REPLY" in
-          1) clearfile="y"; break ;;
-          2) clearfile="n"; break ;;
-          *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
-          esac
-        done
+  if [[ "$tuanxacnhan" == "1" && "$tuanxacnhandb" == "1" ]]; then
+    if [[ "$ggdriver" != "1998" ]]; then
+      if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' ~/.config/rclone/rclone.conf 2>/dev/null; then
+        drive_name='OneDrive'
+      elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' ~/.config/rclone/rclone.conf 2>/dev/null; then
+        drive_name='S3 Storage'
+      else
+        drive_name='Google Drive'
       fi
+      echo "$ban_co_muon file backup uploads ${drive_name}?"
+
+      prompt="$nhap_lua_chon_cua_ban [1-2]: "
+      uploads="n"
+      options=("$dong_y" "$khong_dong_y")
+      PS3="$prompt"
+      select opt in "${options[@]}"; do
+        case "$REPLY" in
+        1) uploads="y"; break ;;
+        2) uploads="n"; break ;;
+        *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
+        esac
+      done
     fi
+    
+    if [[ "$uploads" = "y" || "$ggdriver" = "1998" ]]; then
 
-    if [[ "$clearfile" = "y" || "$ggdriver2" = "1998" ]]; then
-      _runing "$xoa file backup tại local"
+      _runing "File backup uploads $drive_name"
       
-      # TINH GỌN XÓA LOCAL XUỐNG 1 DÒNG DỄ NHÌN
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f \
-        "/usr/local/backup-website/${NAME:?}/$FILE_CORE" \
-        "/usr/local/backup-website/${NAME:?}/$FILE_DB"
+      # Xử lý Bucket Name S3
+      CLOUD_DIR="wptangtoc_ols_backup"
+      if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' /root/.config/rclone/rclone.conf 2>/dev/null; then
+        CLOUD_DIR="wptangtoc-ols-backup"
+      elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+        CLOUD_DIR="wptangtoc-ols-backup"
+      fi
 
+      # -------------------------------------------------------------
+      # BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE)
+      # -------------------------------------------------------------
+      TOTAL_CORES=$(nproc 2>/dev/null || echo 1)
+      TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+
+      if (( TOTAL_CORES <= 2 )) || (( TOTAL_RAM_MB <= 2048 )); then
+          OPT_TRANSFERS=2
+          OPT_CHUNK="32M"
+      else
+          OPT_TRANSFERS=4
+          OPT_CHUNK="64M"
+      fi
+
+      # 1. Khởi tạo mảng cấu hình tiêu chuẩn (Bung hết sức mạnh cho mọi Cloud)
+      RCLONE_OPTS=(
+          "--transfers=$OPT_TRANSFERS"
+          "--checkers=$OPT_TRANSFERS"
+          "--drive-chunk-size=$OPT_CHUNK" 
+          "--s3-upload-concurrency=$OPT_TRANSFERS"
+          "--contimeout" "60s"
+          "--timeout" "300s"
+          "--retries" "5"
+          "--log-level" "ERROR"
+      )
+
+      # 2. Phân tích loại Cloud và cấu hình hiện tại
+      RCLONE_CONF="/root/.config/rclone/rclone.conf"
+      is_google_drive="n"
+      has_custom_id="n"
+
+      if grep -q '^\[wptangtoc\]' "$RCLONE_CONF" 2>/dev/null; then
+          # Lấy chính xác tham số type của remote [wptangtoc]
+          cloud_type=$(grep -A 8 '^\[wptangtoc\]' "$RCLONE_CONF" | grep -E '^[[:space:]]*type[[:space:]]*=' | head -n 1 | awk -F'=' '{print $2}' | tr -d ' ')
+          
+          if [[ "$cloud_type" == "drive" ]]; then
+              is_google_drive="y"
+              # Nếu đúng là GDrive, soi tiếp xem có Client ID riêng không
+              if grep -A 8 '^\[wptangtoc\]' "$RCLONE_CONF" | grep -E -q '^[[:space:]]*client_id[[:space:]]*='; then
+                  has_custom_id="y"
+              fi
+          fi
+      fi
+
+      # 3.Chỉ áp dụng khi đúng là Google Drive VÀ xài API dùng chung
+      if [[ "$is_google_drive" == "y" && "$has_custom_id" == "n" ]]; then
+          RCLONE_OPTS+=(
+              "--tpslimit=5"
+              "--drive-pacer-min-sleep=10ms"
+          )
+      fi
+
+      if [[ "$ggdriver" == "1998" ]]; then
+          # 2. Nhồi thêm tham số có khoảng trắng vào Mảng cực kỳ an toàn
+          if (( TOTAL_CORES == 1 )); then OPT_TRANSFERS=1; fi
+      fi
+
+      # =============================================================
+      # HÀM UPLOAD GIAO DIỆN CHUẨN UX (KẾT HỢP PV + RCAT + AUTO CLEAN)
+      # =============================================================
+      function wptt_upload_luy_tien_ux() {
+          local src_file="$1"
+          local dest_dir="$2"
+          local file_type="$3"
+          local fname
+          fname=$(basename "$src_file")
+
+          if [[ "$ggdriver" == "1998" ]]; then
+              # 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
+              $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" >/dev/null 2>&1
+          else
+              if command -v pv &>/dev/null; then
+                  local fsize
+                  fsize=$(du -b "$src_file" | cut -f1)
+                  # 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
+                  pv -s "$fsize" -N "Upload $file_type" -p -t -e -r -b -w 90 "$src_file" | rclone rcat "$dest_dir/$fname" "${RCLONE_OPTS[@]}"
+                  echo -en "\033[1A\033[2K\r"
+              else
+                  # 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
+                  rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" --progress --stats-one-line
+                  echo -en "\033[1A\033[2K\r"
+              fi
+          fi
+      }
+
+      echo "" # Tạo một dòng trống cho giao diện thoáng đãng
+
+      # BẮT ĐẦU GÁN TÊN FILE & ĐẨY CLOUD O(1)
+      FILE_CORE="$NAME$times-wptt-luy-tien-tung-phan-core.zip"
+      
+      # 1. Đẩy Mã nguồn cốt lõi (Core)
+      wptt_upload_luy_tien_ux "/usr/local/backup-website/$NAME/$FILE_CORE" "wptangtoc:$CLOUD_DIR/$NAME" "Lõi Mã Nguồn"
+
+      # 2. Đẩy Thư mục Ảnh (Nếu có tạo file full mới tháng này)
       if [[ $tao_file_dir_uploads_full = '1' ]]; then
-        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f "/usr/local/backup-website/${NAME:?}/${NAME:?}-${date_thang_nam:?}-wptt-luy-tien-wp-uploads-dir.zip"
+        wptt_upload_luy_tien_ux "/usr/local/backup-website/$NAME/$NAME-${date_thang_nam}-wptt-luy-tien-wp-uploads-dir.zip" "wptangtoc:$CLOUD_DIR/$NAME" "Thư Mục Ảnh"
       fi
-      
-      _rundone "$xoa file backup tại local"
-    fi
 
+      # 3. Đẩy Database
+      wptt_upload_luy_tien_ux "/usr/local/backup-website/$NAME/$FILE_DB" "wptangtoc:$CLOUD_DIR/$NAME" "Database"
+
+      # KIỂM TRA TỒN TẠI O(1) - KHÔNG QUÉT FULL THƯ MỤC CHẬM CHẠP
+      check_core=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME/$FILE_CORE" 2>/dev/null)
+      check_db=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME/$FILE_DB" 2>/dev/null)
+
+      if [[ -n "$check_core" || -n "$check_db" ]]; then
+        kiem_tra_xem_file_da_uploads="OK"
+        _rundone "File backup uploads $drive_name"
+        
+        #CHẠY NỀN LẤY DUNG LƯỢNG NGAY SAU KHI UPLOAD XONG
+        FILE_TEMP_CLOUD_SIZE=$(mktemp -p "/etc/wptt/tmp" wptt_rclone_XXXXXX.cnf)
+        ( rclone about wptangtoc: 2>/dev/null > "$FILE_TEMP_CLOUD_SIZE" ) &
+        PID_CLOUD_SIZE=$!
+
+      else
+        kiem_tra_xem_file_da_uploads=""
+        _runloi "File backup uploads $drive_name"
+      fi
+
+      if ! [[ "$ggdriver2" = "1998" || "$ggdriver2" = "12345" ]]; then
+        if [[ -n "$kiem_tra_xem_file_da_uploads" ]]; then
+          echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây $drive_name không?"
+          prompt="$nhap_lua_chon_cua_ban [1-2]: "
+          clearfile="n"
+          options=("$dong_y" "$khong_dong_y")
+          PS3="$prompt"
+          select opt in "${options[@]}"; do
+            case "$REPLY" in
+            1) clearfile="y"; break ;;
+            2) clearfile="n"; break ;;
+            *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
+            esac
+          done
+        fi
+      fi
+
+      if [[ "$clearfile" = "y" || "$ggdriver2" = "1998" ]]; then
+        _runing "$xoa file backup tại local"
+        
+        # TINH GỌN XÓA LOCAL XUỐNG 1 DÒNG DỄ NHÌN
+        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f \
+          "/usr/local/backup-website/${NAME:?}/$FILE_CORE" \
+          "/usr/local/backup-website/${NAME:?}/$FILE_DB"
+
+        if [[ $tao_file_dir_uploads_full = '1' ]]; then
+          $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rm -f "/usr/local/backup-website/${NAME:?}/${NAME:?}-${date_thang_nam:?}-wptt-luy-tien-wp-uploads-dir.zip"
+        fi
+        
+        _rundone "$xoa file backup tại local"
+      fi
+    fi
+  else
+    echo -e "\n${C_YELLOW}Sao lưu thất bại hoặc bị hủy. Bỏ qua tiến trình Upload lên Cloud!${C_RESET}"
   fi
 fi
 
@@ -640,6 +693,12 @@ if [[ "$uploads" = "y" || "$ggdriver" = "1998" ]]; then
   
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 fi
+
+# 1. Báo cho Kernel mở khóa đồng bộ và chờ xác nhận (Synchronous)
+flock -u 200
+# 2. Đóng File Descriptor
+exec 200>&-
+rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME:?}.lock" 2>/dev/null
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
