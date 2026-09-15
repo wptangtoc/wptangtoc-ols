@@ -3,12 +3,17 @@
 # @website: https://wptangtoc.com
 # @since: 2026
 
-# BẢO ĐẢM MÔI TRƯỜNG CRON HOẠT ĐỘNG CHUẨN 100%
 export HOME=/root
 export PATH="/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
 
 NAME=$1
 so_ban=$2
+
+## Ngăn chặn thảm họa xóa sạch dữ liệu nếu biến $so_ban bị lỗi, rỗng hoặc là chữ
+if [[ ! "$so_ban" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Lỗi: Số lượng bản backup cần giữ ($so_ban) không hợp lệ! Bắt buộc phải là số nguyên dương."
+    exit 1
+fi
 
 # ==============================================================================
 # HÀM XÓA FILE TẠI LOCAL (GIỮ LẠI SỐ BẢN MỚI NHẤT)
@@ -20,31 +25,30 @@ xoa_backup_cu() {
   # Nếu thư mục không tồn tại thì bỏ qua
   [[ ! -d "$backup_dir" ]] && return
   
-  # Dùng ls -t để lấy danh sách file, sắp xếp theo thời gian (mới nhất nằm trên cùng)
-  local all_files=$(ls -t "$backup_dir" 2>/dev/null)
+  local source_files=()
+  local db_files=()
+
+	# Dùng ls -t để lấy danh sách file, sắp xếp theo thời gian (mới nhất nằm trên cùng)
+  mapfile -t source_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(zip|tar\.gz|tar\.zst)$')
+  mapfile -t db_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(sql|sql\.gz|sql\.zst)$')
   
-  # Tách mảng Mã nguồn và Database y hệt như Cloud
-  local source_files=($(echo "$all_files" | grep -E '\.(zip|tar\.gz|tar\.zst)$'))
-  local db_files=($(echo "$all_files" | grep -E '\.(sql|sql\.gz|sql\.zst)$'))
+  # Nếu cả array Mã nguồn và Database đều chưa vượt quá số bản quy định (hoặc rỗng),
+  # lập tức Thoát sớm tránh rủi ro
+  if [[ ${#source_files[@]} -le $so_ban && ${#db_files[@]} -le $so_ban ]]; then
+      return
+  fi
   
-  local files_to_delete=()
-  
-  # Chém mảng: Bỏ qua $so_ban đầu tiên, lấy phần còn lại tống vào danh sách xóa
   if [[ ${#source_files[@]} -gt $so_ban ]]; then
-    files_to_delete+=("${source_files[@]:$so_ban}")
+    for file in "${source_files[@]:$so_ban}"; do
+      [[ -n "$file" ]] && ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
+    done
   fi
   
   if [[ ${#db_files[@]} -gt $so_ban ]]; then
-    files_to_delete+=("${db_files[@]:$so_ban}")
+    for file in "${db_files[@]:$so_ban}"; do
+      [[ -n "$file" ]] && ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
+    done
   fi
-  
-  # Thực thi trảm file cũ
-  for file in "${files_to_delete[@]}"; do
-    if [[ -n "$file" ]]; then
-      # Ép lệnh nice và ionice để thao tác xóa không làm nghẽn I/O ổ cứng của các website đang chạy
-      ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
-    fi
-  done
 }
 
 # ==============================================================================
