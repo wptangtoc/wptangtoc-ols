@@ -100,17 +100,29 @@ wp_config_path="$path/wp-config.php"
 # Gỡ bỏ chattr nếu đang lock_down
 [[ $lock_down ]] && chattr -i "$wp_config_path"
 
+# KIỂM TRA LỚP 1: Đảm bảo wp-config.php có quyền ghi trước khi thao tác
+if [[ ! -w "$wp_config_path" ]]; then
+  echo -en "\033[1A\033[2K\r"
+  _runloi "Lỗi: File wp-config.php không có quyền ghi. Không thể thay đổi salt!"
+  [[ $lock_down ]] && chattr +i "$wp_config_path"
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  return 1 2>/dev/null || exit 1
+fi
+
 . /etc/wptt/php/php-cli-domain-config "$NAME"
 
 # FIX LỖI Ở ĐÂY: Khai báo WP_EXEC dưới dạng Mảng (Array) để tương thích với "${WP_EXEC[@]}"
 WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
 
-# 1. Shuffle Salts mặc định
-"${WP_EXEC[@]}" config shuffle-salts --path="$path" --allow-root >/dev/null 2>&1
+# KIỂM TRA LỚP 2: Bắt lỗi trực tiếp từ tiến trình WP-CLI khi Shuffle Salts
+if ! "${WP_EXEC[@]}" config shuffle-salts --path="$path" >/dev/null 2>&1; then
+  _runloi "Lỗi WP-CLI: Cập nhật salt thất bại (Kiểm tra lại cú pháp wp-config.php)"
+  [[ $lock_down ]] && chattr +i "$wp_config_path"
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  return 1 2>/dev/null || exit 1
+fi
 
-# 2. Xử lý WP_CACHE_KEY_SALT (Đảm bảo chỉ tồn tại 1 dòng duy nhất)
-"${WP_EXEC[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force --path="$path" --allow-root >/dev/null 2>&1
-
+# Xử lý WP_CACHE_KEY_SALT (Đảm bảo chỉ tồn tại 1 dòng duy nhất)
 # Xóa các dòng trùng lặp nếu có
 for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "$wp_config_path" | head -n -1 | cut -d: -f1 | tac); do
   sed -i "${line_num}d" "$wp_config_path"
@@ -120,13 +132,26 @@ done
 if ! grep -q "WP_CACHE_KEY_SALT" "$wp_config_path"; then
   # Tối ưu dùng Regex chèn an toàn tránh lỗi extra characters
   sed -i "s|^define( 'NONCE_SALT'.*|&\ndefine( 'WP_CACHE_KEY_SALT', '$NAME' );|" "$wp_config_path"
-  "${WP_EXEC[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force --path="$path" --allow-root >/dev/null 2>&1
 fi
 
-#xoá opcache cache
+if ! "${WP_EXEC[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force --path="$path" >/dev/null 2>&1; then
+  _runloi "Lỗi WP-CLI: Không thể thay đổi WP_CACHE_KEY_SALT"
+  [[ $lock_down ]] && chattr +i "$wp_config_path"
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  return 1 2>/dev/null || exit 1
+fi
+
+# KIỂM TRA LỚP 3: Sanity check - Đảm bảo file cấu hình không bị hỏng sau khi xử lý
+if ! grep -q "AUTH_KEY" "$wp_config_path"; then
+  _runloi "Lỗi Nghiêm Trọng: Cấu trúc Salt trong wp-config.php bị hỏng!"
+  [[ $lock_down ]] && chattr +i "$wp_config_path"
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  return 1 2>/dev/null || exit 1
+fi
+
+# Xóa opcache cache
 . /etc/wptt/cache/lib-opcache-clear
 wptt_xoa_opcache "$NAME"
-#xoá opcache cache
 
 # Đóng giáp chattr lại
 [[ $lock_down ]] && chattr +i "$wp_config_path"
