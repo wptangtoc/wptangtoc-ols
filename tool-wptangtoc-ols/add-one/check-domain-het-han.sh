@@ -82,7 +82,7 @@ mapfile -t ROOT_DOMAINS < <(printf "%s\n" "${DOMAINS[@]}" | awk -F. '{OFS="."; p
 
 for domain in "${ROOT_DOMAINS[@]}"; do
   # Vá lỗi SC2086: Bọc ngoặc kép cho $domain
-  whois_data=$(/usr/bin/whois "$domain" 2>/dev/null)
+  whois_data=$(timeout 15 /usr/bin/whois "$domain" 2>/dev/null)
 
   expiry_date=$(echo "$whois_data" | grep -E -i "Expiry Date:|Expiration Date:|paid-till" | head -n 1 | awk '{print $NF}')
   # Dự phòng
