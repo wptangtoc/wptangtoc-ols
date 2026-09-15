@@ -9,6 +9,13 @@ export PATH="/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin
 
 NAME=$1
 so_ban=$2
+
+# Ngăn chặn thảm họa xóa sạch dữ liệu Cloud nếu biến $so_ban bị lỗi, rỗng hoặc là chữ
+if [[ ! "$so_ban" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Lỗi: Số lượng bản backup cần giữ ($so_ban) không hợp lệ! Bắt buộc phải là số nguyên dương."
+  exit 1
+fi
+
 RCLONE_CONF="/root/.config/rclone/rclone.conf"
 
 # Kiểm tra trạng thái kích hoạt Cloud
@@ -53,33 +60,45 @@ xoa_backup_cu() {
   # Format rclone lsl: size date time filename => Dùng awk '{print $NF}' để hốt tên file
   local all_files=$(rclone lsl "wptangtoc:$CLOUD_DIR/$domain" 2>/dev/null | sort -r -k2,3 | awk '{print $NF}')
   
-  # Tách thành 2 mảng: Mã nguồn và Database để đảm bảo giữ đủ số lượng cho từng loại
-  local source_files=($(echo "$all_files" | grep -E '\.(zip|tar\.gz|tar\.zst)$')) #quét file mã nguồn
-  local db_files=($(echo "$all_files" | grep -E '\.(sql|sql\.gz|sql\.zst)$')) #quét file database
+  # Nếu thư mục rỗng, thoát sớm để tránh chạy lệnh mapfile vô ích
+  [[ -z "$all_files" ]] && return
   
-  local files_to_delete=()
+  local source_files=()
+  local db_files=()
   
-  # Nếu số file Mã nguồn lớn hơn số bản quy định, từ vị trí $so_ban trở đi để xoá
-  if [[ ${#source_files[@]} -gt $so_ban ]]; then
-    files_to_delete+=("${source_files[@]:$so_ban}")
-  fi
+  # Tách thành 2 mảng bằng mapfile siêu tốc
+  mapfile -t source_files < <(echo "$all_files" | grep -E '\.(zip|tar\.gz|tar\.zst)$')
+  mapfile -t db_files < <(echo "$all_files" | grep -E '\.(sql|sql\.gz|sql\.zst)$')
   
-  # Tương tự với Database
-  if [[ ${#db_files[@]} -gt $so_ban ]]; then
-    files_to_delete+=("${db_files[@]:$so_ban}")
+  # Thoát sớm giải phóng I/O và API nếu chưa vượt mốc $so_ban
+  if [[ ${#source_files[@]} -le $so_ban && ${#db_files[@]} -le $so_ban ]]; then
+      return
   fi
   
   # Duyệt danh sách "tử ngục" và bóp cò
-  for file in "${files_to_delete[@]}"; do
-    if [[ -n "$file" ]]; then
-      # Truyền linh hoạt các cờ xóa (flags) tùy thuộc vào từng nền tảng Cloud
-      if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
-        rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain/$file"
-      else
-        rclone -v delete "wptangtoc:$CLOUD_DIR/$domain/$file"
+  if [[ ${#source_files[@]} -gt $so_ban ]]; then
+    for file in "${source_files[@]:$so_ban}"; do
+      if [[ -n "$file" ]]; then
+        if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
+          rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain/$file"
+        else
+          rclone -v delete "wptangtoc:$CLOUD_DIR/$domain/$file"
+        fi
       fi
-    fi
-  done
+    done
+  fi
+  
+  if [[ ${#db_files[@]} -gt $so_ban ]]; then
+    for file in "${db_files[@]:$so_ban}"; do
+      if [[ -n "$file" ]]; then
+        if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
+          rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain/$file"
+        else
+          rclone -v delete "wptangtoc:$CLOUD_DIR/$domain/$file"
+        fi
+      fi
+    done
+  fi
 }
 
 # ==============================================================================
@@ -99,12 +118,12 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
     fi
     if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
 
-		# CƠ CHẾ KẾ THỪA ƯU TIÊN (PRIORITY OVERRIDE) CLOUD
-		NAME_CRON=${domain//[.]/_} #ubuntu nó không cho dấu . tuơng thích
-		if [[ -f "/etc/cron.d/delete-google-driver-$domain.cron" || -f "/etc/cron.d/delete_gdrive_${NAME_CRON}" ]]; then
-			# Phát hiện website đã có cấu hình riêng -> Bỏ qua, không áp dụng luật "Tất cả", nguyên tắc giá trị riêng lẻ đè giá trị toàn cục
-			continue
-		fi
+        # CƠ CHẾ KẾ THỪA ƯU TIÊN (PRIORITY OVERRIDE) CLOUD
+        NAME_CRON=${domain//[.]/_} #ubuntu nó không cho dấu . tuơng thích
+        if [[ -f "/etc/cron.d/delete-google-driver-$domain.cron" || -f "/etc/cron.d/delete_gdrive_${NAME_CRON}" ]]; then
+            # Phát hiện website đã có cấu hình riêng -> Bỏ qua, không áp dụng luật "Tất cả", nguyên tắc giá trị riêng lẻ đè giá trị toàn cục
+            continue
+        fi
 
       xoa_backup_cu "$domain"
     fi
