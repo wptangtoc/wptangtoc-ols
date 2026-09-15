@@ -51,22 +51,22 @@ if rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
 fi
 
 # ==============================================================================
-# HÀM XÓA FILE (GIỮ LẠI SỐ BẢN MỚI NHẤT)
+# HÀM XÓA FILE (BULK DELETE CHỐNG DỘI BOM API)
 # ==============================================================================
 xoa_backup_cu() {
   local domain="$1"
   
   # Lấy toàn bộ file, sắp xếp theo thời gian sửa đổi (Mới nhất nằm trên cùng)
-  # Format rclone lsl: size date time filename => Dùng awk '{print $NF}' để hốt tên file
   local all_files=$(rclone lsl "wptangtoc:$CLOUD_DIR/$domain" 2>/dev/null | sort -r -k2,3 | awk '{print $NF}')
   
-  # Nếu thư mục rỗng, thoát sớm để tránh chạy lệnh mapfile vô ích
+  # Nếu thư mục rỗng, thoát sớm
   [[ -z "$all_files" ]] && return
   
   local source_files=()
   local db_files=()
+  local files_to_delete=()
   
-  # Tách thành 2 mảng bằng mapfile siêu tốc
+  # Tách thành 2 mảng bằng mapfile
   mapfile -t source_files < <(echo "$all_files" | grep -E '\.(zip|tar\.gz|tar\.zst)$')
   mapfile -t db_files < <(echo "$all_files" | grep -E '\.(sql|sql\.gz|sql\.zst)$')
   
@@ -75,29 +75,32 @@ xoa_backup_cu() {
       return
   fi
   
-  # Duyệt danh sách "tử ngục" và bóp cò
+  # Gom tất cả "tử tù" vào một danh sách chung
   if [[ ${#source_files[@]} -gt $so_ban ]]; then
-    for file in "${source_files[@]:$so_ban}"; do
-      if [[ -n "$file" ]]; then
-        if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
-          rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain/$file"
-        else
-          rclone -v delete "wptangtoc:$CLOUD_DIR/$domain/$file"
-        fi
-      fi
-    done
+    files_to_delete+=("${source_files[@]:$so_ban}")
   fi
   
   if [[ ${#db_files[@]} -gt $so_ban ]]; then
-    for file in "${db_files[@]:$so_ban}"; do
-      if [[ -n "$file" ]]; then
-        if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
-          rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain/$file"
-        else
-          rclone -v delete "wptangtoc:$CLOUD_DIR/$domain/$file"
-        fi
-      fi
-    done
+    files_to_delete+=("${db_files[@]:$so_ban}")
+  fi
+  
+  # THỰC THI BULK DELETE QUA 1 REQUEST DUY NHẤT
+  if [[ ${#files_to_delete[@]} -gt 0 ]]; then
+		local tmp_delete_list
+		tmp_delete_list=$(mktemp -p "/etc/wptt/tmp" delete_list_"${domain}"_XXXXXX.txt)
+    
+    # Ghi toàn bộ tên file cần xóa vào file temp
+    printf "%s\n" "${files_to_delete[@]}" > "$tmp_delete_list"
+    
+    # --files-from (Chỉ tốn đúng 1 nhịp gọi API), call 1 lần xóa nhiều file thay vì xóa từng file nó dễ bị limit API
+    if [[ ${#DELETE_FLAGS[@]} -gt 0 ]]; then
+      rclone -v "${DELETE_FLAGS[@]}" delete "wptangtoc:$CLOUD_DIR/$domain" --files-from "$tmp_delete_list"
+    else
+      rclone -v delete "wptangtoc:$CLOUD_DIR/$domain" --files-from "$tmp_delete_list"
+    fi
+    
+    # Dọn rác file temp[cite: 1]
+    rm -f "$tmp_delete_list"
   fi
 }
 
