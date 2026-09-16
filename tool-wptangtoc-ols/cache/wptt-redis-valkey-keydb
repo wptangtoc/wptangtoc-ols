@@ -82,24 +82,12 @@ function in_thong_tin_acl_cho_khach() {
         
         # Mở khóa +flushdb cho plugin
         if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
-					# =========================================================================
-					# ACL SCOPE DÙNG CHUNG (sửa 1 chỗ, áp dụng cho cả 2 nhánh gọi ACL SETUSER)
-					# =========================================================================
-					# +flushdb: giữ nguyên theo yêu cầu, vì LiteSpeed Cache / WP-CLI gọi FLUSHDB
-					#           (chỉ xoá DB hiện tại) khi purge object cache -> bắt buộc phải mở.
-					# -flushall: vẫn chặn, vì FLUSHALL xoá toàn bộ 16 DB cùng lúc, ảnh hưởng
-					#            mọi website khác trên cùng server.
-					# Nhóm lệnh admin/RCE chặn thêm (không liên quan gì tới cache purge của WP,
-					# nên chặn không phá chức năng, chỉ bịt đường leo thang từ 1 site bị hack):
-					#   -config      : chặn CONFIG SET dir/dbfilename + SAVE -> ghi webshell ra đĩa
-					#   -module      : chặn MODULE LOAD -> nạp .so độc hại
-					#   -replicaof -slaveof : chặn kỹ thuật RCE qua giả lập master-slave
-					#   -acl         : chặn tự tạo thêm tài khoản ACL backdoor khác
-					#   -shutdown -client : chặn DoS toàn server / kick client khác
-					#   -save -bgsave -debug -monitor -swapdb : chặn các lệnh admin nguy hiểm khác
-					ACL_RULES_COMMON=( +@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -client -save -bgsave -debug -monitor -swapdb )
-					$cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
-            # $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" +@all -flushall +flushdb >/dev/null 2>&1
+          # [BẢN VÁ]: Đã xóa -client ra khỏi list để LSCache không bị Failed
+          ACL_RULES_COMMON=( +@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb )
+          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
+          
+          # Khóa cứng User xuống ổ cứng (Chống mất Cache khi Restart)
+          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
         fi
         pass_show="$raw_pass"
     else
@@ -120,7 +108,10 @@ function in_thong_tin_acl_cho_khach() {
 
         # Cập nhật lại quyền +flushdb
         if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
-            $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$pass_show" "~*" +@all -flushall +flushdb >/dev/null 2>&1
+          ACL_RULES_COMMON=( +@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb )
+          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$pass_show" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
+          
+          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
         fi
     fi
 
@@ -128,7 +119,7 @@ function in_thong_tin_acl_cho_khach() {
       left_text "Website: ${C_GREEN}$domain${C_RESET}" 2
       left_text "   - Username    : ${C_BOLD_WHITE}$redis_acl_user${C_RESET}" 2
       left_text "   - Password    : ${C_YELLOW}$pass_show${C_RESET}" 2
-			left_text "   - Database ID : ${C_CYAN}${redis_db_id}${C_RESET}" 2
+      left_text "   - Database ID : ${C_CYAN}${redis_db_id}${C_RESET}" 2
       echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
       found=1
     fi
@@ -142,8 +133,25 @@ function in_thong_tin_acl_cho_khach() {
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
     echo -e "\n${C_GREEN}HƯỚNG DẪN ĐIỀN VÀO LITESPEED CACHE / WP-REDIS:${C_RESET}"
     echo -e "1. Bật Object Cache: ${C_YELLOW}ON${C_RESET} | Method: ${C_YELLOW}Redis${C_RESET}"
-    echo -e "2. Host: ${C_YELLOW}$socket_path${C_RESET} | Port: ${C_YELLOW}0${C_RESET}"
+    echo -e "2. Host: ${C_YELLOW}unix://$socket_path${C_RESET} | Port: ${C_YELLOW}0${C_RESET}"
     echo -e "3. Copy Username/Password và điền đúng số ID Database ở trên."
+  fi
+
+  # =========================================================================
+  # BOX THÔNG TIN MASTER KEY CHO ADMIN
+  # =========================================================================
+  if [[ -n "$raw_master_pass" ]]; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}🔑 THÔNG TIN QUẢN TRỊ MASTER KEY (CHỈ DÀNH CHO ADMIN)${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Mật khẩu gốc (Master Password) của hệ thống Object Cache:" 2
+    center_text "${C_YELLOW}$raw_master_pass${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  ${C_YELLOW}⚠️ CẢNH BÁO BẢO MẬT:${C_RESET}" 2
+    left_text "  - Tuyệt đối KHÔNG lấy Master Key này điền vào plugin Website." 2
+    left_text "  - Chỉ sử dụng để Debug hoặc bảo trì hệ thống qua dòng lệnh Terminal." 2
+    left_text "    (VD: valkey-cli -s $socket_path -a \"Master_Key\" PING)" 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   fi
 }
 
@@ -261,6 +269,12 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
         REDIS_MASTER_PASS="$master_pass_encrypted"
     fi
     dec_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
+
+    # KHỞI TẠO FILE LƯU TRỮ ACL ĐỂ TRÁNH MẤT USER KHI RESTART
+    mkdir -p "/etc/$name_service"
+    touch "/etc/$name_service/users.acl"
+    chown -hR "$name_service":"$name_service" "/etc/$name_service/users.acl" 2>/dev/null
+    chmod 600 "/etc/$name_service/users.acl"
     
     # [TỐI ƯU CÔ LẬP]: Bơm databases 1000 để mở rộng quỹ đất lưu trữ riêng biệt
     echo -e "\n# WPTangToc Optimize
@@ -268,6 +282,7 @@ port 0
 unixsocket /var/run/$name_service/$name_service.sock
 unixsocketperm 777
 requirepass \"$dec_master_pass\"
+aclfile /etc/$name_service/users.acl
 maxmemory 128mb
 maxmemory-policy allkeys-lfu
 databases 1000
