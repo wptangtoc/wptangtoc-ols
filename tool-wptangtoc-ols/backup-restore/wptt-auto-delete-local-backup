@@ -15,6 +15,9 @@ if [[ ! "$so_ban" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
+# Biến cờ theo dõi: Bắt đầu với 0 (Chưa có gì bị xóa)
+HAS_DELETED_FILES=0
+
 # ==============================================================================
 # HÀM XÓA FILE TẠI LOCAL (GIỮ LẠI SỐ BẢN MỚI NHẤT)
 # ==============================================================================
@@ -28,7 +31,7 @@ xoa_backup_cu() {
   local source_files=()
   local db_files=()
 
-	# Dùng ls -t để lấy danh sách file, sắp xếp theo thời gian (mới nhất nằm trên cùng)
+  # Dùng ls -t để lấy danh sách file, sắp xếp theo thời gian (mới nhất nằm trên cùng)
   mapfile -t source_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(zip|tar\.gz|tar\.zst)$')
   mapfile -t db_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(sql|sql\.gz|sql\.zst)$')
   
@@ -40,13 +43,19 @@ xoa_backup_cu() {
   
   if [[ ${#source_files[@]} -gt $so_ban ]]; then
     for file in "${source_files[@]:$so_ban}"; do
-      [[ -n "$file" ]] && ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
+      if [[ -n "$file" ]]; then
+        ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
+        HAS_DELETED_FILES=1 # Xác nhận đã có rác xả ra
+      fi
     done
   fi
   
   if [[ ${#db_files[@]} -gt $so_ban ]]; then
     for file in "${db_files[@]:$so_ban}"; do
-      [[ -n "$file" ]] && ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
+      if [[ -n "$file" ]]; then
+        ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
+        HAS_DELETED_FILES=1 # Xác nhận đã có rác xả ra
+      fi
     done
   fi
 }
@@ -66,15 +75,23 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
       continue
     fi
     if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
-		NAME_CRON=${domain//[.]/_}
-		if [[ -f "/etc/cron.d/delete$domain.cron" || -f "/etc/cron.d/delete_local_${NAME_CRON}" ]]; then
-			# Phát hiện website đã có cấu hình riêng -> Bỏ qua, không áp dụng luật "Tất cả", nguyên tắc giá trị riêng lẻ đè giá trị toàn cục
-			continue
-		fi
+        NAME_CRON=${domain//[.]/_}
+        if [[ -f "/etc/cron.d/delete$domain.cron" || -f "/etc/cron.d/delete_local_${NAME_CRON}" ]]; then
+            # Phát hiện website đã có cấu hình riêng -> Bỏ qua, không áp dụng luật "Tất cả"
+            continue
+        fi
       xoa_backup_cu "$domain"
     fi
   done
 else
   # Chỉ thực thi 1 website cụ thể
   xoa_backup_cu "$NAME"
+fi
+
+# ==============================================================================
+# TỐI ƯU HÓA Ổ CỨNG SSD (FSTRIM) CHỈ KHI CÓ FILE BỊ XÓA
+# ==============================================================================
+if [[ $HAS_DELETED_FILES -eq 1 ]]; then
+	flock -n /etc/wptt/tmp/wptt_fstrim.lock -c "ionice -c 3 nice -n 19 fstrim -a >/dev/null 2>&1"
+	# ionice -c 3 nice -n 19 fstrim -a >/dev/null 2>&1
 fi
