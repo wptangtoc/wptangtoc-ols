@@ -15,83 +15,70 @@ if [[ ! "$so_ban" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
-# Biến cờ theo dõi: Bắt đầu với 0 (Chưa có gì bị xóa)
-HAS_DELETED_FILES=0
-
 # ==============================================================================
-# HÀM XÓA FILE TẠI LOCAL (GIỮ LẠI SỐ BẢN MỚI NHẤT)
+# HÀM XÓA FILE TẠI LOCAL (TỐI ƯU HÓA HIỆU NĂNG BATCH DELETE)
 # ==============================================================================
 xoa_backup_cu() {
-  local domain="$1"
-  local backup_dir="/usr/local/backup-website/$domain"
+    local domain="$1"
+    local backup_dir="/usr/local/backup-website/$domain"
   
-  # Nếu thư mục không tồn tại thì bỏ qua
-  [[ ! -d "$backup_dir" ]] && return
+    # Nếu thư mục không tồn tại thì thoát ngay để đỡ tốn nhịp CPU
+    [[ ! -d "$backup_dir" ]] && return
   
-  local source_files=()
-  local db_files=()
+    local source_files=() db_files=() files_to_delete=()
 
-  # Dùng ls -t để lấy danh sách file, sắp xếp theo thời gian (mới nhất nằm trên cùng)
-  mapfile -t source_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(zip|tar\.gz|tar\.zst)$')
-  mapfile -t db_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(sql|sql\.gz|sql\.zst)$')
+    # Thu thập mảng file (mới nhất -> cũ nhất)
+    mapfile -t source_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(zip|tar\.gz|tar\.zst)$')
+    mapfile -t db_files < <(ls -t "$backup_dir" 2>/dev/null | grep -E '\.(sql|sql\.gz|sql\.zst)$')
   
-  # Nếu cả array Mã nguồn và Database đều chưa vượt quá số bản quy định (hoặc rỗng),
-  # lập tức Thoát sớm tránh rủi ro
-  if [[ ${#source_files[@]} -le $so_ban && ${#db_files[@]} -le $so_ban ]]; then
-      return
-  fi
+    # 1. Cắt lấy danh sách các file CŨ HƠN số bản quy định (nếu có)
+    if [[ ${#source_files[@]} -gt $so_ban ]]; then
+        files_to_delete+=( "${source_files[@]:$so_ban}" )
+    fi
   
-  if [[ ${#source_files[@]} -gt $so_ban ]]; then
-    for file in "${source_files[@]:$so_ban}"; do
-      if [[ -n "$file" ]]; then
-        ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
-        HAS_DELETED_FILES=1 # Xác nhận đã có rác xả ra
-      fi
-    done
-  fi
-  
-  if [[ ${#db_files[@]} -gt $so_ban ]]; then
-    for file in "${db_files[@]:$so_ban}"; do
-      if [[ -n "$file" ]]; then
-        ionice -c 3 nice -n 19 rm -f "$backup_dir/$file"
-        HAS_DELETED_FILES=1 # Xác nhận đã có rác xả ra
-      fi
-    done
-  fi
+    if [[ ${#db_files[@]} -gt $so_ban ]]; then
+        files_to_delete+=( "${db_files[@]:$so_ban}" )
+    fi
+
+    # 2. XÓA GOM LÔ (BATCHING) - CHỈ CHẠY RM 1 LẦN DUY NHẤT
+    if [[ ${#files_to_delete[@]} -gt 0 ]]; then
+        # Tuyệt kỹ Bash: Nối thẳng chuỗi đường dẫn tuyệt đối vào đầu mọi phần tử của mảng 
+        # (Không cần for, không subshell, chạy bằng tốc độ gốc của Bash)
+        local delete_paths=( "${files_to_delete[@]/#/$backup_dir/}" )
+        
+        # Bắn 1 lệnh rm duy nhất nuốt trọn toàn bộ danh sách file
+        ionice -c 3 nice -n 19 rm -f "${delete_paths[@]}"
+    fi
 }
 
 # ==============================================================================
 # THỰC THI CHÍNH
 # ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
-  # Quét toàn bộ vhost nếu chọn All
-  for filepath in /etc/wptt/vhost/.*.conf; do
-    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-    domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
+    # Quét toàn bộ vhost
+    for filepath in /etc/wptt/vhost/.*.conf; do
+        [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+        
+        # Tách tên domain (Dùng built-in của Bash cực nhẹ)
+        domain="${filepath##*/}"
+        domain="${domain%.conf}"
+        domain="${domain#.}"
 
-    if [[ "$domain" != ?*.?* ]]; then
-      continue
-    fi
-    if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
-        NAME_CRON=${domain//[.]/_}
-        if [[ -f "/etc/cron.d/delete$domain.cron" || -f "/etc/cron.d/delete_local_${NAME_CRON}" ]]; then
-            # Phát hiện website đã có cấu hình riêng -> Bỏ qua, không áp dụng luật "Tất cả"
+        # Kiểm tra chuẩn domain (có chứa dấu chấm)
+        if [[ "$domain" != *.* ]]; then
             continue
         fi
-      xoa_backup_cu "$domain"
-    fi
-  done
+        
+        if [[ "$domain" != "${domain/./}" ]] && [[ "$domain" != '.' ]]; then
+            NAME_CRON=${domain//[.]/_}
+            if [[ -f "/etc/cron.d/delete$domain.cron" || -f "/etc/cron.d/delete_local_${NAME_CRON}" ]]; then
+                # Ưu tiên cấu hình riêng lẻ -> bỏ qua
+                continue
+            fi
+            xoa_backup_cu "$domain"
+        fi
+    done
 else
-  # Chỉ thực thi 1 website cụ thể
-  xoa_backup_cu "$NAME"
-fi
-
-# ==============================================================================
-# TỐI ƯU HÓA Ổ CỨNG SSD (FSTRIM) CHỈ KHI CÓ FILE BỊ XÓA
-# ==============================================================================
-if [[ $HAS_DELETED_FILES -eq 1 ]]; then
-	flock -n /etc/wptt/tmp/wptt_fstrim.lock -c "ionice -c 3 nice -n 19 fstrim -a >/dev/null 2>&1"
-	# ionice -c 3 nice -n 19 fstrim -a >/dev/null 2>&1
+    # Chỉ thực thi 1 website cụ thể
+    xoa_backup_cu "$NAME"
 fi
