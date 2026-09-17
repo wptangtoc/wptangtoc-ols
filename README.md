@@ -2,9 +2,10 @@
     <h1>WPTangToc OLS</h1>
     <p><b>Giải pháp Thiết lập & Quản trị Webserver Miễn phí, Siêu tốc độ, Dành riêng cho WordPress</b></p>
     <p>
-        <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3">
-        <img src="https://img.shields.io/badge/Optimized%20for-WordPress-21759b.svg" alt="Optimized for WordPress">
-        <img src="https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM-success.svg" alt="Architecture">
+    <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3">
+    <img src="https://img.shields.io/badge/Optimized%20for-WordPress-21759b.svg" alt="Optimized for WordPress">
+    <img src="https://img.shields.io/github/v/release/wptangtoc/wptangtoc-ols?label=stable&color=007ec6" alt="Stable Version">
+    <img src="https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM-success.svg" alt="Architecture">
     </p>
 </div>
 
