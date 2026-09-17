@@ -60,6 +60,17 @@
 <pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols --auto</pre>
 <hr>
 
+
+<br>
+<details>
+    <summary><i>🛡️ Dành cho Sysadmin: Mã SHA256 kiểm tra toàn vẹn file (Click để xem)</i></summary>
+    <br>
+    <blockquote>
+        <code>wptangtoc-ols: <!-- SHA256_START -->e3103d12df86eafd95c3de99f776ae98ccfa39bb9a25726d519e80eadbe77599<!-- SHA256_END --></code>
+    </blockquote>
+</details>
+<hr>
+
 <h2>🛠️ Danh sách Tính năng Đồ sộ</h2>
 <p>WPTangToc OLS không chỉ là kịch bản cài đặt, mà là một hệ sinh thái quản trị máy chủ hoàn chỉnh mang tiêu chuẩn Enterprise, bao gồm:</p>
 <ul>
