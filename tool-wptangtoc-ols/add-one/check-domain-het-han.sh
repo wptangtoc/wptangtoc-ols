@@ -84,7 +84,7 @@ for domain in "${ROOT_DOMAINS[@]}"; do
   # Vá lỗi SC2086: Bọc ngoặc kép cho $domain
   whois_data=$(timeout 15 /usr/bin/whois "$domain" 2>/dev/null)
 
-  expiry_date=$(echo "$whois_data" | grep -E -i "Expiry Date:|Expiration Date:|paid-till" | head -n 1 | awk '{print $NF}')
+	expiry_date=$(echo "$whois_data" | grep -E -i "Expiry Date:|Expiration Date:|paid-till|Registry Expiry Date:|Ngay het han:" | head -n 1 | awk -F':' '{print $2}' | xargs)
   # Dự phòng
   if [ -z "$expiry_date" ]; then
     expiry_date=$(host -t soa "$domain" | awk '{print $7}' | tr -d '.')

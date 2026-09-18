@@ -164,8 +164,8 @@ chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
 
 cat >"$TEMP_CNF" <<EOF
 [client]
-user=${DB_User_web}
-password=${password_database_website_giai_ma}
+user="${DB_User_web}"
+password="${password_database_website_giai_ma}"
 host=localhost
 max_allowed_packet=1G
 default-character-set=utf8mb4
