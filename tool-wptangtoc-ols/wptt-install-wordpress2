@@ -9,12 +9,14 @@ function huong_dan() {
   * Chuẩn hóa Cài đặt: Đảm bảo các website mới được cài đặt theo một cấu trúc và cấu hình chuẩn, có thể đã được tối ưu sẵn cho môi trường OpenLiteSpeed và các tính năng khác của WPTangToc OLS.
   * Giảm thiểu Lỗi: Tự động hóa giúp hạn chế tối đa các sai sót có thể xảy ra khi thực hiện thủ công.
   * Thân thiện với Người dùng: Giúp cả những người không quá rành về kỹ thuật cũng có thể dễ dàng tạo một website WordPress mới.
+  * [MỚI] An toàn dữ liệu: Nếu website đã có mã nguồn hoặc Database từ trước, hệ thống sẽ tự động đưa dữ liệu cũ vào Thùng rác ảo thay vì xóa vĩnh viễn ngay lập tức, phòng khi cài nhầm domain.
 
   ✅ Lợi ích:
   * Triển khai Nhanh: Tạo website mới chỉ trong vài phút.
   * Dễ dàng &
   Tiện lợi: Quy trình đơn giản hóa.
   * Tối ưu Sẵn: Website mới có khả năng được cài đặt với các thiết lập tối ưu cho OLS.
+  * Có thể khôi phục: Dữ liệu source và database cũ, nếu có, được lưu tạm ở Thùng rác trước khi bị dọn dẹp định kỳ.
   Tóm lại: Tính năng cài đặt mã nguồn WordPress trong WPTangToc OLS là một công cụ tự động hóa giúp đơn giản hóa và tăng tốc quá trình tạo một website WordPress mới trên máy chủ OpenLiteSpeed, đồng thời đảm bảo website được thiết lập theo các tiêu chuẩn có thể đã được tối ưu hóa bởi bộ công cụ này.
 }
 
@@ -47,6 +49,26 @@ if [[ "$1" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-wordpress-main 1"
 fi
+
+# ==============================================================================
+# [MODULE MỚI] - KIỂM TRA TRẠNG THÁI THÙNG RÁC, DUNG LƯỢNG VÀ CRONJOB
+# (Học theo wptt-xoa-website để đồng bộ hành vi Thùng rác ảo trên toàn hệ thống)
+# ==============================================================================
+[[ -z "$WPTT_TRASH_ENABLE" ]] && WPTT_TRASH_ENABLE=1
+DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}' | tr -d '%')
+CRON_LINK="/etc/cron.d/wptt-trash-cleaner"
+
+if [[ "$WPTT_TRASH_ENABLE" -eq 1 ]]; then
+    if [[ "$DISK_USAGE" -ge 90 ]]; then
+        echo -e "\n${C_RED}CẢNH BÁO ĐỎ: Ổ cứng đang đầy $DISK_USAGE%!${C_RESET}"
+        echo -e "${C_YELLOW}Hệ thống sẽ TẠM TẮT Thùng rác ảo để giải phóng dung lượng ngay lập tức.${C_RESET}"
+        WPTT_TRASH_ENABLE=0
+        sleep 3
+    elif [[ ! -f "$CRON_LINK" ]]; then
+        WPTT_TRASH_ENABLE=0
+    fi
+fi
+# ==============================================================================
 
 # ==============================================================================
 # 1. KHỞI TẠO VÀ CHỌN DOMAIN
@@ -96,6 +118,8 @@ fi
 
 . "$pathcheck"
 . /etc/wptt/.wptt.conf
+
+CLEAN="$NAME"
 
 # ==============================================================================
 # 1.5. TRẠM KIỂM LÂM: PHÁT HIỆN DATABASE "MA" (BỊ XÓA LÉN)
@@ -179,13 +203,30 @@ fi
 # ==============================================================================
 # 2. XÁC NHẬN CÀI ĐẶT
 # ==============================================================================
+CO_MA_NGUON_CU=0
+[[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]] && CO_MA_NGUON_CU=1
+
+if [[ -f /usr/local/lsws/"$NAME"/html/index.php ]];then
+	if grep -q 'build-ols' /usr/local/lsws/"$NAME"/html/index.php;then #mã nguồn xác thực chưa có gì, nếu không có thì không cần thùng rác ảo để làm gì cả
+		WPTT_TRASH_ENABLE=0
+		CO_MA_NGUON_CU=0
+	fi
+fi
+
+
+
 msg_title="Xác nhận thiết lập WordPress mới cho domain: $domain"
-if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
-  msg_info1="${C_RED}CẢNH BÁO: Thao tác này sẽ XÓA SẠCH toàn bộ mã nguồn WP và Database hiện tại!${C_RESET}"
+if [[ "$CO_MA_NGUON_CU" -eq 1 ]]; then
+  if [[ "$WPTT_TRASH_ENABLE" -eq 1 ]]; then
+    msg_info1="${C_YELLOW}Website đã có mã nguồn cũ. Dữ liệu source + Database cũ sẽ được xóa.${C_RESET}"
+  else
+    msg_info1="${C_RED}CẢNH BÁO: Thao tác này sẽ XÓA SẠCH toàn bộ mã nguồn WP và Database hiện tại!${C_RESET}"
+  fi
 else
   msg_info1="${C_BOLD_WHITE}Lưu ý:${C_RESET} Mọi dữ liệu cũ source trong thư mục html + DB sẽ bị xóa sạch."
 fi
 
+if [[ "$CO_MA_NGUON_CU" -eq 1 ]];then #nếu có mã nguồn thì mới phải xác thưc chứ
 if ! wptt_xac_nhan "$msg_title" "$msg_info1" "" "Đồng ý (Bắt đầu cài đặt)" "Không đồng ý (Hủy thao tác)"; then
   echo -e "${C_YELLOW}Đã hủy thao tác cài đặt.${C_RESET}"
   sleep 1.5
@@ -193,8 +234,12 @@ if ! wptt_xac_nhan "$msg_title" "$msg_info1" "" "Đồng ý (Bắt đầu cài �
   [[ ${1:-} == "99" ]] && exec /usr/bin/wptangtoc 1
   exit
 fi
+fi
 
 echo "Install mã nguồn Wordpress website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+# Mốc thời gian dùng chung cho cả Source lẫn Database đưa vào Thùng rác (đồng bộ 1 lần install = 1 timestamp)
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 # ==============================================================================
 # 3. LÀM SẠCH VÀ CHUẨN BỊ
@@ -215,7 +260,59 @@ if ! wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
 fi
 
 cd "/usr/local/lsws/$NAME/html/" || exit 1
-rm -rf ./*
+
+# ==============================================================================
+# (Học theo cơ chế renameat2 RENAME_EXCHANGE của wptt-xoa-website)
+# ==============================================================================
+CO_DU_LIEU_SOURCE_CU=0
+if [[ -n "$(ls -A "/usr/local/lsws/$NAME/html/" 2>/dev/null)" ]]; then
+  CO_DU_LIEU_SOURCE_CU=1
+fi
+
+if [[ "$CO_DU_LIEU_SOURCE_CU" -eq 1 && "$WPTT_TRASH_ENABLE" -eq 1 ]]; then
+    TRASH_DIR="/usr/local/.wptt_trash/${CLEAN}_${TIMESTAMP}"
+    mkdir -p "/usr/local/.wptt_trash"
+    chmod 700 "/usr/local/.wptt_trash"
+
+    # Khởi tạo vỏ thư mục trống để chuẩn bị đổi chéo (Exchange)
+    mkdir -p "$TRASH_DIR/html"
+
+    # Sử dụng Python3 Syscall RENAME_EXCHANGE (Cờ = 2) siêu tốc, tránh downtime khi đổi chéo thư mục lớn
+    python3 -c "
+import ctypes
+import sys
+try:
+    libc = ctypes.CDLL('libc.so.6')
+    res = libc.renameat2(-100, b'/usr/local/lsws/${CLEAN}/html', -100, b'${TRASH_DIR}/html', 2)
+    if res != 0: sys.exit(1)
+except Exception:
+    sys.exit(1)
+" >/dev/null 2>&1
+
+    if [[ $? -eq 0 ]]; then
+        # Đổi chéo thành công: vỏ thư mục html cũ (rỗng) giờ đang nằm ở TRASH_DIR
+        # Cần tái tạo lại thư mục html trống mới cho quá trình cài đặt tiếp theo
+        rm -rf "/usr/local/lsws/${CLEAN:?}/html"
+        mkdir -p "/usr/local/lsws/${CLEAN:?}/html"
+    else
+        # Fallback tương thích ngược: Dùng mv truyền thống nếu hệ điều hành quá cũ (kernel < 3.15)
+        rm -rf "$TRASH_DIR/html"
+        mv "/usr/local/lsws/$CLEAN/html" "$TRASH_DIR/html_old" 2>/dev/null
+        mkdir -p "$TRASH_DIR/html"
+        [[ -d "$TRASH_DIR/html_old" ]] && mv "$TRASH_DIR/html_old"/* "$TRASH_DIR/html/" 2>/dev/null
+        rm -rf "$TRASH_DIR/html_old"
+        mkdir -p "/usr/local/lsws/$CLEAN/html"
+    fi
+
+    # Ghi chú lại tên DB cũ (nếu có) để tiện đối chiếu khi khôi phục, phần rename DB thật sự nằm ở bước 5
+    echo "${DB_Name_web:-}" > "$TRASH_DIR/.old_db_name_ref"
+
+	else
+    # Thùng rác đang tắt (do đầy ổ đĩa hoặc cronjob dọn rác không hoạt động) -> xóa thẳng như code cũ bình thường không có thùng rác ảo gì hết
+    rm -rf ./*
+fi
+# ==============================================================================
+
 [[ -d "/usr/local/lsws/${NAME:?}/luucache" ]] && rm -rf "/usr/local/lsws/${NAME:?}/luucache"
 
 vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
@@ -350,7 +447,35 @@ EOF
 
 unset password_database_root database_admin_password #giải biến
 
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`$DB_Name_web\`;"
+  # ==============================================================================
+  # [MODULE MỚI] - ĐƯA DATABASE CŨ VÀO THÙNG RÁC ẢO TRƯỚC KHI TẠO DB MỚI
+  # (Học theo cơ chế RENAME TABLE sang DB _trash_ của wptt-xoa-website)
+  # ==============================================================================
+  DB_co_du_lieu_cu=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -sse "SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = '$DB_Name_web');" 2>/dev/null)
+
+  if [[ "$DB_co_du_lieu_cu" == "1" && "$WPTT_TRASH_ENABLE" -eq 1 ]]; then
+      SHORT_DB_NAME="${DB_Name_web:0:38}"
+      TRASH_DB="${SHORT_DB_NAME}_trash_${TIMESTAMP}"
+
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "CREATE DATABASE IF NOT EXISTS \`$TRASH_DB\`;"
+
+      RENAME_QUERY=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -N -s -e "SELECT CONCAT('RENAME TABLE \`', table_schema, '\`.\`', table_name, '\` TO \`$TRASH_DB\`.\`', table_name, '\`;') FROM information_schema.TABLES WHERE table_schema='$DB_Name_web';")
+
+      if [[ -n "$RENAME_QUERY" ]]; then
+          mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "$RENAME_QUERY"
+      fi
+
+      # Ghi lại tên DB rác để tiện đối chiếu với thư mục source rác cùng timestamp (nếu có)
+      if [[ -n "$TRASH_DIR" && -d "$TRASH_DIR" ]]; then
+        echo "$TRASH_DB" > "$TRASH_DIR/.trash_db_name"
+      fi
+
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_Name_web}\`;" 2>/dev/null
+  else
+      mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS \`$DB_Name_web\`;"
+  fi
+  # ==============================================================================
+
   mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS \`$DB_Name_web\`;"
   rm -f "${TEMP_CNF_ROOT:?}"
   _rundone "$lam_sach_toan_bo_du_lieu_database $NAME"
@@ -589,8 +714,16 @@ END
   fi
 fi
 
+# [MODULE MỚI] - Gợi ý nhẹ nhàng nếu có dữ liệu cũ đã được đưa vào Thùng rác trong lần cài đặt này
+if [[ "$WPTT_TRASH_ENABLE" -eq 1 && ( "$CO_DU_LIEU_SOURCE_CU" -eq 1 ) ]]; then
+  print_border_mid "$C_GREEN"
+  left_text "${C_YELLOW}Mẹo:${C_RESET} Mã nguồn/Database cũ của $NAME đã được chuyển vào Thùng rác ảo (Chưa xóa vĩnh viễn)." 2 "$C_GREEN"
+  left_text "Khôi phục bằng lệnh: ${C_CYAN}36 [Thùng Rác]${C_RESET}" 2 "$C_GREEN"
+fi
+
 print_border_bot "$C_GREEN"
 echo ""
 
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
 [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
+
