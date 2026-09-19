@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2025
+# @since: 2026
 
 function huong_dan() {
   WPTangToc OLS có khả năng mở rộng SSL Lets Encrypt.
@@ -159,32 +159,32 @@ server_ips=$(ip a | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | 
 public_ip=$(curl -sf --connect-timeout 5 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 server_ips="$server_ips $public_ip"
 
+# Check IP Nguồn bằng kỹ thuật 4 kênh (Bypass Local Cache DNS)
 checkdns=$(host "$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
 [[ -z "$checkdns" ]] && checkdns=$(nslookup "$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-
-checkdnscname=$(host "www.$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-[[ -z "$checkdnscname" ]] && checkdnscname=$(nslookup "www.$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+[[ -z "$checkdns" ]] && checkdns=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
 
 # Check IP Nguồn (Trừ phi dùng CF API)
-if [[ ! -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
+if [[ ! -f "/etc/wptt/.cloudflare/wptt-$NAME.conf" && ! -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
   if [[ -n "$checkdns" ]] && ! echo "$server_ips" | grep -q "\b$checkdns\b"; then
     echo -e "\n${C_RED}❌ Lỗi: Tên miền gốc $NAME chưa trỏ về IP máy chủ hiện tại.${C_RESET}"
     echo -e "IP DNS hiện tại: ${C_YELLOW}${checkdns:-Không xác định}${C_RESET}"
-    echo -e "Bạn phải trỏ chuẩn IP trước khi thực hiện mở rộng chứng chỉ."
+    echo -e "Bạn phải trỏ chuẩn IP cho domain chính trước khi thực hiện mở rộng chứng chỉ."
     sleep 4
-    exit 1
+    exec /etc/wptt/wptt-ssl-main 1
   fi
 fi
 
 # ==============================================================================
-# LẤY DANH SÁCH SSL HIỆN TẠI VÀ THÊM MỚI
+# LẤY DANH SÁCH SSL HIỆN TẠI VÀ THÊM MỚI (AN TOÀN TRONG /etc/wptt/tmp/)
 # ==============================================================================
-rm -f "/tmp/ssl-${NAME:?}.txt"
+mkdir -p /etc/wptt/tmp
+rm -f "/etc/wptt/tmp/ssl-${NAME:?}.txt"
 
 # Đọc các domain hiện có trong chứng chỉ (Gộp nhiều dòng thành 1 chuỗi bằng xargs)
 ssl_actives=$(openssl x509 -in "/etc/letsencrypt/live/$NAME/cert.pem" -noout -ext subjectAltName 2>/dev/null | grep 'DNS:' | sed 's/DNS://g' | tr -d ' ' | tr ',' '\n')
 for ssl_active in $ssl_actives; do
-  echo "$ssl_active" >>"/tmp/ssl-$NAME.txt"
+  echo "$ssl_active" >>"/etc/wptt/tmp/ssl-$NAME.txt"
 done
 
 echo ""
@@ -192,23 +192,28 @@ echo -e "${C_GREEN}╭───────────────────�
 left_text "${C_BOLD_WHITE}CHỨNG CHỈ HIỆN TẠI ĐANG BẢO VỆ CÁC TÊN MIỀN:${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 # Tự động gập dòng nếu danh sách quá dài
-left_text "${C_YELLOW}$(cat "/tmp/ssl-$NAME.txt" | xargs | sed 's/ /, /g')${C_RESET}"
+left_text "${C_YELLOW}$(cat "/etc/wptt/tmp/ssl-$NAME.txt" | xargs | sed 's/ /, /g')${C_RESET}"
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 echo ""
 
-# Vòng lặp Nhập liệu mượt mà
+# Vòng lặp Nhập liệu mượt mà (Hỗ trợ nhập nhiều sub cùng lúc)
 while true; do
-  echo -en "${C_CYAN}Nhập tên Subdomain bạn muốn mở rộng (VD: cdn, shop, api) [Để trống = Xong]: ${C_RESET}"
-  read -r subdomain
+  echo -en "${C_CYAN}Nhập Subdomain muốn mở rộng (VD:cdn, shop, api) [Để trống = Bắt đầu cài]: ${C_RESET}"
+  read -r raw_subdomains
 
-  if [[ -z "$subdomain" || "$subdomain" == "0" ]]; then
+  if [[ -z "$raw_subdomains" || "$raw_subdomains" == "0" ]]; then
     break
   fi
 
-  # Làm sạch input (tự động gắn đuôi tên miền gốc nếu người dùng chỉ nhập prefix)
-  subdomain=$(echo "$subdomain" | sed "s/.$NAME//g" | sed "s/$/.$NAME/g" | sed 's#https://##g' | sed 's#http://##g')
-  echo "$subdomain" >>"/tmp/ssl-$NAME.txt"
-  echo -e "   ${C_GREEN}✔ Đã đưa ${C_YELLOW}$subdomain${C_GREEN} vào danh sách chờ.${C_RESET}"
+  # Tiền xử lý: Đổi phẩy thành khoảng trắng để đọc mảng
+  clean_subdomains="${raw_subdomains//,/ }"
+  
+  for sub in $clean_subdomains; do
+      # Làm sạch input (tự động gắn đuôi tên miền gốc nếu người dùng chỉ nhập prefix)
+      subdomain=$(echo "$sub" | sed "s/.$NAME//g" | sed "s/$/.$NAME/g" | sed 's#https://##g' | sed 's#http://##g')
+      echo "$subdomain" >>"/etc/wptt/tmp/ssl-$NAME.txt"
+      echo -e "   ${C_GREEN}✔ Đã đưa ${C_YELLOW}$subdomain${C_GREEN} vào danh sách chờ.${C_RESET}"
+  done
 done
 
 # ==============================================================================
@@ -218,110 +223,290 @@ _runing "Đang quét hệ thống để tìm kiếm tự động các Subdomain 
 
 if [[ -f "/usr/local/lsws/$NAME/html/wp-config.php" ]] && grep -q 'MULTISITE' "/usr/local/lsws/$NAME/html/wp-config.php"; then
   sub_domain_multisite=$(wp site list --field=url --path="/usr/local/lsws/$NAME/html" --allow-root 2>/dev/null | cut -f3 -d '/' | sort -u | uniq)
-  [[ -n "$sub_domain_multisite" ]] && echo "$sub_domain_multisite" >>"/tmp/ssl-$NAME.txt"
+  [[ -n "$sub_domain_multisite" ]] && echo "$sub_domain_multisite" >>"/etc/wptt/tmp/ssl-$NAME.txt"
 fi
 
-# Fix lỗi check vhAliases của bản cũ
+# Quét vhAliases
 domain_alias_all=$(grep "vhAliases" "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null | cut -f2-99 -d ' ' | sed 's/ //g' | tr ',' '\n')
 if [[ -n "$domain_alias_all" ]]; then
   for domain_alis in $domain_alias_all; do
-    echo "$domain_alis" >>"/tmp/ssl-$NAME.txt"
+    echo "$domain_alis" >>"/etc/wptt/tmp/ssl-$NAME.txt"
   done
 fi
 
-if [[ "$checkdns" == "$checkdnscname" && -n "$checkdns" ]]; then
-  echo "www.$NAME" >>"/tmp/ssl-$NAME.txt"
+# Tự động nạp WWW nếu khách đã trỏ
+checkdns_www=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=www.${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+if [[ -n "$checkdns_www" ]] && echo "$server_ips" | grep -q "\b$checkdns_www\b"; then
+  echo "www.$NAME" >>"/etc/wptt/tmp/ssl-$NAME.txt"
 fi
-echo "$NAME" >>"/tmp/ssl-$NAME.txt"
+
+echo "$NAME" >>"/etc/wptt/tmp/ssl-$NAME.txt"
 _rundone "Quét và gộp danh sách Subdomain hoàn tất"
 
 # ==============================================================================
 # KIỂM TRA DNS KHẮT KHE (TỰ ĐỘNG BỎ QUA SUBDOMAIN SAI IP)
 # ==============================================================================
 _runing "Đang kiểm tra phân giải DNS cho tất cả tên miền trong danh sách chờ..."
-if [[ ! -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
-  if [[ -f "/tmp/ssl-$NAME.txt" ]]; then
-    mapfile -t multisite_check_dns_tro_ip_chua < <(cat "/tmp/ssl-$NAME.txt" | sort -u | sed '/^$/d')
+
+# Nếu KHÔNG dùng Cloudflare API, bắt buộc phải lọc bỏ các Sub trỏ sai IP để bảo vệ tiến trình Certbot
+if [[ ! -f "/etc/wptt/.cloudflare/wptt-$NAME.conf" && ! -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
+  if [[ -f "/etc/wptt/tmp/ssl-$NAME.txt" ]]; then
+    # Đọc danh sách duy nhất vào mảng
+    mapfile -t multisite_check_dns_tro_ip_chua < <(cat "/etc/wptt/tmp/ssl-$NAME.txt" | sort -u | sed '/^$/d')
+    
+    # Xóa trắng file tạm để ghi lại từ đầu chỉ những domain hợp lệ
+    > "/etc/wptt/tmp/ssl-$NAME.txt"
+
     for multisite in "${multisite_check_dns_tro_ip_chua[@]}"; do
-      multisite_check_dns=$(host "$multisite" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+      # Lọc qua 2 kênh DNS đáng tin cậy
+      multisite_check_dns=$(curl -s --connect-timeout 5 "https://dns.google/resolve?name=${multisite}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+      [[ -z "$multisite_check_dns" ]] && multisite_check_dns=$(nslookup "$multisite" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+
       if [[ -z "$multisite_check_dns" ]] || ! echo "$server_ips" | grep -q "\b$multisite_check_dns\b"; then
-        echo -e "\n${C_YELLOW}⚠️ Bỏ qua: Tên miền $multisite chưa trỏ IP (hoặc trỏ sai).${C_RESET}"
-        sed -i "/^$multisite$/d" "/tmp/ssl-$NAME.txt"
+        echo -en "\033[1A\033[2K\r" # Kéo thanh status xuống để in cảnh báo
+        echo -e "${C_YELLOW}⚠️ Bỏ qua: Subdomain [$multisite] chưa trỏ đúng IP máy chủ.${C_RESET}"
+        _runing "Đang kiểm tra phân giải DNS..."
+      else
+        echo "$multisite" >>"/etc/wptt/tmp/ssl-$NAME.txt"
       fi
     done
   fi
 fi
 _rundone "Kiểm tra DNS hoàn tất"
 
+# Đảm bảo danh sách không bị rỗng sau khi lọc
+if [[ ! -s "/etc/wptt/tmp/ssl-$NAME.txt" ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: Tất cả Subdomain bạn yêu cầu đều trỏ sai IP.${C_RESET}"
+    echo "Hệ thống hủy yêu cầu mở rộng để bảo vệ chứng chỉ gốc."
+    sleep 3
+    exec /etc/wptt/wptt-ssl-main 1
+fi
+
 # ==============================================================================
-# THỰC THI CERTBOT EXPAND
+# THỰC THI CERTBOT EXPAND (KÈM CLOUDFLARE IN-MEMORY DECRYPTION)
 # ==============================================================================
 echo ""
 _runing "Gửi yêu cầu cấp phát và MỞ RỘNG chứng chỉ tới Let's Encrypt..."
 echo "Cài đặt mở rộng SSL free letsencrypt website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-list_ssl_domain_all=$(cat "/tmp/ssl-$NAME.txt" | sort -u | uniq | sed '/^$/d' | sed 's/^/-d /g' | tr -s '\n' ' ')
-cloudflare=""
-if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
-  cloudflare="--dns-cloudflare --dns-cloudflare-credentials /etc/wptt/.cloudflare/wptt-$NAME.ini"
-fi
+LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
+
+# Đếm số dòng log TRƯỚC KHI chạy
+LINE_START=0
+[[ -f "$LOG_FILE" ]] && LINE_START=$(wc -l < "$LOG_FILE")
 
 duong_dan_docroot_web=$(grep 'docRoot' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null | awk '{print $2}' | head -n 1)
 
-# Lệnh thực thi mở rộng (Lưu ý: Không dùng --force-renewal để tránh lãng phí Rate Limit nếu không có thay đổi)
-certbot_output=$(certbot certonly "$cloudflare" --non-interactive --agree-tos --register-unsafely-without-email --expand --webroot -w "${duong_dan_docroot_web}" "$list_ssl_domain_all" 2>&1)
+# XÂY DỰNG MẢNG LỆNH CERTBOT AN TOÀN
+certbot_args=(
+    "certonly"
+    "--non-interactive"
+    "--agree-tos"
+    "--register-unsafely-without-email"
+    "--expand"
+    "--webroot"
+    "-w" "${duong_dan_docroot_web}"
+    "--cert-name" "$NAME"
+)
+
+# XỬ LÝ CREDENTIALS CLOUDFLARE (BẢO MẬT & TƯƠNG THÍCH NGƯỢC)
+CF_CRED_FILE=""
+TMP_INI=""
+
+if [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.conf" ]]; then #khi người dùng thiết lập cloudflare API ssl
+  # LUỒNG BẢO MẬT MỚI: File .conf chứa API Key mã hóa
+  . "/etc/wptt/.cloudflare/wptt-$NAME.conf" 2>/dev/null
+  
+  # Giải mã AES-256 (Tương thích ngược nếu chưa mã hóa)
+  tmp_api=$(wptt_giai_ma "$dns_cloudflare_api_key" 2>/dev/null)
+  decrypted_key="${tmp_api:-$dns_cloudflare_api_key}"
+
+  # Khởi tạo file .ini tạm trên RAM (SHM) hoặc /tmp (Dự phòng)
+  TMP_INI=$(mktemp -p /dev/shm wptt_cf_XXXXXX.ini 2>/dev/null || mktemp /etc/wptt/tmp/wptt_cf_XXXXXX.ini)
+  chmod 400 "$TMP_INI" # Ép quyền Read-only cực đoan
+  
+  echo "dns_cloudflare_email = $dns_cloudflare_email" > "$TMP_INI"
+  echo "dns_cloudflare_api_key = $decrypted_key" >> "$TMP_INI"
+  
+  CF_CRED_FILE="$TMP_INI"
+elif [[ -f "/etc/wptt/.cloudflare/wptt-$NAME.ini" ]]; then
+  # TƯƠNG THÍCH NGƯỢC: File .ini cleartext cũ
+  CF_CRED_FILE="/etc/wptt/.cloudflare/wptt-$NAME.ini"
+fi
+
+if [[ -n "$CF_CRED_FILE" ]]; then
+  certbot_args+=("--dns-cloudflare" "--dns-cloudflare-credentials" "$CF_CRED_FILE")
+fi
+
+# Nạp danh sách domain vào mảng
+final_list=$(cat "/etc/wptt/tmp/ssl-$NAME.txt" | sort -u | sed '/^$/d')
+for d in $final_list; do
+    certbot_args+=("-d" "$d")
+done
+
+# Lệnh thực thi mở rộng
+certbot_output=$(certbot "${certbot_args[@]}" 2>&1)
 certbot_exit_code=$?
+
+# DỌN DẸP FILE TẠM CHỨA API KEY NGAY LẬP TỨC (QUAN TRỌNG)
+[[ -n "$TMP_INI" && -f "$TMP_INI" ]] && rm -f "$TMP_INI"
+
+# Đếm số dòng log SAU KHI chạy để trích xuất RECENT_LOG
+LINE_END=0
+[[ -f "$LOG_FILE" ]] && LINE_END=$(wc -l < "$LOG_FILE")
+LINES_NEW=$((LINE_END - LINE_START))
+
+if (( LINES_NEW <= 0 )); then
+    LINES_NEW=150 
+fi
+
+RECENT_LOG=$(tail -n "$LINES_NEW" "$LOG_FILE" 2>/dev/null)
 
 wptt_smart_reload_lsws >/dev/null 2>&1
 _rundone "Yêu cầu Let's Encrypt kết thúc"
 
 # ==============================================================================
-# KIỂM TRA LỖI RATE LIMIT & BÁO CÁO THÀNH CÔNG
+# KIỂM TRA LỖI BẰNG LOG DÒ TÌM & BÁO CÁO KẾT QUẢ
 # ==============================================================================
 if [[ $certbot_exit_code -ne 0 ]]; then
-  LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
-  LIMIT_MSG=$(tail -n 500 "$LOG_FILE" 2>/dev/null | grep -E -i "rateLimited|too many certificates" | tail -n 1)
+  _runloi "Cấp phát/Mở rộng chứng chỉ thất bại"
 
-  if [[ -n "$LIMIT_MSG" ]]; then
-    if echo "$LIMIT_MSG" | grep -qi "too many certificates already issued"; then
-      BAN_REASON="Cấp phát chứng chỉ lặp lại quá nhiều (5 lần/tuần)."
-      WAIT_TIME="Vui lòng chờ hệ thống mở khóa (Tối đa 7 ngày)."
-    elif echo "$LIMIT_MSG" | grep -qi "too many failed authorizations"; then
-      BAN_REASON="Xác thực lỗi quá nhiều lần (Giới hạn 5 lần/giờ)."
-      WAIT_TIME="Hãy đợi đúng 1 tiếng đồng hồ nữa rồi thử lại."
-    else
-      BAN_REASON="Vi phạm chính sách chống Spam API của Let's Encrypt."
-      WAIT_TIME="Vui lòng thử lại sau vài giờ hoặc vài ngày."
-    fi
+  # 1. Quét log tìm lỗi "Ký tự không hợp lệ" (Invalid Character / Punycode)
+  INVALID_CHAR_MSG=$(echo "$RECENT_LOG" | grep -E -i "rejectedIdentifier|Invalid identifiers requested|Domain name contains an invalid character" | tail -n 1)
 
-    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}⚠️ TỪ CHỐI CẤP PHÁT: BỊ KHÓA SSL TẠM THỜI${C_RESET}"
-    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "  Tên miền bị chặn : ${C_YELLOW}$NAME${C_RESET}" 2
-    left_text "  Nguyên nhân      : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
-    left_text "  Cách xử lý       : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
-    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text " ${C_YELLOW}💡 GIẢI THÍCH & LỜI KHUYÊN TỪ HỆ THỐNG:${C_RESET}" 2
-    left_text " - Hệ thống Let's Encrypt từ chối yêu cầu mở rộng chứng chỉ do bạn" 2
-    left_text "   đã thao tác (Cài đặt/Mở rộng) thành công quá nhiều lần trong tuần." 2
-    left_text " - Tin tốt là: ${C_GREEN}Chứng chỉ cũ của bạn VẪN ĐANG HOẠT ĐỘNG!${C_RESET}" 2
-    left_text " - Chỉ là các Subdomain bạn vừa gõ thêm sẽ chưa có SSL vào lúc này." 2
-    left_text " - ${C_RED}Tuyệt đối KHÔNG thử lại ngay lúc này${C_RESET} để tránh bị khóa lâu hơn." 2
-    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  else
-    echo -e "\n${C_RED}❌ Lỗi: Quá trình Mở rộng SSL Let's Encrypt không thành công!${C_RESET}"
-    echo "Bạn có thể kiểm tra chi tiết lỗi tại file log: $LOG_FILE"
+  if [[ -n "$INVALID_CHAR_MSG" ]]; then
+      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}TỪ CHỐI MỞ RỘNG: TÊN MIỀN KHÔNG HỢP LỆ (INVALID CHARACTER)${C_RESET}"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Tên miền báo lỗi : ${C_YELLOW}$NAME${C_RESET}" 2
+      left_text "  Mã lỗi Certbot   : ${C_BOLD_WHITE}rejectedIdentifier / Invalid Character${C_RESET}" 2
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_YELLOW}NGUYÊN NHÂN & CÁCH GIẢI QUYẾT:${C_RESET}" 2
+      left_text " - Let's Encrypt từ chối cấp SSL vì Subdomain của bạn vi phạm quy tắc" 2
+      left_text "   đặt tên quốc tế (RFC). Có thể chứa ký tự đặc biệt, dấu gạch ngang" 2
+      left_text "   ở đầu/cuối, hoặc nhãn quá dài." 2
+      left_text " - Tin tốt: Chứng chỉ cũ của bạn VẪN HOẠT ĐỘNG. Bạn chỉ không thể" 2
+      left_text "   mở rộng thêm các subdomain bị lỗi này vào chứng chỉ." 2
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      rm -f "/etc/wptt/tmp/ssl-${NAME:?}.txt"
+      echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+      read -r _
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+      return 1 2>/dev/null || exit 1
+  fi
+
+  # 2. Quét log tìm lỗi "Không thể truy cập file xác thực (Unauthorized / 404 / 403)"
+  UNAUTHORIZED_MSG=$(echo "$RECENT_LOG" | grep -E -i "unauthorized|Invalid response from|404 Not Found|403 Forbidden" | tail -n 1)
+  if [[ -n "$UNAUTHORIZED_MSG" ]]; then
+      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}TỪ CHỐI MỞ RỘNG: KHÔNG THỂ ĐỌC FILE XÁC THỰC (UNAUTHORIZED)${C_RESET}"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Tên miền báo lỗi : ${C_YELLOW}$NAME${C_RESET}" 2
+      left_text "  Mã lỗi Certbot   : ${C_BOLD_WHITE}Unauthorized / Invalid response${C_RESET}" 2
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_YELLOW}NGUYÊN NHÂN & CÁCH GIẢI QUYẾT TỪ HỆ THỐNG:${C_RESET}" 2
+      left_text " - Let's Encrypt kết nối được tới máy chủ của bạn, nhưng khi tìm đọc" 2
+      left_text "   file xác thực thì bị chặn lại (Lỗi 403) hoặc không thấy file (404)." 2
+      left_text " - ${C_RED}Thủ phạm thường gặp:${C_RESET} File .htaccess chặn truy cập thư mục ẩn," 2
+      left_text "   hoặc bạn đang bật Tường lửa WAF (Cloudflare/Wordfence) chặn Bot." 2
+      left_text " - ${C_GREEN}Chứng chỉ cũ VẪN AN TOÀN${C_RESET}. Hãy tạm tắt Tường lửa hoặc dọn dẹp" 2
+      left_text "   nội dung file .htaccess rồi thử mở rộng lại." 2
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      rm -f "/etc/wptt/tmp/ssl-${NAME:?}.txt"
+      echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+      read -r _
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+      return 1 2>/dev/null || exit 1
+  fi
+
+  # 3. Quét Timeout
+  TIMEOUT_MSG=$(echo "$RECENT_LOG" | grep -E -i "Timeout after connect|Timeout during connect|Connection refused" | tail -n 1)
+  if [[ -n "$TIMEOUT_MSG" ]]; then
+      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}TỪ CHỐI MỞ RỘNG: HỆ THỐNG BỊ CHẶN KẾT NỐI (TIMEOUT/FIREWALL)${C_RESET}"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Tên miền báo lỗi : ${C_YELLOW}$NAME${C_RESET}" 2
+      left_text "  Mã lỗi Certbot   : ${C_BOLD_WHITE}Timeout after connect / Connection refused${C_RESET}" 2
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_YELLOW}NGUYÊN NHÂN VÀ CÁCH GIẢI QUYẾT:${C_RESET}" 2
+      left_text " - Máy chủ Let's Encrypt đang cố truy cập vào file xác thực qua" 2
+      left_text "   Port 80 nhưng bị chặn đứng lại (Tường lửa nhà mạng / VPS chặn)." 2
+      left_text " - Vui lòng mở Port 80/443 ra quốc tế để cài SSL." 2
+      left_text " - ${C_GREEN}Tin tốt: Chứng chỉ cũ của bạn vẫn hoạt động bình thường!${C_RESET}" 2
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      rm -f "/etc/wptt/tmp/ssl-${NAME:?}.txt"
+      echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+      read -r _
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+      return 1 2>/dev/null || exit 1
+  fi
+
+  # 4. Quét log để tìm mã lỗi Rate Limit
+  if echo "$RECENT_LOG" | grep -Eqi "rateLimited|too many certificates|too many failed authorizations"; then
+      if echo "$RECENT_LOG" | grep -qi "too many certificates already issued"; then
+          BAN_REASON="Cài trùng lặp quá nhiều (Giới hạn 5 lần / tuần)."
+          WAIT_TIME="Vui lòng chờ hệ thống mở khóa (Tối đa 7 ngày)."
+      elif echo "$RECENT_LOG" | grep -qi "too many failed authorizations"; then
+          BAN_REASON="Xác thực lỗi quá nhiều lần (Giới hạn 5 lần / giờ)."
+          WAIT_TIME="Hãy đợi đúng 1 tiếng đồng hồ nữa rồi thử lại."
+      elif echo "$RECENT_LOG" | grep -qi "Certificates per Registered Domain"; then
+          BAN_REASON="Vượt giới hạn chứng chỉ tên miền (50 lần/tuần)."
+          WAIT_TIME="Phải đợi Let's Encrypt reset lại quota trong tuần tới."
+      else
+          BAN_REASON="Vi phạm chính sách chống Spam API của Let's Encrypt."
+          WAIT_TIME="Vui lòng thử lại sau vài giờ hoặc vài ngày."
+      fi
+
+      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}⚠️ TỪ CHỐI MỞ RỘNG: BỊ KHÓA SSL TẠM THỜI${C_RESET}"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "  Tên miền bị chặn : ${C_YELLOW}$NAME${C_RESET}" 2
+      left_text "  Nguyên nhân      : ${C_BOLD_WHITE}$BAN_REASON${C_RESET}" 2
+      left_text "  Cách xử lý       : ${C_GREEN}$WAIT_TIME${C_RESET}" 2
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_YELLOW}💡 GIẢI THÍCH & LỜI KHUYÊN TỪ HỆ THỐNG:${C_RESET}" 2
+      left_text " - Hệ thống Let's Encrypt từ chối yêu cầu mở rộng chứng chỉ do bạn" 2
+      left_text "   đã thao tác (Cài đặt/Mở rộng) thành công quá nhiều lần trong tuần." 2
+      left_text " - Tin tốt là: ${C_GREEN}Chứng chỉ cũ của bạn VẪN ĐANG HOẠT ĐỘNG!${C_RESET}" 2
+      left_text " - Chỉ là các Subdomain bạn vừa gõ thêm sẽ chưa có SSL vào lúc này." 2
+      left_text " - ${C_RED}Tuyệt đối KHÔNG thử lại ngay lúc này${C_RESET} để tránh bị khóa lâu hơn." 2
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      rm -f "/etc/wptt/tmp/ssl-${NAME:?}.txt"
+      echo -en "${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL...${C_RESET}"
+      read -r _
+      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+      return 1 2>/dev/null || exit 1
+  fi
+
+  # Lựa chọn xem file log nếu lỗi không thuộc các lỗi trên
+  echo -e "\n${C_RED}❌ Lỗi: Quá trình Mở rộng SSL Let's Encrypt không thành công!${C_RESET}"
+  echo -e "Lệnh Certbot trả về lỗi. Bạn có thể kiểm tra chi tiết nguyên nhân lỗi tại file log: ${C_YELLOW}$LOG_FILE${C_RESET}"
+  if wptt_xac_nhan "Bạn có muốn xem toàn bộ nội dung letsencrypt.log không?" "Mở trình đọc Log chuyên sâu để tự dò lỗi." "" "Đồng ý (xem log)" "Không đồng ý (Hủy thao tác)"; then
+    echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HƯỚNG DẪN SỬ DỤNG TRÌNH ĐỌC LOG (LESS)${C_RESET}"
+    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "File đang xem : ${C_YELLOW}$LOG_FILE${C_RESET}" 2
+    echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " ⬇️ ⬆️  Nhấn phím mũi tên [Lên/Xuống] để cuộn từng dòng." 2
+    left_text " ␣    Nhấn phím [Space] để cuộn nhanh từng trang." 2
+    left_text " 🔍   Nhấn phím [/] và nhập từ khóa để TÌM KIẾM (Bấm 'n' tìm tiếp)." 2
+    left_text " ❌   ${C_RED}Nhấn phím [q] để THOÁT${C_RESET} và quay lại Menu." 2
+    echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+    echo -e "${C_CYAN}Đang chuẩn bị dữ liệu và mở trình đọc log...${C_RESET}"
+    sleep 3
+    clear
+    less +G "$LOG_FILE"
   fi
 else
   # BẢNG BÁO CÁO THÀNH CÔNG (UX BO CONG)
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}🎉 HOÀN TẤT MỞ RỘNG CHỨNG CHỈ SSL${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT MỞ RỘNG CHỨNG CHỈ SSL${C_RESET}"
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "Chứng chỉ bảo mật Let's Encrypt đã được cấp phát / mở rộng" 2
-  left_text "thành công cho các tên miền sau:" 2
+  left_text "thành công cho khối tên miền sau:" 2
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  final_list=$(cat "/tmp/ssl-$NAME.txt" | sort -u | uniq | sed '/^$/d')
   for final_dom in $final_list; do
     left_text "▪ ${C_YELLOW}$final_dom${C_RESET}" 2
   done
@@ -329,11 +514,11 @@ else
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
 
-rm -f "/tmp/ssl-${NAME:?}.txt"
+rm -f "/etc/wptt/tmp/ssl-${NAME:?}.txt"
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active == "98" ]]; then
-  echo -en "${C_GREEN}👉 Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
   read -r _
   exec /etc/wptt/wptt-ssl-main 1
 fi
