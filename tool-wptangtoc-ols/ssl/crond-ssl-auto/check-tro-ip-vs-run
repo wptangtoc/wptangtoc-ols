@@ -1,39 +1,91 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# Cải tiến: đồng bộ cách kiểm tra DNS với wptt-caissl
 
 NAME=$1
-if [[ -d /etc/letsencrypt/live/$NAME || -d /usr/local/lsws/$NAME/ssl ]];then
-rm -f /etc/cron.d/cai-ssl-auto-"${NAME:?}"-tu-dong.cron
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-	NAME_CRON_ubuntu=${NAME//[.]/_}
-	rm -f /etc/cron.d/cai-ssl-auto-"${NAME_CRON_ubuntu:?}"-tu-dong_cron
-	systemctl restart cron.service
-else
-	systemctl restart crond.service
+
+# ==============================================================================
+# HÀM DỌN CRON (dùng chung cho mọi trường hợp thoát)
+# ==============================================================================
+function don_dep_cron() {
+  rm -f "/etc/cron.d/cai-ssl-auto-${NAME:?}-tu-dong.cron"
+
+  if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
+    local NAME_CRON_ubuntu=${NAME//[.]/_}
+    rm -f "/etc/cron.d/cai-ssl-auto-${NAME_CRON_ubuntu:?}-tu-dong_cron"
+    systemctl restart cron.service >/dev/null 2>&1
+  else
+    systemctl restart crond.service >/dev/null 2>&1
+  fi
+}
+
+# ==============================================================================
+# NẾU SSL ĐÃ TỒN TẠI THÌ CHỈ DỌN CRON RỒI THOÁT, KHÔNG CẦN CHECK DNS
+# ==============================================================================
+if [[ -d "/etc/letsencrypt/live/$NAME" || -d "/usr/local/lsws/$NAME/ssl" ]]; then
+  don_dep_cron
+  return 2>/dev/null || exit 0
 fi
-exit
+
+echo "[check-tro-ip-vs-run] $(date '+%d-%m-%Y %H:%M') - Kiểm tra DNS cho $NAME trước khi tự động cài SSL" >>/var/log/wptangtoc-ols.log
+
+# ==============================================================================
+# 1. THU THẬP IP CỦA MÁY CHỦ (IPv4 + IPv6)
+# ==============================================================================
+server_ips=$(ip a | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sed '/127.0.0.1/d' | sed '/192.168/d' | sort -u)
+
+public_ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -Eo '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+[[ -z "$public_ip" ]] && public_ip=$(curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -Eo '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+
+server_ips="$server_ips $public_ip"
+server_ipv6=$(curl -s --connect-timeout 5 --max-time 10 https://ipv6.icanhazip.com 2>/dev/null)
+
+# ==============================================================================
+# 2. KIỂM TRA BẪY IPV6 (AAAA) TRƯỚC — giống hệt logic trong wptt-caissl
+#    Nếu tên miền có bản ghi AAAA trỏ sai (hoặc máy chủ không có IPv6),
+#    thì không được tự ý chạy certbot vì chắc chắn sẽ thất bại / dính rate limit.
+# ==============================================================================
+checkdns_v6=$(host -t AAAA "$NAME" 2>/dev/null | grep "has IPv6 address" | awk '{print $5}' | head -1)
+
+if [[ -n "$checkdns_v6" ]]; then
+  if [[ -z "$server_ipv6" ]] || ! echo "$server_ipv6" | grep -qiw "$checkdns_v6"; then
+    echo "[check-tro-ip-vs-run] $(date '+%d-%m-%Y %H:%M') - $NAME: Bỏ qua tự động cài SSL (Bản ghi AAAA trỏ sai: $checkdns_v6)" >>/var/log/wptangtoc-ols.log
+    return 2>/dev/null || exit 0
+  fi
 fi
 
-checkdns=$(host "$NAME" | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-checkdns2=$(nslookup "$NAME" | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+# ==============================================================================
+# 3. KIỂM TRA BẢN GHI IPV4 (A) BẰNG NHIỀU NGUỒN PHÂN GIẢI SONG SONG
+#    Dùng host, nslookup, DNS Google, DNS Cloudflare — nếu 1 trong 4 nguồn
+#    khớp với IP máy chủ thì coi như đã trỏ đúng (tránh false-negative do
+#    resolver cục bộ lỗi hoặc cache cũ).
+# ==============================================================================
+checkdns=$(host "$NAME" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+checkdns2=$(nslookup "$NAME" 2>/dev/null | grep Address | cut -f5 | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+checkdns3=$(curl -s --connect-timeout 5 --max-time 10 "https://dns.google/resolve?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
+checkdns4=$(curl -s --connect-timeout 5 --max-time 10 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=${NAME}&type=A" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -1)
 
+error_ssl_ipv4="1"
+for resolved_ip in "$checkdns" "$checkdns2" "$checkdns3" "$checkdns4"; do
+  if [[ -n "$resolved_ip" ]] && echo "$server_ips" | grep -q "\b$resolved_ip\b"; then
+    error_ssl_ipv4="0"
+    break
+  fi
+done
 
-ip=$(ip a | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | sed '/127.0.0.1/d' | sed '/192.168/d' | sort -u)
-ip+=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com |grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com| grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-#tro ve quay lai
-
-if ! [[ $(echo "$ip" | grep "$checkdns") || $(echo "$ip" | grep "$checkdns2") ]]; then
-return 2>/dev/null ; exit
+if [[ "$error_ssl_ipv4" == "1" ]]; then
+  echo "[check-tro-ip-vs-run] $(date '+%d-%m-%Y %H:%M') - $NAME: Bỏ qua tự động cài SSL (DNS chưa trỏ đúng, hiện trỏ: ${checkdns:-${checkdns2:-${checkdns3:-${checkdns4:-Không xác định}}}})" >>/var/log/wptangtoc-ols.log
+  return 2>/dev/null || exit 0
 fi
 
+echo "[check-tro-ip-vs-run] $(date '+%d-%m-%Y %H:%M') - $NAME: DNS đã trỏ đúng, tiến hành gọi wptt-caissl để cài SSL tự động" >>/var/log/wptangtoc-ols.log
+
+# ==============================================================================
+# 4. GỌI SCRIPT CÀI SSL CHÍNH
+# ==============================================================================
+don_dep_cron
 . /etc/wptt/ssl/wptt-caissl "$NAME"
-# . /etc/wptt/ssl/wptt-caissl-cache-dns $NAME
-rm -f /etc/cron.d/cai-ssl-auto-"${NAME:?}"-tu-dong.cron
 
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-	NAME_CRON_ubuntu=${NAME//[.]/_}
-rm -f /etc/cron.d/cai-ssl-auto-"${NAME_CRON_ubuntu:?}"-tu-dong_cron
-	systemctl restart cron.service
-else
-	systemctl restart crond.service
-fi
 
