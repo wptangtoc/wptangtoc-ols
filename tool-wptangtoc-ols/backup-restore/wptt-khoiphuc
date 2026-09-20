@@ -23,6 +23,35 @@ export box_inner_width=78
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 
+# Dùng find -print0 + đọc bằng mapfile -d '' thay vì "for entry in $(ls ...)"
+wptt_list_source_backups() {
+  local dir="$1" safe_mode="$2" fname
+  [[ -d "$dir" ]] || return 0
+  while IFS=$'\t' read -r -d '' _ fname; do
+    if [[ "$safe_mode" == "1" ]]; then
+      # Giữ nguyên bộ lọc an toàn gốc cho thư mục User (chống ANSI Escape Injection / Log Forging)
+      [[ "$fname" =~ ^[a-zA-Z0-9._-]+$ ]] || continue
+    fi
+    printf '%s\0' "$fname"
+  done < <(find "$dir" -maxdepth 1 -type f \
+             \( -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tar.zst' \) \
+             ! -iname '*-wptt-luy-tien*' \
+             -printf '%T@\t%f\0' 2>/dev/null | sort -z -t $'\t' -k1,1 -rn)
+}
+
+wptt_list_db_backups() {
+  local dir="$1" safe_mode="$2" fname
+  [[ -d "$dir" ]] || return 0
+  while IFS=$'\t' read -r -d '' _ fname; do
+    if [[ "$safe_mode" == "1" ]]; then
+      [[ "$fname" =~ ^[a-zA-Z0-9._-]+$ ]] || continue
+    fi
+    printf '%s\0' "$fname"
+  done < <(find "$dir" -maxdepth 1 -type f \
+             \( -iname '*.sql' -o -iname '*.sql.gz' -o -iname '*.sql.zst' \) \
+             -printf '%T@\t%f\0' 2>/dev/null | sort -z -t $'\t' -k1,1 -rn)
+}
+
 if [[ "$1" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-backup-restore-main 1"
@@ -65,13 +94,11 @@ if [[ ! "$(ls -A /usr/local/backup-website/"$NAME"/ 2>/dev/null)" && ! "$(ls -A 
   exec /etc/wptt/wptt-backup-restore-main 1
 fi
 
-c=1
-for entry in $(ls -At /usr/local/backup-website/"$NAME" 2>/dev/null | grep ".zip$\|.tar.gz$\|.tar.zst$" | grep -v -- '-wptt-luy-tien'); do c=$((c + 1)); done
+mapfile -d '' -t selects_root < <(wptt_list_source_backups "/usr/local/backup-website/$NAME" 0)
+mapfile -d '' -t selects_user < <(wptt_list_source_backups "/usr/local/lsws/$NAME/backup-website" 1)
 
-cc=1
-if [[ $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.zip$\|.tar.gz$\|.tar.zst$' | grep -v -- '-wptt-luy-tien') ]]; then
-  for entry in $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.zip$\|.tar.gz$\|.tar.zst$' | grep -v -- '-wptt-luy-tien'); do cc=$((cc + 1)); done
-fi
+c=$(( ${#selects_root[@]} + 1 ))
+cc=$(( ${#selects_user[@]} + 1 ))
 
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}THỐNG KÊ BẢN SAO LƯU MÃ NGUỒN (SOURCE CODE)${C_RESET}"
@@ -82,16 +109,7 @@ echo -e "${C_CYAN}├───────────────────�
 left_text "${C_GREEN}Tổng cộng có: $((cc + c - 2)) file sao lưu mã nguồn${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-selects=()
-for entry in $(ls -At /usr/local/backup-website/"$NAME"/ 2>/dev/null | grep ".zip$\|.tar.gz$\|.tar.zst$" | grep -v -- '-wptt-luy-tien'); do selects+=("$entry"); done
-
-if [[ $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.zip$\|.tar.gz$\|.tar.zst$' | grep -v -- '-wptt-luy-tien') ]]; then
-	for entry in $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.zip$\|.tar.gz$\|.tar.zst$' | grep -v -- '-wptt-luy-tien'); do
-		if [[ "$entry" =~ ^[a-zA-Z0-9._-]+$ ]]; then # BỘ LỌC AN TOÀN: Phớt lờ mọi file chứa ký tự lạ/mã ANSI điều khiển, Tấn công giả mạo (Log Forging / ANSI Escape Injection), Lọc (Sanitize) toàn bộ các mục nhập từ thư mục User, chỉ cho phép các ký tự chữ, số, dấu chấm, và dấu gạch ngang/gạch dưới lọt vào mảng.
-			selects+=("$entry"); 
-		fi
-	done
-fi
+selects=( "${selects_root[@]}" "${selects_user[@]}" )
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   echo -e "${C_RED}Không có file backup mã nguồn nào hợp lệ (.zip, .tar.gz, .tar.zst)!${C_RESET}"
@@ -169,13 +187,11 @@ if [[ ! $(ls -A /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sq
   exec /etc/wptt/wptt-backup-restore-main 1
 fi
 
-b=1
-for entry in $(ls -At /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do b=$((b + 1)); done
+mapfile -d '' -t selects_db_root < <(wptt_list_db_backups "/usr/local/backup-website/$NAME" 0)
+mapfile -d '' -t selects_db_user < <(wptt_list_db_backups "/usr/local/lsws/$NAME/backup-website" 1)
 
-bb=1
-if [[ $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') ]]; then
-  for entry in $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do bb=$((bb + 1)); done
-fi
+b=$(( ${#selects_db_root[@]} + 1 ))
+bb=$(( ${#selects_db_user[@]} + 1 ))
 
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}THỐNG KÊ BẢN SAO LƯU DATABASE (CƠ SỞ DỮ LIỆU)${C_RESET}"
@@ -186,15 +202,7 @@ echo -e "${C_CYAN}├───────────────────�
 left_text "${C_GREEN}Tổng cộng có: $((bb + b - 2)) file sao lưu Database${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-selects_db=()
-for entry in $(ls -At /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do selects_db+=("$entry"); done
-if [[ $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') ]]; then
-	for entry in $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do
-		if [[ "$entry" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-			selects_db+=("$entry");
-		fi
-	done
-fi
+selects_db=( "${selects_db_root[@]}" "${selects_db_user[@]}" )
 
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}CHỌN MỐC THỜI GIAN KHÔI PHỤC (DATABASE)${C_RESET}"
@@ -871,3 +879,4 @@ exec 200>&-
 rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME:?}.lock" 2>/dev/null
 
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+
