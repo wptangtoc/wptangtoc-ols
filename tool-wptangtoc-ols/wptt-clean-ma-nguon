@@ -68,8 +68,8 @@ function xuly_clean_website() {
   # Load cấu hình của từng website
   . "/etc/wptt/vhost/.$domain_clean.conf"
 
-	pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 #pkil để xóa tiến trình hiện hữu
-	sleep 1
+  pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 #pkil để xóa tiến trình hiện hữu
+  sleep 1
 
   local live_path="/usr/local/lsws/$domain_clean/html"
   local temp_path="/usr/local/lsws/$domain_clean/html_clean"
@@ -77,7 +77,14 @@ function xuly_clean_website() {
 
   . /etc/wptt/php/php-cli-domain-config "$domain_clean"
   
-  WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" -d memory_limit=512M /usr/local/bin/wp )
+  # ==============================================================================
+  # BẢO MẬT: Tạo thư mục cache ngẫu nhiên cho WP-CLI (Chống Symlink Attack)
+  # ==============================================================================
+  local wp_cache_dir
+  wp_cache_dir=$(mktemp -d -t "wp-cli-cache-${User_name_vhost}-XXXXXX")
+  chown -R "$User_name_vhost:$User_name_vhost" "$wp_cache_dir" 2>/dev/null
+
+  WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- env WP_CLI_CACHE_DIR="$wp_cache_dir" "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" -d memory_limit=512M /usr/local/bin/wp )
 
   echo -e "${C_CYAN}Đang tiến hành trinh sát và phân tích mã độc trước khi dọn dẹp...${C_RESET}"
 
@@ -145,14 +152,14 @@ function xuly_clean_website() {
   _rundone "Xóa Core và file rác hoàn tất"
 
   _runing "Đang Rsync cập nhật Core WordPress mới nhất từ Staging..."
-  
   # Rsync file từ kho tạm an toàn vào thẳng mã nguồn
   rsync -a /etc/wptt/tmp/wptt-core-clean-staging/ "$path/"
   
-  # Khôi phục phân quyền chuẩn OLS cho các thư mục vừa được copy
-  local owner_group
-  owner_group=$(stat -c '%U:%G' "$path/wp-config.php" 2>/dev/null || stat -c '%U:%G' "$path")
-  chown -hR "$owner_group" "$path/wp-admin" "$path/wp-includes" "$path"/*.php
+  # ==============================================================================
+  # RESET QUYỀN TRUY CẬP CHO USER WEBSITE TRƯỚC KHI GỌI WP-CLI
+  # ==============================================================================
+  # Bắt buộc phải có đoạn này để wp-cli có quyền ghi wp-content/plugins, themes...
+  chown -R "$User_name_vhost:$User_name_vhost" "$path"
   
   "${WP_EXEC[@]}" core update-db --path="$path" >/dev/null 2>&1
   
@@ -172,6 +179,7 @@ function xuly_clean_website() {
   fi
 
   mkdir -p "$path/wp-content/languages"
+  chown -R "$User_name_vhost:$User_name_vhost" "$path/wp-content/languages"
   "${WP_EXEC[@]}" language core update --path="$path" >/dev/null 2>&1
   "${WP_EXEC[@]}" language plugin update --all --path="$path" >/dev/null 2>&1
   "${WP_EXEC[@]}" language theme update --all --path="$path" >/dev/null 2>&1
@@ -181,33 +189,66 @@ function xuly_clean_website() {
   local FAILED_PLUGINS=""
   local FAILED_THEMES=""
 
-  _runing "Đang tải lại thư viện Plugins (Có thể mất vài phút)..."
-  local plugins_list=$("${WP_EXEC[@]}" plugin list --field=name --path="$path" 2>/dev/null)
-  if [[ -n "$plugins_list" ]]; then
-    for plugin in $plugins_list; do
-      if ! "${WP_EXEC[@]}" plugin install "$plugin" --force --path="$path" >/dev/null 2>&1; then
+  # ==============================================================================
+  # XỬ LÝ PLUGINS (V4 - Force Clean & Anti-Panic WP-CLI)
+  # ==============================================================================
+  _runing "Đang tải lại thư viện Plugins (Force Clean & Debug)..."
+  for plugin_path in "$path/wp-content/plugins"/*; do
+    if [[ -d "$plugin_path" ]]; then
+      plugin=$(basename "$plugin_path")
+      [[ "$plugin" == "index.php" || "$plugin" == *"_wptt_bak" ]] && continue
+      
+      local plugin_dir="$path/wp-content/plugins/$plugin"
+      local backup_dir="$path/wp-content/plugins/${plugin}_wptt_bak"
+      
+      mv "$plugin_dir" "$backup_dir"
+
+      install_output=$(timeout 30 "${WP_EXEC[@]}" plugin install "$plugin" --force --path="$path" --skip-plugins --skip-themes 2>&1)
+      
+      if [[ -d "$plugin_dir" && "$(ls -A "$plugin_dir" 2>/dev/null)" ]]; then
+        rm -rf "$backup_dir"
+      else
+        echo -e "\n${C_RED}⚠ WP-CLI từ chối tải plugin [$plugin]. Lỗi chi tiết:${C_RESET} \n$install_output\n"
+        [[ -d "$backup_dir" ]] && mv "$backup_dir" "$plugin_dir"
         FAILED_PLUGINS+="$plugin, "
       fi
-    done
-  fi
-  _rundone "Xử lý tải lại Plugins hoàn tất"
+    fi
+  done
+  find "$path/wp-content/plugins" -maxdepth 1 -type f -name "*.php" ! -name "index.php" -delete
+  _rundone "Xử lý tải lại và làm sạch Plugins hoàn tất"
 
-  _runing "Đang tải lại giao diện Themes (Có thể mất vài phút)..."
-  local themes_list=$("${WP_EXEC[@]}" theme list --field=name --path="$path" 2>/dev/null)
-  if [[ -n "$themes_list" ]]; then
-    for theme in $themes_list; do
-      if ! "${WP_EXEC[@]}" theme install "$theme" --force --path="$path" >/dev/null 2>&1; then
+  # XỬ LÝ THEMES ( Force Clean & Anti-Panic WP-CLI)
+  _runing "Đang tải lại giao diện Themes (Force Clean & Debug)..."
+  for theme_path in "$path/wp-content/themes"/*; do
+    if [[ -d "$theme_path" ]]; then
+      theme=$(basename "$theme_path")
+      [[ "$theme" == "index.php" || "$theme" == *"_wptt_bak" ]] && continue
+      
+      local theme_dir="$path/wp-content/themes/$theme"
+      local backup_dir="$path/wp-content/themes/${theme}_wptt_bak"
+      
+      mv "$theme_dir" "$backup_dir"
+
+      install_output=$(timeout 30 "${WP_EXEC[@]}" theme install "$theme" --force --path="$path" --skip-plugins --skip-themes 2>&1)
+
+      if [[ -d "$theme_dir" && "$(ls -A "$theme_dir" 2>/dev/null)" ]]; then
+        rm -rf "$backup_dir"
+      else
+        echo -e "\n${C_RED}⚠ WP-CLI từ chối tải theme [$theme]. Lỗi chi tiết:${C_RESET} \n$install_output\n"
+        [[ -d "$backup_dir" ]] && mv "$backup_dir" "$theme_dir"
         FAILED_THEMES+="$theme, "
       fi
-    done
-  fi
-  _rundone "Xử lý tải lại Themes hoàn tất"
+    fi
+  done
+  find "$path/wp-content/themes" -maxdepth 1 -type f -name "*.php" ! -name "index.php" -delete
+  _rundone "Xử lý tải lại và làm sạch Themes hoàn tất"
 
-  FAILED_PLUGINS=${FAILED_PLUGINS%, }
-  FAILED_THEMES=${FAILED_THEMES%, }
-
+  # ==============================================================================
+  # DỌN DẸP CACHE, CRONJOB VÀ DROP-INS
+  # ==============================================================================
   _runing "Đang dọn dẹp Cache ảo, Cronjob lạ và Drop-ins..."
   rm -rf "${path:?}/wp-content/cache" "/usr/local/lsws/${domain_clean:?}/luucache"
+  rm -rf "${path:?}/wp-content/litespeed" # Xóa thư mục Litespeed minify chứa mã độc
 
   # Tiêu diệt các cronjob mã độc (vtpost_*, sc_cron_*, và chuỗi ngẫu nhiên >= 15 ký tự)
   "${WP_EXEC[@]}" cron event list --allow-root --path="$path" 2>/dev/null | awk '{ print $1 }' | grep -E 'vtpost_login_daily|^sc_cron_|^[a-zA-Z0-9]{15,}$' | while read -r bad_cron; do
@@ -239,8 +280,7 @@ function xuly_clean_website() {
   find "$path/wp-content/uploads" -type f \( -name "*.php" -o -name "*.php[34578]" -o -name "*.phtml" -o -name "*.phps" -o -name "*.sh" -o -name "*.cgi" -o -name "*.pl" -o -name "*.shtml" \) -delete
   find "$path/wp-content" -type f -name ".htaccess" -delete
 
-
-	#Quét và tiêu diệt thư mục ẩn / file ẩn trong wp-content (Cờ -mindepth 1 để bảo vệ dấu chấm thư mục hiện tại)
+  #Quét và tiêu diệt thư mục ẩn / file ẩn trong wp-content (Cờ -mindepth 1 để bảo vệ dấu chấm thư mục hiện tại)
   find "$path/wp-content" -mindepth 1 -type d -name ".*" -prune -exec rm -rf {} +
   find "$path/wp-content" -mindepth 1 -type f -name ".*" -delete
 
@@ -248,16 +288,14 @@ function xuly_clean_website() {
   echo '<?php' >"$path/wp-content/index.php"
   echo '<?php' >"$path/wp-content/themes/index.php"
   echo '<?php' >"$path/wp-content/plugins/index.php"
-	rm -f "${path:?}"/wp-content/object-cache.php
-	rm -f "${path:?}"/wp-content/advanced-cache.php
+  rm -f "${path:?}"/wp-content/object-cache.php
+  rm -f "${path:?}"/wp-content/advanced-cache.php
 
-	if [[ -f "$path/wp-content/db.php" ]] && grep -q -i "sqlite" "$path/wp-content/db.php"; then
-		:
-	else
-		rm -f "${path:?}"/wp-content/db.php
-	fi
-
-
+  if [[ -f "$path/wp-content/db.php" ]] && grep -q -i "sqlite" "$path/wp-content/db.php"; then
+    :
+  else
+    rm -f "${path:?}"/wp-content/db.php
+  fi
 
   find "$path/wp-content/uploads" -type d -print0 | while IFS= read -r -d '' dir; do
     [[ ! -f "$dir/index.php" ]] && echo '<?php' >"$dir/index.php"
@@ -276,20 +314,19 @@ function xuly_clean_website() {
     echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
     sleep 4
   fi
+  # DỌN DẸP THƯ MỤC CACHE TẠM SAU KHI SỬ DỤNG XONG
+  rm -rf "$wp_cache_dir" 2>/dev/null
 
   _runing "Đang làm mới cấu hình Salt"
   (/etc/wptt/wordpress/thay-salt "$domain_clean" >/dev/null 2>&1)
   _rundone "Đang làm mới cấu hình Salt"
 
-	echo "Bạn hãy chủ động đi vào: thư mục: $path"
-	echo "Để kiểm tra lại mã nguồn nếu chưa sạch hãy tự làm sạch thủ công"
+  echo "Bạn hãy chủ động đi vào: thư mục: $path"
+  echo "Để kiểm tra lại mã nguồn nếu chưa sạch hãy tự làm sạch thủ công"
 
-	echo ""
+  echo ""
   echo -en "\n${C_GREEN}➜ Nhấn [Enter] đưa website trở lại hoạt động${C_RESET}"
   read -r _
-
-
-
 
   _runing "Đang đưa website trở lại hoạt động..."
   mv "$path" "$live_path"
@@ -349,12 +386,13 @@ function xuly_clean_website() {
   '
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-	pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 #pkil để xóa tiến trình hiện hữu
-	sleep 1
+  pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 #pkil để xóa tiến trình hiện hữu
+  sleep 1
 
   if [[ $lock_down_duoc_tat_khi_run ]]; then
     . /etc/wptt/bao-mat/wptt-lock-down "$domain_clean" on >/dev/null 2>&1
   fi
+  
 }
 
 # ==============================================================================
