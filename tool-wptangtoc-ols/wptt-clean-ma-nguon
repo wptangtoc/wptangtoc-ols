@@ -67,7 +67,13 @@ function xuly_clean_website() {
 
   # Load cấu hình của từng website
   . "/etc/wptt/vhost/.$domain_clean.conf"
-  local path="/usr/local/lsws/$domain_clean/html"
+
+	pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 #pkil để xóa tiến trình hiện hữu
+	sleep 1
+
+  local live_path="/usr/local/lsws/$domain_clean/html"
+  local temp_path="/usr/local/lsws/$domain_clean/html_clean"
+  local path="$live_path"
 
   . /etc/wptt/php/php-cli-domain-config "$domain_clean"
   
@@ -87,7 +93,7 @@ function xuly_clean_website() {
     echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     
     if [[ -n "$MODIFIED_FILES" ]]; then
-      left_text " ${C_YELLOW}1. File PHP bị sửa đổi trong 7 ngày qua (Thường là Backdoor):${C_RESET}" 2
+      left_text "  ${C_YELLOW}1. File PHP bị sửa đổi trong 7 ngày qua (Thường là Backdoor):${C_RESET}" 2
       echo "$MODIFIED_FILES" | head -n 8 | while read -r line; do
         left_text "    - ${line#"$path"/}" 2
       done
@@ -96,7 +102,7 @@ function xuly_clean_website() {
     fi
 
     if [[ -n "$CHECKSUM_WARNINGS" ]]; then
-      left_text " ${C_YELLOW}2. Plugin bị sai lệch mã nguồn so với kho WordPress.org:${C_RESET}" 2
+      left_text "  ${C_YELLOW}2. Plugin bị sai lệch mã nguồn so với kho WordPress.org:${C_RESET}" 2
       echo "$CHECKSUM_WARNINGS" | head -n 8 | while read -r line; do
         clean_warn=$(echo "$line" | sed 's/Warning: //g')
         left_text "    - $clean_warn" 2
@@ -117,6 +123,15 @@ function xuly_clean_website() {
     sed -i '/lock_down/d' "/etc/wptt/vhost/.$domain_clean.conf"
     _rundone "Tắt Lock Down thành công"
   fi
+
+  # ==============================================================================
+  # CÔ LẬP MÃ NGUỒN (NGĂN CHẶN WP-CRON VÀ REQUEST BÊN NGOÀI KÍCH HOẠT MÃ ĐỘC)
+  # ==============================================================================
+  _runing "Đang cô lập mã nguồn (Chuyển sang thư mục html_clean tạm)..."
+  rm -rf "$temp_path" 2>/dev/null
+  mv "$live_path" "$temp_path"
+  path="$temp_path" # Đổi đường dẫn xử lý sang thư mục tạm
+  _rundone "Đã cô lập mã nguồn thành công để tránh tái nhiễm"
 
   _runing "Đang xóa Core cũ và các file rác gốc..."
   rm -rf "${path:?}/wp-admin" "${path:?}/wp-includes"
@@ -143,6 +158,7 @@ function xuly_clean_website() {
   
   if [[ ! -f "$path/wp-load.php" ]]; then
     echo -e "${C_RED}❌ Khôi phục Core WP thất bại cho $domain_clean${C_RESET}"
+    mv "$path" "$live_path" 2>/dev/null # Trả lại thư mục gốc nếu lỗi
     return 1
   fi
   _rundone "Phục hồi Core WordPress siêu tốc thành công"
@@ -193,7 +209,10 @@ function xuly_clean_website() {
   _runing "Đang dọn dẹp Cache ảo, Cronjob lạ và Drop-ins..."
   rm -rf "${path:?}/wp-content/cache" "/usr/local/lsws/${domain_clean:?}/luucache"
 
-  "${WP_EXEC[@]}" cron event list --allow-root --path="$path" 2>/dev/null | grep 'vtpost_login_daily' | awk '{ print $1 }' | xargs -I % "${WP_EXEC[@]}" cron event delete % --path="$path" >/dev/null 2>&1
+  # Tiêu diệt các cronjob mã độc (vtpost_*, sc_cron_*, và chuỗi ngẫu nhiên >= 15 ký tự)
+  "${WP_EXEC[@]}" cron event list --allow-root --path="$path" 2>/dev/null | awk '{ print $1 }' | grep -E 'vtpost_login_daily|^sc_cron_|^[a-zA-Z0-9]{15,}$' | while read -r bad_cron; do
+    "${WP_EXEC[@]}" cron event delete "$bad_cron" --path="$path" >/dev/null 2>&1
+  done
 
   rm -f "${path:?}/wp-content/advanced-cache.php" "${path:?}/wp-content/object-cache.php"
 
@@ -224,6 +243,16 @@ function xuly_clean_website() {
   echo '<?php' >"$path/wp-content/index.php"
   echo '<?php' >"$path/wp-content/themes/index.php"
   echo '<?php' >"$path/wp-content/plugins/index.php"
+	rm -f "${path:?}"/wp-content/object-cache.php
+	rm -f "${path:?}"/wp-content/advanced-cache.php
+
+	if [[ -f "$path/wp-content/db.php" ]] && grep -q -i "sqlite" "$path/wp-content/db.php"; then
+		:
+	else
+		rm -f "${path:?}"/wp-content/db.php
+	fi
+
+
 
   find "$path/wp-content/uploads" -type d -print0 | while IFS= read -r -d '' dir; do
     [[ ! -f "$dir/index.php" ]] && echo '<?php' >"$dir/index.php"
@@ -247,13 +276,32 @@ function xuly_clean_website() {
   (/etc/wptt/wordpress/thay-salt "$domain_clean" >/dev/null 2>&1)
   _rundone "Đang làm mới cấu hình Salt"
 
-  _runing "Đang làm mới cấu hình htaccess"
-  (/etc/wptt/wptt-htaccess-reset "$domain_clean" >/dev/null 2>&1)
-  _rundone "làm mới cấu hình htaccess"
+	echo "Bạn hãy chủ động đi vào: thư mục: $path"
+	echo "Để kiểm tra lại mã nguồn nếu chưa sạch hãy tự làm sạch thủ công"
+
+	echo ""
+  echo -en "\n${C_GREEN}➜ Nhấn [Enter] đưa website trở lại hoạt động${C_RESET}"
+  read -r _
+
+
+
+
+  _runing "Đang đưa website trở lại hoạt động..."
+  mv "$path" "$live_path"
+  path="$live_path" # Trả lại biến path chuẩn nếu có dùng ở dưới
+  _rundone "Website đã trở lại hoạt động bình thường"
 
   _runing "Đang làm mới Cache"
   (/etc/wptt/cache/wptt-xoacache "$domain_clean" >/dev/null 2>&1)
   _rundone "Đang làm mới Cache"
+
+  # ==============================================================================
+  # HOÀN TRẢ MÃ NGUỒN VỀ HOẠT ĐỘNG (RENAME LẠI)
+  # ==============================================================================
+
+  _runing "Đang làm mới cấu hình htaccess"
+  (/etc/wptt/wptt-htaccess-reset "$domain_clean" >/dev/null 2>&1)
+  _rundone "Làm mới cấu hình htaccess"
 
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT TẨY RỬA MÃ NGUỒN (CLEAN CORE)${C_RESET}"
@@ -295,6 +343,9 @@ function xuly_clean_website() {
     NR>1  { printf "  %-5s | %-20s | %-30s\n", $1, $2, $3 }
   '
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+	pkill -9 -u "$User_name_vhost" >/dev/null 2>&1 #pkil để xóa tiến trình hiện hữu
+	sleep 1
 
   if [[ $lock_down_duoc_tat_khi_run ]]; then
     . /etc/wptt/bao-mat/wptt-lock-down "$domain_clean" on >/dev/null 2>&1
@@ -361,4 +412,4 @@ fi
 
 echo -en "${C_GREEN}Nhấn phím [Enter] để kết thúc...${C_RESET}"
 read -r _
-[[ -z "$1" ]] && exec /usr/bin/wptangtoc 1 || exit 1] && exec /usr/bin/wptangtoc 1 || exit 1
+[[ -z "$1" ]] && exec /usr/bin/wptangtoc 1 || exit 1
