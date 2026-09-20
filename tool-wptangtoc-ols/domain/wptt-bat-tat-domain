@@ -6,7 +6,8 @@
 function huong_dan() {
   Đây là tính năng giúp tạm khoá website
   Tính năng bật và tắt này là tính năng tạm khoá website, không xoá mã nguồn bất kỳ thứ gì.
-  chỉ đơn giản nó sẽ tạm ngừng hoạt động website hoặc bật lại nếu đã thiết lập tạm ngừng trước đó
+  chỉ đơn giản nó sẽ tạm ngừng hoạt động website hoặc bật lại nếu đã thiết lập tạm ngừng trước đó.
+  Đóng băng mã nguồn bằng chmod 000 & chown root.
 }
 
 # ==============================================================================
@@ -34,27 +35,27 @@ function lua_chon_NAME() {
   local i=1
 
   for filepath in /etc/wptt/vhost/.*.conf; do
-	  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-	  local domain="${filepath##*/}"
-	  domain="${domain%.conf}"
-	  domain="${domain#.}"
+    local domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-	  if [[ "$domain" == ?*.?* ]]; then
-		  local status_text=""
-		  local status_color=""
+    if [[ "$domain" == ?*.?* ]]; then
+      local status_text=""
+      local status_color=""
 
-		  # Kiểm tra trạng thái dựa trên sự tồn tại của file .bkwptt
-		  if [[ -f "/usr/local/lsws/conf/vhosts/$domain/$domain.conf.bkwptt" ]]; then
-			  status_text="[Đang TẠM KHÓA]"
-			  status_color=$C_RED
-		  else
-			  status_text="[Đang BẬT - Hoạt động]"
-			  status_color=$C_GREEN
-		  fi
+      # Kiểm tra trạng thái dựa trên sự tồn tại của file .bkwptt
+      if [[ -f "/usr/local/lsws/conf/vhosts/$domain/$domain.conf.bkwptt" ]]; then
+        status_text="[Đang TẠM KHÓA]"
+        status_color=$C_RED
+      else
+        status_text="[Đang BẬT - Hoạt động]"
+        status_color=$C_GREEN
+      fi
 
-		  selects+=("$domain|$status_text|$status_color")
-	  fi
+      selects+=("$domain|$status_text|$status_color")
+    fi
   done
 
   if [[ ${#selects[@]} -eq 0 ]]; then
@@ -170,7 +171,6 @@ elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
   CLI_MODE=1
 elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
   NAME="$1"
-  # Hỗ trợ CLI cho 1 domain: wptt-bat-tat-domain domain.com on/off
   if [[ "${2:-}" == "on" ]]; then
     CLI_MODE=1
     CLI_ACTION="bat"
@@ -302,10 +302,10 @@ else
       left_text "  Website ${NAME} hiện ĐANG BẬT (Hoạt động bình thường)." 2
       echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-      str_opt1="  1) TẠM KHÓA (Ngừng hoạt động website, giữ nguyên dữ liệu)"
+      str_opt1="  1) TẠM KHÓA (Ngừng hoạt động, Đóng băng bảo mật mã nguồn)"
       pad_opt1=$((box_inner_width - ${#str_opt1}))
       [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẠM KHÓA${C_RESET} (Ngừng hoạt động website, giữ nguyên dữ liệu)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẠM KHÓA${C_RESET} (Ngừng hoạt động, Đóng băng bảo mật mã nguồn)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
 
       str_opt2="  2) Không làm gì cả (Hủy thao tác)"
       pad_opt2=$((box_inner_width - ${#str_opt2}))
@@ -337,25 +337,68 @@ else
 fi
 
 # ==============================================================================
-# THỰC THI THAY ĐỔI FILE VHOST
+# THỰC THI THAY ĐỔI FILE VHOST & QUYỀN MÃ NGUỒN (ĐÓNG BĂNG VÀ NGẮT LOG OLS)
 # ==============================================================================
 echo ""
 for DOMAIN in "${DOMAIN_LIST[@]}"; do
   _runing "$action_text cho $DOMAIN"
 
+  # --- Truy xuất file cấu hình để lấy Tên User Isolated ---
+  unset User_name_vhost
+  if [[ -f "/etc/wptt/vhost/.$DOMAIN.conf" ]]; then
+    . "/etc/wptt/vhost/.$DOMAIN.conf"
+  fi
+  user_vhost="${User_name_vhost:-$DOMAIN}" # Fallback
+  # -------------------------------------------------------
+
+  main_conf="/usr/local/lsws/conf/httpd_config.conf"
+  flag_file="/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf.bkwptt"
+  conf_file="/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf"
+
   if [[ "$wp_action" == "bat" ]]; then
-    # Kích hoạt lại (Nếu đang bị khóa thì mới mở)
-    if [[ -f "/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf.bkwptt" ]]; then
-      mv "/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf.bkwptt" "/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf"
+    # MỞ KHÓA
+    if [[ -f "$flag_file" ]]; then
+      
+      # 1. Tương thích ngược: Đổi tên file cấu hình về như cũ
+      mv "$flag_file" "$conf_file"
+
+      # 2. Khôi phục khai báo trong httpd_config.conf (Gỡ bỏ prefix #bkwptt_)
+      sed -i "/^#bkwptt_virtualhost $DOMAIN {/,/^#bkwptt_}/ s/^#bkwptt_//" "$main_conf"
+      sed -i "s/^#bkwptt_\([[:space:]]*map[[:space:]]*$DOMAIN[[:space:]]*$DOMAIN\)/\1/g" "$main_conf"
+
       chown -hR lsadm:$tuong_thich_nhom_litespeed "/usr/local/lsws/conf/vhosts/$DOMAIN"
       chmod -R 750 "/usr/local/lsws/conf/vhosts/$DOMAIN"
+
+      # 3. RÃ ĐÔNG MÃ NGUỒN (Trả về quyền cho User & Mở khóa thư mục)
+      if [[ -d "/usr/local/lsws/$DOMAIN/html" ]]; then
+        chown -hR "$user_vhost":"$user_vhost" "/usr/local/lsws/$DOMAIN/html"
+        chmod 755 "/usr/local/lsws/$DOMAIN/html"
+      fi
+
       is_success=true
     fi
   else
-    # Tạm khóa (Nếu đang mở thì mới khóa)
-    if [[ -n "$DOMAIN" && -f "/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf" ]]; then
-      mv "/usr/local/lsws/conf/vhosts/${DOMAIN:?}/${DOMAIN:?}.conf" "/usr/local/lsws/conf/vhosts/${DOMAIN:?}/${DOMAIN:?}.conf.bkwptt"
+    # TẠM KHÓA
+    if [[ -n "$DOMAIN" && -f "$conf_file" ]]; then
+      
+      # 1. Tương thích ngược: Vẫn dùng mv để UI và hệ thống cũ nhận diện
+      mv "$conf_file" "$flag_file"
+
+      # 2. Ẩn khai báo khỏi httpd_config.conf để OLS không báo lỗi (Thêm prefix #bkwptt_)
+      # Comment toàn bộ block virtualhost
+      sed -i "/^[[:space:]]*virtualhost $DOMAIN {/,/^[[:space:]]*}/ s/^/#bkwptt_/" "$main_conf"
+      # Comment thẻ map (lắng nghe domain)
+      sed -i "s/^[[:space:]]*map[[:space:]]*$DOMAIN[[:space:]]*$DOMAIN/#bkwptt_&/g" "$main_conf"
+      
       [[ -d "/usr/local/lsws/${DOMAIN:?}/luucache" ]] && rm -rf "/usr/local/lsws/${DOMAIN:?}/luucache"
+
+      # 3. ĐÓNG BĂNG MÃ NGUỒN (Khóa cứng với root và 000)
+      if [[ -d "/usr/local/lsws/$DOMAIN/html" ]]; then
+        chown -hR root:root "/usr/local/lsws/$DOMAIN/html"
+        chmod 000 "/usr/local/lsws/$DOMAIN/html"
+      fi
+
+      pkill -9 -u "$user_vhost" >/dev/null 2>&1
       is_success=true
     fi
   fi
@@ -365,7 +408,7 @@ for DOMAIN in "${DOMAIN_LIST[@]}"; do
 done
 
 # ==============================================================================
-# KHỞI ĐỘNG LẠI DỊCH VỤ VÀ BÁO CÁO (NẾU CÓ THAY ĐỔI)
+# KHỞI ĐỘNG LẠI DỊCH VỤ VÀ BÁO CÁO
 # ==============================================================================
 if $is_success; then
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
@@ -380,9 +423,9 @@ if $is_success; then
   fi
 
   if [[ "$wp_action" == "bat" ]]; then
-    left_text "Trạng thái mới   : ${C_GREEN}Đã MỞ KHÓA. Các website hoạt động bình thường.${C_RESET}" 2
+    left_text "Trạng thái mới   : ${C_GREEN}Đã MỞ KHÓA. Phục hồi 100% quyền truy cập.${C_RESET}" 2
   else
-    left_text "Trạng thái mới   : ${C_RED}Đã TẠM KHÓA. Truy cập sẽ bị báo lỗi không tìm thấy.${C_RESET}" 2
+    left_text "Trạng thái mới   : ${C_RED}Đã TẠM KHÓA. Cấm 100% truy cập vào dữ liệu.${C_RESET}" 2
   fi
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
