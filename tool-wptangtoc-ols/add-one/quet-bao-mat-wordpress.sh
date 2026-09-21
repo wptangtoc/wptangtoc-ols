@@ -1,5 +1,5 @@
 #!/bin/bash
-# shellcheck disable=SC1091
+# shellcheck disable=SC1091,SC2048,SC2086
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
@@ -75,6 +75,25 @@ if [[ ! -f "$wp_config" ]]; then
   exit 0
 fi
 
+#chạy lệnh [[ -L "/usr/local/lsws/$NAME/html/wp-config.php" ]], Bash sẽ chỉ kiểm tra chính cái điểm cuối cùng (tức là file wp-config.php). Nó không bận tâm việc các thư mục cha (như $NAME hay html) có phải là symlink hay không.
+
+# Chống tấn công Symlink (Ghi đè file hệ thống /etc/shadow)
+if [[ -L "$wp_config" ]]; then
+  echo -e "\n${C_RED}❌ CẢNH BÁO BẢO MẬT: Phát hiện Symlink tại wp-config.php! Hủy bỏ để ngăn chặn tấn công leo thang đặc quyền.${C_RESET}"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && . /etc/wptt/wptt-add-one-main 1
+  exit 1
+fi
+
+# ==============================================================================
+# TẢI CẤU HÌNH VÀ KHỞI TẠO MÔI TRƯỜNG THỰC THI WP-CLI CHUẨN
+# ==============================================================================
+. /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
+. "$pathcheck" 2>/dev/null
+
+# Khởi tạo mảng thực thi WP-CLI an toàn, map đúng phiên bản PHP của Vhost và hạ quyền xuống User
+WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
+
 # ==============================================================================
 # BẮT ĐẦU QUÁ TRÌNH QUÉT
 # ==============================================================================
@@ -84,14 +103,10 @@ echo -e "${C_CYAN}╰───────────────────�
 
 # 1. CÀI ĐẶT THƯ VIỆN GÓI WP-CLI NẾU THIẾU
 _runing "Kiểm tra và chuẩn bị thư viện Vulnerability Scanner..."
-if ! wp package list --allow-root 2>/dev/null | grep -q -i 'wpcli-vulnerability-scanner'; then
-  wp package install 10up/wpcli-vulnerability-scanner:dev-stable --allow-root >/dev/null 2>&1
+if ! "${WP_EXEC[@]}" package list 2>/dev/null | grep -q -i 'wpcli-vulnerability-scanner'; then
+  "${WP_EXEC[@]}" package install 10up/wpcli-vulnerability-scanner:dev-stable >/dev/null 2>&1
 fi
 _rundone "Chuẩn bị thư viện WP-CLI hoàn tất"
-
-# Tải cấu hình PHP của domain và cấu hình vhost
-. /etc/wptt/php/wptt-php-service-cli-theo-domain "$NAME" 2>/dev/null
-. "$pathcheck" 2>/dev/null
 
 # 2. BYPASS LOCKDOWN & CẤU HÌNH WORDFENCE API
 is_locked=0
@@ -108,16 +123,16 @@ sed -i "0,/<?php/s/<?php/<?php\ndefine( 'VULN_API_PROVIDER', 'wordfence' );/" "$
 # 3. THỰC THI QUÉT LỖ HỔNG (WORDFENCE VULNERABILITY SCANNER)
 echo -e "\n${C_CYAN}➜ Đang quét lỗ hổng Plugin/Theme/Core bằng dữ liệu Wordfence...${C_RESET}"
 echo -e "${C_YELLOW}------------------------------------------------------------------------------${C_RESET}"
-wp vuln status --allow-root --path="/usr/local/lsws/$NAME/html"
+"${WP_EXEC[@]}" vuln status --path="/usr/local/lsws/$NAME/html"
 echo -e "${C_YELLOW}------------------------------------------------------------------------------${C_RESET}"
 
 # 4. LỚP KHIÊN 1: KIỂM TRA MÃ BĂM (CHECKSUM) CORE & PLUGIN
 echo -e "\n${C_CYAN}➜ Đang kiểm tra tính toàn vẹn của mã nguồn gốc (Checksum)...${C_RESET}"
 echo -e "${C_YELLOW}------------------------------------------------------------------------------${C_RESET}"
-wp core verify-checksums --allow-root --path="/usr/local/lsws/$NAME/html"
+"${WP_EXEC[@]}" core verify-checksums --path="/usr/local/lsws/$NAME/html"
 
 # Quét checksum plugin (lọc bỏ các cảnh báo của plugin trả phí không có trên repo WP)
-wp plugin verify-checksums --all --allow-root --path="/usr/local/lsws/$NAME/html" 2>&1 | grep -v 'Warning: Plugin not found' | grep -v 'Success: Plugin verifies'
+"${WP_EXEC[@]}" plugin verify-checksums --all --path="/usr/local/lsws/$NAME/html" 2>&1 | grep -v 'Warning: Plugin not found' | grep -v 'Success: Plugin verifies'
 echo -e "${C_YELLOW}------------------------------------------------------------------------------${C_RESET}"
 
 # 5. LỚP KHIÊN 2: QUÉT MÃ ĐỘC (BACKDOOR/EVAL) BẰNG REGEX HỆ THỐNG
