@@ -50,13 +50,13 @@
 
 <h3>Cách 1: Cài đặt tiêu chuẩn (Có tương tác)</h3>
 <p>Bạn chỉ cần dán đoạn mã này vào Terminal (quyền <code>root</code>), hệ thống sẽ chạy và có menu hỏi bạn một số thiết lập cơ bản:</p>
-<pre><code>curl --tlsv1.3 -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</code></pre>
+<pre><code>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</code></pre>
 <p><i>Link dự phòng từ GitHub:</i></p>
 <pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
 
 <h3>Cách 2: 🤖 Cài đặt Không Chạm (Unattended / Zero-Touch)</h3>
 <p>Tuyệt chiêu dành cho các Sysadmin muốn triển khai hạ tầng hàng loạt (Mass Deployment) qua Ansible, Cloud-Init, hãng VPS đóng thành template hay Snapshots để nhân bản rất nhanh chóng và tiện lợi hoặc đơn giản là bạn "lười" bấm phím. Chỉ cần thêm cờ <code>--auto</code>, phần mềm sẽ <b>tự động bỏ qua mọi câu hỏi</b>, áp dụng ngay cấu hình mặc định an toàn, ổn định và nhanh nhất do tác giả định chuẩn (PHP 8.3, MariaDB Stable LTS 10.11, Port SSH mặc định).</p>
-<pre><code>curl --tlsv1.3 -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols --auto</code></pre>
+<pre><code>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols --auto</code></pre>
 <p><i>Link dự phòng từ GitHub:</i></p>
 <pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols --auto</pre>
 <hr>

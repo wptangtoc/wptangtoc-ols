@@ -52,6 +52,29 @@ if [[ "$check_multisite" == 'true' ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
 
+
+
+#chạy lệnh [[ -L "/usr/local/lsws/$NAME/html/wp-config.php" ]], Bash sẽ chỉ kiểm tra chính cái điểm cuối cùng (tức là file wp-config.php). Nó không bận tâm việc các thư mục cha (như $NAME hay html) có phải là symlink hay không.
+# Chống tấn công Symlink (Ghi đè file hệ thống /etc/shadow)
+if [[ -L "$path/wp-config.php" ]]; then #xách định wp-config.php có phải symlink không?
+  echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  echo -e "${C_RED}│   CẢNH BÁO BẢO MẬT: PHÁT HIỆN SYMLINK TẠI WP-CONFIG.PHP                   │${C_RESET}"
+  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  echo -e "  Hệ thống nhận thấy tệp ${C_YELLOW}wp-config.php${C_RESET} là một liên kết ảo (Symlink)."
+  echo -e "  Để ngăn chặn rủi ro hacker lợi dụng Symlink đánh lừa máy chủ ghi đè"
+  echo -e "  các tệp tin hệ điều hành, tiến trình này đã bị chặn tự động an toàn."
+  echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  echo -e "${C_CYAN}  HƯỚNG DẪN CÁCH KHẮC PHỤC:${C_RESET}"
+  echo -e "  1. Truy cập thư mục: ${C_YELLOW}$path${C_RESET}"
+  echo -e "  2. Xóa liên kết ảo wp-config.php hiện tại đi."
+  echo -e "  3. Copy/Tạo lại một file wp-config.php vật lý (file thật) vào đó."
+  echo -e "  4. Chạy lại tính năng này sau khi đã xử lý xong."
+  echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  sleep 4
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  return 2>/dev/null || exit 1
+fi
+
 . "$path_conf"
 . /etc/wptt/php/php-cli-domain-config "$NAME"
 
@@ -65,7 +88,7 @@ ramdom_db=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 5)
 NEW_PREFIX="${ramdom_db}_"
 
 # Lấy tiền tố cũ
-OLD_PREFIX=$("${WP_EXEC[@]}" db prefix --allow-root --path="$path" 2>/dev/null)
+OLD_PREFIX=$("${WP_EXEC[@]}" db prefix --path="$path" 2>/dev/null)
 tien_to_cu="$OLD_PREFIX"
 
 # ==============================================================================
@@ -88,18 +111,18 @@ UI_STRING="$thay_doi $tien_to website $NAME từ $tien_to_cu thành ${NEW_PREFIX
 _runing "$UI_STRING"
 
 # 1. Lấy danh sách các bảng hiện tại với tiền tố cũ
-TABLES=$("${WP_EXEC[@]}" db query "SHOW TABLES LIKE '${OLD_PREFIX}%'" --skip-column-names --allow-root --path="$path" 2>/dev/null)
+TABLES=$("${WP_EXEC[@]}" db query "SHOW TABLES LIKE '${OLD_PREFIX}%'" --skip-column-names --path="$path" 2>/dev/null)
 
 if [[ -n "$TABLES" ]]; then
   # 2. Đổi tên từng bảng một cách mượt mà (Bịt kín Output)
   for TABLE in $TABLES; do
     NEW_TABLE="${NEW_PREFIX}${TABLE#"$OLD_PREFIX"}"
-    "${WP_EXEC[@]}" db query "RENAME TABLE \`$TABLE\` TO \`$NEW_TABLE\`;" --allow-root --path="$path" >/dev/null 2>&1
+    "${WP_EXEC[@]}" db query "RENAME TABLE \`$TABLE\` TO \`$NEW_TABLE\`;" --path="$path" >/dev/null 2>&1
   done
 
   # 3. Cập nhật bảng Options và Usermeta bằng logic SQL chuẩn xác (Bịt kín Output chống rác màn hình)
-  "${WP_EXEC[@]}" db query "UPDATE \`${NEW_PREFIX}options\` SET option_name = CONCAT('${NEW_PREFIX}', SUBSTRING(option_name, CHAR_LENGTH('${OLD_PREFIX}') + 1)) WHERE option_name LIKE '${OLD_PREFIX}%';" --allow-root --path="$path" >/dev/null 2>&1
-  "${WP_EXEC[@]}" db query "UPDATE \`${NEW_PREFIX}usermeta\` SET meta_key = CONCAT('${NEW_PREFIX}', SUBSTRING(meta_key, CHAR_LENGTH('${OLD_PREFIX}') + 1)) WHERE meta_key LIKE '${OLD_PREFIX}%';" --allow-root --path="$path" >/dev/null 2>&1
+  "${WP_EXEC[@]}" db query "UPDATE \`${NEW_PREFIX}options\` SET option_name = CONCAT('${NEW_PREFIX}', SUBSTRING(option_name, CHAR_LENGTH('${OLD_PREFIX}') + 1)) WHERE option_name LIKE '${OLD_PREFIX}%';" --path="$path" >/dev/null 2>&1
+  "${WP_EXEC[@]}" db query "UPDATE \`${NEW_PREFIX}usermeta\` SET meta_key = CONCAT('${NEW_PREFIX}', SUBSTRING(meta_key, CHAR_LENGTH('${OLD_PREFIX}') + 1)) WHERE meta_key LIKE '${OLD_PREFIX}%';" --path="$path" >/dev/null 2>&1
 
   # 4. Sửa file wp-config.php cực an toàn bằng Regex
   sed -i -e "s/\$table_prefix[[:space:]]*=[[:space:]]*['\"][^'\"]*['\"]/\$table_prefix = '${NEW_PREFIX}'/" "$wp_config_path"
@@ -112,14 +135,14 @@ wptt_xoa_opcache "$NAME"
 
 
 #xoá object cache
-  "${WP_EXEC[@]}" cache flush --path="$path" --allow-root >/dev/null 2>&1
+  "${WP_EXEC[@]}" cache flush --path="$path" >/dev/null 2>&1
 
   if [ "$(systemctl is-active memcached.service)" == "active" ]; then
     echo "flush_all" | socat - UNIX-CONNECT:/var/run/memcached/memcached.sock >/dev/null 2>&1
   fi
 
   # Xác thực lại kết quả
-  tien_to_moi=$("${WP_EXEC[@]}" db prefix --allow-root --path="$path" 2>/dev/null)
+  tien_to_moi=$("${WP_EXEC[@]}" db prefix --path="$path" 2>/dev/null)
 
   if [[ "$tien_to_moi" == "$tien_to_cu" || -z "$tien_to_moi" ]]; then
     _runloi "$UI_STRING"
