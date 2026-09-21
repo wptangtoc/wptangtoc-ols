@@ -12,8 +12,6 @@ function huong_dan() {
   Lợi ích chính:
   * Giảm đáng kể log tấn công brute-force.
   * Làm cho máy chủ của bạn ít bị chú ý hơn.
-
-  Đây là một bước đơn giản nhưng mang lại hiệu quả bảo mật đáng kể cho máy chủ của bạn.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -96,7 +94,7 @@ if [[ -n "$port_mariadb_remote" && "$port" == "$port_mariadb_remote" ]]; then
 fi
 
 # ==============================================================================
-# XÁC NHẬN VÀ THỰC THI THAY ĐỔI
+# XÁC NHẬN VÀ THỰC THI THAY ĐỔI KÈM ROLLBACK
 # ==============================================================================
 echo ""
 msg_title="Xác nhận thay đổi cổng kết nối SSH của máy chủ?"
@@ -106,11 +104,35 @@ msg_info2="${C_BOLD_WHITE}Port mới:${C_RESET} ${C_GREEN}$port${C_RESET}"
 if wptt_xac_nhan "$msg_title" "$msg_info1" "$msg_info2" "Đồng ý (Lưu cấu hình ngay)" "Không đồng ý (Hủy thao tác)"; then
   echo ""
   echo "Thiết lập thay đổi port SSH: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-  _runing "Đang thiết lập tường lửa và mở Port $port..."
+  
+  _runing "Đang cập nhật cấu hình và kiểm tra bằng sshd -t..."
 
-  # Cấu hình SSHD
-  sed -i "/Port/d" /etc/ssh/sshd_config
+  # 1. Tạo file dự phòng trước khi thay đổi (Backup)
+  cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.bkwptt
+
+  # 2. Xóa các dòng cấu hình Port cũ và thêm Port mới
+  # (Sửa biểu thức sed để xóa chính xác hơn, tránh xóa nhầm GatewayPorts hay dòng khác)
+  sed -i '/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]/d' /etc/ssh/sshd_config
+  sed -i '/^[[:space:]]*Port[[:space:]]/d' /etc/ssh/sshd_config
   sed -i "1 i Port $port" /etc/ssh/sshd_config
+
+  # 3. Kích hoạt sshd -t (Check Cú pháp)
+  if ! sshd -t >/dev/null 2>&1; then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "Lỗi cú pháp SSHD! Đang tiến hành Rollback..."
+    # Khôi phục file cấu hình gốc
+    mv -f /etc/ssh/sshd_config.bkwptt /etc/ssh/sshd_config
+    echo -e "${C_RED}Đã khôi phục lại cổng cũ ($port_checkssh). Máy chủ không bị ảnh hưởng.${C_RESET}"
+    sleep 3
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
+    exit 1
+  fi
+  
+  # Cú pháp tốt -> Xóa file backup
+  rm -f /etc/ssh/sshd_config.bkwptt
+  _rundone "Cấu hình SSH hợp lệ (Đã vượt qua test sshd -t)"
+
+  _runing "Đang thiết lập tường lửa và mở Port $port..."
 
   yum -y install policycoreutils-python >/dev/null 2>&1
   semanage port -a -t ssh_port_t -p tcp "$port" 2>/dev/null
@@ -154,7 +176,7 @@ END
     fi
     if [[ -f "$path_nftables_config" ]]; then
       sed -i '/#port ssh/d' "$path_nftables_config"
-      sed -i "/chain input /a\ \ tcp dport $port accept #port ssh" "$path_nftables_config"
+      sed -i "/chain input /a\ \ \ \ tcp dport $port accept #port ssh" "$path_nftables_config"
       systemctl restart nftables >/dev/null 2>&1
     fi
   fi
@@ -163,8 +185,19 @@ END
 
   _runing "Đang nạp lại dịch vụ SSHD và Fail2ban..."
   fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1
-  systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null
-  systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+  
+  # Kích hoạt Rollback thêm lần nữa ở bước restart service (Phòng hờ lỗi tranh chấp port)
+  if ! (systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null); then
+    echo -en "\033[1A\033[2K\r"
+    _runloi "Lỗi dịch vụ SSH (Restart Failed)! Đang tiến hành Rollback..."
+    sed -i '/^[[:space:]]*Port[[:space:]]/d' /etc/ssh/sshd_config
+    sed -i "1 i Port $port_checkssh" /etc/ssh/sshd_config
+    systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+    echo -e "${C_RED}Đã khôi phục lại cổng cũ ($port_checkssh) do khởi động lại dịch vụ thất bại.${C_RESET}"
+    sleep 3
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
+    exit 1
+  fi
 
   sed -i "/port_ssh=/d" /etc/wptt/.wptt.conf
   echo "port_ssh=$port" >>/etc/wptt/.wptt.conf
