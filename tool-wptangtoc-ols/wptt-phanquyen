@@ -53,9 +53,12 @@ if [[ $NAME = 'Tất cả website' ]]; then
   echo "Phân quyền toàn bộ website : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 	tien_do='1'
 
-	if [[ -z "$tong_so_web" ]];then #tình toán tình huống người dùng không dùng thư viên tenmien
-		vhosts_path=(/etc/wptt/vhost/*.conf)
-		tong_so_web="${#vhosts_path[@]}"
+	if [[ -z "$tong_so_web" ]]; then
+		tong_so_web=0
+		for filepath in /etc/wptt/vhost/.*.conf; do
+			# Chỉ đếm nếu là file thực sự và không phải là file rác ..conf
+			[[ -f "$filepath" && "$filepath" != *"/..conf" ]] && ((tong_so_web++))
+		done
 	fi
 
 	print_border_top
@@ -245,6 +248,26 @@ if [[ $lock_down ]]; then
     chmod 400 /usr/local/lsws/"$NAME"/html/wp-config.php
   fi
 
+
+	# setuid/setgid là gì?
+	#   Đây là 1 "cờ đặc biệt" gắn trên file thực thi, cho phép file đó khi chạy
+	#   sẽ MƯỢN quyền của CHỦ SỞ HỮU file (thường là root), thay vì chạy bằng
+	#   quyền của người/tiến trình gọi nó.
+
+	#   Nếu hacker (qua lỗi plugin/theme, upload file...) cấy được 1 file vào
+	#   thư mục web và file đó có bit setuid + thuộc sở hữu root, thì BẤT KỲ AI
+	#   chạy được file này cũng sẽ có quyền ROOT trên máy chủ - đây chính là
+	#   con đường LEO THANG ĐẶC QUYỀN (Privilege Escalation) kinh điển nhất.
+
+
+	#   Một website WordPress bình thường KHÔNG BAO GIỜ cần bit này. nếu có thì website WordPress bị hack là chắc chắn
+
+	# [Bảo mật] Quét & gỡ bit setuid/setgid trong thư mục web.
+	# Ngăn chặn: file bị cấy bit "chạy bằng quyền root" (dù bằng cách nào) bị
+	# lợi dụng để leo thang đặc quyền. Chạy mỗi lần phân quyền để tự động dọn,
+	# không cần chờ admin phát hiện thủ công.
+	ionice -c 3 nice -n 19 find /usr/local/lsws/"$NAME"/html -type f \( -perm -4000 -o -perm -2000 \) -print0 | xargs -0 -r ionice -c 3 nice -n 19 chmod ugo-s
+
   . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on
 
 else
@@ -253,6 +276,9 @@ else
   ionice -c 3 nice -n 19 chown -Rh "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/backup-website
   ionice -c 3 nice -n 19 find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type f -print0 | xargs -0 ionice -c 3 nice -n 19 chmod 644
   ionice -c 3 nice -n 19 find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type d -print0 | xargs -0 ionice -c 3 nice -n 19 chmod 755
+
+	ionice -c 3 nice -n 19 find /usr/local/lsws/"$NAME"/html -type f \( -perm -4000 -o -perm -2000 \) -print0 | xargs -0 -r ionice -c 3 nice -n 19 chmod ugo-s
+
   if [[ -f /usr/local/lsws/"$NAME"/html/index.php ]]; then
     chmod 444 /usr/local/lsws/"$NAME"/html/index.php
   fi
