@@ -1,0 +1,70 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Setup Realtime OpenLiteSpeed .htaccess Watcher
+# @since: 2026
+
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+
+# 1. DỌN DẸP HỆ THỐNG CRONJOB CŨ
+_runing "Đang dọn dẹp cấu hình Cronjob cũ..."
+cat <(crontab -l 2>/dev/null | grep -v 'wptt_smart_reload_lsws') | crontab -
+cat <(crontab -l 2>/dev/null | grep -v '/usr/local/lsws/cgid') | crontab -
+
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
+    rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium_cron 2>/dev/null
+    systemctl restart cron.service
+else
+    systemctl restart crond.service
+fi
+_rundone "Dọn dẹp cấu hình Cronjob cũ"
+
+# 2. CÀI ĐẶT THƯ VIỆN GIAO TIẾP KERNEL (INOTIFY-TOOLS)
+_runing "Đang kiểm tra và cài đặt thư viện inotify-tools..."
+if ! command -v inotifywait &>/dev/null; then
+    if [ -f /etc/redhat-release ]; then
+        dnf install inotify-tools -y -q >/dev/null 2>&1 || yum install inotify-tools -y -q >/dev/null 2>&1
+    elif [ -f /etc/debian_version ]; then
+        apt-get update -q >/dev/null 2>&1 && apt-get install inotify-tools -y -q >/dev/null 2>&1
+    fi
+fi
+_rundone "Cài đặt thư viện Kernel hoàn tất"
+
+# Đảm bảo file tĩnh engine có quyền thực thi
+chmod 700 /etc/wptt/wptt-htaccess-watcher 2>/dev/null
+
+# 3. TẠO VÀ KÍCH HOẠT DỊCH VỤ SYSTEMD CHẠY NGẦM VĨNH VIỄN
+_runing "Thiết lập Dịch vụ Systemd Daemon..."
+cat << 'EOF' > /etc/systemd/system/wptt-htaccess.service
+[Unit]
+Description=WPTangToc OLS Realtime .htaccess Watcher
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /etc/wptt/wptt-htaccess-watcher
+Restart=always
+RestartSec=5
+# Đặt giới hạn bộ nhớ nhỏ gọn để chống rò rỉ RAM (Memory Leak)
+MemoryMax=50M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable wptt-htaccess >/dev/null 2>&1
+systemctl restart wptt-htaccess
+_rundone "Kích hoạt Dịch vụ Systemd thành công"
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}CẤU HÌNH .HTACCESS REALTIME HOÀN TẤT${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Reload OLS tức thì (0.001s) ngay khi ấn Save file .htaccess"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-add-one-main 1

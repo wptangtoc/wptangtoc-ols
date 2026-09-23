@@ -276,6 +276,7 @@ if ! flock -n 200; then
   exit 1
 fi
 
+touch "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active" 2>/dev/null
 _runing "Đang nạp Database (Atomic Blue/Green)..."
 password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
 [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
@@ -412,6 +413,7 @@ if [[ $IMPORT_STATUS -eq 0 ]]; then
 else
   mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`${DB_TEMP}\`;" 2>/dev/null
   _runloi "Lỗi Import Database! Dữ liệu web cũ được giữ nguyên."
+	rm -f "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active" 2>/dev/null
   exit 1
 fi
 rm -f "${TEMP_CNF_ROOT}"
@@ -484,6 +486,7 @@ except Exception:
   _rundone "Giải nén và chuyển đổi mã nguồn hoàn tất."
 else
   _runloi "Giải nén thất bại! Hủy bỏ để bảo vệ web cũ."
+	rm -f "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active"
   rm -rf "$THU_MUC_TAM"
   exit 1
 fi
@@ -499,16 +502,19 @@ exec 200>&- 2>/dev/null
 # 6. PHÂN QUYỀN VÀ CẤU HÌNH WP-CONFIG
 # ==============================================================================
 _runing "Đang phân quyền và nạp cấu hình Website..."
+find /usr/local/lsws/"$NAME"/html -type f \( -perm -4000 -o -perm -2000 \) -print0 | xargs -0 -r chmod ugo-s
 chown -hR "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html
-find /usr/local/lsws/"$NAME"/html -type d -exec chmod 755 {} \;
-find /usr/local/lsws/"$NAME"/html -type f -exec chmod 644 {} \;
+find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 644
+find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
 
-if [[ -f "/usr/local/lsws/$NAME/html/wp-config.php" ]]; then
-  wp config set DB_HOST 'localhost' --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-  wp config set DB_NAME "$DB_Name_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-  wp config set DB_USER "$DB_User_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-  wp config set DB_PASSWORD "$password_database_website_giai_ma" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
-  wp rewrite flush --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
+if [[ -f "/usr/local/lsws/$NAME/html/wp-config.php" && ! -L "/usr/local/lsws/$NAME/html/wp-config.php" ]]; then
+	. /etc/wptt/php/php-cli-domain-config "$NAME"
+	WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
+	"${WP_EXEC[@]}" config set DB_HOST 'localhost' --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
+	"${WP_EXEC[@]}" config set DB_NAME "$DB_Name_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
+	"${WP_EXEC[@]}" config set DB_USER "$DB_User_web" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
+	"${WP_EXEC[@]}" config set DB_PASSWORD "$password_database_website_giai_ma" --type=constant --allow-root --path="/usr/local/lsws/$NAME/html" --quiet
+	"${WP_EXEC[@]}" rewrite flush --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
 fi
 
 unset password_database_website_giai_ma
@@ -612,6 +618,12 @@ if [[ -z "$all_for" ]]; then
   left_text " 3. Thư mục Website  : ${C_YELLOW}/usr/local/lsws/$NAME/html${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
+
+
+rm -f "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active"
+systemctl restart wptt-htaccess >/dev/null 2>&1
+systemctl restart wptt-phanquyen >/dev/null 2>&1
+
 
 if [[ -z "$all_for" ]];then 
   echo -en "${C_GREEN}Nhấn phím [Enter] để quay về menu chuyển website...${C_RESET}"

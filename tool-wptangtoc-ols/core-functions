@@ -242,49 +242,296 @@ function wptt_xac_nhan() {
   done
 }
 
-function wptt_smart_reload_lsws() {
-    local lock_file="/etc/wptt/tmp/.wptt_ls_reload.lock"
-    local lsws_marker="/usr/local/lsws/cgid"
 
+# ============================================================
+# WPTangToc OLS - Smart Graceful Reload
+# ============================================================
+function wptt_smart_reload_lsws() {
+
+    # --------------------------------------------------------
+    # CẤU HÌNH
+    # --------------------------------------------------------
+    local RUN_DIR="/run/wptangtoc"
+    local LOCK_FILE="$RUN_DIR/lsws-reload.lock"
+    local PENDING_FILE="$RUN_DIR/lsws-reload.pending"
+    local PROCESSING_FILE="$RUN_DIR/lsws-reload.processing"
+    local WORKER_PID_FILE="$RUN_DIR/lsws-reload.worker.pid"
+    local CB_FILE="$RUN_DIR/lsws-reload.cb"         
+    local BACKOFF_FILE="$RUN_DIR/lsws-reload.backoff" 
+
+    local LSWSCTRL="/usr/local/lsws/bin/lswsctrl"
+    local PID_FILE="/tmp/lshttpd/lshttpd.pid"
+    #OLS luôn touch cgid khi worker mới sẵn sàng
+    local CGID_FILE="/usr/local/lsws/cgid"
+    
+    local SERVICE="lsws.service"
+    local LOG_FILE="/var/log/wptangtoc-ols.log"
+
+    local MIN_RELOAD_INTERVAL=15
+    local BACKOFF_CAP=60
+    local RELOAD_TIMEOUT=25
+    local HEALTH_INTERVAL=1
+    local CB_MAX=5
+    local CB_WINDOW=300
+
+    local HEALTH_HOST="${WPTT_LSWS_HEALTH_HOST:-localhost}"
+    local HEALTH_URL="${WPTT_LSWS_HEALTH_URL:-http://127.0.0.1/}"
+
+    mkdir -p "$RUN_DIR" 2>/dev/null || return 1
+
+    # ========================================================
+    # 1. XẾP HÀNG SỰ KIỆN 
+    # ========================================================
+    touch "$PENDING_FILE" 2>/dev/null || return 1
+
+    # ========================================================
+    # 2. TƯỜNG LỬA CHỐNG BÃO TIẾN TRÌNH
+    # ========================================================
+    if [[ -r "$WORKER_PID_FILE" ]]; then
+        local existing_pid="$(cat "$WORKER_PID_FILE" 2>/dev/null)"
+        if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    # ========================================================
+    # 3. FORK LUỒNG NGẦM DUY NHẤT (WORKER)
+    # ========================================================
     (
         flock -n 9 || exit 0
+        echo $BASHPID > "$WORKER_PID_FILE"
+        trap 'rm -f "$WORKER_PID_FILE"' EXIT
 
-        local current_time=$(date +%s)
-        local last_run=0
+        # --- HELPER FUNCTIONS ---
+        _log() { printf '[%s] [LSWS-RELOAD] [%s] %s\n' "$(date '+%d-%m-%Y %H:%M:%S')" "$1" "${*:2}" >> "$LOG_FILE" 2>/dev/null; }
         
-        # Đọc trực tiếp Timestamp từ file do chính LiteSpeed quản lý
-        if [[ -f "$lsws_marker" ]]; then
-            last_run=$(stat -c %Y "$lsws_marker" 2>/dev/null || echo 0)
+        _get_pid() { 
+            local pid=""
+            [[ -r "$PID_FILE" ]] && pid="$(cat "$PID_FILE" 2>/dev/null)"
+            [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) && { echo "$pid"; return 0; }
+            return 1
+        }
+        
+        _get_cgid_mtime() { stat -c %Y "$CGID_FILE" 2>/dev/null || echo 0; }
+        _alive() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 1 )) && kill -0 "$1" 2>/dev/null; }
+        
+        _http_health() {
+            command -v curl >/dev/null 2>&1 || { _log "WARN" "Không có curl, bỏ qua HTTP health."; return 0; }
+            local code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 -H "Host: $HEALTH_HOST" "$HEALTH_URL" 2>/dev/null)"
+            [[ "$code" =~ ^[1-4][0-9][0-9]$ ]]
+        }
+        
+        _health() { 
+            local pid="$1"; _alive "$pid" || return 1; _http_health || return 1; return 0; 
+        }
+
+        _cb_allowed() {
+            local now="$(date +%s)" line count=0 tmp=""
+            [[ -f "$CB_FILE" ]] || return 0
+            while read -r line; do
+                [[ "$line" =~ ^[0-9]+$ ]] || continue
+                if (( now - line < CB_WINDOW )); then
+                    count=$((count + 1)); tmp+="$line"$'\n'
+                fi
+            done < "$CB_FILE"
+            printf '%s' "$tmp" > "$CB_FILE"
+            (( count < CB_MAX ))
+        }
+        _cb_record() { date +%s >> "$CB_FILE" 2>/dev/null; }
+
+        _get_backoff() {
+            local fails=0; [[ -f "$BACKOFF_FILE" ]] && fails="$(cat "$BACKOFF_FILE" 2>/dev/null)"
+            [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+            local wait=$(( 8 * (2 ** fails) )); (( wait > BACKOFF_CAP )) && wait=$BACKOFF_CAP
+            echo "$wait"
+        }
+        _bump_backoff() {
+            local fails=0; [[ -f "$BACKOFF_FILE" ]] && fails="$(cat "$BACKOFF_FILE" 2>/dev/null)"
+            [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+            echo $((fails + 1)) > "$BACKOFF_FILE"
+        }
+        _reset_backoff() { echo 0 > "$BACKOFF_FILE" 2>/dev/null; }
+
+        if [[ ! -x "$LSWSCTRL" ]]; then
+            _log "ERROR" "Không tìm thấy lswsctrl: $LSWSCTRL"
+            exit 1
         fi
 
-        local time_diff=$((current_time - last_run))
+        local LAST_RELOAD_TIME=0
 
-        if [[ $time_diff -lt 8 ]]; then
-            sleep $((8 - time_diff))
-        fi
+        # ====================================================
+        # 4. VÒNG LẶP XỬ LÝ HÀNG ĐỢI
+        # ====================================================
+        while mv "$PENDING_FILE" "$PROCESSING_FILE" 2>/dev/null; do
 
-        /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-        
-        # Cho LiteSpeed 3 giây để thở và ghi đè file cgid mới, thuờng 1 lệnh reload của litespeed cũng mất khoảng 3 giây thì cho sleep 3 giây là hợp lý
-		# time /usr/local/lsws/bin/lswsctrl reload
-		# Cho LiteSpeed 3.2 giây để "thở" sau khi tốn ~3s gửi tín hiệu SIGUSR1
-        sleep 3.2
+            local EFFECTIVE_INTERVAL=$MIN_RELOAD_INTERVAL
+            local EXTRA_BACKOFF="$(_get_backoff)"
+            (( EXTRA_BACKOFF > EFFECTIVE_INTERVAL )) && EFFECTIVE_INTERVAL=$EXTRA_BACKOFF
 
-        # Kiểm tra sinh hiệu
-        if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running'; then
-			:
-        else
-            echo "Kích hoạt Auto-Heal do lỗi Reload: $(date '+%d-%m-%Y %H:%M:%S')" >> /var/log/wptangtoc-ols.log
+            if (( LAST_RELOAD_TIME > 0 )); then
+                local NOW=$(date +%s)
+                local DIFF=$((NOW - LAST_RELOAD_TIME))
+                if (( DIFF < EFFECTIVE_INTERVAL )); then
+                    local WAIT=$((EFFECTIVE_INTERVAL - DIFF))
+                    _log "INFO" "Gộp lệnh reload, chờ ${WAIT}s (backoff=${EXTRA_BACKOFF}s)."
+                    sleep "$WAIT"
+                fi
+            fi
+
+            local OLD_PID="$(_get_pid 2>/dev/null || echo 0)"
+            local OLD_CGID_MTIME="$(_get_cgid_mtime)"
+
+            if [[ "$OLD_PID" == "0" ]] || ! _alive "$OLD_PID"; then
+                _log "WARN" "OLS không chạy. Kích hoạt systemd start."
+                if ! _cb_allowed; then
+                    _log "CRITICAL" "Circuit breaker OPEN. Ngừng Auto-Heal."
+                    rm -f "$PROCESSING_FILE"; continue
+                fi
+                
+                _cb_record
+                systemctl start "$SERVICE" >/dev/null 2>&1
+                sleep 2
+                
+                local NEW_PID="$(_get_pid 2>/dev/null || echo 0)"
+                if [[ "$NEW_PID" != "0" ]] && _health "$NEW_PID"; then
+                    _log "INFO" "OLS khởi động lại thành công qua systemd."
+                    _reset_backoff
+                else
+                    _log "CRITICAL" "Systemd start nhưng health check thất bại."
+                    _bump_backoff
+                fi
+                LAST_RELOAD_TIME="$(date +%s)"
+                rm -f "$PROCESSING_FILE"; continue
+            fi
+
+            # --- GRACEFUL RELOAD CHÍNH THỨC ---
+            _log "INFO" "Graceful reload. PID=$OLD_PID"
+            local RELOAD_START=$(date +%s)
+            local RELOAD_RC=0
             
-            systemctl stop lsws.service >/dev/null 2>&1
-            rm -f /tmp/lshttpd/lshttpd.pid
-            killall -9 openlitespeed litespeed lshttpd 2>/dev/null
-            systemctl start lsws.service >/dev/null 2>&1
-            # Khi start thành công, file cgid tự động được hệ thống nạp lại
-        fi
+            "$LSWSCTRL" reload >/dev/null 2>&1 || RELOAD_RC=$?
 
-    ) 9> "$lock_file" &
+            if (( RELOAD_RC != 0 )); then
+                _log "ERROR" "Lệnh lswsctrl reload thất bại, exit code=$RELOAD_RC."
+                _bump_backoff
+                rm -f "$PROCESSING_FILE"
+                continue
+            fi
+
+            # --- KIỂM TRA CHUYỂN GIAO TIẾN TRÌNH BẰNG CGID ---
+            local SUCCESS=0 CONSECUTIVE_OK=0
+            while true; do
+                local NOW=$(date +%s)
+                local ELAPSED=$((NOW - RELOAD_START))
+                local CURRENT_PID="$(_get_pid 2>/dev/null || echo 0)"
+                local CURRENT_CGID_MTIME="$(_get_cgid_mtime)"
+
+                # CHỈ TIN LÀ ĐÃ NẠP CẤU HÌNH NẾU CGID BỊ CHẠM TỚI
+                if [[ "$CURRENT_CGID_MTIME" -gt "$OLD_CGID_MTIME" ]]; then
+                    if [[ "$CURRENT_PID" != "0" ]] && _health "$CURRENT_PID"; then
+                        CONSECUTIVE_OK=$((CONSECUTIVE_OK + 1))
+                        if (( CONSECUTIVE_OK >= 2 )); then
+                            _log "INFO" "Graceful reload hoàn tất (CGID đã nạp). PID=$CURRENT_PID."
+                            SUCCESS=1
+                            break
+                        fi
+                    else
+                        CONSECUTIVE_OK=0
+                    fi
+                fi
+
+                (( ELAPSED >= RELOAD_TIMEOUT )) && break
+                sleep "$HEALTH_INTERVAL"
+            done
+
+            LAST_RELOAD_TIME="$(date +%s)"
+
+            if (( SUCCESS == 1 )); then
+                _reset_backoff
+                rm -f "$PROCESSING_FILE"
+                continue
+            fi
+
+            # --- XỬ LÝ TIMEOUT (TRÁNH PHẠT OAN FALSE NEGATIVE) ---
+            local FINAL_PID="$(_get_pid 2>/dev/null || echo 0)"
+
+            if [[ "$FINAL_PID" != "0" ]] && _health "$FINAL_PID"; then
+                # OLS khỏe, HTTP trả 200, nhưng CGID không đổi sau 25s
+                # => Chắc chắn khách cấu hình sai file (Bad Config) khiến OLS từ chối nạp,
+                # HOẶC là một edge-bug vô hại nào đó. KHÔNG phạt backoff, KHÔNG kill server!
+                _log "WARN" "Timeout 25s: CGID không đổi, có thể do Bad Config. Tuy nhiên server vẫn Health OK (PID=$FINAL_PID). Bỏ qua lỗi này."
+                _reset_backoff # Server vẫn khoẻ, tha bổng, reset backoff về 0
+            else
+                # Thực sự đã chết ngúm
+                _bump_backoff
+                _log "CRITICAL" "OLS đã chết ngúm sau reload. Kích hoạt Controlled Recovery."
+                
+                if _cb_allowed; then
+                    _cb_record
+                    systemctl start "$SERVICE" >/dev/null 2>&1
+                    sleep 2
+                    FINAL_PID="$(_get_pid 2>/dev/null || echo 0)"
+                    if [[ "$FINAL_PID" != "0" ]] && _health "$FINAL_PID"; then
+                        _log "INFO" "Auto-Heal thành công. PID=$FINAL_PID."
+                    else
+                        _log "CRITICAL" "Auto-Heal thất bại."
+                    fi
+                else
+                    _log "CRITICAL" "Circuit breaker OPEN. Dừng Auto-Heal."
+                fi
+            fi
+
+            rm -f "$PROCESSING_FILE"
+        done
+
+    ) 9>"$LOCK_FILE" &
+
+    return 0
 }
+
+# function wptt_smart_reload_lsws() {
+#     local lock_file="/etc/wptt/tmp/.wptt_ls_reload.lock"
+#     local lsws_marker="/usr/local/lsws/cgid"
+
+#     (
+#         flock -n 9 || exit 0
+
+#         local current_time=$(date +%s)
+#         local last_run=0
+        
+#         # Đọc trực tiếp Timestamp từ file do chính LiteSpeed quản lý
+#         if [[ -f "$lsws_marker" ]]; then
+#             last_run=$(stat -c %Y "$lsws_marker" 2>/dev/null || echo 0)
+#         fi
+
+#         local time_diff=$((current_time - last_run))
+
+#         if [[ $time_diff -lt 8 ]]; then
+#             sleep $((8 - time_diff))
+#         fi
+
+#         /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+        
+#         # Cho LiteSpeed 3 giây để thở và ghi đè file cgid mới, thuờng 1 lệnh reload của litespeed cũng mất khoảng 3 giây thì cho sleep 3 giây là hợp lý
+# 		# time /usr/local/lsws/bin/lswsctrl reload
+# 		# Cho LiteSpeed 3.2 giây để "thở" sau khi tốn ~3s gửi tín hiệu SIGUSR1
+#         sleep 3.2
+
+#         # Kiểm tra sinh hiệu
+#         if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running'; then
+# 			:
+#         else
+#             echo "Kích hoạt Auto-Heal do lỗi Reload: $(date '+%d-%m-%Y %H:%M:%S')" >> /var/log/wptangtoc-ols.log
+            
+#             systemctl stop lsws.service >/dev/null 2>&1
+#             rm -f /tmp/lshttpd/lshttpd.pid
+#             killall -9 openlitespeed litespeed lshttpd 2>/dev/null
+#             systemctl start lsws.service >/dev/null 2>&1
+#             # Khi start thành công, file cgid tự động được hệ thống nạp lại
+#         fi
+
+#     ) 9> "$lock_file" &
+# }
 
 
 
