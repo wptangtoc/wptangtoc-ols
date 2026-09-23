@@ -1,31 +1,28 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
 
-rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium.cron
-# cat <(crontab -l) <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name '.htaccess' -exec false {} +; then wptt_smart_reload_lsws >/dev/null 2>&1; fi') | crontab -
-
-cat <(crontab -l 2>/dev/null | grep -v 'wptt_smart_reload_lsws') <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name ".htaccess" -exec false {} +; then /bin/bash -c ". /etc/wptt/core-functions && wptt_smart_reload_lsws" >/dev/null 2>&1; fi') | crontab -
-
-# cat <(crontab -l 2>/dev/null) <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name ".htaccess" -exec false {} +; then /bin/bash -c ". /etc/wptt/core-functions && wptt_smart_reload_lsws" >/dev/null 2>&1; fi') | crontab -
+# 1. Dọn dẹp Cronjob cũ (Đề phòng hệ thống chưa sạch)
+rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium* 2>/dev/null
+cat <(crontab -l 2>/dev/null | grep -v 'wptt_smart_reload_lsws') | crontab - 2>/dev/null
 
 if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-	rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium_cron
-	systemctl restart cron.service
+    systemctl restart cron.service >/dev/null 2>&1
 else
-	systemctl restart crond.service
+    systemctl restart crond.service >/dev/null 2>&1
 fi
 
-
+# 2. Vòng lặp Khôi phục .htaccess (Sử dụng shopt nullglob chống lỗi)
+shopt -s nullglob
 for filepath in /etc/wptt/vhost/.*.conf; do
-	  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
 
-	  domain="${filepath##*/}"
-	  domain="${domain%.conf}"
-	  domain="${domain#.}"
-
-	  if [[ "$domain" == ?*.?* ]]; then
-		  . /etc/wptt/wptt-vhost-chuyen-ve-htaccess "$domain" >/dev/null 2>&1
-	  fi
+    if [[ "$domain" == ?*.?* ]]; then
+        . /etc/wptt/wptt-vhost-chuyen-ve-htaccess "$domain" >/dev/null 2>&1
+    fi
 done
 
-
-
+# 3. Reload lại Watcher
+systemctl restart wptt-htaccess >/dev/null 2>&1

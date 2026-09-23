@@ -1,0 +1,103 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+
+function huong_dan() {
+  Hệ thống tự động giám sát và sửa lỗi phân quyền [Chmod/Chown] theo thời gian thực.
+  Ngăn chặn lỗi 403, 500 do tải file hoặc giải nén sai quyền [như dùng quyền root].
+}
+
+# . /etc/wptt/thiet-lap-auto-phanquyen on
+# . /etc/wptt/thiet-lap-auto-phanquyen off
+
+
+export box_inner_width=78
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+
+FLAG_FILE="/etc/wptt/auto-chmod-active"
+
+ACTION=""
+for arg in "$@"; do
+  [[ "$arg" == "on" || "$arg" == "off" ]] && ACTION="$arg"
+  [[ "$arg" == "98" ]] && check_menu_wptangtoc_active="98"
+done
+
+if [[ -z "$ACTION" ]]; then
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}TỐI ƯU BẢO MẬT ➜ Realtime Auto Chmod/Chown${C_RESET}"
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+fi
+
+kich_hoat_tinh_nang() {
+  [[ -z "$ACTION" ]] && echo ""
+  _runing "Đang kích hoạt hệ thống giám sát phân quyền thời gian thực..."
+  
+  mkdir -p /etc/wptt/cau-hinh
+  touch "$FLAG_FILE"
+  
+  # Dọn dẹp sạch sẽ Cronjob cũ của bạn
+  cat <(crontab -l 2>/dev/null | grep -v 'chmod-chown-auto-wptangtoc') | crontab - 2>/dev/null
+  
+  if ! command -v inotifywait &>/dev/null; then
+    [ -f /etc/redhat-release ] && (dnf install inotify-tools -y -q >/dev/null 2>&1 || yum install inotify-tools -y -q >/dev/null 2>&1)
+    [ -f /etc/debian_version ] && (apt-get update -q >/dev/null 2>&1 && apt-get install inotify-tools -y -q >/dev/null 2>&1)
+  fi
+
+  cat << 'EOF' > /etc/systemd/system/wptt-phanquyen.service
+[Unit]
+Description=WPTangToc Auto Chmod/Chown Watcher
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /etc/wptt/wptt-phanquyen-watcher
+Restart=always
+RestartSec=5
+MemoryMax=50M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now wptt-phanquyen >/dev/null 2>&1
+  systemctl restart wptt-phanquyen >/dev/null 2>&1
+  _rundone "Thiết lập Auto Phân quyền Realtime hoàn tất"
+}
+
+huy_bo_tinh_nang() {
+  [[ -z "$ACTION" ]] && echo ""
+  _runing "Đang hủy hệ thống giám sát phân quyền..."
+  
+  rm -f "$FLAG_FILE"
+  systemctl stop wptt-phanquyen >/dev/null 2>&1
+  systemctl disable wptt-phanquyen >/dev/null 2>&1
+  rm -f /etc/systemd/system/wptt-phanquyen.service
+  systemctl daemon-reload
+  
+  _rundone "Hủy hệ thống Auto Phân quyền hoàn tất"
+}
+
+if [[ "$ACTION" == "on" ]]; then
+  [[ ! -f "$FLAG_FILE" ]] && kich_hoat_tinh_nang
+elif [[ "$ACTION" == "off" ]]; then
+  [[ -f "$FLAG_FILE" ]] && huy_bo_tinh_nang
+else
+  if [[ ! -f "$FLAG_FILE" ]]; then
+    if wptt_xac_nhan "Bạn có muốn BẬT hệ thống Tự động Phân quyền Realtime?" "0% Disk IO - Sửa lỗi quyền file ngay lập tức." "" "Đồng ý Bật" "Hủy bỏ"; then
+      kich_hoat_tinh_nang
+    fi
+  else
+    if wptt_xac_nhan "Bạn có chắc chắn muốn TẮT hệ thống Tự động Phân quyền?" "Trạng thái: Đang hoạt động" "" "Đồng ý Tắt" "Giữ nguyên"; then
+      huy_bo_tinh_nang
+    fi
+  fi
+fi
+
+[[ -z "$ACTION" ]] && sleep 2
+[[ "$check_menu_wptangtoc_active" == "98" ]] && exec /etc/wptt/wptt-add-one-main 1
