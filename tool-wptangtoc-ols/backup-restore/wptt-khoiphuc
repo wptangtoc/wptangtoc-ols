@@ -487,7 +487,9 @@ rm -f "${TEMP_CNF_ROOT}"
 # ==============================================================================
 touch "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active" 2>/dev/null
 
+unset restore_tat_tam_lockdown
 if [[ -n "$lock_down" ]]; then
+	restore_tat_tam_lockdown='1'
   . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off
 fi
 
@@ -514,6 +516,27 @@ fi
 [[ -z "$unzipped_size_kb" || "$unzipped_size_kb" -eq 0 ]] && unzipped_size_kb=$((archive_size_kb * 3))
 
 required_space_kb=$((unzipped_size_kb * 15 / 10))
+
+
+wptt_apply_permissions() {
+    local target_dir="$1"
+    _runing "Đang thiết lập phân quyền an toàn (Pre-flight) cho: $target_dir"
+    
+    find "$target_dir" -type f \( -perm -4000 -o -perm -2000 \) -print0 | xargs -0 -r chmod ugo-s
+    chown -hR "$User_name_vhost":"$User_name_vhost" "$target_dir"
+
+    if [[ -n "$lock_down" ]]; then
+        find "$target_dir" -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 404
+        find "$target_dir" -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 515
+        [[ -d "$target_dir/wp-content/uploads" ]] && find "$target_dir/wp-content/uploads" -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
+    else
+        find "$target_dir" -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 644
+        find "$target_dir" -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
+    fi
+    
+    _rundone "Thiết lập phân quyền hoàn tất"
+}
+
 
 thuc_thi_giai_nen() {
   local target_dir="$1"
@@ -656,9 +679,9 @@ if ((free_space_kb > required_space_kb)); then
   rm -rf "$THU_MUC_TAM" && mkdir -p "$THU_MUC_TAM"
 
   if thuc_thi_giai_nen "$THU_MUC_TAM"; then
-    if command -v pv &>/dev/null; then echo -en "\033[1A\033[2K\033[1A\r"; fi
-
-    if [[ -f "$THU_MUC_TAM/wp-load.php" ]]; then
+		if command -v pv &>/dev/null; then echo -en "\033[1A\033[2K\033[1A\r"; fi
+		wptt_apply_permissions "$THU_MUC_TAM"
+		if [[ -f "$THU_MUC_TAM/index.php" ]]; then
       # Cứu hộ các tệp tin cấu hình và file ẩn quan trọng trước khi xóa mã nguồn cũ
       if [[ -f "/usr/local/lsws/${NAME}/html/.htaccess" && ! -f "$THU_MUC_TAM/.htaccess" ]]; then
         cp -p "/usr/local/lsws/${NAME}/html/.htaccess" "$THU_MUC_TAM/" 2>/dev/null
@@ -743,6 +766,7 @@ else
 
   if thuc_thi_giai_nen "/usr/local/lsws/$NAME/html"; then
     if command -v pv &>/dev/null; then echo -en "\033[1A\033[2K\033[1A\r"; fi
+		wptt_apply_permissions "/usr/local/lsws/$NAME/html"
     _rundone "$giai_nen $ma_nguon website $NAME"
   else
     if command -v pv &>/dev/null; then echo -en "\033[1A\033[2K\033[1A\r"; fi
@@ -753,24 +777,7 @@ else
   fi
 fi
 
-_runing "$phan_quyen website $NAME"
 
-find /usr/local/lsws/"$NAME"/html -type f \( -perm -4000 -o -perm -2000 \) -print0 | xargs -0 -r chmod ugo-s
-
-chown -hR "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html
-
-if [[ -n "$lock_down" ]]; then
-  find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 404
-  find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 515
-  find /usr/local/lsws/"$NAME"/html/wp-content/uploads -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
-  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on
-else
-  find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 644
-  find /usr/local/lsws/"$NAME"/html -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
-fi
-
-
-_rundone "$phan_quyen website $NAME"
 
 # Update wp-config.php
 wp_config_php_path="/usr/local/lsws/$NAME/html/wp-config.php"
@@ -858,22 +865,50 @@ if [[ -n "$bao_tri_restore_atomic" ]]; then
   fi
 fi
 
-if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
-  . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
+
+#Xóa lớp vật lý (File Cache/Disk) trước, xóa lớp bộ nhớ (RAM) sau.
+#Bản thân plugin LiteSpeed Cache trong WordPress khi nhận lệnh flush (từ wptt-xoacache) cũng sẽ cố gắng dùng PHP để dò tìm và xóa các tệp tin bên trong thư mục luucache.
+# Việc để PHP đi xóa hàng chục ngàn file là thảm họa I/O
+#tối ưu là thực thi rm luucache trước, để thực thi wp cli xoacache cho nó mượt tối ưu nhất
+
+CACHE_DIR="/usr/local/lsws/${NAME:?}/luucache"
+TRASH_DIR="/usr/local/lsws/${NAME}/luucache_trash_$(date +%s)_${RANDOM}"
+
+
+if [[ -d "$CACHE_DIR" ]]; then
+    _runing "Đang dọn dẹp LSCache"
+    if mv -T -- "$CACHE_DIR" "$TRASH_DIR" 2>/dev/null; then
+        (
+            ionice -c 3 nice -n 19 rm -rf -- "$TRASH_DIR"
+        ) &
+        _rundone "Dọn dẹp LSCache hoàn tất"
+    else
+        _runloi "Không thể chuyển LSCache sang thư mục rác"
+    fi
+fi
+ 
+if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then #nếu là wordpress thì tuyệt vời có quy trình xóa full cache
+	. /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
+else #nếu không phải là wordpress thì cũng cố gắng clear cache php hỗ trợ anh em
+	. /etc/wptt/cache/lib-opcache-clear
+	wptt_xoa_opcache "$NAME"
 fi
 
-if [[ -n "$NAME" && -d "/usr/local/lsws/$NAME/luucache" ]]; then
-  _runing "$don_dep cache lscache"
-  rm -rf /usr/local/lsws/"${NAME:?}"/luucache
-  _rundone "$don_dep cache lscache"
-fi
+# if [[ -n "$NAME" && -d "/usr/local/lsws/$NAME/luucache" ]]; then
+#   _runing "$don_dep cache lscache"
+#   rm -rf /usr/local/lsws/"${NAME:?}"/luucache
+#   _rundone "$don_dep cache lscache"
+# fi
 
 #xoá opcache cache
-. /etc/wptt/cache/lib-opcache-clear
-wptt_xoa_opcache "$NAME"
 #xoá opcache cache
+
 
 wptt_smart_reload_lsws >/dev/null 2>&1
+
+if [[ -n "$restore_tat_tam_lockdown" ]]; then
+  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on
+fi
 
 clear
 # ==============================================================================
