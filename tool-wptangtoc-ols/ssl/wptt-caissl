@@ -173,16 +173,76 @@ if [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
 fi
 
 if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]]; then
-  echo -e "\n${C_RED}Tên miền $NAME không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-ssl-main 1
+	echo -e "\n${C_RED}Tên miền $NAME không tồn tại trên hệ thống này!${C_RESET}"
+	sleep 3
+	if [[ "${1:-}" == "98" ]]; then
+		exec /etc/wptt/wptt-ssl-main 1
+	fi
+	return 1 2>/dev/null || exit 1
 fi
 
 if [[ -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf.bkwptt" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Website $NAME đang bị TẠM KHÓA!${C_RESET}"
-  echo -e "${C_YELLOW}Không thể cài đặt SSL khi website đang tắt. Vui lòng mở khóa trước.${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-ssl-main 1
+	echo -e "\n${C_RED}❌ Lỗi: Website $NAME đang bị TẠM KHÓA!${C_RESET}"
+	echo -e "${C_YELLOW}Không thể cài đặt SSL khi website đang tắt. Vui lòng mở khóa trước.${C_RESET}"
+	sleep 3
+	if [[ "${1:-}" == "98" ]]; then
+		exec /etc/wptt/wptt-ssl-main 1
+	fi
+	return 1 2>/dev/null || exit 1
+fi
+
+
+#kiểm tra thư viện certbot đã cài đặt chưa nếu chưa có thì cài đặt
+if ! command -v certbot >/dev/null 2>&1; then
+	UI_HEAL="Hệ thống phát hiện thiếu Certbot, đang tiến hành tự động cài đặt"
+	_runing "$UI_HEAL"
+
+	# Đảm bảo thư mục tmp của WPTangToc tồn tại trước khi tạo file
+	mkdir -p /etc/wptt/tmp
+
+	# Sử dụng không gian an toàn của WPTangToc thay vì /tmp hệ thống
+	LOG_CERTBOT=$(mktemp -p "/etc/wptt/tmp" wptt_certbot_install_XXXXXX.log)
+	install_success=0
+	max_attempts=3
+	attempt=1
+
+	while (( attempt <= max_attempts )); do
+		echo "--- Thử cài đặt lần $attempt lúc $(date) ---" >> "$LOG_CERTBOT"
+
+		if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+			export DEBIAN_FRONTEND=noninteractive 
+			apt-get update -y >> "$LOG_CERTBOT" 2>&1
+			if apt-get install -y certbot >> "$LOG_CERTBOT" 2>&1; then
+				install_success=1
+				break
+			fi
+		else
+			dnf install epel-release -y >> "$LOG_CERTBOT" 2>&1
+			if dnf install certbot -y --setopt=timeout=15 >> "$LOG_CERTBOT" 2>&1; then
+				install_success=1
+				break
+			fi
+		fi
+
+		sleep 3
+		((attempt++))
+	done
+
+	if ! command -v certbot >/dev/null 2>&1 || [[ $install_success -eq 0 ]]; then
+		_runloi "$UI_HEAL"
+		echoDo "Lỗi nghiêm trọng: Không thể cài đặt Certbot sau $max_attempts lần thử!"
+		echo "=> Chi tiết lỗi đã được lưu tại: ${LOG_CERTBOT}"
+		echo "=> Bạn hãy dùng lệnh: cat ${LOG_CERTBOT} để xem nguyên nhân cụ thể."
+		sleep 5
+
+		if [[ "${1:-}" == "98" ]]; then
+			exec /etc/wptt/wptt-ssl-main 1
+		fi
+		return 1 2>/dev/null || exit 1
+	else
+		_rundone "$UI_HEAL"
+		rm -f "$LOG_CERTBOT" 
+	fi
 fi
 
 
