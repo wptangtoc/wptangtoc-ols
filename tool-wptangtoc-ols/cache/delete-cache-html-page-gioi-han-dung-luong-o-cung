@@ -1,29 +1,57 @@
 #!/bin/bash
+# @description: Auto-purge Cache khi vượt quá dung lượng cho phép (Zero-Downtime)
 
 NAME=$1
+MAX_SIZE=$2
+
+# 1. RÀO CHẮN BẢO MẬT (Input Validation)
+if [[ -z "$NAME" || -z "$MAX_SIZE" ]]; then
+    exit 1
+fi
+
+# Đảm bảo MAX_SIZE là số nguyên dương
+if [[ ! "$MAX_SIZE" =~ ^[0-9]+$ ]]; then
+    exit 1
+fi
+
 TARGET_DIRS=(
-	"/usr/local/lsws/$NAME/luucache"
-	"/usr/local/lsws/$NAME/html/wp-content/cache"
+    "/usr/local/lsws/$NAME/luucache"
+    "/usr/local/lsws/$NAME/html/wp-content/cache"
 )
 
-# Kích thước tối đa (MB)
-MAX_SIZE=$2
-# Kiểm tra kích thước thư mục
-get_dir_size() {
-	du -sm "$1" | cut -f1
-}
+deleted_trigger=0
 
-# Vòng lặp qua từng thư mục
+# 2. VÒNG LẶP XỬ LÝ (Tối giản Dependency)
 for TARGET_DIR in "${TARGET_DIRS[@]}"; do
-	# Kiểm tra xem thư mục có tồn tại không
-	if [ -d "$TARGET_DIR" ]; then  # Thêm kiểm tra thư mục tồn tại
-		# Lấy kích thước hiện tại của thư mục
-		current_size=$(get_dir_size "$TARGET_DIR")
+    if [[ -d "$TARGET_DIR" ]]; then
+        # Lấy kích thước (MB) - du -sm trả về giá trị an toàn
+        current_size=$(du -sm "$TARGET_DIR" 2>/dev/null | awk '{print $1}')
 
-	if (( $(echo "$current_size > $MAX_SIZE" | bc -l) )); then
-		rm -rf "${TARGET_DIR:?}" >/dev/null 2>&1
-		. /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
-	fi
-	fi
+        # So sánh toán học thuần túy của Bash (Không dùng bc)
+        if [[ "$current_size" =~ ^[0-9]+$ ]] && (( current_size > MAX_SIZE )); then
+            
+            # Khởi tạo thư mục rác với định danh ngẫu nhiên chống Symlink
+            TRASH_DIR="${TARGET_DIR}_trash_$(date +%s)_${RANDOM}"
+
+            # 3. ATOMIC SWAP (Tráo đổi tức thời bằng cờ -T --)
+            if mv -T -- "$TARGET_DIR" "$TRASH_DIR" 2>/dev/null; then
+                
+                # 4. TIÊU DIỆT RÁC NGẦM (Non-blocking I/O)
+                (
+                    ionice -c 3 nice -n 19 rm -rf -- "$TRASH_DIR"
+                ) &
+                
+                deleted_trigger=1
+            fi
+        fi
+    fi
 done
 
+# 5. ĐỒNG BỘ TRẠNG THÁI CACHE MỨC HỆ THỐNG
+# Chỉ gọi lệnh clear cache (RAM/Memcached/Redis) nếu thực sự có hành động xóa file diễn ra
+if [[ $deleted_trigger -eq 1 ]]; then
+    # Ghi log nhẹ để Sysadmin dễ truy vết khi thấy cache tự nhiên bị mất
+    echo "[$(date '+%d-%m-%Y %H:%M:%S')] Auto-Purge Cache (Vượt mức ${MAX_SIZE}MB) -> Domain: $NAME" >> /var/log/wptangtoc-ols.log
+    
+    . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
+fi
