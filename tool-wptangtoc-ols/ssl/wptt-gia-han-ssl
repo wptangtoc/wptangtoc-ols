@@ -4,10 +4,10 @@
 # @since: 2026
 
 function huong_dan() {
-  Gia hạn chứng chỉ SSL letsencrypt thủ công. Tính năng này sẽ gia hạn xin cấp gia hạn chứng chỉ ssl letsencrypt
+	Gia hạn chứng chỉ SSL letsencrypt thủ công. Tính năng này sẽ xin cấp gia hạn chứng chỉ ssl letsencrypt.
 
-  Ghi chú: Mặc định WPTangToc OLS có cơ chế tự động gia hạn auto vĩnh viễn rồi.
-  Có thể vì lý do lỗi nào đó bạn không thể gia hạn được, có thể sử dụng tính năng này
+	Ghi chú: Mặc định WPTangToc OLS có cơ chế tự động gia hạn auto vĩnh viễn rồi.
+	Có thể vì lý do mạng hoặc repo lỗi nào đó bạn không thể gia hạn được tự động, có thể sử dụng tính năng này để kiểm tra và xử lý.
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -17,188 +17,262 @@ function huong_dan() {
 . /etc/wptt/core-functions 2>/dev/null
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_ssl} ➜ Gia hạn thủ công chứng chỉ SSL FREE letsencrypt${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_ssl} ➜ Gia hạn thủ công chứng chỉ SSL FREE Let's Encrypt${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 if [[ "${1:-}" == '98' ]]; then
-  WPTT_IN_MENU="yes"
-  WPTT_MENU_BACK="/etc/wptt/wptt-ssl-main 1"
+	WPTT_IN_MENU="yes"
+	WPTT_MENU_BACK="/etc/wptt/wptt-ssl-main 1"
 fi
 
-wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị lỗi, Không cho phép gia hạn thủ công SSL letsencrypt"
+wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị lỗi, không cho phép gia hạn thủ công SSL Let's Encrypt."
 
-# --- Quét Server xem có SSL Let's Encrypt nào không ---
+# ==============================================================================
+# QUÉT HỆ THỐNG KIỂM TRA ĐIỀU KIỆN GIA HẠN
+# ==============================================================================
 ssl_count=0
 for filepath in /etc/wptt/vhost/.*.conf; do
-  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+	[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-  domain="${filepath##*/}"
-  domain="${domain%.conf}"
-  domain="${domain#.}"
+	domain="${filepath##*/}"
+	domain="${domain%.conf}"
+	domain="${domain#.}"
 
-  if [[ "$domain" == ?*.?* ]]; then
-    if [[ -f "/etc/letsencrypt/live/$domain/cert.pem" ]]; then
-      ((ssl_count++))
-    fi
-  fi
+	if [[ "$domain" == ?*.?* ]]; then
+		if [[ -f "/etc/letsencrypt/live/$domain/cert.pem" ]]; then
+			((ssl_count++))
+		fi
+	fi
 done
 
 if [[ "$ssl_count" -eq 0 ]]; then
-  echoDo "Tất cả domain trên hệ thống không có domain nào sử dụng SSL letsencrypt"
-  sleep 2
-  exec /etc/wptt/wptt-ssl-main 1
+	echoDo "Tất cả domain trên hệ thống không có domain nào sử dụng SSL Let's Encrypt."
+	sleep 2
+	[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
 	return 2>/dev/null || exit 1
 fi
 
-# Thiết lập cron gia hạn tự động SSL Let's Encrypt lũy đẳng
-# người dùng mà tự nhiên chủ động gia thủ công thì nên chạy lũy đăng gia hạn tự động để xem, nếu gia hạn tự động ngon thì người dùng chả phải quan tâm gia hạn thủ công, nên check 1 vòng để kiểm tra, nếu tình huống cron lỗi (chuyển qua system service times) hay người dùng xóa đoạn gia hạn trong cron thì nó tự động add lại
-#bọc sub shell tránh chèn biến
+# Thiết lập cron gia hạn tự động SSL Let's Encrypt lũy đẳng (Idempotent)
 (. /etc/wptt/ssl/gia-han-tu-dong-ssl-let-encrypt >/dev/null 2>&1)
-# End thiết lập cron gia hạn tự động SSL Let's Encrypt lũy đẳng
 
-
-if wptt_xac_nhan "Bạn muốn gia hạn chứng chỉ SSL Free letsencrypt trên toàn Server?" "Mặc định WPTangToc OLS đã có gia hạn tự động SSL letsencrypt." "Xử lý sự cố gia hạn chứng chỉ letsencrypt tự động có vấn đề." "Đồng ý (gia hạn thủ công)" "Không đồng ý (Hủy thao tác)"; then
-
-  # --- MODULE AUTO-HEAL: KIỂM TRA & CÀI ĐẶT CERTBOT NẾU BỊ MẤT ---
-  if [[ ! -f /usr/bin/certbot ]]; then
-    UI_HEAL="Hệ thống phát hiện thiếu Certbot, đang tự động cài đặt lại"
-    _runing "$UI_HEAL"
-
-    if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
-      apt-get update >/dev/null 2>&1
-      apt-get install -y certbot >/dev/null 2>&1
-    else
-      dnf install epel-release -y >/dev/null 2>&1
-      dnf install certbot -y >/dev/null 2>&1
-    fi
-
-    if [[ ! -f /usr/bin/certbot ]]; then
-      _runloi "$UI_HEAL"
-      echoDo "Lỗi nghiêm trọng: Không thể cài đặt tự động Certbot. Vui lòng kiểm tra lại Network/Repo."
-      sleep 3
-      exec /etc/wptt/wptt-ssl-main 1
-    else
-      _rundone "$UI_HEAL"
-    fi
-  fi
-  # -------------------------------------------------------------
-
-  UI_STRING="Gia hạn chứng chỉ SSL Free letsencrypt"
-  _runing "$UI_STRING"
-
-  echo "Gia hạn thủ công SSL free letsencrypt all: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-  # --- 1. MỞ CỬA TƯỜNG LỬA (Tránh Block IP Let's Encrypt) ---
-  if [[ -f /etc/csf/csf.conf ]]; then
-    countryblicklist=$(awk -F'"' '/^CC_ALLOW_FILTER/ {print $2}' /etc/csf/csf.conf)
-    if [[ -n "$countryblicklist" ]]; then
-      csf -x >/dev/null 2>&1
-    fi
-  fi
-
-  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
-    path_nftables_config="/etc/nftables.conf"
-  else
-    path_nftables_config="/etc/sysconfig/nftables.conf"
-  fi
-
-  if [[ -f "$path_nftables_config" ]]; then
-    if grep -q 'ipvietnam' "$path_nftables_config"; then
-      systemctl stop nftables >/dev/null 2>&1
-    fi
-  fi
-
-#sử lý tình huống nguời dùng sử dụng OLS nhưng mà lại đi lại NGINX hay apache vào cướp port 80 không thể gia hạn ssl
 # ==============================================================================
-# KIỂM TRA XUNG ĐỘT PORT 80 (NGINX / APACHE CƯỚP PORT)
+# XÁC NHẬN VÀ THỰC THI GIA HẠN
 # ==============================================================================
-conflict_process=$(ss -tlnp 2>/dev/null | grep -E '\b:80\b' | grep -oP 'users:\(\("\K[^"]+' | grep -v -iE "litespeed|openlite|lsws|lshttpd" | head -n 1)
-if [[ -z "$conflict_process" ]]; then
-  conflict_process=$(netstat -tlnp 2>/dev/null | grep -E '\b:80\b' | awk '{print $7}' | cut -d'/' -f2 | grep -v -iE "litespeed|openlite|lsws|lshttpd|-" | head -n 1)
-fi
+if wptt_xac_nhan "Bạn muốn gia hạn chứng chỉ SSL Free Let's Encrypt trên toàn Server?" "Mặc định WPTangToc OLS đã có gia hạn tự động SSL." "Chức năng này giúp xử lý sự cố khi tiến trình tự động gặp vấn đề." "Đồng ý (Gia hạn thủ công)" "Không đồng ý (Hủy thao tác)"; then
 
-if [[ -n "$conflict_process" ]]; then #vì dùng grep -v đi tìm biến: nếu port 80 mà bị cướp bới nginx hay apache thì nó sẽ đi vào true
-  _runloi "Kiểm tra tình trạng xung đột Port 80 (HTTP)"
-  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_RED}CẢNH BÁO: XUNG ĐỘT PORT 80 (HTTP) của OpenLiteSpeed${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  center_text "Hệ thống phát hiện dịch vụ ${C_YELLOW}[$conflict_process]${C_RESET} đang chiếm giữ Port 80."
-  center_text "Let's Encrypt bắt buộc Port 80 phải thông suốt để xác thực gia hạn."
-  center_text ""
-  center_text "Để tiếp tục gia hạn, bạn cần tắt dịch vụ xung đột này đi bằng lệnh:"
-  center_text "${C_GREEN}systemctl stop $conflict_process${C_RESET}"
-  center_text "${C_GREEN}systemctl disable $conflict_process${C_RESET}"
-  center_text "${C_GREEN}systemctl mask $conflict_process${C_RESET}"
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL${C_RESET}"
-  read -r _
-  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
-  exit 1
-fi
-# ==============================================================================
-  # --- 2. THỰC THI GIA HẠN VÀ LƯU LOG ---
-  # Bỏ cờ --quiet, thu thập toàn bộ luồng báo cáo của Certbot vào biến
-  certbot_output=$(/usr/bin/certbot renew 2>&1)
+	# --- MODULE AUTO-HEAL: KIỂM TRA & CÀI ĐẶT CERTBOT NẾU BỊ MẤT ---
+	if ! command -v certbot >/dev/null 2>&1; then
+		UI_HEAL="Hệ thống phát hiện thiếu Certbot, đang tiến hành tự động cài đặt"
+		_runing "$UI_HEAL"
 
-  # --- 3. ĐÓNG LẠI TƯỜNG LỬA (Khôi phục trạng thái ban đầu) ---
-  if [[ -f /etc/csf/csf.conf && -n "$countryblicklist" ]]; then
-    csf -e >/dev/null 2>&1
-  fi
+		# Đảm bảo thư mục tmp của WPTangToc tồn tại trước khi tạo file
+		mkdir -p /etc/wptt/tmp
+		
+		# Sử dụng không gian an toàn của WPTangToc thay vì /tmp hệ thống
+		LOG_CERTBOT=$(mktemp -p "/etc/wptt/tmp" wptt_certbot_install_XXXXXX.log)
+		install_success=0
+		max_attempts=3
+		attempt=1
 
-  if [[ -f "$path_nftables_config" ]]; then
-    if grep -q 'ipvietnam' "$path_nftables_config"; then
-      systemctl start nftables >/dev/null 2>&1
-    fi
-  fi
+		# Vòng lặp Retry an toàn
+		while (( attempt <= max_attempts )); do
+			echo "--- Thử cài đặt lần $attempt lúc $(date) ---" >> "$LOG_CERTBOT"
+			
+			if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+				# Khử popup hỏi đáp làm treo script trên Ubuntu
+				export DEBIAN_FRONTEND=noninteractive 
+				apt-get update -y >> "$LOG_CERTBOT" 2>&1
+				if apt-get install -y certbot >> "$LOG_CERTBOT" 2>&1; then
+					install_success=1
+					break
+				fi
+			else
+				dnf install epel-release -y >> "$LOG_CERTBOT" 2>&1
+				# Dùng --setopt=timeout để tránh dnf bị treo quá lâu nếu repo lag
+				if dnf install certbot -y --setopt=timeout=15 >> "$LOG_CERTBOT" 2>&1; then
+					install_success=1
+					break
+				fi
+			fi
 
-  # Reload OpenLiteSpeed không làm sập tiến trình hiện tại
-  wptt_smart_reload_lsws >/dev/null 2>&1
+			# Nghỉ 3 giây trước khi retry để nhả kết nối mạng
+			sleep 3
+			((attempt++))
+		done
 
-  _rundone "$UI_STRING"
+		# Đánh giá kết quả cài đặt Certbot
+		if ! command -v certbot >/dev/null 2>&1 || [[ $install_success -eq 0 ]]; then
+			_runloi "$UI_HEAL"
+			echoDo "Lỗi nghiêm trọng: Không thể cài đặt Certbot sau $max_attempts lần thử!"
+			echo "=> Chi tiết lỗi đã được lưu tại: ${LOG_CERTBOT}"
+			echo "=> Bạn hãy dùng lệnh: cat ${LOG_CERTBOT} để xem nguyên nhân cụ thể."
+			sleep 5
+			
+			[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+			return 1 2>/dev/null || exit 1
+		else
+			_rundone "$UI_HEAL"
+			rm -f "$LOG_CERTBOT" # Dọn dẹp sạch sẽ khi thành công
+		fi
+	fi
 
-  # --- 4. HIỂN THỊ BÁO CÁO UX ---
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}BÁO CÁO GIA HẠN CERTBOT (SSL LETSENCRYPT)${C_RESET}"
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+	# -------------------------------------------------------------
+	UI_STRING="Gia hạn chứng chỉ SSL Free Let's Encrypt"
+	_runing "$UI_STRING"
+	echo "Gia hạn thủ công SSL free letsencrypt all: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-  # 4.1 Lọc danh sách gia hạn THÀNH CÔNG
-  if echo "$certbot_output" | grep -qiE "Congratulations|succeeded"; then
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    left_text "${C_BOLD_WHITE}GIA HẠN THÀNH CÔNG:${C_RESET}"
-    echo "$certbot_output" | grep -i "succeeded" -A 50 | grep "/live/" | while read -r line; do
-      domain_success=$(echo "$line" | grep -oP '/live/\K[^/]+')
-      [[ -n "$domain_success" ]] && left_text "$domain_success" 4
-    done
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
-  fi
+	# --- 1. MỞ CỬA TƯỜNG LỬA (Tránh Block IP Let's Encrypt) ---
+	if [[ -f /etc/csf/csf.conf ]]; then
+		countryblicklist=$(awk -F'"' '/^CC_ALLOW_FILTER/ {print $2}' /etc/csf/csf.conf)
+		if [[ -n "$countryblicklist" ]]; then
+			csf -x >/dev/null 2>&1
+		fi
+	fi
 
-  # 4.2 Lọc danh sách BỎ QUA (Chưa tới hạn)
-  if echo "$certbot_output" | grep -q "not yet due for renewal"; then
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    left_text "${C_BOLD_WHITE}CHƯA TỚI HẠN (BỎ QUA):${C_RESET}"
-    echo "$certbot_output" | grep "expires on" | while read -r line; do
-      domain_skip=$(echo "$line" | grep -oP '/live/\K[^/]+')
-      date_exp=$(echo "$line" | grep -oP 'expires on \K[0-9-]+')
-      [[ -n "$domain_skip" ]] && left_text "$domain_skip hết hạn $date_exp" 4
-    done
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
-  fi
+	if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
+		path_nftables_config="/etc/nftables.conf"
+	else
+		path_nftables_config="/etc/sysconfig/nftables.conf"
+	fi
 
-  # 4.3 Lọc danh sách LỖI (Failed)
-  if echo "$certbot_output" | grep -qiE "failed|error"; then
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    left_text "${C_BOLD_WHITE}GIA HẠN THẤT BẠI (CẦN KIỂM TRA):${C_RESET}"
-    left_text "Phát hiện lỗi trong quá trình gia hạn."
-    left_text "Vui lòng xem chi tiết tại: \033[4;37m/var/log/letsencrypt/letsencrypt.log\033[0m"
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
-  fi
+	if [[ -f "$path_nftables_config" ]]; then
+		if grep -q 'ipvietnam' "$path_nftables_config"; then
+			systemctl stop nftables >/dev/null 2>&1
+		fi
+	fi
 
-  # 4.4 Chốt tóm tắt
-  if echo "$certbot_output" | grep -q "No renewals were attempted"; then
-    left_text "\033[3;37m(Không có hành động gia hạn nào được thực thi trong lần chạy này)\033[0m"
-  fi
+	# ==============================================================================
+	# KIỂM TRA XUNG ĐỘT PORT 80 (NGINX / APACHE CƯỚP PORT)
+	# ==============================================================================
+	conflict_process=$(ss -tlnp 2>/dev/null | grep -E '\b:80\b' | grep -oP 'users:\(\("\K[^"]+' | grep -v -iE "litespeed|openlite|lsws|lshttpd" | head -n 1)
+	if [[ -z "$conflict_process" ]]; then
+		conflict_process=$(netstat -tlnp 2>/dev/null | grep -E '\b:80\b' | awk '{print $7}' | cut -d'/' -f2 | grep -v -iE "litespeed|openlite|lsws|lshttpd|-" | head -n 1)
+	fi
 
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+	if [[ -n "$conflict_process" ]]; then 
+		_runloi "Kiểm tra tình trạng xung đột Port 80 (HTTP)"
+		echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+		center_text "${C_RED}CẢNH BÁO: XUNG ĐỘT PORT 80 (HTTP) CỦA OPENLITESPEED${C_RESET}"
+		echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+		center_text "Hệ thống phát hiện dịch vụ ${C_YELLOW}[$conflict_process]${C_RESET} đang chiếm giữ Port 80."
+		center_text "Let's Encrypt bắt buộc Port 80 phải thông suốt để xác thực gia hạn."
+		center_text ""
+		center_text "Để tiếp tục gia hạn, bạn cần tắt dịch vụ xung đột này đi bằng lệnh:"
+		center_text "${C_GREEN}systemctl stop $conflict_process${C_RESET}"
+		center_text "${C_GREEN}systemctl disable $conflict_process${C_RESET}"
+		echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+		echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Quản lý SSL${C_RESET}"
+		read -r _
+		
+		# Khôi phục Firewall trước khi thoát
+		[[ -f /etc/csf/csf.conf && -n "$countryblicklist" ]] && csf -e >/dev/null 2>&1
+		[[ -f "$path_nftables_config" ]] && grep -q 'ipvietnam' "$path_nftables_config" && systemctl start nftables >/dev/null 2>&1
+
+		[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
+		exit 1
+	fi
+
+	# ==============================================================================
+	# --- 2. THỰC THI GIA HẠN VÀ CẮT LOG (LOG SLICING HYBRID) ---
+	# ==============================================================================
+	LOG_FILE="/var/log/letsencrypt/letsencrypt.log"
+
+	# Đếm số dòng log TRƯỚC KHI chạy
+	LINE_START=0
+	[[ -f "$LOG_FILE" ]] && LINE_START=$(wc -l < "$LOG_FILE")
+
+	# Bỏ cờ --quiet, thu thập toàn bộ luồng báo cáo CLI của Certbot vào biến
+	certbot_cli_output=$(/usr/bin/certbot renew 2>&1)
+
+	# Đếm số dòng log SAU KHI chạy
+	LINE_END=0
+	[[ -f "$LOG_FILE" ]] && LINE_END=$(wc -l < "$LOG_FILE")
+	LINES_NEW=$((LINE_END - LINE_START))
+
+	# Đề phòng file log bị hệ thống cắt (Logrotate) giữa chừng khiến LINE_END nhỏ hơn
+	if (( LINES_NEW <= 0 )); then
+		LINES_NEW=150 
+	fi
+
+	# TÓM ĐÚNG ĐOẠN LOG CỦA PHIÊN CHẠY VỪA RỒI
+	RECENT_LOG=$(tail -n "$LINES_NEW" "$LOG_FILE" 2>/dev/null)
+
+	# ==============================================================================
+	# --- 3. ĐÓNG LẠI TƯỜNG LỬA (Khôi phục trạng thái ban đầu) ---
+	# ==============================================================================
+	if [[ -f /etc/csf/csf.conf && -n "$countryblicklist" ]]; then
+		csf -e >/dev/null 2>&1
+	fi
+
+	if [[ -f "$path_nftables_config" ]]; then
+		if grep -q 'ipvietnam' "$path_nftables_config"; then
+			systemctl start nftables >/dev/null 2>&1
+		fi
+	fi
+
+	# Reload OpenLiteSpeed không làm sập tiến trình hiện tại
+	wptt_smart_reload_lsws >/dev/null 2>&1
+
+	_rundone "$UI_STRING"
+
+	# ==============================================================================
+	# --- 4. HIỂN THỊ BÁO CÁO UX ---
+	# ==============================================================================
+	echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+	center_text "${C_BOLD_WHITE}BÁO CÁO GIA HẠN CERTBOT (SSL LETSENCRYPT)${C_RESET}"
+	echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+	# 4.1 Lọc danh sách gia hạn THÀNH CÔNG
+	if echo "$certbot_cli_output" | grep -qiE "Congratulations|succeeded"; then
+		echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+		left_text "${C_BOLD_WHITE}GIA HẠN THÀNH CÔNG:${C_RESET}"
+		echo "$certbot_cli_output" | grep -i "succeeded" -A 50 | grep "/live/" | while read -r line; do
+			domain_success=$(echo "$line" | grep -oP '/live/\K[^/]+')
+			[[ -n "$domain_success" ]] && left_text "✓ $domain_success" 4
+		done
+		echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+	fi
+
+	# 4.2 Lọc danh sách BỎ QUA (Chưa tới hạn)
+	if echo "$certbot_cli_output" | grep -q "not yet due for renewal"; then
+		echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+		left_text "${C_BOLD_WHITE}CHƯA TỚI HẠN (BỎ QUA):${C_RESET}"
+		echo "$certbot_cli_output" | grep "expires on" | while read -r line; do
+			domain_skip=$(echo "$line" | grep -oP '/live/\K[^/]+')
+			date_exp=$(echo "$line" | grep -oP 'expires on \K[0-9-]+')
+			[[ -n "$domain_skip" ]] && left_text "⏸ $domain_skip (Tới $date_exp)" 4
+		done
+		echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+	fi
+
+	# 4.3 Lọc danh sách LỖI (SỬ DỤNG LOG SLICING ĐỂ BẮT ĐÚNG NGUYÊN NHÂN)
+	if echo "$certbot_cli_output" | grep -qiE "failed|error"; then
+		echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+		center_text "${C_BOLD_WHITE}GIA HẠN THẤT BẠI (CẦN KIỂM TRA QUẢN TRỊ VIÊN)${C_RESET}"
+		echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+		left_text "Hệ thống phát hiện lỗi trong quá trình gia hạn."
+		
+		# Trích xuất chính xác dòng báo lỗi Detail/Hint từ File Log
+		error_details=$(echo "$RECENT_LOG" | grep -iE "Detail:|Challenge failed|Hint:|Timeout" | tail -n 4)
+		
+		if [[ -n "$error_details" ]]; then
+			left_text "${C_YELLOW}Nguyên nhân trích xuất từ hệ thống:${C_RESET}"
+			echo "$error_details" | while read -r err_line; do
+				# Clean log JSON/Datetime prefix của Certbot
+				clean_err=$(echo "$err_line" | sed -E 's/^[0-9-]+ [0-9:,]+ [A-Z]+:certbot[^:]+://g' | xargs)
+				left_text "  - $clean_err"
+			done
+		fi
+		
+		echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+		left_text "Log đầy đủ: \033[4;37m$LOG_FILE\033[0m"
+		echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+	fi
+
+	# 4.4 Chốt tóm tắt
+	if echo "$certbot_cli_output" | grep -q "No renewals were attempted"; then
+		echo -e "   \033[3;37m(Không có hành động gia hạn nào được thực thi trong lần chạy này)\033[0m\n"
+	fi
 fi
 
 [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-ssl-main 1
