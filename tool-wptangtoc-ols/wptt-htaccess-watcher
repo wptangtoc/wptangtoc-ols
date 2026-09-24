@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Realtime OpenLiteSpeed .htaccess
+# @description: Realtime OpenLiteSpeed .htaccess Watcher
 # @since: 2026
 
 . /etc/wptt/core-functions
@@ -9,10 +9,11 @@
 shopt -s nullglob
 WATCH_DIRS=()
 
+# 1. Quét thư mục an toàn (Bỏ qua Symlink để chống Path Traversal)
 for html_dir in /usr/local/lsws/*/html; do
-    if [[ -d "$html_dir" ]]; then
+    if [[ -d "$html_dir" && ! -L "$html_dir" ]]; then
         WATCH_DIRS+=("$html_dir")
-        [[ -d "$html_dir/wp-content" ]] && WATCH_DIRS+=("$html_dir/wp-content")
+        [[ -d "$html_dir/wp-content" && ! -L "$html_dir/wp-content" ]] && WATCH_DIRS+=("$html_dir/wp-content")
     fi
 done
 
@@ -21,24 +22,34 @@ if [[ ${#WATCH_DIRS[@]} -eq 0 ]]; then
     exit 0
 fi
 
-# Cờ %w%f giúp in ra ĐƯỜNG DẪN TUYỆT ĐỐI của file bị thay đổi (VD: /usr/local/lsws/domain.com/html/.htaccess)
-inotifywait -m -q -e close_write,moved_to,create,delete "${WATCH_DIRS[@]}" --format "%w%f" | while read -r filepath; do
-    if [[ "$filepath" == *".htaccess" ]]; then
+# 2. Lắng nghe sự kiện (Bỏ -q để có thể debug nếu chạy service status)
+inotifywait -m -e close_write,moved_to,create,delete "${WATCH_DIRS[@]}" --format "%w%f" | while read -r raw_filepath; do
+    if [[ "$raw_filepath" == *".htaccess" ]]; then
         
-        # Kiểm tra xem tính năng Htaccess Cache có đang bật không?
-				if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
-					# Trích xuất chính xác tên domain từ đường dẫn tuyệt đối (Cột thứ 5)
-					domain=$(echo "$filepath" | awk -F'/' '{print $5}')
+        # LỚP KHIÊN 1: Realpath để bóc trần sự thật của đường dẫn (Chống Symlink ảo)
+        filepath=$(realpath -q "$raw_filepath" 2>/dev/null)
+        # Fallback nếu file vừa bị delete (realpath sẽ rỗng)
+        [[ -z "$filepath" ]] && filepath="$raw_filepath" 
 
-						# Kích hoạt convert .htaccess -> vhost cho riêng domain bị thay đổi
-						if [[ -n "$domain" ]]; then
-							/bin/bash -c ". /etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost \"$domain\" >/dev/null 2>&1"
-						fi
-					else #bản thân wptt-htaccess-tat-chuyen-vhost cũng đã có wptt-smart-reload-lsws rồi
-						# Nếu không bật Htaccess Cache, chỉ cần báo OLS nạp lại cấu hình thông thường
-						wptt_smart_reload_lsws >/dev/null 2>&1
-				fi
-        sleep 3
+        # LỚP KHIÊN 2: Strict Domain Validation bằng Regex (Tuyệt đối không dùng awk -F'/')
+        if [[ "$filepath" =~ ^/usr/local/lsws/([a-zA-Z0-9.-]+)/html/ ]]; then
+            domain="${BASH_REMATCH[1]}"
+            
+            # LỚP KHIÊN 3: Domain ↔ Vhost Mapping (Xác thực domain có tồn tại thật trên WPTangToc)
+            if [[ -n "$domain" && -f "/etc/wptt/vhost/.$domain.conf" ]]; then
+                
+                if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
+                    # LỚP KHIÊN 4: Không Source (.). Ép chạy tiến trình con (Sub-process)
+                    /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$domain" >/dev/null 2>&1
+                else 
+                    wptt_smart_reload_lsws >/dev/null 2>&1
+                fi
+            fi
+        fi
+
+        # LỚP KHIÊN 5:
+        # Nếu người dùng lưu file liên tục 10 lần trong 1 giây, chỉ xử lý 1 lần.
+        sleep 2
         while read -r -t 0.1 discard; do :; done
     fi
 done
