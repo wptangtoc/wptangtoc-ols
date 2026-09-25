@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 # shellcheck disable=SC1091
 
 if [[ -z $(bpftool map list) ]]; then

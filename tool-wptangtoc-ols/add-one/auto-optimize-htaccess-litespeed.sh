@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 # shellcheck disable=SC1091
 for entry_path in /etc/wptt/vhost/.*.conf; do
 	# Bỏ qua nếu không có file nào khớp

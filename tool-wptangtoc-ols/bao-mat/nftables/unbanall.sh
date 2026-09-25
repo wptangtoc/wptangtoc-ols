@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 nft flush set ip blackblock blackaction >/dev/null 2>&1
 
 # 2. Tái tạo: Bơm ngay cái IP neo (Dummy IP) 0.0.0.0 trở lại để giữ cấu trúc

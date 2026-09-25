@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 
 #cat <(crontab -l) <(echo "10 0,6,12,18 * * * /bin/bash /đường/dẫn/tới/script/update_firehol_blacklist_ip.sh >/dev/null 2>&1") | crontab -
 #systemctl restart crond

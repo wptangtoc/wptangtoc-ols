@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 
 modprobe nf_synproxy_core
 echo 0 > /proc/sys/net/netfilter/nf_conntrack_tcp_loose

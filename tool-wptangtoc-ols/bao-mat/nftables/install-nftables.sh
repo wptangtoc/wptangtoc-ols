@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 
 systemctl mask iptables
 systemctl stop iptables
