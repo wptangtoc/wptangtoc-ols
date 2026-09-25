@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 
 # ==========================================
 # LẤY DANH SÁCH IP CHÍNH THỨC TỪ GOOGLE
