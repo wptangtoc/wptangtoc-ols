@@ -28,7 +28,7 @@ if [[ -f "/usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadA
   . "/etc/wptt/vhost/.${NAME}.conf" 2>/dev/null
   . "/etc/wptt/php/php-cli-domain-config" "$NAME" 2>/dev/null
   
-  echo "Preload Cache PHP html cache website $NAME: $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
+  wptt_logs "INFO" "Preload Cache PHP html cache website $NAME"
 
   # Bọc ngoặc kép chuẩn chỉ cho các biến của Runuser và WP-CLI
   /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'WPTangToc\PreloadAllPHP::preload_cache();' --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
