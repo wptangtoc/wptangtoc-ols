@@ -209,7 +209,7 @@ _runing "Đang nén Mã nguồn (Source Code)..."
 zip_path="/usr/local/backup-website/$domain/${domain}${timedate}.zip"
 
 # Vá lỗi SC2035: Dùng ./* thay cho * để tránh xung đột với tùy chọn của lệnh zip
-cd "$path" && zip -r -q "$zip_path" ./* -x "wp-content/ai1wm-backups/*" -x "wp-content/cache/*" -x "wp-content/updraft/*" -x "error_log" -x "wp-content/debug.log" -x "wp-content/uploads/backupbuddy_backups/*" -x "wp-content/backups-dup-*/*"
+cd "$path" && zip -r -q "$zip_path" -x "wp-content/ai1wm-backups/*" -x "wp-content/cache/*" -x "wp-content/updraft/*" -x "error_log" -x "wp-content/debug.log" -x "wp-content/uploads/backupbuddy_backups/*" -x "wp-content/backups-dup-*/*" -- .
 
 if [[ -s "$zip_path" ]]; then
     _rundone "Nén Mã nguồn thành công"
