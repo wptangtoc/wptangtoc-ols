@@ -11,3 +11,16 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+# WPTangToc OLS - Phiên bản 8.1.2.7
+
+## 🚀 Tính năng mới
+- **Chuẩn hóa hệ thống Logging & Output CLI:** Cải tiến và đồng bộ hóa cơ chế ghi system log cùng định dạng in log (print log) nhất quán trên giao diện dòng lệnh, giúp quản trị viên dễ dàng giám sát vận hành (monitoring) và truy vết sự cố (troubleshooting) chính xác hơn.
+
+## 🛠️ Tối ưu hệ thống
+- **Thắt chặt an ninh môi trường thực thi (Security Hardening):** Tự động dọn dẹp (`unset`) các biến môi trường nhạy cảm (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `BASH_ENV`, `ENV`, `CDPATH`), triệt tiêu nguy cơ leo thang đặc quyền và tấn công can thiệp thư viện động (Shared Library Injection / Command Hijacking).
+- **Tái cấu trúc luồng cài đặt OpenLiteSpeed (nhánh RedHat/AlmaLinux):** Loại bỏ phương thức tải và thực thi trực tiếp qua pipeline thiếu xác thực (`curl | bash`); chuyển đổi sang quy trình triển khai an toàn, bảo vệ tính toàn vẹn của hệ thống.
+- **Tối ưu hóa mã nguồn lõi:** Cập nhật và tinh chỉnh các module vận hành nội bộ, gia tăng độ ổn định tổng thể cho bộ công cụ quản trị.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
