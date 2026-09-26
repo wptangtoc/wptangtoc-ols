@@ -1,3 +1,12 @@
+## WPTangToc OLS v8.1.3.1
+
+### 🛠️ Tối ưu hệ thống
+- **Tăng cường độ ổn định quy trình cập nhật:** Nâng cấp cơ chế phát hiện và xử lý lỗi chuyên sâu khi cập nhật WordPress Core, Theme và Plugin; ngăn ngừa rủi ro treo tiến trình và hạn chế tối đa gián đoạn dịch vụ trong lúc bảo trì.
+- **Kiểm soát lỗi giao diện (Themes) chuẩn xác:** Cải tiến khâu xác thực trạng thái khi cập nhật theme, giúp quản trị viên chủ động phát hiện sớm xung đột và xử lý sự cố nhanh chóng.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.1.3.0
 
 ### 🛠️ Tối ưu hệ thống
