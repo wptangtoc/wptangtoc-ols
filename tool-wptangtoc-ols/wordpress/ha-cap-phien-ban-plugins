@@ -10,23 +10,23 @@ function huong_dan() {
   * Tính năng bị loại bỏ hoặc thay đổi không mong muốn: Đôi khi, phiên bản mới của plugin loại bỏ một tính năng bạn cần hoặc thay đổi cách hoạt động theo hướng bạn không thích.
   * Vấn đề tương thích tạm thời: Trong khi chờ nhà phát triển plugin hoặc theme khác cập nhật để tương thích với phiên bản plugin mới nhất.
 
-  Tóm lại: WPTangToc OLS tích hợp tính năng hạ cấp plugin giúp bạn quay lại phiên bản cũ hơn của một plugin để giải quyết các vấn đề phát sinh từ bản cập nhật mới. Tuy nhiên, đây nên được coi là một giải pháp tạm thời và cần thực hiện hết sức cẩn trọng do các rủi ro về bảo mật và tương thích. Hãy luôn tham khảo tài liệu cụ thể hoặc nhờ sự hỗ trợ từ cộng đồng WPTangToc OLS để biết cách sử dụng an toàn và hiệu quả.
+  Tóm lại: WPTangToc OLS tích hợp tính năng hạ cấp plugin giúp bạn quay lại phiên bản cũ hơn của một plugin để giải quyết các vấn đề phát sinh từ bản cập nhật mới. Tuy nhiên, đây nên được coi là một giải pháp tạm thời và cần thực hiện hết sức cẩn trọng do các rủi ro về bảo mật và tương thích.
 }
 
-. /etc/wptt/.wptt.conf
+. /etc/wptt/.wptt.conf 2>/dev/null
 if [[ -z "$ngon_ngu" ]]; then
   ngon_ngu='vi'
 fi
-. "/etc/wptt/lang/$ngon_ngu.sh"
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 
-. /etc/wptt/echo-color
+. /etc/wptt/echo-color 2>/dev/null
 tinh_nang_ten="Hạ cấp phiên bản Plugins"
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
 NAME=$1
-if [[ $NAME = "98" ]]; then
+if [[ "$NAME" = "98" ]]; then
   NAME=""
 fi
 
@@ -42,122 +42,151 @@ fi
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echoDo "Lỗi: Tên miền '$NAME' không tồn tại trên hệ thống này."
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
-  exit
+  exit 1
 fi
 
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
+path="/usr/local/lsws/$NAME/html"
+if [[ ! -f "$path/wp-load.php" ]]; then
   clear
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉcó thể hoạt động trên WordPress"
+  echoDo "Lỗi: Website $NAME chưa được cài đặt WordPress."
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
-  exit
+  exit 1
 fi
 
-# read -rp "plugin muốn hạ cấp" plugin_downupgrade
-
-# curl -s https://api.wordpress.org/plugins/info/1.0/${plugin_downupgrade}
-. /etc/wptt/vhost/."$NAME".conf
-if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
-  wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
+. "$pathcheck" 2>/dev/null
+if ! . /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null; then
+  wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME"
   _runloi "Không xác định được phiên bản PHP"
-  return 1 2>/dev/null || exit 1
+  exit 1
 fi
 
-unset plugin_all line selects
-# plugin_all=$(wp plugin list --allow-root --field=name --path=/usr/local/lsws/$NAME/html 2>/dev/null)
-#không dùng /sbin/runuser -u NAME -- vì không có quyền truy cập vào /etc/wptt
-plugin_all=$(/usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval-file /etc/wptt/wordpress/plugin-call-name.php --allow-root --path=/usr/local/lsws/"$NAME"/html 2>/dev/null)
+WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" /usr/local/bin/wp )
 
-if [[ -z $plugin_all ]]; then
-  echo "Đã có lỗi xảy ra không thể quét được các plugin được trong website $NAME"
+# ==============================================================================
+# HỆ THỐNG BẢO VỆ LOCKDOWN (TRAP)
+# ==============================================================================
+CURRENT_IS_LOCKED=0
+# ==============================================================================
+# 1. LẤY DANH SÁCH PLUGIN (Tối ưu hóa: Dùng WP-CLI thay vì gọi file PHP ngoài)
+# ==============================================================================
+# Sử dụng WP-CLI thuần túy ghép tên và slug: "Tên Plugin (slug-plugin)"
+
+# nó sẽ print ra ví dụ: LiteSpeed Cache (litespeed-cache)
+mapfile -t selects < <("${WP_EXEC[@]}" plugin list --fields=title,name --format=csv --skip-plugins --skip-themes --path="$path" 2>/dev/null | awk -F, 'NR>1 {gsub(/"/, "", $1); gsub(/"/, "", $2); print $1 " (" $2 ")"}')
+wp_status=$?
+
+if [[ $wp_status -ne 0 || ${#selects[@]} -eq 0 ]]; then
+  echoDo "Lỗi: Không thể quét được danh sách plugin hoặc website chưa cài plugin nào."
+  sleep 2
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  exit 1
 fi
 
-echo "Bạn hãy lựa chọn plugin website $NAME bạn muốn hạ cấp: "
-while IFS= read -r line; do selects+=("$line"); done <<<"$plugin_all"
-PS3="
--//- Nhập vào lựa chọn của bạn [1-${#selects[@]})] [0=Thoát]: "
-select select in "${selects[@]}"; do
-  plugin_downupgrade=$select
-  break
+echo -e "\n${C_YELLOW}Danh sách các plugin hiện có trên website $NAME:${C_RESET}"
+PS3="$(tput setab 0)-//- Chọn plugin bạn muốn hạ cấp [1-${#selects[@]}] [0=Thoát]:$(tput sgr0) "
+select opt in "${selects[@]}"; do
+  if [[ "$REPLY" == "0" || -z "$REPLY" ]]; then
+      exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  elif [[ "$REPLY" -ge 1 && "$REPLY" -le ${#selects[@]} ]]; then
+      plugin_downupgrade="$opt"
+      break
+  else
+      echoDo "Lựa chọn không hợp lệ."
+  fi
 done
 
-if [[ $plugin_downupgrade = '0' || $plugin_downupgrade = '' ]]; then
+# Tách riêng Slug và Tên hiển thị từ chuỗi "Rank Math SEO (seo-by-rank-math)"
+plugin_show_name="${plugin_downupgrade%(*}"  # Lấy phần trước dấu (
+plugin_downupgrade=$(echo "$plugin_downupgrade" | grep -oP '\(\K[^)]+(?=\))') # Lấy phần trong ngoặc
+
+# ==============================================================================
+# 2. LẤY DANH SÁCH PHIÊN BẢN CŨ TỪ WORDPRESS.ORG
+# ==============================================================================
+echo -e "\nĐang truy xuất lịch sử phiên bản từ hệ thống máy chủ WordPress.org..."
+
+# Sử dụng timeout để chống treo kịch bản nếu API WordPress.org bị lỗi mạng
+mapfile -t version_selects < <(timeout 15 curl -s "https://api.wordpress.org/plugins/info/1.0/${plugin_downupgrade}" | 
+  tr "}" "\n" | 
+  grep -oP 's:\d+:"\K[^"]+(?=";s:\d+:)' | 
+  grep "$plugin_downupgrade" | 
+  sed -n 's#^.*/'"$plugin_downupgrade"'\.\([0-9.]\+\)\.zip$#\1#p' | 
+  sort -ruV)
+
+if [[ ${#version_selects[@]} -eq 0 ]]; then
+  echoDo "Không thể tìm thấy danh sách phiên bản cũ cho plugin: $plugin_show_name"
+  echo "Nguyên nhân có thể do đây là plugin trả phí hoặc API mạng bị lỗi."
+  sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
-fi
-
-#đoạn này để convert giữ liệu Rank Math SEO with AI Best SEO Tools (seo-by-rank-math) thành seo-by-rank-math
-plugin_show_name=$(echo "$plugin_downupgrade")
-plugin_downupgrade=$(echo "$plugin_downupgrade" | grep -oP '.*\(\K[^)]*(?=\)$)')
-
-unset plugin_version_phien_ban phien_ban_core_download line selects
-path="/usr/local/lsws/$NAME/html"
-phien_ban_core_download=$(curl -s https://api.wordpress.org/plugins/info/1.0/"${plugin_downupgrade}" |
-  tr "}" "\n" |
-  grep -oP 's:\d+:"\K[^"]+(?=";s:\d+:)' |
-  grep "$plugin_downupgrade" |
-  sed -n 's#^.*/'"$plugin_downupgrade"'\.\([0-9.]\+\)\.zip$#\1#p' |
-  sort -ruV |
-  while read -r line; do
-    echo "$line"
-  done)
-
-if [[ -z $phien_ban_core_download ]]; then
-  echo "$phien_ban của plugin $plugin_downupgrade không thể kiểm tra phiên bản được"
-  echo "Có thể vì lý do bản quyền trả phí $plugin_downupgrade"
-  exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  exit 1
 fi
 
 clear
-echo "Bạn hãy lựa chọn phiên bản plugin $plugin_show_name bạn muốn muốn sử dụng: "
-while IFS= read -r line; do selects+=("$line"); done <<<"$phien_ban_core_download"
-PS3="
--//- Nhập vào lựa chọn của bạn [1-$(echo "$phien_ban_core_download" | wc -w)] [0=Thoát]: "
-select select in "${selects[@]}"; do
-  plugin_version_phien_ban=$select
-  break
+echo -e "\n${C_YELLOW}Chọn phiên bản của [$plugin_show_name] bạn muốn áp dụng:${C_RESET}"
+PS3="$(tput setab 0)-//- Nhập số thứ tự phiên bản [1-${#version_selects[@]}] [0=Thoát]:$(tput sgr0) "
+select opt in "${version_selects[@]}"; do
+  if [[ "$REPLY" == "0" || -z "$REPLY" ]]; then
+      exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  elif [[ "$REPLY" -ge 1 && "$REPLY" -le ${#version_selects[@]} ]]; then
+      plugin_version_phien_ban="$opt"
+      break
+  else
+      echoDo "Lựa chọn không hợp lệ."
+  fi
 done
 
-if [[ $plugin_version_phien_ban = '0' || $plugin_version_phien_ban = '' ]]; then
-  exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+# ==============================================================================
+# 3. THỰC THI HẠ CẤP VÀ XỬ LÝ LỖI
+# ==============================================================================
+# Tạm tắt Lockdown an toàn (Đã có Trap bảo vệ ở trên)
+if [[ -n "$lock_down" ]]; then
+  CURRENT_IS_LOCKED=1
+  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1
 fi
 
-. /etc/wptt/vhost/."$NAME".conf
-if [[ $lock_down ]]; then
-  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off
-fi
+_runing "Đang tải và hạ cấp $plugin_show_name xuống phiên bản v$plugin_version_phien_ban..."
+exit_status_final=0
 
-path="/usr/local/lsws/$NAME/html"
-_runing "hạ cấp plugin $plugin_show_name website $NAME $phien_ban $plugin_version_phien_ban"
-
-/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp plugin install "$plugin_downupgrade" --version="${plugin_version_phien_ban}" --force --allow-root --path="$path" >/dev/null 2>&1
-
-. /etc/wptt/cache/lib-opcache-clear
-wptt_xoa_opcache "$NAME" >/dev/null 2>&1
-
-_rundone "hạ cấp plugin $plugin_show_name website $NAME $phien_ban $plugin_version_phien_ban"
-
-_runing "$phan_quyen website $NAME"
-
-if [[ $lock_down ]]; then
-  find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type f -print0 | xargs -0 chmod 404
-  find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type d -print0 | xargs -0 chmod 515
-  find /usr/local/lsws/"$NAME"/html/wp-content/uploads -type d -print0 | xargs -0 chmod 755
-  . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on
+# Thực thi lệnh tải plugin và BẮT LỖI
+if "${WP_EXEC[@]}" plugin install "$plugin_downupgrade" --version="${plugin_version_phien_ban}" --force --path="$path" >/dev/null 2>&1; then
+    _rundone "Hạ cấp thành công $plugin_show_name (v$plugin_version_phien_ban)."
+    wptt_logs "INFO" "Hạ cấp plugin $plugin_downupgrade website $NAME xuống bản $plugin_version_phien_ban"
 else
-  find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type f -print0 | xargs -0 chmod 644
-  find /usr/local/lsws/"$NAME"/html/wp-content/plugins -type d -print0 | xargs -0 chmod 755
+    _runloi "Hạ cấp thất bại! Không thể tải hoặc ghi đè file plugin."
+    wptt_logs "ERROR" "Lỗi hạ cấp plugin $plugin_downupgrade website $NAME"
+    exit_status_final=1
 fi
-_rundone "$phan_quyen website $NAME"
 
-wptt_logs "INFO" "hạ cấp plugin $plugin_downupgrade website $NAME $phien_ban $plugin_version_phien_ban website $NAME "
+# ==============================================================================
+# 4. HOÀN TRẢ TRẠNG THÁI (DỌN DẸP / PHÂN QUYỀN)
+# ==============================================================================
+if [[ "$exit_status_final" -eq 0 ]]; then
+    _runing "Đang dọn dẹp Cache và phân quyền..."
+    
+    . /etc/wptt/cache/lib-opcache-clear >/dev/null 2>&1
+    wptt_xoa_opcache "$NAME" >/dev/null 2>&1
+
+    # Khôi phục phân quyền chuẩn
+    if [[ "$CURRENT_IS_LOCKED" -eq 1 ]]; then
+        find "$path/wp-content/plugins" -type f -print0 | xargs -0 chmod 404
+        find "$path/wp-content/plugins" -type d -print0 | xargs -0 chmod 515
+        find "$path/wp-content/uploads" -type d -print0 | xargs -0 chmod 755
+        . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on >/dev/null 2>&1
+        CURRENT_IS_LOCKED=0 # Reset biến Trap
+    else
+        find "$path/wp-content/plugins" -type f -print0 | xargs -0 chmod 644
+        find "$path/wp-content/plugins" -type d -print0 | xargs -0 chmod 755
+    fi
+    _rundone "Hoàn tất phân quyền và dọn dẹp Cache."
+fi
 
 check_menu_wptangtoc_active=${1:-}
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+if [[ "$check_menu_wptangtoc_active" = "98" ]]; then
+  # Chạy giao diện Menu dưới dạng Sub-process
+  /etc/wptt/wordpress/wptt-update-wordpress-main 1
 fi
+
+exit "$exit_status_final"
