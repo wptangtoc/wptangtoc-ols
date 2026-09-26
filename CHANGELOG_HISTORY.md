@@ -1,3 +1,12 @@
+# WPTangToc OLS v8.1.3.3
+
+### 🐛 Sửa lỗi
+
+* **Khắc phục lỗi vòng lặp thực thi (exec loop):** Xử lý triệt để lỗi tương thích khi gọi lệnh qua `exec`, loại bỏ nguy cơ rơi vào vòng lặp vô hạn (infinite loop) gây treo tiến trình và quá tải tài nguyên CPU/RAM, giúp máy chủ duy trì trạng thái vận hành ổn định và thông suốt.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS v8.1.3.2
 
 ### 🛠️ Tối ưu hệ thống
