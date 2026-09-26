@@ -1,3 +1,16 @@
+# WPTangToc OLS v8.1.2.8
+
+## 🚀 Tính năng mới & Bảo mật
+- Tăng cường bảo mật toàn diện bằng cách tự động `unset` các biến môi trường nhạy cảm (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `BASH_ENV`, `ENV`, `CDPATH`).
+- Nâng cao bảo mật và tối ưu hóa quy trình cài đặt/thực thi OpenLiteSpeed qua `curl | bash`, cải tiến tốt hơn đặc biệt cho nhánh RedHat.
+
+## 🛠️ Tối ưu hệ thống & Sửa lỗi
+- Chuẩn hóa hệ thống `system log` và định dạng log của WPTangToc OLS giúp quản lý và theo dõi dễ dàng hơn.
+- Cải tiến cơ chế kiểm tra lỗi cấu hình `php-cli-domain-config`.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS - Phiên bản 8.1.2.7
 
 ## 🚀 Tính năng mới
