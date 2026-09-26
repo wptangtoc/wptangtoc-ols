@@ -37,18 +37,16 @@ if [[ -z "$NAME" ]]; then
 fi
 
 # ==============================================================================
-# XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE) - CHUẨN XÁC TIẾN ĐỘ & CÁCH LY
+# XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE) - BẮT LỖI SUBSHELL
 # ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
     tien_do=1
-    # FIX BUG: Đếm tổng số website hợp lệ để hiển thị tiến độ (UI) không bị lỗi khuyết số
     tong_so_web=$(find /etc/wptt/vhost/ -maxdepth 1 -name ".*.conf" ! -name "..conf" 2>/dev/null | wc -l)
 
     shopt -s nullglob
     for filepath in /etc/wptt/vhost/.*.conf; do
         [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
         
-        # Kỹ thuật Parameter Expansion (Xử lý cắt chuỗi trực tiếp trên RAM)
         domain="${filepath##*/}" 
         domain="${domain%.conf}" 
         domain="${domain#.}"     
@@ -57,10 +55,16 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
             if [[ -f "/usr/local/lsws/$domain/html/wp-config.php" ]]; then
                 _runing "[ $tien_do / $tong_so_web ] Đang cập nhật TẤT CẢ plugins cho: $domain"
                 
-                # Gọi Sub-process và chặn Output rác để bảo vệ màn hình Terminal
+                # Chạy subshell và bắt mã thoát (Exit Status) ngay lập tức
                 ( /bin/bash /etc/wptt/wordpress/update-plugin "$domain" >/dev/null 2>&1 )
+                exit_status=$?
                 
-                _rundone "[ $tien_do / $tong_so_web ] Cập nhật hoàn tất cho: $domain"
+                if [ "$exit_status" -eq 0 ]; then
+                    _rundone "[ $tien_do / $tong_so_web ] Cập nhật hoàn tất cho: $domain"
+                else
+                    # Xử lý báo lỗi nếu tiến trình ngầm thất bại
+                    _runloi "[ $tien_do / $tong_so_web ] Lỗi khi cập nhật plugin cho: $domain (Mã lỗi: $exit_status)"
+                fi
                 ((tien_do++)) 
             fi
         fi
@@ -74,7 +78,7 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
 fi
 
 # ==============================================================================
-# XỬ LÝ ĐƠN LẺ MỘT WEBSITE
+# XỬ LÝ ĐƠN LẺ MỘT WEBSITE - RÀ SOÁT ĐIỀU KIỆN
 # ==============================================================================
 if [[ "$NAME" == "0" || -z "$NAME" ]]; then
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
@@ -83,53 +87,62 @@ fi
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 3
-  exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
-  exit 1
-fi
-
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Hệ thống xác nhận bạn chưa kích hoạt sử dụng WordPress"
+  echoDo "Lỗi: Tên miền '$NAME' không tồn tại trên hệ thống này!"
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
   exit 1
 fi
 
 path="/usr/local/lsws/$NAME/html"
-. /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
+if [[ ! -f "$path/wp-load.php" ]]; then
+  clear
+  echoDo "Lỗi: Hệ thống xác nhận tên miền '$NAME' chưa cài đặt WordPress!"
+  sleep 3
+  exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  exit 1
+fi
+
+if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
+	wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
+	_runloi "Không xác định được phiên bản PHP"
+	[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+	return 1 2>/dev/null || exit 1
+fi
+
 . "$pathcheck" 2>/dev/null
 
-# Khai báo mảng thực thi WP-CLI chuẩn bảo mật (Drop Privilege)
 WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
 
 echo "Đang quét các bản cập nhật plugin cho website $NAME..."
 
 # ==============================================================================
-# ANTI DATA POLLUTION (CHỐNG Ô NHIỄM DỮ LIỆU)
-# Ép wp-cli chạy --skip-plugins --skip-themes để chặn các Plugin rác in log ra màn hình
-# Dùng mapfile đưa thẳng vào mảng RAM an toàn, thay thế cho vòng lặp while read cũ
+# QUÉT BẢN CẬP NHẬT VỚI KIỂM TRA WP-CLI
 # ==============================================================================
+# Khởi tạo mảng và bắt lỗi WP-CLI
 mapfile -t selects < <("${WP_EXEC[@]}" plugin list --update=available --field=name --skip-plugins --skip-themes --quiet --path="$path" 2>/dev/null)
+wp_check_status=$?
+
+if [ $wp_check_status -ne 0 ]; then
+    echoDo "Lỗi kết nối CSDL hoặc WP-CLI khi quét plugin. Vui lòng kiểm tra lại trạng thái website."
+    sleep 3
+    exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+    exit 1
+fi
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   echo ""
   echoDone "Tuyệt vời! Tất cả plugin trên website $NAME đều đã ở phiên bản mới nhất."
-	sleep 2
+  sleep 2
   echo ""
 else
   echo ""
   echo "========================================================================="
   echo " Danh sách plugin CẦN CẬP NHẬT trên website $NAME:"
   echo "-------------------------------------------------------------------------"
-  # Gắn khiên skip-plugins để bảng UI không bị vỡ bởi log debug
   "${WP_EXEC[@]}" plugin list --update=available --fields=name,version,update_version --skip-plugins --skip-themes --path="$path" 2>/dev/null
   echo "========================================================================="
   echo ""
 
-  # Khởi tạo Menu Lựa chọn động
   options=("Cập nhật TẤT CẢ plugin đang có bản mới")
   for p in "${selects[@]}"; do
     options+=("Chỉ cập nhật plugin: $p")
@@ -156,31 +169,44 @@ else
   echo ""
   
   # ==============================================================================
-  # THỰC THI CẬP NHẬT (Trút bỏ khiên chặn để Plugin chạy đủ Hook database)
+  # THỰC THI CẬP NHẬT VÀ BÁO CÁO KẾT QUẢ ĐÍCH THỰC
   # ==============================================================================
   if [[ "$plugin_target" == "all" ]]; then
     _runing "Đang cập nhật TẤT CẢ plugins cho website $NAME"
-    "${WP_EXEC[@]}" plugin update --all --path="$path" >/dev/null 2>&1
-    "${WP_EXEC[@]}" language plugin update --all --path="$path" >/dev/null 2>&1
-    _rundone "Cập nhật TẤT CẢ plugins cho website $NAME"
+    if "${WP_EXEC[@]}" plugin update --all --path="$path" >/dev/null 2>&1; then
+        "${WP_EXEC[@]}" language plugin update --all --path="$path" >/dev/null 2>&1
+        _rundone "Cập nhật TẤT CẢ plugins thành công cho website $NAME"
+    else
+        _runloi "Cập nhật thất bại! Vui lòng kiểm tra dung lượng ổ cứng hoặc phân quyền file."
+        exit_status_final=1
+    fi
   else
     _runing "Đang cập nhật riêng plugin: $plugin_target"
-    "${WP_EXEC[@]}" plugin update "$plugin_target" --path="$path" >/dev/null 2>&1
-    "${WP_EXEC[@]}" language plugin update "$plugin_target" --path="$path" >/dev/null 2>&1
-    _rundone "Cập nhật riêng plugin: $plugin_target"
+    if "${WP_EXEC[@]}" plugin update "$plugin_target" --path="$path" >/dev/null 2>&1; then
+        "${WP_EXEC[@]}" language plugin update "$plugin_target" --path="$path" >/dev/null 2>&1
+        _rundone "Cập nhật thành công plugin: $plugin_target"
+    else
+        _runloi "Lỗi khi cập nhật plugin: $plugin_target. Vui lòng kiểm tra lại mạng hoặc bản quyền plugin."
+        exit_status_final=1
+    fi
   fi
 
   # ==============================================================================
-  # DỌN DẸP HẬU KỲ CHUẨN MỰC
+  # DỌN DẸP HẬU KỲ CHUẨN MỰC (Chỉ thực hiện khi không có lỗi nghiêm trọng)
   # ==============================================================================
-  _runing "Đang dọn dẹp hệ thống sau khi cập nhật..."
-  "${WP_EXEC[@]}" rewrite flush --path="$path" >/dev/null 2>&1
-  . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1 
-  # 4. Cấp lại Rewrite Rules (Phòng trường hợp Plugin CPT sinh Rule mới)
-  _rundone "Hoàn tất dọn dẹp Cache và Rewrite Rules."
+  if [[ "${exit_status_final:-0}" -eq 0 ]]; then
+      _runing "Đang dọn dẹp hệ thống sau khi cập nhật..."
+      "${WP_EXEC[@]}" rewrite flush --path="$path" >/dev/null 2>&1
+      . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1 
+      _rundone "Hoàn tất dọn dẹp Cache và Rewrite Rules."
+  else
+      echoDo "Bỏ qua dọn dẹp hệ thống do quá trình cập nhật gặp lỗi."
+  fi
 fi
 
 check_menu_wptangtoc_active=${1:-}
 if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
 fi
+
+exit ${exit_status_final:-0}
