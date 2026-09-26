@@ -48,11 +48,9 @@ fi
 if [[ $NAME = 'Tất cả website' ]]; then
 	tien_do='1'
 	#$tong_so_web đuợc gọi từ thư viện tenmien
-
 	if [[ -z "$tong_so_web" ]]; then
 	tong_so_web=0
 	for filepath in /etc/wptt/vhost/.*.conf; do
-		# Chỉ đếm nếu là file thực sự và không phải là file rác ..conf
 		[[ -f "$filepath" && "$filepath" != *"/..conf" ]] && ((tong_so_web++))
 	done
 fi
@@ -78,7 +76,13 @@ fi
 			if [[ -f "$path" ]]; then
 				_runing "[ $tien_do / $tong_so_web ] $don_dep $toan_bo Cache website $domain"
 				(/etc/wptt/cache/wptt-xoacache "$domain" >/dev/null 2>&1)
-				_rundone "[ $tien_do / $tong_so_web ] $don_dep $toan_bo Cache website $domain"
+				exit_status=$?
+				if [ "$exit_status" -eq 0 ]; then
+					_rundone "[ $tien_do / $tong_so_web ] $don_dep $toan_bo Cache website $domain"
+				else
+					_runloi "[ $tien_do / $tong_so_web ] $don_dep $toan_bo Cache website $domain"
+				fi
+
 				((tien_do++)) # Tăng tiến độ sau mỗi lần chạy xong
 			fi
 		fi
@@ -129,11 +133,27 @@ if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
   return 1 2>/dev/null || exit 1
 fi
 
-plugins_active=$(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp plugin list --fields=name --status=active --path="$path2" 2>/dev/null | sed '1d')
+wp_exec=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
 
-if [[ -z "$plugins_active" ]]; then
-  plugins_active=$(ls -At "$path2"/wp-content/plugins)
+# Thực thi lệnh với lớp giáp bảo vệ tối đa (Skip load & Quiet)
+plugins_active=$("${wp_exec[@]}" plugin list --field=name --status=active --skip-plugins --skip-themes --quiet --path="$path2" 2>/dev/null)
+wp_status=$?
+
+# 3. KÍCH HOẠT FALLBACK (Chỉ khi lỗi DB thực sự)
+if [ $wp_status -ne 0 ]; then
+    wptt_logs "WARNING" "WP-CLI thất bại khi đọc plugin tại $path2 (Lỗi kết nối DB). Kích hoạt Fallback quét thư mục..."
+    
+    plugin_dir="$path2/wp-content/plugins"
+    
+    if [[ -d "$plugin_dir" ]]; then
+        plugins_active=$(find "$plugin_dir" -mindepth 1 -maxdepth 1 -type d -printf "%f\n" 2>/dev/null)
+        wptt_logs "INFO" "Fallback: Đã lấy danh sách TẤT CẢ plugin (Không thể lọc trạng thái Active do WP-CLI sập)."
+    else
+        plugins_active=""
+        wptt_logs "ERROR" "Thư mục plugins không tồn tại: $plugin_dir"
+    fi
 fi
+
 
 echo "$don_dep $toan_bo cache website $NAME:"
 
