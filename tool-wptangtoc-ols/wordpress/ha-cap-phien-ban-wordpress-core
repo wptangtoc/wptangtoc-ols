@@ -87,8 +87,11 @@ if [[ $wp_version = '0' || $wp_version = '' ]]; then
 fi
 
 . /etc/wptt/vhost/."$NAME".conf
-if [[ $lock_down ]]; then
+
+unset is_lock_down_ha_cap
+if [[ -n "$lock_down" ]]; then
   . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off
+	is_lock_down_ha_cap='1'
 fi
 
 _runing "hạ cấp WordPress Core website $NAME $phien_ban $wp_version"
@@ -100,27 +103,23 @@ if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
   return 1 2>/dev/null || exit 1
 fi
 
-/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp core download --skip-content --version="${wp_version}" --force --allow-root --path="$path" >/dev/null 2>&1
-/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp core update-db --allow-root --path="$path" >/dev/null 2>&1
-_rundone "hạ cấp WordPress Core website $NAME $phien_ban $wp_version"
-
-#xoa cache redis để tránh bị lỗi tiếp update database version khi hạ cấp phiên bản php
-/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp cache flush --allow-root --path="$path" >/dev/null 2>&1
-
-. /etc/wptt/cache/lib-opcache-clear
-wptt_xoa_opcache "$NAME" >/dev/null 2>&1
-
-
-#memcached xoá cache
-if [ "$(systemctl is-active memcached.service)" == "active" ]; then
-  echo "flush_all" | socat - UNIX-CONNECT:/var/run/memcached/memcached.sock >/dev/null 2>&1
+#thực thi kiểm tra check lỗi, nếu download thành công thì mới cho phép update-db core
+if /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp core download --skip-content --version="${wp_version}" --force --allow-root --path="$path" >/dev/null 2>&1;then
+	/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp core update-db --allow-root --path="$path" >/dev/null 2>&1
+	#xoa cache redis để tránh bị lỗi tiếp update database version khi hạ cấp phiên bản php
+	/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp cache flush --allow-root --path="$path" >/dev/null 2>&1
+	"${WP_EXEC[@]}" rewrite flush --path="$path" >/dev/null 2>&1
+	. /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1 
+	_rundone "hạ cấp WordPress Core website $NAME $phien_ban $wp_version"
+else
+	_runloi "hạ cấp WordPress Core website $NAME $phien_ban $wp_version"
+	wptt_logs "ERROR" "hạ cấp Core WordPress website $NAME "
 fi
 
-if [[ $lock_down ]]; then
+if [[ -n "$is_lock_down_ha_cap" ]]; then
   . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on
 fi
 
-wptt_logs "INFO" "hạ cấp Core WordPress website $NAME "
 
 check_menu_wptangtoc_active=$1
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
