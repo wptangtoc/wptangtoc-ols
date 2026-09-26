@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.1.3.0
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp cơ chế kiểm tra lỗi khi cập nhật Plugin WordPress:** Tăng độ chính xác trong việc phát hiện và xử lý sự cố phát sinh khi nâng cấp plugin, ngăn ngừa tình trạng treo tiến trình và giảm thiểu tối đa rủi ro gây gián đoạn hoạt động của website.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS v8.1.3
 
 ### 🛠️ Tối ưu hệ thống & Bảo mật
