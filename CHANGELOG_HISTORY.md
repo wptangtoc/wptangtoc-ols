@@ -1,3 +1,13 @@
+# WPTangToc OLS v8.1.3.2
+
+### 🛠️ Tối ưu hệ thống
+
+* **Cơ chế cập nhật WordPress an toàn (Full Check):** Bổ sung quy trình kiểm tra lỗi toàn diện trong quá trình nâng cấp mã nguồn WordPress, giúp phát hiện sớm các bất thường và loại bỏ rủi ro gây gián đoạn website (downtime).
+* **Nâng cấp tính năng Rollback WordPress & Plugin:** Hoàn thiện tiến trình hạ cấp phiên bản WordPress Core và Plugin, cho phép quản trị viên nhanh chóng khôi phục về phiên bản ổn định khi xảy ra lỗi tương thích hoặc xung đột phần mềm.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.1.3.1
 
 ### 🛠️ Tối ưu hệ thống
