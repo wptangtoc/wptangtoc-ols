@@ -35,19 +35,15 @@ if [[ -z "$NAME" ]]; then
   lua_chon_NAME "$tinh_nang_ten"
 fi
 
-# ==============================================================================
-# XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE) - NON-BLOCKING & UX OPTIMIZED
-# ==============================================================================
+# XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE)
 if [[ "$NAME" == 'Tất cả website' ]]; then
     tien_do=1
-    # Đếm tổng số website hợp lệ bằng find (Siêu tốc, chính xác)
     tong_so_web=$(find /etc/wptt/vhost/ -maxdepth 1 -name ".*.conf" ! -name "..conf" 2>/dev/null | wc -l)
 
     shopt -s nullglob
     for filepath in /etc/wptt/vhost/.*.conf; do
         [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-        # Parameter Expansion: Xử lý chuỗi trực tiếp trên RAM, không gọi sed/awk
         domain="${filepath##*/}" 
         domain="${domain%.conf}" 
         domain="${domain#.}"     
@@ -56,10 +52,15 @@ if [[ "$NAME" == 'Tất cả website' ]]; then
             if [[ -f "/usr/local/lsws/$domain/html/wp-config.php" ]]; then
                 _runing "[ $tien_do / $tong_so_web ] Đang cập nhật themes cho: $domain"
                 
-                # Gọi Sub-process và chặn toàn bộ Output rác để không làm nát màn hình Terminal
+                # Chạy subshell và bắt mã thoát (Exit Status) để kiểm soát lỗi
                 ( /bin/bash /etc/wptt/wordpress/update-theme "$domain" >/dev/null 2>&1 )
+                exit_status=$?
                 
-                _rundone "[ $tien_do / $tong_so_web ] Cập nhật hoàn tất cho: $domain"
+                if [ "$exit_status" -eq 0 ]; then
+                    _rundone "[ $tien_do / $tong_so_web ] Cập nhật hoàn tất cho: $domain"
+                else
+                    _runloi "[ $tien_do / $tong_so_web ] Lỗi cập nhật theme cho: $domain (Mã lỗi: $exit_status)"
+                fi
                 ((tien_do++))
             fi
         fi
@@ -82,7 +83,7 @@ fi
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echoDo "Lỗi: Tên miền '$NAME' không tồn tại trên hệ thống này!"
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
   exit 1
@@ -91,7 +92,7 @@ fi
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
-  echoDo "Hệ thống xác nhận bạn chưa kích hoạt sử dụng WordPress"
+  echoDo "Lỗi: Hệ thống xác nhận tên miền '$NAME' chưa cài đặt WordPress!"
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
   exit 1
@@ -101,35 +102,37 @@ path="/usr/local/lsws/$NAME/html"
 . /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
 . "$pathcheck" 2>/dev/null
 
-# Khai báo mảng thực thi WP-CLI chuẩn bảo mật (Drop Privilege)
 WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
 
 echo "Đang kiểm tra các bản cập nhật theme cho website $NAME..."
 
 # ==============================================================================
-# ANTI DATA POLLUTION (CHỐNG Ô NHIỄM DỮ LIỆU)
-# Sử dụng cờ --skip-plugins --skip-themes để cô lập môi trường WP-CLI.
-# Đảm bảo lệnh wp theme list chỉ trả về ĐÚNG CẤU TRÚC, không bị lẫn log debug từ Elementor. Plugin hay gây ô nhiễm log
-# MAPFILE (Tránh rò rỉ bộ nhớ thay vì vòng lặp while read, support ngon có dấu cách theme mà chả ai dùng theme có dấu cách nhưng cứ vẫn làm biết đâu có ai đó tự code themes mà cho dấu cách làm thên thư mục themes)
+# QUÉT BẢN CẬP NHẬT VỚI KIỂM TRA MÃ THOÁT WP-CLI
 # ==============================================================================
 mapfile -t selects < <("${WP_EXEC[@]}" theme list --update=available --field=name --skip-plugins --skip-themes --quiet --path="$path" 2>/dev/null)
+wp_check_status=$?
+
+if [ $wp_check_status -ne 0 ]; then
+    echoDo "Lỗi kết nối CSDL hoặc WP-CLI khi quét theme. Vui lòng kiểm tra lại trạng thái website."
+    sleep 3
+    exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+    exit 1
+fi
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   echo ""
   echoDone "Website $NAME đã sử dụng các phiên bản theme mới nhất."
-	sleep 2
+  sleep 2
   echo ""
 else
   echo ""
   echo "========================================================================="
   echo " Danh sách theme CẦN CẬP NHẬT của website $NAME:"
   echo "-------------------------------------------------------------------------"
-  # Hiển thị cho người dùng xem cũng phải kèm --skip-plugins để bảng không bị vỡ khung
   "${WP_EXEC[@]}" theme list --update=available --fields=name,version,update_version --skip-plugins --skip-themes --path="$path" 2>/dev/null
   echo "========================================================================="
   echo ""
 
-  # Khởi tạo menu động an toàn
   options=("Cập nhật TẤT CẢ các theme trên")
   for t in "${selects[@]}"; do
     options+=("Chỉ cập nhật theme: $t")
@@ -156,29 +159,44 @@ else
   echo ""
   
   # ==============================================================================
-  # THỰC THI CẬP NHẬT
-  # Lưu ý: Ở bước thực thi cập nhật (update), KHÔNG dùng --skip-plugins nữa, vì 
-  # một số theme/plugin cần tương tác với nhau trong quá trình chạy hook cập nhật.
+  # THỰC THI CẬP NHẬT VÀ BÁO CÁO KẾT QUẢ ĐÍCH THỰC
   # ==============================================================================
   if [[ "$theme_target" == "all" ]]; then
     _runing "Đang cập nhật TẤT CẢ themes cho website $NAME"
-    "${WP_EXEC[@]}" theme update --all --path="$path" >/dev/null 2>&1
-    "${WP_EXEC[@]}" language theme update --all --path="$path" >/dev/null 2>&1
-    _rundone "Cập nhật TẤT CẢ themes cho website $NAME"
+    if "${WP_EXEC[@]}" theme update --all --path="$path" >/dev/null 2>&1; then
+        "${WP_EXEC[@]}" language theme update --all --path="$path" >/dev/null 2>&1
+        _rundone "Cập nhật TẤT CẢ themes thành công cho website $NAME"
+    else
+        _runloi "Cập nhật thất bại! Vui lòng kiểm tra phân quyền file hoặc kết nối API của Theme."
+        exit_status_final=1
+    fi
   else
     _runing "Đang cập nhật theme: $theme_target"
-    "${WP_EXEC[@]}" theme update "$theme_target" --path="$path" >/dev/null 2>&1
-    "${WP_EXEC[@]}" language theme update "$theme_target" --path="$path" >/dev/null 2>&1
-    _rundone "Cập nhật theme: $theme_target"
+    if "${WP_EXEC[@]}" theme update "$theme_target" --path="$path" >/dev/null 2>&1; then
+        "${WP_EXEC[@]}" language theme update "$theme_target" --path="$path" >/dev/null 2>&1
+        _rundone "Cập nhật thành công theme: $theme_target"
+    else
+        _runloi "Lỗi khi cập nhật theme: $theme_target. Vui lòng kiểm tra lại key bản quyền hoặc kết nối mạng."
+        exit_status_final=1
+    fi
   fi
 
-  # Dọn dẹp Cache (Kích hoạt Non-blocking I/O từ file xóa cache)
-  _runing "Đang dọn dẹp các lớp Cache cho website $NAME..."
-  . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
-  _rundone "Dọn dẹp Cache hoàn tất."
+  # ==============================================================================
+  # DỌN DẸP HẬU KỲ CHUẨN MỰC (Chỉ thực hiện khi cập nhật thành công)
+  # ==============================================================================
+  if [[ "${exit_status_final:-0}" -eq 0 ]]; then
+      _runing "Đang dọn dẹp các lớp Cache cho website $NAME..."
+      . /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
+      _rundone "Dọn dẹp Cache hoàn tất."
+  else
+      echoDo "Bỏ qua dọn dẹp hệ thống do quá trình cập nhật gặp lỗi."
+  fi
 fi
 
 check_menu_wptangtoc_active=${1:-}
 if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
 fi
+
+# Chốt hạ mã thoát của toàn bộ tiến trình
+exit ${exit_status_final:-0}
