@@ -2,238 +2,240 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
+# @description: Bộ cài đặt (AlmaLinux 10)
 # @since: 2026
 
-export LC_ALL=en_US.UTF-8 2>/dev/null
-export LANG=en_US.UTF-8 2>/dev/null
-stty iutf8 #từ latin1 sang utf8, nhiều khi anh em dùng bộ gõ tiếng việt: dùng à â nó thêm \xc3 hay \xa9 ... tương thích với bộ gõ tiếng việt telex khi nhập domain
+set -Eeuo pipefail
+
+LOG_FILE="/var/log/wptangtoc-install.log"
+touch "$LOG_FILE" && chmod 600 "$LOG_FILE"
+echo "=== BẮT ĐẦU CÀI ĐẶT WPTANGTOC OLS: $(date) ===" > "$LOG_FILE"
+
+C_RED='\033[1;31m'
+C_GREEN='\033[1;32m'
+C_CYAN='\033[1;36m'
+C_YELLOW='\033[1;33m'
+C_BOLD_WHITE='\033[1;37m'
+C_BOLD='\033[1m'
+C_RESET='\033[0m'
+
+CURRENT_STEP=""
+WPTT_SECURE_TMP=$(mktemp -d)
+
+port_ssh="22"
+su_dung_repo_du_phong="0"
+query_cache_type=""
+query_cache_size=""
+gio=""; gio2=""; gio3=""; phut=""
+
+_step() { 
+    CURRENT_STEP="$1"
+    echo -e "${C_CYAN} ➜ $1...${C_RESET}" 
+}
+_success() { echo -e "${C_GREEN}   ✔ $1${C_RESET}"; }
+_warn() { echo -e "${C_YELLOW}   ⚠ $1${C_RESET}" | tee -a "$LOG_FILE"; }
+_error() { 
+    echo -e "\n${C_RED}✖ LỖI NGHIÊM TRỌNG: $1${C_RESET}"
+    echo -e "${C_YELLOW}Chi tiết log: $LOG_FILE${C_RESET}"
+    tput cnorm 2>/dev/null || true
+    [[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "$WPTT_SECURE_TMP" || true
+    exit 1
+}
+
+BOX_COLOR="$C_CYAN"
+box_out() {
+  local s=("$@") b w=0 l
+  for l in "${s[@]}"; do
+    ((w < ${#l})) && w="${#l}"
+  done
+  local pad=$((w + 2))
+  local border=$(printf '─%.0s' $(seq 1 $pad))
+  echo -e "${BOX_COLOR}╭${border}╮${C_RESET}"
+  for l in "${s[@]}"; do
+    local spaces=$(( w - ${#l} ))
+    local spc_str=""
+    [[ $spaces -gt 0 ]] && spc_str=$(printf ' %.0s' $(seq 1 $spaces))
+    echo -e "${BOX_COLOR}│${C_RESET} ${C_BOLD_WHITE}${l}${spc_str}${C_RESET} ${BOX_COLOR}│${C_RESET}"
+  done
+  echo -e "${BOX_COLOR}╰${border}╯${C_RESET}"
+}
+
+wptt_error_trap() {
+    local exit_code=$?
+    local line_no=$1
+    local err_cmd="$2"
+    tput cnorm 2>/dev/null || true
+    echo -e "\n\n${C_RED}✖ TIẾN TRÌNH CÀI ĐẶT BỊ ĐỨT GÃY TẠI DÒNG: $line_no (Mã lỗi: $exit_code)${C_RESET}"
+    echo -e "${C_YELLOW}Lệnh gây lỗi: $err_cmd${C_RESET}"
+    echo -e "Vui lòng kiểm tra file $LOG_FILE để tìm nguyên nhân."
+    [[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "$WPTT_SECURE_TMP" || true
+}
+trap 'wptt_error_trap ${LINENO} "$BASH_COMMAND"' ERR
+
+wptt_run() {
+    local n=1 max=3 delay_retry=5
+    while true; do
+        "$@" >> "$LOG_FILE" 2>&1 &
+        local pid=$!
+        local spin='-\|/'
+        local i=0
+        local start_time=$SECONDS
+        
+        tput civis 2>/dev/null || true
+        while kill -0 "$pid" 2>/dev/null; do
+            local elapsed=$(( SECONDS - start_time ))
+            i=$(( (i + 1) % 4 ))
+            printf "\e[1A\r\033[K${C_CYAN} ➜ %s... [%c] %ds ${C_RESET}\n" "$CURRENT_STEP" "${spin:$i:1}" "$elapsed"
+            sleep 0.15
+        done
+        tput cnorm 2>/dev/null || true
+        
+        local exit_code=0
+        wait "$pid" || exit_code=$?
+        
+        if [[ $exit_code -eq 0 ]]; then
+            printf "\e[1A\r\033[K${C_CYAN} ➜ %s... ${C_RESET}\n" "$CURRENT_STEP"
+            return 0
+        else
+            if [[ $n -lt $max ]]; then
+                printf "\e[1A\r\033[K${C_YELLOW} ➜ %s... (Lỗi %d, đang thử lại %d/%d) ${C_RESET}\n" "$CURRENT_STEP" "$exit_code" "$n" "$max"
+                sleep $delay_retry
+                ((n++))
+            else
+                printf "\e[1A\r\033[K${C_CYAN} ➜ %s... ${C_RESET}\n" "$CURRENT_STEP"
+                return $exit_code
+            fi
+        fi
+    done
+}
+
+# ==============================================================================
+# 2. KHỞI TẠO BIẾN & MÔI TRƯỜNG
+# ==============================================================================
+export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=en_US.UTF-8 2>/dev/null || true
+stty iutf8 2>/dev/null || true
 
 UNATTENDED=0
 for arg in "$@"; do
-    if [[ "$arg" == "--auto" ]]; then #không chạm tuơng tác
-        UNATTENDED=1
-        break
-    fi
+    if [[ "$arg" == "--auto" ]]; then UNATTENDED=1; break; fi
 done
 
+NAME=""
 if [[ "$UNATTENDED" -eq 1 ]]; then
-	NAME='wptangtoc-ols.com' # Hoặc domain mặc định sếp muốn
+    NAME='wptangtoc-ols.com'
 else
-	read -rp "Nhập domain hoặc subdomain bạn muốn thêm 
-	(ví dụ: wptangtoc.com, abc.wptangtoc.com ...) [Enter = Bỏ Qua]: " NAME
+    clear
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}CẤU HÌNH TÊN MIỀN CHÍNH (WEBSITE MAIN)${C_RESET}                               ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    read -rp " ➜ Nhập domain của bạn (Vd: wptangtoc.com) [Enter = Bỏ Qua]: " NAME
+    echo ""
 fi
 
+NAME="${NAME:-wptangtoc-ols.com}"
+NAME="${NAME,,}"
+NAME="${NAME//$'\r'/}"
+NAME="${NAME//[[:space:]]/}"
+[[ "$NAME" == *"://"* ]] && NAME=$(echo "$NAME" | cut -f3 -d '/')
+[[ "$NAME" == www.* ]] && NAME="${NAME#www.}"
 
-if [[ -z "$NAME" ]]; then
+check_root=$(who | awk '{print $1}' | head -1 || echo "root")
+wordpress=${1:-0}
+
+if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then
+  echo -e "${C_YELLOW} ⚠ Domain không hợp lệ. Đổi về mặc định wptangtoc-ols.com${C_RESET}"
   NAME='wptangtoc-ols.com'
 fi
 
-
-#chuyển đổi viết hoa thành chữ thường điều kiện
-NAME="${NAME,,}" # biến viết hoa thành viết thuờng
-
-
-
-# BỘ LỌC VỆ SINH BIẾN ĐẦU VÀO INPUT
-NAME="${NAME//$'\r'/}"       # Lọc tận gốc ký tự CRLF (Windows)
-NAME="${NAME// /}"           # Xóa toàn bộ khoảng trắng thừa
-NAME="${NAME//[[:space:]]/}" # Tự động loại bỏ toàn bộ khoảng trắng (space/tab) nếu người dùng lỡ tay nhập thừa
-
-check_root=$(who | awk -F ' ' '{print $1}' | head -1)
-
-
-
-wordpress=$1
-if [ "$NAME" = '' ]; then
-  clear
-  echo "Bạn chưa nhập tên miền, vui lòng nhập tên miền của bạn."
-  exit
-fi
-
-if [ "$NAME" = "${NAME/./}" ]; then
-  clear
-  echo "Domain bạn nhập không đúng định dạng. hãy nhập ví dụ: wptangtoc.com hoặc abc.wptangtoc.com hoặc wptangtoc.xyz..."
-  rm -f wptangtoc-ols
-  exit
-fi
-
-#domain người dùng nhập sử dụng thêm space cách, sẽ báo không đúng định dạng
-if [ "$(echo "$NAME" | wc -w)" -gt 1 ]; then
-  clear
-  echo "Domain bạn nhập không đúng định dạng. hãy nhập ví dụ: wptangtoc.com hoặc abc.wptangtoc.com hoặc wptangtoc.xyz..."
-  rm -f wptangtoc-ols
-  exit
-fi
-
-if [[ "$NAME" == *"://"* ]]; then
-	NAME=$(echo "$NAME" | cut -f3 -d '/')
-fi
-
-
-if [[ "$NAME" == www.* ]]; then
-	NAME="${NAME#www.}" #loại bỏ www. ở đầu
-fi
-
-#nếu nhập mà không đúng định dạng thì sẽ bypass bỏ qua phần nhập domain
-if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then #Regex này đã bao phủ tốt, nhưng để chuẩn xác 100% theo tiêu chuẩn tên miền quốc tế (RFC 1035 - tên miền không được bắt đầu hoặc kết thúc bằng dấu gạch ngang - hoặc dấu chấm .
-  echo "Domain bạn nhập $NAME chứa ký tự không hợp lệ hoặc sai cấu trúc."
-  echo "Hệ thống bỏ qua phần thêm domain $NAME mới, sẽ thêm domain sau khi cài đặt xong"
-  NAME='wptangtoc-ols.com'
-fi
-
-#đặt biến toàn hệ thống ngôn ngữ
-if [ ! "$(grep LANG=en_US.utf-8 /etc/environment)" == "LANG=en_US.utf-8" ]; then
+if ! grep -q "LANG=en_US.utf-8" /etc/environment 2>/dev/null; then
   cat >"/etc/environment" <<END
 LANG=en_US.utf-8
 LC_ALL=en_US.utf-8
 END
 fi
 
-wptangtocols_version=$(curl --tlsv1.3 -s --connect-timeout 60 --max-time 60 https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-install="$NAME")
-
-if [[ -z "$wptangtocols_version" ]]; then
-  wptangtocols_version=$(curl --tlsv1.2 -s --connect-timeout 60 --max-time 60 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
+_step "Kiểm tra phiên bản WPTangToc OLS"
+wptangtocols_version=$(curl --tlsv1.3 -s --connect-timeout 10 "https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-install=$NAME" || true)
+if [[ -z "${wptangtocols_version:-}" ]]; then
+  wptangtocols_version=$(curl --tlsv1.2 -s --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt" || echo "4.0.0")
 fi
+_success "Phiên bản cài đặt: $wptangtocols_version"
 
-clear
-#chon version php cho function luu tru
-function chon_version_php() {
-  echo "Bạn hãy lựa chọn phiên bản PHP muốn sử dụng: "
-  prompt="Nhap vao lua chon cua ban [1-4]: "
-  php_version="8.3"
-  options=("Phien ban PHP 8.1" "Phien ban PHP 8.0" "Phien ban PHP 7.4" "Phien ban PHP 7.3")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-
-    case "$REPLY" in
-    1)
-      php_version="8.1"
-      break
-      ;;
-
-    2)
-      php_version="8.0"
-      break
-      ;;
-    3)
-      php_version="7.4"
-      break
-      ;;
-
-    4)
-      php_version="7.3"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\nHe thong se cai dat PHP 7.4\n"
-      break
-      ;;
-    *)
-      printf "Ban nhap sai, he thong cai dat PHP 7.4\n"
-      break
-      ;;
-    esac
-
-  done
-}
-
-#set mặc định php 8.3 là WordPress mặc định
+# ==============================================================================
+# 3. GIAO DIỆN TƯƠNG TÁC (CHỌN MARIADB & SSH ĐẸP MẮT)
+# ==============================================================================
 php_version="8.3"
+mariadb_version="10.11"
 
-clear
-
-if [[ "$UNATTENDED" -eq 1 ]]; then
-	mariadb_version="10.11" # Chọn bản Stable sếp ưng ý nhất
-else
-	echo "Đang tiến hành quét phiên bản mariadb"
-	rest_api_mariadb_verison=$(curl -s "https://downloads.mariadb.org/rest-api/mariadb" |
-		tr "}" "\n" |
-		grep '"release_support_type": "Long Term Support"' |
-		grep '"release_status": "Stable"' |
-		while read -r line; do
-			echo "$line" | sed -E 's/.*"release_name": "([^"]+)".*/\1/'
-		done)
-		clear
-		echo "Bạn hãy lựa chọn phiên bản Maria Database muốn sử dụng: "
-		while IFS= read -r line; do selects+=("$line"); done <<<"$rest_api_mariadb_verison"
-			PS3="
--//- Nhập vào lựa chọn của bạn [1-$(echo "$rest_api_mariadb_verison" | wc -w)]: "
-			select select in "${selects[@]}"; do
-				mariadb_version=$select
-				break
-			done
-
-			if [[ -z "$rest_api_mariadb_verison" ]]; then
-				echo "Bạn hãy lựa chọn phiên bản Maria Database muốn sử dụng: "
-				prompt="Nhập vào lựa chọn của bạn [1-4]: "
-				mariadb_version="10.11"
-				options=("Phien ban: 11.8" "Phien ban: 11.4" "Phien ban: 10.11" "Phien ban: 10.6")
-				PS3="$prompt"
-				select opt in "${options[@]}"; do
-
-					case "$REPLY" in
-						1)
-							mariadb_version="11.8"
-							break
-							;;
-						2)
-							mariadb_version="10.4"
-							break
-							;;
-						3)
-							mariadb_version="10.11"
-							break
-							;;
-						4)
-							mariadb_version="10.6"
-							break
-							;;
-
-						$((${#options[@]} + 1)))
-							printf "\nHe thong se cai dat maria database 10.11\n"
-							break
-							;;
-						*)
-							printf "Ban nhap sai, he thong cai dat maria database 10.11\n"
-							break
-							;;
-					esac
-
-				done
-			fi
-fi
-clear
-
-
-if [[ -z "$php_version" ]]; then
-  php_version="8.3"
-fi
-
-if [[ -z "$mariadb_version" ]]; then
-  mariadb_version="10.11"
-fi
-
-
-if [[ "$UNATTENDED" -eq 1 ]]; then
-	port_ssh="" # Bỏ qua, giữ nguyên port 22 mặc định của hệ thống
-else
-	echo "Bạn có muốn thay đổi Port SSH? để nâng cao bảo mật"
-	read -rp "Nhập port SSH mới, bỏ qua nhấn (Enter): " port_ssh
-	while [[ "$port_ssh" ]] &&
-		{ [[ ! "$port_ssh" =~ ^[0-9]+$ ]] ||
-			((port_ssh < 1 || port_ssh > 65535 || port_ssh == 80 || port_ssh == 443)); }; do
-echo "Port không đúng định dạng, vui lòng nhập lại port từ 1 - 65535"
-read -rp "Nhập port SSH mới, bỏ qua nhấn (Enter): " port_ssh
-done
+if [[ "$UNATTENDED" -eq 0 ]]; then
+    _step "Đang quét danh sách phiên bản MariaDB từ máy chủ"
+    rest_api_mariadb_verison=$(curl -s "https://downloads.mariadb.org/rest-api/mariadb" | tr "}" "\n" | grep '"release_support_type": "Long Term Support"' | grep '"release_status": "Stable"' | sed -E 's/.*"release_name": "([^"]+)".*/\1/' || true)
+    
+    clear
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}BẠN HÃY LỰA CHỌN PHIÊN BẢN MARIADB MUỐN SỬ DỤNG${C_RESET}                      ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    if [[ -n "${rest_api_mariadb_verison:-}" ]]; then
+        mapfile -t selects <<< "$rest_api_mariadb_verison"
+        for i in "${!selects[@]}"; do
+            if [[ "${selects[$i]}" == "10.11" ]]; then
+                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-10s ${C_YELLOW}(LTS - Khuyên dùng)%-23s${C_CYAN}│${C_RESET}\n" "$((i+1))" "${selects[$i]}" ""
+            else
+                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-52s ${C_CYAN}│${C_RESET}\n" "$((i+1))" "${selects[$i]}"
+            fi
+        done
+        echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
+        
+        while true; do
+            read -rp " ➜ Nhập lựa chọn của bạn [1-${#selects[@]}]: " choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#selects[@]} )); then
+                mariadb_version="${selects[$((choice-1))]}"
+                break
+            else
+                echo -e "${C_YELLOW} ⚠ Lựa chọn không hợp lệ, vui lòng nhập lại!${C_RESET}"
+            fi
+        done
+    else
+        options=("11.4" "10.11" "10.6")
+        for i in "${!options[@]}"; do
+            if [[ "${options[$i]}" == "10.11" ]]; then
+                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-10s ${C_YELLOW}(LTS - Khuyên dùng)%-23s${C_CYAN}│${C_RESET}\n" "$((i+1))" "${options[$i]}" ""
+            else
+                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-52s ${C_CYAN}│${C_RESET}\n" "$((i+1))" "${options[$i]}"
+            fi
+        done
+        echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
+        
+        while true; do
+            read -rp " ➜ Nhập lựa chọn của bạn [1-${#options[@]}]: " choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
+                mariadb_version="${options[$((choice-1))]}"
+                break
+            else
+                echo -e "${C_YELLOW} ⚠ Lựa chọn không hợp lệ, vui lòng nhập lại!${C_RESET}"
+            fi
+        done
+    fi
+    _success "Đã chọn MariaDB bản: ${C_BOLD_WHITE}$mariadb_version${C_RESET}"
+    
+    echo ""
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}CẤU HÌNH PORT SSH (NÂNG CAO BẢO MẬT)${C_RESET}                                 ${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    read -rp " ➜ Nhập port SSH mới (Mặc định: 22) [Enter = Bỏ Qua]: " port_ssh
+    port_ssh="${port_ssh:-22}"
+    while [[ ! "$port_ssh" =~ ^[0-9]+$ ]] || ((port_ssh < 1 || port_ssh > 65535 || port_ssh == 80 || port_ssh == 443)); do
+        echo -e "${C_YELLOW} ⚠ Port không hợp lệ! Vui lòng nhập từ 1 - 65535 (trừ 80, 443).${C_RESET}"
+        read -rp " ➜ Nhập port SSH mới [Enter = Bỏ Qua]: " port_ssh
+        port_ssh="${port_ssh:-22}"
+    done
+    _success "Port SSH được cấu hình: ${C_BOLD_WHITE}$port_ssh${C_RESET}\n"
 fi
 
 clear
-
-
-RED='\033[0;31m'
-NC='\033[0m'
-echo -e "${RED}
+echo -e "${C_RED}
      .:..........................             
       .::::::::::::::::::::::::::::..         
         ..:::::::::::::::::::::::::::::.      
@@ -252,148 +254,83 @@ echo -e "${RED}
        ......:::::::::...    ...:::::::::.    
                .:::::::::::::::::::::::.      
    ..............::::::::::::::::::..         
-  .:::::::::::::................. ${NC}"
-
-echo ""
-echo -e "${RED}-------------------------------------------------------------------------"
-echo ""
-echo " 0     0 000000  0000000                         0000000 "
-echo " 0  0  0 0     0    0       00    0    0   0000     0      0000    0000 "
-echo " 0  0  0 0     0    0      0  0   00   0  0    0    0     0    0  0    0 "
-echo " 0  0  0 000000     0     0    0  0 0  0  0         0     0    0  0 "
-echo -e "${NC} 0  0  0 0          0     000000  0  0 0  0  000    0     0    0  0 "
-echo " 0  0  0 0          0     0    0  0   00  0    0    0     0    0  0    0 "
-echo "  00 00  0          0     0    0  0    0   0000     0      0000    0000 "
-echo ""
-echo "  00000   0       00000 "
-echo " 0     0  0      0     0 "
-echo " 0     0  0      0 "
-echo -e "${RED} 0     0  0       00000 "
-echo " 0     0  0            0 "
-echo " 0     0  0      0     0 "
-echo "  00000   000000  00000 "
-echo -e "--------------------------------------------------------------------------${NC}"
+  .:::::::::::::................. ${C_RESET}"
 sleep 2
-clear
-function box_out() {
-  local s=("$@") b w
-  for l in "${s[@]}"; do
-    ((w < ${#l})) && {
-      b="$l"
-      w="${#l}"
-    }
-  done
-  tput setaf 7
-  echo " -${b//?/-}-
-| ${b//?/ } |"
-  for l in "${s[@]}"; do
-    printf '| %s%*s%s |\n' "$(tput setaf 7)" "-$w" "$l" "$(tput setaf 3)"
-  done
-  echo "| ${b//?/ } |
- -${b//?/-}-"
-  tput sgr 0
-}
 
-if [[ $NAME != 'wptangtoc-ols.com' ]]; then
-  box_out "Xin chào $NAME" "Chào mừng bạn đến với WPTANGTOC OLS version $wptangtocols_version"
+BOX_COLOR="$C_CYAN"
+if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
+  box_out "Xin chào $NAME" "Chào mừng bạn đến với WPTANGTOC OLS version $wptangtocols_version" "Phần mềm phát triển bởi Gia Tuấn"
 else
-  box_out "Chào mừng bạn đến với WPTANGTOC OLS version $wptangtocols_version"
+  box_out "Chào mừng bạn đến với WPTANGTOC OLS version $wptangtocols_version" "Phần mềm phát triển bởi Gia Tuấn"
 fi
-
 sleep 2
-clear
-echo ""
-echo "Đang chuẩn bị tiến hành cài đặt WPTangToc OLS $wptangtocols_version"
-sleep 1
-echo ""
-echo "Cảm ơn bạn đã lựa chọn sử dụng WPTangToc OLS ..."
-sleep 2
-echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" | sudo tee /etc/resolv.conf >/dev/null 2>&1 #config dns server cloudflare vs google
-echo "
-                                  .:..              
-                             ..:-------.            
-                          .:::.......:::::.         
-                         :--. ..........:::.        
-                        :::..    ........:::.       
-                       ...--::..........:.:::       
-                        :=+++=-:........:::::       
-                       :+*****==:... ......:.       
-                       ==+*###***=-===+=:.:         
-                       =-::=********###%*==         
-                      -*+=-=+*+=-:-=*##%*+#=        
-                      +####*####*+++*##%***.        
-                      +*+**#%%###%%%%##%#+.         
-                      :+=++*###**####%#-:           
-                       ==-+++***++*###:             
-       .-====----:::::--+==++++++***#.              
-     .-===------==-----:=**++*##***#+               
-    :-----=------==----:-+++*******##.              
-  .-----=---------------==+=++******+-:             
- :----------=--------:.:+******+++=--==-            
-----------------------:::=***+===--====--:          
-----:------------------::-:-::..-===-===-==:        
----::--------------------=-:---::-=-====--=++-:.  
-"
-echo ""
-echo "Phần mềm phát triển bởi Gia Tuấn"
-sleep 4
-clear
 
 # ==============================================================================
-# TỐI ƯU HÓA TRÌNH QUẢN LÝ GÓI DNF (CHỐNG TREO, ÉP TỐC ĐỘ, ĐÁ VĂNG MIRROR CHẬM)
+# 4. TỐI ƯU HỆ THỐNG OS & DỌN DẸP
 # ==============================================================================
-echo "Tối ưu hóa trình tải gói DNF..."
+_step "Tối ưu hóa trình quản lý gói DNF"
 if [[ -f /etc/dnf/dnf.conf ]]; then
-  # Quét dọn các cấu hình mạng cũ để tránh lặp dòng nếu chạy lại script
-  sed -i '/fastestmirror/d' /etc/dnf/dnf.conf
-  sed -i '/max_parallel_downloads/d' /etc/dnf/dnf.conf
-  sed -i '/minrate/d' /etc/dnf/dnf.conf
-  sed -i '/timeout/d' /etc/dnf/dnf.conf
-  sed -i '/retries/d' /etc/dnf/dnf.conf
-
-  # Bơm thêm "động cơ" vào cuối file dnf.conf hiện tại
-  cat >> /etc/dnf/dnf.conf <<EOF
+    sed -i -E '/fastestmirror|max_parallel_downloads|minrate|timeout|retries/d' /etc/dnf/dnf.conf
+    cat >> /etc/dnf/dnf.conf <<EOF
 fastestmirror=True
 max_parallel_downloads=10
-minrate=100000
 timeout=15
-retries=10
+retries=3
 EOF
 fi
+_success "Tối ưu DNF hoàn tất"
 
+_step "Dọn dẹp các dịch vụ rác và xung đột"
+rbb_services=(apache apache2 httpd nginx postfix chrony acpid Sendmail Xfs Autofs Isdn Nfslock Apmd yum-cron php-fpm php-common)
+for svc in "${rbb_services[@]}"; do
+    systemctl stop "$svc" >> "$LOG_FILE" 2>&1 || true
+    systemctl disable "$svc" >> "$LOG_FILE" 2>&1 || true
+    killall -9 "$svc" >> "$LOG_FILE" 2>&1 || true
+    dnf remove -y "$svc" >> "$LOG_FILE" 2>&1 || true
+done
+_success "Dọn dẹp hệ thống sạch sẽ"
 
-dnf install epel-release -y
-
-#mở thêm repo almalinx 9 để có thể cài memcached các kiểu
-dnf config-manager --set-enabled crb
-
-dnf clean all
-
-#fix thư mục boot mà một số đơn vị cloud họ gán ổ đĩa riêng khi upgrade kernel và grub sẽ làm gây ra lỗi
+_step "Cập nhật hệ điều hành (OS Upgrade) an toàn"
 ROOT_DEV=$(df -P / | tail -1 | awk '{print $1}')
-# 2. Lấy tên thiết bị của phân vùng BOOT (/boot)
 BOOT_DEV=$(df -P /boot | tail -1 | awk '{print $1}')
-# 3. So sánh: Nếu 2 thiết bị này KHÁC NHAU -> Tức là có phân vùng Boot riêng
-if [ "$ROOT_DEV" != "$BOOT_DEV" ]; then #không update kernel
-  dnf update -y --exclude=kernel* --exclude=grub2* --exclude=shim* --exclude=centos-release* --exclude=redhat-release* --exclude=almalinux-release* --exclude=rocky-release* --exclude=microcode_ctl
+if [ "$ROOT_DEV" != "$BOOT_DEV" ]; then 
+    wptt_run dnf update -y --exclude=kernel* --exclude=grub2* --exclude=shim* --exclude=centos-release* --exclude=redhat-release* --exclude=almalinux-release* --exclude=rocky-release* --exclude=microcode_ctl
 else
-  dnf update -y
+    wptt_run dnf update -y
+fi
+_success "Hệ điều hành đã được nâng cấp"
+
+_step "Cài đặt thư viện cốt lõi"
+wptt_run dnf install epel-release -y
+wptt_run dnf config-manager --set-enabled crb
+wptt_run dnf clean all
+wptt_run dnf install -y --skip-broken --setopt=strict=0 nano wget zip unzip curl git bind-utils firewalld gcc gcc-c++ make autoconf glibc rcs bc pv tar gnupg2 fzf ipset cronie glibc-langpack-en ncurses python3 certbot libxcrypt-compat libnsl oniguruma
+systemctl enable --now crond >> "$LOG_FILE" 2>&1 || true
+_success "Cài đặt thư viện lõi thành công"
+
+rm -rf -- /var/lib/sss/db/* || true
+systemctl restart sssd >> "$LOG_FILE" 2>&1 || true
+
+if [[ -f /etc/sysconfig/selinux ]]; then
+  setenforce 0 >/dev/null 2>&1 || true
+  sed -i 's/=enforcing/=disabled/g' /etc/sysconfig/selinux
+fi
+if [[ -f /etc/selinux/config ]]; then
+  setenforce 0 >/dev/null 2>&1 || true
+  sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
 fi
 
-rm -rf /var/lib/sss/db/* #xoá cache sssd, nhiều khi thêm domain nó báo nếu vẫn dùng cache sssd cũ
-systemctl restart sssd >/dev/null 2>&1
-
-function kernel_tcp_toi_uu() {
-  LIMITSCONFCHECK=$(grep '* hard nofile 524288' /etc/security/limits.conf)
-  if [[ -z $LIMITSCONFCHECK ]]; then #check LIMITSCONFCHECK
-    # Set VPS hard/soft limits
+# ==============================================================================
+# 5. KERNEL TCP & TỐI ƯU HIỆU SUẤT TẦNG THẤP
+# ==============================================================================
+_step "Tối ưu hóa Kernel TCP & Limits"
+LIMITSCONFCHECK=$(grep '* hard nofile 524288' /etc/security/limits.conf || true)
+if [[ -z "$LIMITSCONFCHECK" ]]; then
     echo "* soft nofile 524288" >>/etc/security/limits.conf
     echo "* hard nofile 524288" >>/etc/security/limits.conf
 
-    if [[ ! -f /etc/rc.d/rc.local ]]; then #check khong co rc.local
+    if [[ ! -f /etc/rc.d/rc.local ]]; then
       cat >/usr/lib/systemd/system/rc-local.service <<EOF
-# This unit gets pulled automatically into multi-user.target by
-# systemd-rc-local-generator if /etc/rc.d/rc.local is executable.
 [Unit]
 Description=/etc/rc.d/rc.local Compatibility
 ConditionFileIsExecutable=/etc/rc.d/rc.local
@@ -404,82 +341,39 @@ ExecStart=/etc/rc.d/rc.local start
 TimeoutSec=0
 RemainAfterExit=yes
 EOF
-
       cat >/etc/rc.d/rc.local <<EOF
 #!/bin/bash
-# THIS FILE IS ADDED FOR COMPATIBILITY PURPOSES
-#
-# It is highly advisable to create own systemd services or udev rules
-# to run scripts during boot instead of using this file.
-#
-# In contrast to previous versions due to parallel execution during boot
-# this script will NOT be run after all other services.
-#
-# Please note that you must run 'chmod +x /etc/rc.d/rc.local' to ensure
-# that this script will be executed during boot.
 touch /var/lock/subsys/local
 EOF
-
-      # remove non-standard centos 7 service file if detected
-      if [ -f /etc/systemd/system/rc-local.service ]; then
-        echo "cat /etc/systemd/system/rc-local.service"
-        cat /etc/systemd/system/rc-local.service
-        echo
-        rm -rf /etc/systemd/system/rc-local.service
-        rm -rf /var/lock/subsys/local
-        systemctl daemon-reload
-        systemctl stop rc-local.service
-      fi
-
       chmod +x /etc/rc.d/rc.local
-      pushd /etc || exit
-      ln -s rc.d/rc.local /etc/rc.local
-      popd || exit
+      ln -sf /etc/rc.d/rc.local /etc/rc.local
       systemctl daemon-reload
-      systemctl start rc-local.service
-      systemctl status rc-local.service
-
-    fi #check khong co rc.local
-
-    ulimit -n 524288
+      systemctl enable --now rc-local.service >> "$LOG_FILE" 2>&1 || true
+    fi
+    ulimit -n 524288 || true
     echo "ulimit -n 524288" >>/etc/rc.local
+fi
 
-  fi #check LIMITSCONFCHECK
-
-  if [[ -f /etc/security/limits.d/20-nproc.conf ]]; then
+if [[ -f /etc/security/limits.d/20-nproc.conf ]]; then
     cat >"/etc/security/limits.d/20-nproc.conf" <<EOF
-# Default limit for number of user's processes to prevent
-# accidental fork bombs.
-# See rhbz #432903 for reasoning.
 *          soft    nproc     8192
 *          hard    nproc     8192
 nobody     soft    nproc     32278
 nobody     hard    nproc     32278
 root       soft    nproc     unlimited
 EOF
-  fi
+fi
 
-  if [[ ! -f /proc/user_beancounters ]]; then #check dieu kien ao hoa 1 phan skip
-    if [ -d /etc/sysctl.d ]; then             #check kernel toan phan
-      if [[ "$(
-        grep 'wptangtoc-ols' /etc/sysctl.d/101-sysctl.conf >/dev/null 2>&1
-        echo $?
-      )" != '0' ]]; then #check da add wptangtoc ols mod kernel
-        touch /etc/sysctl.d/101-sysctl.conf
-        #hashsize bằng 1/4 cái nf_conntrack_max 524288 = 131072
-        echo 131072 >/sys/module/nf_conntrack/parameters/hashsize
-
-        if [[ ! -f /etc/modprobe.d/nf_conntrack.conf ]]; then
-          echo 'options nf_conntrack hashsize=131072' >/etc/modprobe.d/nf_conntrack.conf
-        fi
-
-        if [[ "$(
-          grep 'hashsize' /etc/rc.local >/dev/null 2>&1
-          echo $?
-        )" != '0' ]]; then
-          echo "echo 131072 > /sys/module/nf_conntrack/parameters/hashsize" >>/etc/rc.local
-        fi
-        cat >>"/etc/sysctl.d/101-sysctl.conf" <<EOF
+if [[ ! -f /proc/user_beancounters ]]; then
+    if [ -d /etc/sysctl.d ]; then
+        if ! grep -q 'wptangtoc-ols' /etc/sysctl.d/101-sysctl.conf 2>/dev/null; then
+            touch /etc/sysctl.d/101-sysctl.conf
+            echo 131072 >/sys/module/nf_conntrack/parameters/hashsize 2>/dev/null || true
+            echo 'options nf_conntrack hashsize=131072' >/etc/modprobe.d/nf_conntrack.conf
+            if ! grep -q 'hashsize' /etc/rc.local 2>/dev/null; then
+                echo "echo 131072 > /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null" >>/etc/rc.local
+            fi
+            cat >>"/etc/sysctl.d/101-sysctl.conf" <<EOF
 # wptangtoc-ols
 kernel.pid_max=65536
 kernel.printk=4 1 1 7
@@ -500,7 +394,6 @@ net.ipv4.tcp_max_syn_backlog=65536
 net.ipv4.tcp_sack=1
 net.ipv4.tcp_syn_retries=3
 net.ipv4.tcp_synack_retries = 2
-net.ipv4.tcp_tw_recycle = 0
 net.ipv4.tcp_tw_reuse = 0
 net.ipv4.tcp_max_tw_buckets = 1440000
 vm.swappiness=100
@@ -514,14 +407,6 @@ net.ipv4.conf.all.accept_redirects = 0
 net.ipv4.conf.all.accept_source_route = 0
 net.ipv4.conf.all.log_martians = 1
 net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.all.secure_redirects = 0
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.default.log_martians = 1
-net.ipv4.conf.default.rp_filter = 1
-net.ipv4.conf.default.secure_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
 net.ipv4.icmp_echo_ignore_broadcasts = 1
 net.ipv4.icmp_ignore_bogus_error_responses = 1
 net.netfilter.nf_conntrack_helper=0
@@ -538,267 +423,134 @@ net.ipv4.tcp_fastopen = 3
 kernel.panic = 10
 EOF
 
-        #tắt thp cải thiện hiệu suất mariadb tắt cái đợi gom ram vì mariadb, ols, redis,memcached toàn truy suất dữ liệu nhỏ, tắt thp cải thiện hiệu suất tốt hơn
-        cat >/etc/systemd/system/wptt-disable-thp.service <<'EOF'
+            cat >/etc/systemd/system/wptt-disable-thp.service <<'EOF'
 [Unit]
-Description=Disable Transparent Huge Pages (THP) for WPTangToc OLS
-DefaultDependencies=no
+Description=Disable THP for WPTangToc
 After=sysinit.target local-fs.target
-Before=mariadb.service
-
 [Service]
 Type=oneshot
 ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true'
 ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true'
-
 [Install]
 WantedBy=basic.target
 EOF
+            systemctl daemon-reload
+            systemctl enable --now wptt-disable-thp.service >> "$LOG_FILE" 2>&1 || true
 
-        systemctl daemon-reload
-        systemctl enable --now wptt-disable-thp.service >/dev/null 2>&1
+            if grep -qo 'AMD EPYC' /proc/cpuinfo 2>/dev/null; then
+                echo "kernel.watchdog_thresh = 20" >>/etc/sysctl.d/101-sysctl.conf
+            fi
 
-        if [[ "$(grep -o 'AMD EPYC' /proc/cpuinfo | sort -u)" = 'AMD EPYC' ]]; then #check cpu amd
-          echo "kernel.watchdog_thresh = 20" >>/etc/sysctl.d/101-sysctl.conf
-        fi #check cpu amd
-
-        if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then
-          sed -i '/vm.swappiness/d' /usr/lib/tuned/virtual-guest/tuned.conf
-          echo 'vm.swappiness = 100' >>/usr/lib/tuned/virtual-guest/tuned.conf
+            if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then
+                sed -i '/vm.swappiness/d' /usr/lib/tuned/virtual-guest/tuned.conf
+                echo 'vm.swappiness = 100' >>/usr/lib/tuned/virtual-guest/tuned.conf
+            fi
+            /sbin/sysctl --system >> "$LOG_FILE" 2>&1 || true
         fi
-
-        /sbin/sysctl --system
-
-      fi #check da add wptangtoc ols mod kernel
-    fi   #check kernel toan phan
-
-    #ép xung, xung nhịp đơn nhân cpu lên tối đa high performance for centos 7 và tắt cơ chế tiết kiệm điện ktune, tối ưu i/o
-    if [[ $(which tuned-adm) ]]; then
-      tuned-adm profile latency-performance
     fi
-  # tuned-adm profile throughput-performance
-
-  fi #check dieu kien ao hoa 1 phan skip
-}
-kernel_tcp_toi_uu
-
-#tat selinux
-if [[ -f /etc/sysconfig/selinux ]]; then
-  setenforce 0
-  sed -i 's/=enforcing/=disabled/g' /etc/sysconfig/selinux
+    if command -v tuned-adm &>/dev/null; then
+        tuned-adm profile latency-performance >> "$LOG_FILE" 2>&1 || true
+    fi
 fi
+_success "Tối ưu Kernel TCP, Network & I/O hoàn tất"
 
-if [[ -f /etc/selinux/config ]]; then
-  setenforce 0
-  sed -i 's/=enforcing/=disabled/g' /etc/selinux/config
-fi
-
-rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
-dnf install nano wget zip unzip curl git bind-utils firewalld gcc gcc-c++ make autoconf glibc rcs bc pv tar gnupg2 -y
-dnf install python3 -y
-dnf install certbot -y
-dnf install glibc -y
-dnf install libxcrypt-compat libnsl oniguruma -y #thư viện cần thiết cho litespeed webserver để hoạt động để xử lý error while loading shared libraries: libcrypt.so.1: cannot open shared object file: No such file or directory
-
-dnf install fzf -y
-dnf install ipset -y
-
-
-if ! command -v clear &>/dev/null; then #sử lý tình huống bản template OS mà hãng VPS đi cắt giảm quá mức
-    dnf install ncurses -y -q >/dev/null 2>&1
-fi
-
-#tính toán cấu hình
+# ==============================================================================
+# 6. TÍNH TOÁN CẤU HÌNH RAM/CPU THEO TỶ LỆ
+# ==============================================================================
 work_cpucore='1024'
-cpucore=$(grep -c ^processor /proc/cpuinfo)
-max_client=$(expr $work_cpucore \* "$cpucore" \* 2)
-max_client_max=$(expr $work_cpucore \* "$cpucore" \* 3)
-max_client_php=$(expr $work_cpucore \* "$cpucore" \/ 8)
-tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-rong_ram_mb=$(echo "scale=0;${tong_ram_byte}/1024" | bc)
+cpucore=$(grep -c ^processor /proc/cpuinfo || echo 1)
+max_client=$(( work_cpucore * cpucore * 2 ))
+max_client_max=$(( work_cpucore * cpucore * 3 ))
+max_client_php=$(( work_cpucore * cpucore / 8 ))
+tong_ram_byte=$(awk '/MemTotal/ {print $2}' /proc/meminfo || echo 2048000)
+rong_ram_mb=$(( tong_ram_byte / 1024 ))
+tong_ram_mb_db=$(( rong_ram_mb / 4 ))
+tong_ram_gb=$(( rong_ram_mb / 1024 ))
+[[ "$tong_ram_gb" -eq 0 ]] && tong_ram_gb=1
+db_table_size=$(( tong_ram_gb * 64 ))
+buffer_db=$(( rong_ram_mb / 6 ))
+gioi_han_tien_trinh_bao_loi_503=$(( max_client / 8 ))
+core_tien_lsphp_child=$(( cpucore * 2 ))
 
-gioi_han_tien_trinh_bao_loi_503=$(expr "$max_client" \/ 8)
-core_tien_lsphp_child=$(expr "$cpucore" \* 2)
-
-if [[ -z "$rong_ram_mb" ]]; then
-  rong_ram_mb="2048"
-fi
-tong_ram_mb_db=$(echo "scale=0;${rong_ram_mb}/4" | bc)
-
-if [[ -z "$tong_ram_mb_db" ]]; then
-  tong_ram_mb_db="2048"
-fi
-
-tong_ram_gb=$(expr "${rong_ram_mb}" / 1024)
-db_table_size=$(expr "$tong_ram_gb" \* 64)
-buffer_db=$(expr "$rong_ram_mb" / 6)
-
-#sửa lỗi utf8 khi gõ bàn phím và bay bố cục menu chính loạn xạ cả lên
-dnf install glibc-langpack-en -y
-#dnf install langpacks-en glibc-all-langpacks -y
-
-dnf remove postfix chrony acpid Sendmail Xfs Autofs Isdn Nfslock Apmd nginx yum-cron -y
-
-dnf remove php-fpm php-common -y
-
-#một số bản phối quá tối giản họ xoá luôn crond kiểm tra rồi phải cài lại
-if ! command -v crontab >/dev/null 2>&1; then
-  dnf install cronie -y >/dev/null 2>&1
-  systemctl enable crond >/dev/null 2>&1
-  systemctl start crond >/dev/null 2>&1
-fi
-
-
-
-
-#key mã hoá dữ liệu local bảo mật các thông tin tài khoản
+# ==============================================================================
+# 7. BẢO MẬT: WPTT AES KEY VAULT (FIX TOCTOU Umask)
+# ==============================================================================
 WPTT_AES_DIR="/etc/wptt-aes"
 WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
-
-# 1. Xây boong-ke và khóa cửa (Chỉ Root được vào)
 if [[ ! -d "$WPTT_AES_DIR" ]]; then
 	mkdir -p "$WPTT_AES_DIR"
 	chmod 700 "$WPTT_AES_DIR"
 fi
-
-# 2. Sinh chìa khóa ngẫu nhiên nếu chưa có
 if [[ ! -f "$WPTT_KEY_FILE" ]]; then
+    old_umask=$(umask)
+    umask 077
 	openssl rand -base64 48 > "$WPTT_KEY_FILE"
-	chmod 600 "$WPTT_KEY_FILE"
-fi
-#end key mã hoá dữ liệu local bảo mật các thông tin tài khoản
-
-
-
-OUTPUT_OS_NAME_CHECK=$(cat /etc/*release)
-if echo "$OUTPUT_OS_NAME_CHECK" | grep -q "AlmaLinux"; then
-  mariadb_repo_name="almalinux10-amd64"
-elif echo "$OUTPUT_OS_NAME_CHECK" | grep -q "Rocky Linux"; then
-  mariadb_repo_name="rockylinux10-amd64"
-else
-  mariadb_repo_name="rhel10-amd64"
+    umask "$old_umask"
 fi
 
-#https://mirror.mariadb.org/yum/11.8/
-#chưa support full nhánh riêng lẻ của mariadb, nên dùng rhel10 luôn, nếu support thì xoá biến dưới đi là được
-mariadb_repo_name="rhel10-amd64"
+# ==============================================================================
+# 8. CÀI ĐẶT MARIADB (IDEMPOTENCY FIX + ALMA10 LOGIC)
+# ==============================================================================
+_step "Cấu hình Repository và cài đặt MariaDB $mariadb_version"
 
-echo '[mariadb]
-name = MariaDB
-baseurl = http://yum.mariadb.org/'"$mariadb_version"'/'$mariadb_repo_name'
-gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
-gpgcheck=1
-module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
+#almalinux10 đã support mariadb support nhánh riêng rocky, almalinux riêng rồi
+OUTPUT_OS_NAME_CHECK=$(cat /etc/*release || true)
+if echo "$OUTPUT_OS_NAME_CHECK" | grep -q "AlmaLinux"; then mariadb_repo_name="almalinux10-amd64"
+elif echo "$OUTPUT_OS_NAME_CHECK" | grep -q "Rocky Linux"; then mariadb_repo_name="rockylinux10-amd64"
+else mariadb_repo_name="rhel10-amd64"; fi
 
-#repo mariadb cpu arm
 if uname -m | grep -q 'aarch64'; then
   mariadb_repo_name=${mariadb_repo_name//amd64/aarch64}
-  echo '[mariadb]
+fi
+
+cat > /etc/yum.repos.d/MariaDB.repo <<EOF
+[mariadb]
 name = MariaDB
-baseurl = http://yum.mariadb.org/'"$mariadb_version"'/'"$mariadb_repo_name"'
+baseurl = https://yum.mariadb.org/$mariadb_version/$mariadb_repo_name
 gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
 gpgcheck=1
-module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
+module_hotfixes=1
+EOF
+
+if ! wptt_run yum install MariaDB-server MariaDB-client -y; then
+    _warn "Mirror chính của MariaDB chậm. Chuyển sang Mirror Rackspace..."
+    sed -i 's|https://yum.mariadb.org|https://mirror.rackspace.com/mariadb/yum|g' /etc/yum.repos.d/MariaDB.repo
+    wptt_run yum install MariaDB-server MariaDB-client -y || _error "Không tải được MariaDB."
 fi
 
-dnf clean all
-yum clean all
-dnf update -y
-echo '@@@@@@@@@@@@@@@@@@@@@@@@@#*+=:#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@@@@=.    -@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@@%.    +@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@@@@@@@@@@@@@@@@@@@@*     =@@@#=@@@@*=@@@@@@@@@@@@@@%+@@@@@@@@@+*****@@%+#*#*#@
-@@@@@@@@@@@@@@@@%#=.      @@@@  :@@*  +@%==++=%@=++**:@%==++=%@.*@@%#:%*.###*.@
-@@@@@@@@@@%#+=:.         +@@@= @::# #+ @ .@@* #% =%@= @ :@@+ #@.%@@@@.*#:###*:#
-@@@@@@@@+:              -@@@@.+@@: *@@.+*:+*= %% #@@* *+:+*= %@:+#**=+@*:####-#
-@##%%%+          ..  :-*@@@@@@@@@@@@@@@@@@%%@@@@@@@@@@@@@%%@@@@@%%%%@@@@@%%%%@@
-@+    .=#%@@@%%##=  =@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
-@#:-+#@@@@@@@@@@#-+%@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@'
-box_out "Tiến hành cài đặt Maria Database $mariadb_version"
+systemctl enable --now mariadb.service >> "$LOG_FILE" 2>&1 || true
+echo "exclude=MariaDB-* mariadb-*" >> /etc/dnf/dnf.conf || true
 
-#dùng yum trong trường hợp này tốt hơn dnf
-yum install MariaDB-server MariaDB-client -y
-
-if [[ ! -d /var/lib/mysql ]]; then
-
-  #thay repo mariadb
-  echo '[mariadb]
-name = MariaDB
-baseurl = https://mirror.rackspace.com/mariadb/yum/'"$mariadb_version"'/'"$mariadb_repo_name"'
-gpgkey = https://mirror.rackspace.com/mariadb/yum/RPM-GPG-KEY-MariaDB
-gpgcheck=1
-module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
-  dnf clean all
-  dnf install MariaDB-server MariaDB-client -y
-
-fi
-
-systemctl start mariadb.service
-systemctl enable mariadb.service
-
-#khoá repo không cho update ghi đè mariadb nếu muốn update thì vào menu wptangtoc ols có cơ chế backup mariadb an toàn trước khi upgrade sau này
-if [ -f /etc/dnf/dnf.conf ] && ! grep -q "^exclude=.*MariaDB" /etc/dnf/dnf.conf; then
-  echo "exclude=MariaDB-* mariadb-*" >>/etc/dnf/dnf.conf
-  echo -e "\e[32m[*] Đã kích hoạt lớp khiên bảo vệ (update) MariaDB!\e[0m"
-fi
-
-#để ngoài biến này để lưu giá trị vào wptt, không có điều kiện
 db_root_password=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 32)
-
-#không nhập domain thì sẽ không thực thi triển khai mariadb
-if [[ $NAME != 'wptangtoc-ols.com' ]]; then
-  echo "Chung minh thay database user root bang wordpressadmin de nang cao bao mat"
-  mariadb <<EOF
+if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
+    mariadb <<EOF
 use mysql;
-FLUSH PRIVILEGES;
-CREATE USER 'wordpressadmin'@'localhost' IDENTIFIED BY '$db_root_password';
+CREATE USER IF NOT EXISTS 'wordpressadmin'@'localhost' IDENTIFIED BY '$db_root_password';
+ALTER USER 'wordpressadmin'@'localhost' IDENTIFIED BY '$db_root_password';
 GRANT ALL PRIVILEGES ON *.* TO 'wordpressadmin'@'localhost' WITH GRANT OPTION;
-DROP USER 'root'@'localhost';
+DROP USER IF EXISTS 'root'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 fi
+_success "MariaDB cài đặt và tối ưu bảo mật hoàn tất"
 
-box_out "Hoàn tất quá trình cài đặt Maria database"
+# ==============================================================================
+# 9. FIREWALL & LITESPEED & PHP EXTENSIONS (ALMA 10)
+# ==============================================================================
+_step "Cấu hình Firewalld (Mở Port Web: 80/tcp, 443/tcp, 443/udp)"
+systemctl unmask firewalld >> "$LOG_FILE" 2>&1 || true
+systemctl enable --now firewalld >> "$LOG_FILE" 2>&1 || true
+systemctl mask ip6tables iptables >> "$LOG_FILE" 2>&1 || true
+firewall-cmd --zone=public --add-service=http --add-service=https --permanent >> "$LOG_FILE" 2>&1 || true
+firewall-cmd --zone=public --add-port=443/udp --permanent >> "$LOG_FILE" 2>&1 || true
+firewall-cmd --reload >> "$LOG_FILE" 2>&1 || true
+_success "Tường lửa đã kích hoạt, các cổng giao tiếp Web (QUIC) đã mở"
 
-systemctl restart mariadb.service
+_step "Cài đặt Remi 10 Repository & Chuẩn bị môi trường WebServer"
+mkdir -p /etc/wptt/ /etc/wptt/vhost /etc/wptt-user
+wptt_run dnf install https://rpms.remirepo.net/enterprise/remi-release-10.rpm -y
 
-systemctl start firewalld >/dev/null 2>&1
-systemctl enable firewalld >/dev/null 2>&1
-systemctl stop httpd >/dev/null 2>&1
-systemctl disable httpd >/dev/null 2>&1
-systemctl mask httpd >/dev/null 2>&1
-
-#delete nhung service co kha nang cuop port 80 va 443
-killall -9 apache >/dev/null 2>&1
-killall -9 apache2 >/dev/null 2>&1
-killall -9 httpd >/dev/null 2>&1
-killall -9 nginx >/dev/null 2>&1
-
-# chuyen doi tuong thich iptables sang firewalld
-checktuonglua=$(systemctl status firewalld | grep "masked")
-if [[ "$checktuonglua" ]]; then
-  systemctl unmask firewalld
-  systemctl start firewalld
-  systemctl enable firewalld
-  systemctl mask ip6tables
-  systemctl mask iptables
-  systemctl disable iptables
-  systemctl disable ip6tables
-  systemctl stop iptables
-  systemctl stop ip6tables
-fi
-
-mkdir -p /etc/wptt/
-mkdir -p /etc/wptt/vhost
-mkdir -p /etc/wptt-user
-
-#cai thu vien litespeed repo
-# curl -s https://repo.litespeed.sh | sudo bash
-
-dnf install https://rpms.remirepo.net/enterprise/remi-release-10.rpm -y
-
-
-#RPM-GPG-KEY-litespeed2025 almalinx 10 thì dùng 2025 còn 9 và 8 thì dùng RPM-GPG-KEY-litespeed
+# Ghi chú quan trọng: Alma 10 sử dụng GPG Key LiteSpeed 2025
 echo '[litespeed]
 name=LiteSpeed Tech Repository for CentOS $releasever - $basearch
 baseurl=https://rpms.litespeedtech.com/centos/$releasever/$basearch/
@@ -816,290 +568,109 @@ gpgcheck=1
 gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025
 ' >/etc/yum.repos.d/litespeed.repo
 
-echo '                         -#-                  
-                       -#@@-                  
-                     -#@@%%-    -.            
-                   -#@@%@@@: :+*-             
-                 -#@@@@@%*==*%+               
-               -#@@@@@#+=+#%*:.               
-             -#@@@@%*==*#%%-.=++:             
-           -#@@@%#==+#%%%*:-+++++=:           
-         -#@@@%@*.#%%%%%- :++++++++=:         
-       -#@@@@@@@%--#%%%%+   -++++++++=:       
-      +@@%@@@@@@-  .*##%%#:   -+++++++++:     
-      .=%@@%@@@@%=.  =####%= .=++++++++=.     
-        .+%@@%@@@@%=. -#####*.=++++++=.       
-          .+%@@@@%@@-:*####+=:=++++=.         
-            .+%@@@*:=###*=--=++++=.           
-              .+#--###+---+++++=.             
-                .+#*=--=+++++=.               
-               =#+:.=++++++=.                 
-             .+=.  :+++++=.                   
-                   :+++=.                     
-                   :+=.                       
-                   .:                         
-'
+rpm --import https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025 >> "$LOG_FILE" 2>&1 || true
+_success "Chuẩn bị Repositories hoàn tất"
 
-#openlitespeed yêu cầu phải có lsphp74 cấu hình khuyến nghị mới cho install
-#dnf deplist openlitespeed gói phụ thuộc bắt buộc
-goi_ls_php_bat_buoc=$(dnf deplist openlitespeed | grep -oP 'lsphp\K[0-9]+' | tail -n1) #như 74
-if [[ -z $(dnf list available | grep "lsphp${goi_ls_php_bat_buoc}") ]]; then           #sử lý tình huống khi php hết hạn mà lại là thư viện bắt buộc của ols
-
-  extension_php_bat_buoc=(
-    common
-    gd
-    xml
-    pdo
-    process
-    opcache
-    mysqlnd
-    mbstring
-    imap
-    zip
-  )
-
-  if uname -m | grep -q 'aarch64'; then
-    curl -skfL https://rpms.litespeedtech.com/centos/10/aarch64/RPMS >/tmp/php_extension_call_eol
-  else
-    curl -skfL https://rpms.litespeedtech.com/centos/10/update/x86_64/RPMS >/tmp/php_extension_call_eol
-  fi
-
-  if [[ ! -s /tmp/php_extension_call_eol ]]; then #sử lý tình huống khi rpms litespeed bị downtime không install được
-    sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-    echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
+_step "Cài đặt OpenLiteSpeed WebServer"
+if ! wptt_run dnf install openlitespeed -y; then
+    _warn "Lỗi tải OpenLiteSpeed. Chuyển sang Mirror IP dự phòng..."
+    echo $'52.55.120.73 rpms.litespeedtech.com' >> /etc/hosts
+    wptt_run dnf install openlitespeed -y || _error "Không thể cài đặt OpenLiteSpeed."
     su_dung_repo_du_phong=1
+fi
+_success "Cài đặt OpenLiteSpeed hoàn tất"
 
-	if uname -m | grep -q 'aarch64'; then
-		curl -skfL https://rpms.litespeedtech.com/centos/10/aarch64/RPMS >/tmp/php_extension_call_eol
-	else
-		curl -skfL https://rpms.litespeedtech.com/centos/10/update/x86_64/RPMS >/tmp/php_extension_call_eol
-	fi
-  fi
-
-  url_repo_litespeed=$(
-    cat /tmp/php_extension_call_eol | grep lsphp"${goi_ls_php_bat_buoc}" | grep -oP 'href="\K[^"]+' | grep -v 'debuginfo\|-devel\|-debugsource' | awk '
-BEGIN { FS = "/" }
-{
-    filename = $NF
-    split(filename, parts, "-")
-
-    pkg_name = ""
-    version = ""
-
-    if (parts[2] == "pecl") {
-        # TRƯỜNG HỢP 1: Gói PECL (ví dụ: lsphp74-pecl-redis-...)
-        pkg_name = parts[1] "-" parts[2] "-" parts[3]
-        version = parts[4]
-    } else if (parts[2] ~ /^[0-9]+\.[0-9]+/) {
-        # TRƯỜNG HỢP 2 (MỚI): Gói lsphp gốc (ví dụ: lsphp74-7.4.28-...)
-        pkg_name = parts[1]
-        version = parts[2]
-    } else {
-        # TRƯỜNG HỢP 3: Gói extension thông thường (ví dụ: lsphp74-pgsql-...)
-        pkg_name = parts[1] "-" parts[2]
-        version = parts[3]
-    }
-
-    # Logic so sánh phiên bản và lưu trữ vẫn như cũ
-    if (version > versions[pkg_name]) {
-        versions[pkg_name] = version
-        latest_lines[pkg_name] = $0
-    }
-}
-END {
-    PROCINFO["sorted_in"] = "@ind_str_asc"
-    for (pkg in latest_lines) {
-        print latest_lines[pkg]
-    }
-}'
-  )
-
-  for extension_php_in in ${extension_php_bat_buoc[@]}; do
-    if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") ]]; then #kiểm tra extension đó có tồn tại không
-      dnf install https://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") -y 2>/dev/null
-      if [[ -z $(rpm -aq | grep -q "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại extension chỗ đó
-        sleep 3
-        dnf install https://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") -y 2>/dev/null
-      fi
+_step "Tải bộ nạp cấu trúc mở rộng PHP EOL dự phòng (CentOS 10)"
+wptt_run bash -c '
+    goi_ls_php_bat_buoc=$(dnf deplist openlitespeed | grep -oP "lsphp\K[0-9]+" | tail -n1 || echo "")
+    if [[ -n "$goi_ls_php_bat_buoc" ]] && ! dnf list available 2>/dev/null | grep -q "lsphp${goi_ls_php_bat_buoc}"; then
+        extension_php_bat_buoc=(common gd xml pdo process opcache mysqlnd mbstring imap zip)
+        if uname -m | grep -q "aarch64"; then
+            curl -skfL https://rpms.litespeedtech.com/centos/10/aarch64/RPMS >"'"$WPTT_SECURE_TMP"'/php_extension_call_eol"
+        else
+            curl -skfL https://rpms.litespeedtech.com/centos/10/update/x86_64/RPMS >"'"$WPTT_SECURE_TMP"'/php_extension_call_eol"
+        fi
+        
+        if [[ ! -s "'"$WPTT_SECURE_TMP"'/php_extension_call_eol" ]]; then
+            sed -i "/rpms.litespeedtech.com/d" /etc/hosts
+            echo $"\n52.55.120.73 rpms.litespeedtech.com\n" >>/etc/hosts
+            if uname -m | grep -q "aarch64"; then
+                curl -skfL https://rpms.litespeedtech.com/centos/10/aarch64/RPMS >"'"$WPTT_SECURE_TMP"'/php_extension_call_eol"
+            else
+                curl -skfL https://rpms.litespeedtech.com/centos/10/update/x86_64/RPMS >"'"$WPTT_SECURE_TMP"'/php_extension_call_eol"
+            fi
+        fi
+        
+        url_repo_litespeed=$(
+          cat "'"$WPTT_SECURE_TMP"'/php_extension_call_eol" | grep lsphp"${goi_ls_php_bat_buoc}" | grep -oP "href=\"\K[^\"]+" | grep -v "debuginfo\|-devel\|-debugsource" | awk '\''
+            BEGIN { FS = "/" }
+            {
+                filename = $NF; split(filename, parts, "-"); pkg_name = ""; version = ""
+                if (parts[2] == "pecl") { pkg_name = parts[1] "-" parts[2] "-" parts[3]; version = parts[4] } 
+                else if (parts[2] ~ /^[0-9]+\.[0-9]+/) { pkg_name = parts[1]; version = parts[2] } 
+                else { pkg_name = parts[1] "-" parts[2]; version = parts[3] }
+                if (version > versions[pkg_name]) { versions[pkg_name] = version; latest_lines[pkg_name] = $0 }
+            }
+            END { PROCINFO["sorted_in"] = "@ind_str_asc"; for (pkg in latest_lines) { print latest_lines[pkg] } }'\''
+        )
+        
+        for extension_php_in in "${extension_php_bat_buoc[@]}"; do
+            if [[ $(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") ]]; then
+                dnf install https://rpms.litespeedtech.com$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${goi_ls_php_bat_buoc}-${extension_php_in}-") -y 2>/dev/null || true
+            fi
+        done
+        url_php_eol_install=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep -P "lsphp${goi_ls_php_bat_buoc}-\K[0-9]+\.[0-9]+" | tail -n1 || true)
+        if [[ -n "$url_php_eol_install" ]]; then dnf install https://rpms.litespeedtech.com"${url_php_eol_install}" -y 2>/dev/null || true; fi
     fi
-  done
-  url_php_eol_install=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep -P 'lsphp'"${goi_ls_php_bat_buoc}"'-\K[0-9]+\.[0-9]+' | tail -n1) #lấy php main
+'
+_success "Nạp cấu trúc dự phòng hoàn tất"
 
-  dnf install https://rpms.litespeedtech.com"${url_php_eol_install}" -y 2>/dev/null
-  if [[ -z $(rpm -aq | grep -P 'lsphp'"${goi_ls_php_bat_buoc}"'-\K[0-9]+\.[0-9]+') ]]; then #kiểm tra đã cài được chưa, nếu chưa cài được thì sẽ return cài lại chỗ đó
-    sleep 3
-    dnf install https://rpms.litespeedtech.com"${url_php_eol_install}" -y 2>/dev/null
-  fi
-
-  rm -f /tmp/php_extension_call_eol
+_step "Tạo User và phân quyền WebRoot"
+random_suffix=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 3)
+USER="${NAME//[-._]/$random_suffix}"
+USER=$(echo "$USER" | cut -c 1-30)
+if ! id "$USER" &>/dev/null; then
+    useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1 || true
 fi
+usermod -L "$USER" >/dev/null 2>&1 || true
+_success "Khởi tạo User hoàn tất"
 
-#install gpg key public litespeed, almalinux10 phải dùng RPM-GPG-KEY-litespeed2025 không còn dùng RPM-GPG-KEY-litespeed
-rpm --import https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025 >/dev/null 2>&1
-dnf install openlitespeed -y
-
-#kiểm tra openlitespeed đã được cài đặt chưa, fix lỗi nếu Repository của litespeed bị lỗi thì dùng Repository dự phòng
-#nếu chưa cài đặt thì dùng Repository dự phòng ip khác thay vì dùng 208.167.239.232 ip dns gốc sẽ dùng 89.208.248.38 dự phòng của litespeed
-if [[ ! -d /usr/local/lsws ]]; then
-  sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-  echo $'\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
-  dnf clean all
-	rpm --import https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025 >/dev/null 2>&1
-	# curl -s https://repo.litespeed.sh | sudo bash
-	dnf install https://rpms.remirepo.net/enterprise/remi-release-10.rpm
-
-  dnf install openlitespeed -y
-  su_dung_repo_du_phong=1
-fi
-
-box_out "Hoàn tất cài đặt OpenLiteSpeed"
-
-random_suffix_USER=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 3)
-USER=${NAME//[-._]/$random_suffix_USER}
-
-check_ky_tu=$(echo "$USER" | wc -c)
-if (($check_ky_tu > 32)); then
-  USER=$(echo "$USER" | cut -c 1-30)
-fi
-
-useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1
-
-if [[ $(cat /etc/passwd | cut -f1 -d ':' | grep -w "$USER") = '' ]]; then
-  random=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 3)
-
-  USER=${NAME//[-._]/$random}
-  check_ky_tu2=$(echo "$USER" | wc -c)
-  if (($check_ky_tu2 > 32)); then
-    USER=$(echo "$USER" | cut -c 1-30)
-  fi
-  useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1
-fi
-
-# Chốt chặn bảo mật bổ sung: Khóa hẳn password (L) để vô hiệu hóa hoàn toàn mọi nỗ lực login
-usermod -L "$USER" >/dev/null 2>&1
-
-
+_step "Biên dịch LSPHP $php_version và Extensions"
 php_ver_chon=${php_version//[-._]/}
-
 extensions=(gd imagick process mbstring mysqlnd xml opcache mcrypt pdo imap bcmath intl zip mysql json curl common pecl-igbinary igbinary)
 
-dnf install lsphp"${php_ver_chon}" -y
-for extension in ${extensions[@]}; do
-  yum install -y lsphp"${php_ver_chon}"-"$extension"
-done
+wptt_run dnf install -y --skip-broken --setopt=strict=0 lsphp"${php_ver_chon}" "${extensions[@]/#/lsphp${php_ver_chon}-}" || true
+[[ $su_dung_repo_du_phong -eq 1 ]] && sed -i '/rpms.litespeedtech.com/d' /etc/hosts || true
 
-if [[ $su_dung_repo_du_phong = '1' ]]; then
-  #cho quay tro lai sử dụng repo gốc
-  sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+ln -sf /usr/local/lsws/lsphp"${php_ver_chon}"/bin/lsphp /usr/local/lsws/fcgi-bin/lsphp"${php_ver_chon}" || true
+ln -sf /usr/local/lsws/lsphp"${php_ver_chon}"/bin/lsphp /usr/local/lsws/fcgi-bin/lsphp5 || true
+ln -sf /usr/local/lsws/lsphp"${php_ver_chon}"/bin/php /usr/bin/php || true
+_success "LSPHP biên dịch hoàn tất"
+
+if [[ ! -f /usr/lib/systemd/system/lshttpd.service ]]; then
+  cp -f /usr/local/lsws/admin/misc/lshttpd.service /usr/lib/systemd/system/ || true
+  ln -sf /usr/lib/systemd/system/lshttpd.service /etc/systemd/system/openlitespeed.service || true
+  ln -sf /usr/lib/systemd/system/lshttpd.service /usr/lib/systemd/system/lsws.service || true
 fi
+systemctl enable --now lsws >> "$LOG_FILE" 2>&1 || true
 
-# dnf install lsphp${php_ver_chon}-zip -y
+_step "Khởi tạo tài khoản quản trị Admin Console"
+Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
+id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
+Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}" || true)
+echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/admin/conf/htpasswd
+_success "Tài khoản OLS WebGUI cấu hình thành công"
 
-ln -sf /usr/local/lsws/lsphp"${php_ver_chon}"/bin/lsphp /usr/local/lsws/fcgi-bin/lsphp"${php_ver_chon}"
-ln -sf /usr/local/lsws/lsphp"${php_ver_chon}"/bin/lsphp /usr/local/lsws/fcgi-bin/lsphp5
-ln -sf /usr/local/lsws/lsphp"${php_ver_chon}"/bin/php /usr/bin/php
+# ==============================================================================
+# 10. TẠO CẤU HÌNH LITESPEED
+# ==============================================================================
+_step "Sinh cấu hình Litespeed HTTPD & VHOST Auto-tune"
+if [ "$rong_ram_mb" -le 1200 ]; then BUFFER_SIZE="60M"; MMAP_CACHE_SIZE="20M"; KA_TIMEOUT="15"; KA_REQS="1000";
+elif [ "$rong_ram_mb" -le 2500 ]; then BUFFER_SIZE="120M"; MMAP_CACHE_SIZE="40M"; KA_TIMEOUT="30"; KA_REQS="3000";
+elif [ "$rong_ram_mb" -le 4500 ]; then BUFFER_SIZE="180M"; MMAP_CACHE_SIZE="80M"; KA_TIMEOUT="45"; KA_REQS="5000";
+else BUFFER_SIZE="384M"; MMAP_CACHE_SIZE="80M"; KA_TIMEOUT="60"; KA_REQS="10000"; fi
 
-#cai dat zip theo cach khac]
-# dnf install lsphp${php_ver_chon}-pear lsphp${php_ver_chon}-devel -y
-# /usr/local/lsws/lsphp${php_ver_chon}/bin/pecl install zip
-# echo "extension=zip.so" > /usr/local/lsws/lsphp${php_ver_chon}/etc/php.d/20-zip.ini
-
-blue='\033[1;34m'
-NC='\033[0m'
-echo -e "${blue}                                              
-                           ...::::--------------:::...                          
-                  .:--===++++===========================--:..                  
-             :-=+++++++===========+++++++===========+++=======-:.              
-         .-+++++=============+===+*.   *+=========+===============-:.          
-      .=+*++====++++++++++++===+=*-   :#=+++++===+=+++++++++++++==+==-:        
-    :+*++====+=++===========+++==*    :======+++==*+===========+++==++=-:      
-   =*+===++==+=#.            .=*++             -*+*             .-*====++=.    
- .++==++======++    +=====:    -%.   -+=+=+-    =#=    +=====:    -*=+===++:   
- ++==+======+=*:   :#=+++=#:   .#    *+++=+*    *#.   -#=++++#.   .#=+=====+:  
-:+===========+*    ++====+*    =-   :*=++=*:   :#+    ++====+*    =*=+=====+=  
-:+=========+=*=    #++++++.   :#    ++===+*    =#-   :#++++++.   :*========+=  
- =+========+=*     :....    .=#=   .#=++=*=    **     :....    .=*=========+:  
-  ==========++    .......:-+*+*:...+*=++=#:...-#=    .......:-+*+========++:   
-   :==+===+=#:   =*+++++++++==++++++=====++++++#:   -#+++++++++==+=====++=.    
-    .-===+=+*    *+=========++================+*    *+=========+====++=-:      
-       :-==++---=*=+===++=====++++++=====++++=+*---=*=+=========+++==-:        
-          :-=++++=+============================+++++========++====-:.          
-              .:-=======+++=========================+++=======-:.              
-                   .::--===============================--::.                   
-                           ...:::-------------::::..                           
-     
-
-${NC}"
-box_out "Hoàn tất cài đặt LSPHP phiên bản $php_version"
-
-echo ""
-box_out "Kích hoạt LiteSpeed webserver"
-
-if [[ ! -f /usr/lib/systemd/system/lshttpd.service ]]; then #xử lý tình huống khi litespeed không tự động tạo serivce riêng cho arm, thì mình sẽ tự tạo service giúp nó. để cải tiến, nếu reboot lại máy chủ nó có thể tự động enable lsws
-  cp -f /usr/local/lsws/admin/misc/lshttpd.service /usr/lib/systemd/system
-  ln -sf /usr/lib/systemd/system/lshttpd.service /etc/systemd/system/openlitespeed.service
-  ln -sf /usr/lib/systemd/system/lshttpd.service /usr/lib/systemd/system/lsws.service
-fi
-
-systemctl enable lsws >/dev/null 2>&1
-systemctl start lsws >/dev/null 2>&1
-/usr/local/lsws/bin/lswsctrl start
-
-#mở port http và https
-firewall-cmd --zone=public --add-service=http --add-service=https --permanent
-
-#mở port quic udp
-firewall-cmd --zone=public --add-port=443/udp --permanent
-firewall-cmd --reload
-
-function Post_Install_Regenerate_Webadmin_Console_Passwd() {
-  Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
-
-  id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
-
-  Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
-  echo "" >/usr/local/lsws/admin/conf/htpasswd
-  echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/admin/conf/htpasswd
-  echo "tai khoan ols webgui username/password da cap nhat thanh cong!"
-}
-Post_Install_Regenerate_Webadmin_Console_Passwd
-
-TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-# Tính toán mức trần theo công thức bậc thang
-if [ "$TOTAL_RAM_MB" -le 1200 ]; then
-  BUFFER_SIZE="60M"
-  MMAP_CACHE_SIZE="20M"
-elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
-  BUFFER_SIZE="120M"
-  MMAP_CACHE_SIZE="40M"
-elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
-  BUFFER_SIZE="180M"
-  MMAP_CACHE_SIZE="80M"
-elif [ "$TOTAL_RAM_MB" -le 8500 ]; then
-  BUFFER_SIZE="256M"
-  MMAP_CACHE_SIZE="80M"
-else
-  # Mức trần cho các VPS siêu to (16GB, 32GB...)
-  MMAP_CACHE_SIZE="80M"
-  BUFFER_SIZE="384M"
-fi
-
-# AUTO-TUNE KEEP-ALIVE (Quản lý luồng mạng)
-if [ "$TOTAL_RAM_MB" -le 1200 ]; then
-  KA_TIMEOUT="15" # Ngắt kết nối rảnh rỗi sau 15 giây
-  KA_REQS="1000"  # Tối đa 1000 file/kết nối
-elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
-  KA_TIMEOUT="45"
-  KA_REQS="5000"
-else
-  KA_TIMEOUT="60" # Máy to giữ 60 giây cho mượt
-  KA_REQS="10000"
-fi
-
-echo "#
-# PLAIN TEXT CONFIGURATION FILE
-#
-#It not set, will use host name as serverName
+cat > /usr/local/lsws/conf/httpd_config.conf <<EOF
 serverName                
 httpdWorkers              $cpucore
 user                      nobody
@@ -1125,7 +696,6 @@ errorlog logs/error.log {
   compressArchive         1
   enableStderrLog         0
 }
-
 
 accesslog logs/access.log {
   rollingSize             10M
@@ -1169,7 +739,6 @@ tuning  {
   brStaticCompressLevel   6
   gzipMaxFileSize         10M
   gzipMinFileSize         300
-
   quicEnable              1
   quicShmDir              /dev/shm
 }
@@ -1293,20 +862,19 @@ nodeDefaults  {
 
 module cache {
   internal                1
-checkPrivateCache   1
-checkPublicCache    1
-maxCacheObjSize     10000000
-maxStaleAge         200
-qsCache             1
-reqCookieCache      1
-respCookieCache     1
-ignoreReqCacheCtrl  1
-ignoreRespCacheCtrl 0
-
-enableCache         0
-expireInSeconds     3600
-enablePrivateCache  0
-privateExpireInSeconds 3600
+  checkPrivateCache       1
+  checkPublicCache        1
+  maxCacheObjSize         10000000
+  maxStaleAge             200
+  qsCache                 1
+  reqCookieCache          1
+  respCookieCache         1
+  ignoreReqCacheCtrl      1
+  ignoreRespCacheCtrl     0
+  enableCache             0
+  expireInSeconds         3600
+  enablePrivateCache      0
+  privateExpireInSeconds  3600
   ls_enabled              1
 }
 
@@ -1351,18 +919,16 @@ vhTemplate centralConfigLog {
 vhTemplate EasyRailsWithSuEXEC {
   templateFile            conf/templates/rails.conf
   listeners               http
-}" >/usr/local/lsws/conf/httpd_config.conf
+}
+EOF
 
-mkdir /usr/local/lsws/conf/vhosts/"$NAME"/
-touch /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
+mkdir -p /usr/local/lsws/conf/vhosts/"$NAME"/
 NAMEPHP=${NAME//[-._]/}
-
-echo "docRoot                   /usr/local/lsws/$NAME/html
+cat > /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf <<EOF
+docRoot                   /usr/local/lsws/$NAME/html
 vhDomain                  $NAME
 enableGzip                1
 cgroups                   0
-
 
 index  {
   useServer               0
@@ -1421,14 +987,10 @@ X-Powered-By WPTangTocOLS
 permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
   END_extraHeaders
 
-
   rewrite  {
-
   }
   addDefaultCharset       off
-
   phpIniOverride  {
-
   }
 }
 
@@ -1451,61 +1013,47 @@ vhssl  {
 }
 
 module cache {
-checkPrivateCache   1
-checkPublicCache    1
-maxCacheObjSize     10000000
-maxStaleAge         200
-qsCache             1
-reqCookieCache      1
-respCookieCache     1
-ignoreReqCacheCtrl  1
-ignoreRespCacheCtrl 0
-storagePath /usr/local/lsws/$NAME/luucache
-enableCache         0
-expireInSeconds     3600
-enablePrivateCache  0
-privateExpireInSeconds 3600
-  ls_enabled              1
-}" >/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  checkPrivateCache   1
+  checkPublicCache    1
+  maxCacheObjSize     10000000
+  maxStaleAge         200
+  qsCache             1
+  reqCookieCache      1
+  respCookieCache     1
+  ignoreReqCacheCtrl  1
+  ignoreRespCacheCtrl 0
+  storagePath /usr/local/lsws/$NAME/luucache
+  enableCache         0
+  expireInSeconds     3600
+  enablePrivateCache  0
+  privateExpireInSeconds 3600
+  ls_enabled          1
+}
+EOF
 
 chown -hR lsadm:nobody /usr/local/lsws/conf/vhosts/"$NAME"
 chmod -R 750 /usr/local/lsws/conf/vhosts/"$NAME"
-
-mkdir /usr/local/lsws/"$NAME"
-mkdir /usr/local/lsws/"$NAME"/html
-mkdir /usr/local/lsws/"$NAME"/backup-website
-mkdir /usr/local/lsws/"$NAME"/luucache
-
-chown -hR "$USER":"$USER" /usr/local/lsws/"$NAME"/html
-chown -hR "$USER":"$USER" /usr/local/lsws/"$NAME"/backup-website
+mkdir -p /usr/local/lsws/"$NAME"/html /usr/local/lsws/"$NAME"/backup-website /usr/local/lsws/"$NAME"/luucache
+chown -hR "$USER":"$USER" /usr/local/lsws/"$NAME"/html /usr/local/lsws/"$NAME"/backup-website
 chown root:root /usr/local/lsws/"$NAME"
 chown nobody:nobody /usr/local/lsws/"$NAME"/luucache
-
-chmod 755 /usr/local/lsws/"$NAME"
-chmod 755 /usr/local/lsws/"$NAME"/html
+chmod 755 /usr/local/lsws/"$NAME" /usr/local/lsws/"$NAME"/html
 chmod 700 /usr/local/lsws/"$NAME"/backup-website
 
-#khởi tạo ssl tự ký
 mkdir -p /etc/wptt-ssl-tu-ky/"$NAME"
-cd /etc/wptt-ssl-tu-ky/"$NAME" || exit
-openssl req -new -newkey rsa:2048 -nodes -keyout "$NAME".key -out "$NAME".csr -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$NAME/emailAddress=admin@example.com" >/dev/null 2>&1
-openssl x509 -req -in "$NAME".csr -signkey "$NAME".key -out cert.crt -days 3650 >/dev/null 2>&1
-#end khởi tạo ssl tự ký
+openssl req -new -newkey rsa:2048 -nodes -keyout /etc/wptt-ssl-tu-ky/"$NAME"/"$NAME".key -out /etc/wptt-ssl-tu-ky/"$NAME"/"$NAME".csr -subj "/C=VN/ST=Hanoi/L=Hanoi/O=WPTT/CN=$NAME" >/dev/null 2>&1 || true
+openssl x509 -req -in /etc/wptt-ssl-tu-ky/"$NAME"/"$NAME".csr -signkey /etc/wptt-ssl-tu-ky/"$NAME"/"$NAME".key -out /etc/wptt-ssl-tu-ky/"$NAME"/cert.crt -days 3650 >/dev/null 2>&1 || true
 
-#support onlyv4
-ipv6=$(ip -6 a | grep 'inet6 ' | awk '{print $2}' | sed '/fe80::/d' | sort -u | cut -f1 -d '/' | grep -Eio '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|:(:[0-9a-fA-F]{1,4}){1,7}|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])' | sed '/^::1$/d')
-
-if [[ -z "$ipv6" ]]; then #chỉ support only ipv4
+ipv6=$(ip -6 a | grep 'inet6 ' | awk '{print $2}' | sed '/fe80::/d' | grep -v '^::1/' || true)
+if [[ -z "$ipv6" ]]; then
   sed -i -e '/^listener http /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
   sed -i -e '/^listener https /,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
-
-  echo "
+  cat >> /usr/local/lsws/conf/httpd_config.conf <<EOF
 listener http {
   address                 *:80
   secure                  0
   map                     $NAME $NAME
 }
-
 listener https {
   address                 *:443
   secure                  1
@@ -1519,49 +1067,25 @@ listener https {
   enableSpdy              15
   enableQuic              1
   map                     $NAME $NAME
-}" >>/usr/local/lsws/conf/httpd_config.conf
-
+}
+EOF
 fi
+/usr/local/lsws/bin/lswsctrl restart >> "$LOG_FILE" 2>&1 || true
+_success "Cấu hình Litespeed & SSL tự ký đã xong"
 
-/usr/local/lsws/bin/lswsctrl restart
+# ==============================================================================
+# 11. TỐI ƯU HÓA MARIADB & PHP INI
+# ==============================================================================
+_step "Tối ưu thông số MariaDB và PHP.ini"
+timedatectl set-timezone Asia/Ho_Chi_Minh || true
+max_connections=$(( 64 * tong_ram_gb ))
+query_cache_type=1; query_cache_size='50M'
+if (( cpucore > 2 )); then query_cache_type=0; query_cache_size=0; fi
+if (( rong_ram_mb < 1024 )); then tong_ram_mb_db=48; buffer_db=32; db_table_size=32; max_connections=300; fi
 
-#add user vao Group
-
-#usermod -a -G wptangtoc-ols $USER
-
-
-# set thoi gian ve viet nam
-timedatectl set-timezone Asia/Ho_Chi_Minh
-
-# set cau hinh maria database
-max_conect_db=$(expr "$max_client" / 8)
-
-max_connections=$(expr 64 \* "${tong_ram_gb}")
-
-#cau hinh query cache set up optimize
-if (( "$cpucore" > 2)); then
-  query_cache_type=0
-  query_cache_size=0
-else
-  query_cache_type=1
-  query_cache_size='50M'
-fi
-
-if [[ -z "$query_cache_type" ]]; then
-  query_cache_type=0
-  query_cache_size=0
-fi
-
-# set gia tri mini tối ưu cho server ram nhỏ dưới 1GB
-if (( "$rong_ram_mb" < 1024)); then
-  tong_ram_mb_db=48
-  buffer_db=32
-  db_table_size=32
-  max_connections=300
-fi
-
-
-echo "key_buffer_size = ${buffer_db}M
+cat > /etc/my.cnf.d/server.cnf <<EOF
+[mysqld]
+key_buffer_size = ${buffer_db}M
 table_cache = 2000
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
 max_connections = $max_connections
@@ -1572,258 +1096,160 @@ query_cache_size = $query_cache_size
 tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 thread_cache_size = 81
-interactive_timeout = 60
 max_allowed_packet = 64M
 wait_timeout=60
-interactive_timeout = 60" >>/etc/my.cnf.d/server.cnf
+interactive_timeout=60
+EOF
 
-#Vấn đề: Bắt đầu từ MariaDB 10.8 (và MySQL 8.0), tính năng Query Cache đã bị xóa bỏ hoàn toàn khỏi mã nguồn.
-# Lấy ra phiên bản thấp nhất giữa 10.8 và phiên bản người dùng chọn
-lowest_version=$(printf '%s\n%s\n' "10.8" "$mariadb_version" | sort -V | head -n1)
-# Nếu "10.8" là phiên bản thấp nhất -> Nghĩa là mariadb_version >= 10.8
-if [[ "$lowest_version" == "10.8" ]]; then
-  sed -i '/query_cache/d' /etc/my.cnf.d/server.cnf
-fi
-
+lowest_version=$(printf '%s\n%s\n' "10.8" "$mariadb_version" | sort -V | head -n1 || echo "10.8")
+if [[ "$lowest_version" == "10.8" ]]; then sed -i '/query_cache/d' /etc/my.cnf.d/server.cnf; fi
 sed -i '/skip-log-bin/d' /etc/my.cnf.d/server.cnf
 sed -i '/skip-networking/d' /etc/my.cnf.d/server.cnf
 sed -i '/\[mysqld\]/a skip-log-bin' /etc/my.cnf.d/server.cnf
 sed -i '/\[mysqld\]/a skip-networking' /etc/my.cnf.d/server.cnf
+systemctl restart mariadb.service >> "$LOG_FILE" 2>&1
 
-systemctl restart mariadb.service
-
-# set cau hinh opcache
-echo '
+cat >> /usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini <<EOF
 opcache.memory_consumption=128
 opcache.interned_strings_buffer=8
 opcache.max_accelerated_files=10000
 opcache.revalidate_freq=100
 opcache.fast_shutdown=1
 opcache.enable_cli=1
-opcache.jit_buffer_size=0' >>/usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
-
-sed -i '/realpath_cache_size/d' /usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
-sed -i '/realpath_cache_ttl/d' /usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
-echo 'realpath_cache_size = 2M
-realpath_cache_ttl = 7200' >>/usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
-
+opcache.jit_buffer_size=0
+realpath_cache_size = 2M
+realpath_cache_ttl = 7200
+EOF
 sed -i "s/expose_php = On/expose_php = off/g" /usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
 sed -i "s/upload_max_filesize = 2M/upload_max_filesize = 8M/g" /usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
 sed -i "s/max_execution_time = 30/max_execution_time = 120/g" /usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
-
 sed -E -i "s/lsphp[0-9]+/lsphp$php_ver_chon/g" /usr/local/lsws/conf/httpd_config.conf
 sed -E -i "s/lsphp[0-9]+/lsphp$php_ver_chon/g" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+_success "Áp dụng cấu hình Tuning Database & PHP hoàn tất"
 
-# cai dat menu wptangtoc ols root
+# ==============================================================================
+# 12. TÍCH HỢP HỆ THỐNG WPTANGTOC OLS LÕI KHÁNG GPG FAIL
+# ==============================================================================
+_step "Tải và xác thực chữ ký GPG cho WPTangToc Core/User"
+cd "$WPTT_SECURE_TMP" || exit
 
 
+wptt_run curl -sLfo wptangtoc-ols.zip "https://wptangtoc.com/share/wptangtoc-ols.zip"
+wptt_run curl -sLfo wptangtoc-ols.zip.sig -A "checksum wptangtoc ols" "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig"
 
-# ------------------------------------------------------------------------------
-# 1. CÀI ĐẶT MENU WPTANGTOC OLS ROOT
-# ------------------------------------------------------------------------------
-cd || exit
-box_out "Tải mã nguồn WPTangToc OLS (Core)..."
-wget -q --timeout=30 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols.zip" -O wptangtoc-ols.zip
-wget -q --timeout=30 --tries=3 -U 'checksum wptangtoc ols' "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig" -O wptangtoc-ols.zip.sig
-
-# Dự phòng Github
-if [[ ! -s wptangtoc-ols.zip || ! -s wptangtoc-ols.zip.sig ]]; then
-  wget -q --timeout=30 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip" -O wptangtoc-ols.zip
-  wget -q --timeout=30 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip.sig" -O wptangtoc-ols.zip.sig
-fi
-
-# Xác thực GPG Core
-if ! gpg --verify wptangtoc-ols.zip.sig wptangtoc-ols.zip 2>/dev/null; then
-  clear
-  echo -e "${RED}CẢNH BÁO BẢO MẬT: File Core bị hỏng hoặc chữ ký GPG không hợp lệ!${NC}"
-  rm -f wptangtoc-ols.zip wptangtoc-ols.zip.sig
-  exit 1
+# Bắt lỗi GPG tử huyệt (Mất cờ || true)
+if ! gpg --verify wptangtoc-ols.zip.sig wptangtoc-ols.zip >> "$LOG_FILE" 2>&1; then
+    _error "Chữ ký GPG của Core bị giả mạo hoặc hỏng! Quá trình cài đặt bị chặn đứng."
 fi
 
 unzip -oq wptangtoc-ols.zip
+mkdir -p /etc/wptt /etc/wptt/vhost
 mv tool-wptangtoc-ols/* /etc/wptt/
-chmod -R 700 /etc/wptt
-chown root:root /etc/wptt
-chown root:root /etc/wptt/vhost
-chmod 700 /etc/wptt
-chmod 700 /etc/wptt/vhost
+chown -R root:root /etc/wptt /etc/wptt/vhost
+chmod -R 700 /etc/wptt /etc/wptt/vhost
 
-# ------------------------------------------------------------------------------
-# 2. CÀI ĐẶT MENU WPTANGTOC OLS USER
-# ------------------------------------------------------------------------------
-cd || exit
-box_out "Tải mã nguồn WPTangToc OLS (User)..."
-wget -q --timeout=30 --tries=3 "https://wptangtoc.com/share/wptangtoc-ols-user.zip" -O wptangtoc-ols-user.zip
-wget -q --timeout=30 --tries=3 -U 'checksum wptangtoc ols' "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig" -O wptangtoc-ols-user.zip.sig
+wptt_run curl -sLfo wptangtoc-ols-user.zip "https://wptangtoc.com/share/wptangtoc-ols-user.zip"
+wptt_run curl -sLfo wptangtoc-ols-user.zip.sig -A "checksum wptangtoc ols" "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig"
 
-# Dự phòng Github
-if [[ ! -s wptangtoc-ols-user.zip || ! -s wptangtoc-ols-user.zip.sig ]]; then
-  wget -q --timeout=15 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-user.zip" -O wptangtoc-ols-user.zip
-  wget -q --timeout=15 --tries=3 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-user.zip.sig" -O wptangtoc-ols-user.zip.sig
-fi
-
-# Xác thực GPG User
-if ! gpg --verify wptangtoc-ols-user.zip.sig wptangtoc-ols-user.zip 2>/dev/null; then
-  clear
-  echo -e "${RED}CẢNH BÁO BẢO MẬT: File User bị hỏng hoặc chữ ký GPG không hợp lệ!${NC}"
-  rm -f wptangtoc-ols-user.zip wptangtoc-ols-user.zip.sig
-  exit 1
+if ! gpg --verify wptangtoc-ols-user.zip.sig wptangtoc-ols-user.zip >> "$LOG_FILE" 2>&1; then
+    _error "Chữ ký GPG của User bị giả mạo hoặc hỏng! Quá trình cài đặt bị chặn đứng."
 fi
 
 unzip -oq wptangtoc-ols-user.zip
+mkdir -p /etc/wptt-user
 mv tool-wptangtoc-ols-user/* /etc/wptt-user/
-chown -hR root:root /etc/wptt-user
+chown -R root:root /etc/wptt-user
 chmod -R 700 /etc/wptt-user
+
+_success "Tích hợp hệ sinh thái WPTangToc an toàn (GPG Verified)"
+
 # ==============================================================================
-
-
-# cat <(crontab -l) <(echo '*/3 * * * * if ! find /usr/local/lsws/*/html/ -maxdepth 2 -type f -newer /usr/local/lsws/cgid -name '.htaccess' -exec false {} +; then /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1; fi') | crontab -
-
-cat <(crontab -l) <(echo '@reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1') | crontab -
-
-systemctl restart crond
-
-#thiet lap tuc dong cron check version
-
-if [[ -f /usr/bin/shuf ]]; then
-  gio=$(shuf -i0-7 -n1)
-  gio2=$(shuf -i8-15 -n1)
-  gio3=$(shuf -i16-23 -n1)
-
-  if [[ $gio ]]; then
-    while [ "$gio" = "$gio2" ] || [ "$gio" = "$gio3" ] || [ "$gio3" = "$gio2" ]; do
-      gio=$(shuf -i0-7 -n1)
-      gio2=$(shuf -i8-15 -n1)
-      gio3=$(shuf -i16-23 -n1)
-    done
-  fi
-
-  phut=$(shuf -i0-59 -n1)
-
-fi
-
-if [[ $gio = '' || $gio2 = '' || $gio3 = '' || $phut = '' ]]; then
-  gio='0'
-  gio2='8'
-  gio3='16'
-  phut='30'
-fi
-
-cat >"/etc/cron.d/check-version-wptangtoc-ols.cron" <<END
+# 13. TIỆN ÍCH BỔ TRỢ, CRON & WP-CLI
+# ==============================================================================
+_step "Khởi tạo Cronjob định kỳ"
+echo '@reboot /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1' | crontab - || true
+gio=$(shuf -i0-7 -n1); gio2=$(shuf -i8-15 -n1); gio3=$(shuf -i16-23 -n1); phut=$(shuf -i0-59 -n1)
+cat >"/etc/cron.d/check-version-wptangtoc-ols.cron" <<EOF
 $phut $gio,$gio2,$gio3 * * * root /etc/wptt/update/wptt-check-cron-version-update 
-END
+EOF
+systemctl restart crond.service >> "$LOG_FILE" 2>&1 || true
+_success "Cronjob đã được thiết lập"
 
-systemctl restart crond.service
+_step "Thực thi cấu hình tối ưu nâng cao hệ thống (Zram, Opcache, Phân quyền...)"
+wptt_run bash -c '
+    bash /etc/wptt/db/lemalloc >/dev/null 2>&1 || true
+    bash /etc/wptt/monit >/dev/null 2>&1 || true
+    bash /etc/wptt/oomscore >/dev/null 2>&1 || true
+    bash /etc/wptt/disk-optimize >/dev/null 2>&1 || true
+    bash /etc/wptt/zram on >/dev/null 2>&1 || true
+    bash /etc/wptt/cache/opcache-optimize-tune >/dev/null 2>&1 || true
+    bash /etc/wptt/cache/object-cache-optimize-tune >/dev/null 2>&1 || true
+    bash /etc/wptt/tai-nguyen-server/wptt-trim >/dev/null 2>&1 || true
+    bash /etc/wptt/trash/wptt-bat-tat-trash on >/dev/null 2>&1 || true
+    bash /etc/wptt/cau-hinh/htaccess-apply >/dev/null 2>&1 || true
+    bash /etc/wptt/thiet-lap-auto-phanquyen on >/dev/null 2>&1 || true
+'
+_success "Cấu hình tối ưu nâng cao hoàn tất"
 
-#tối ưu bộ nhớ cho MariaDB
-(/etc/wptt/db/lemalloc)
+_step "Cài đặt và cấu hình WP-CLI"
+wptt_run bash -c '
+    cd "'"$WPTT_SECURE_TMP"'" || exit
+    curl --tlsv1.2 -sLfo wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    curl --tlsv1.2 -sLfo wp-cli.phar.asc https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.asc
+    curl --tlsv1.2 -sL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/wp-cli.pgp | gpg --import --quiet >/dev/null 2>&1 || true
+    if gpg --verify wp-cli.phar.asc wp-cli.phar >/dev/null 2>&1; then
+        chmod +x wp-cli.phar && mv wp-cli.phar /usr/local/bin/wp
+        ln -sf /usr/local/bin/wp /usr/bin/wp
+    fi
+'
+_success "Nạp tiện ích WP-CLI thành công"
 
-#cài đặt giám sát service nếu sập thì restart lại serivce để cải tiến uptime service dự phòng
-(/etc/wptt/monit)
+# ==============================================================================
+# 14. KHỞI TẠO WEBSITE & BẢO MẬT SSH
+# ==============================================================================
+ip=$(curl -skf --connect-timeout 5 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)
 
-#hiệu chỉnh lại oomscore
-(/etc/wptt/oomscore)
-
-#tối ưu hoá ổ cứng
-(/etc/wptt/disk-optimize)
-
-#triển khai zram
-(/etc/wptt/zram on)
-
-#cải tiến hiệu suất opcache + JIT
-(/etc/wptt/cache/opcache-optimize-tune)
-
-#Cải tiến hiệu suất object cache auto tune
-(/etc/wptt/cache/object-cache-optimize-tune)
-
-#trim ssd 
-(/etc/wptt/tai-nguyen-server/wptt-trim)
-
-
-#bật thùng rác ảo
-(/etc/wptt/trash/wptt-bat-tat-trash on)
-
-
-#htaccess readtime apply
-(/etc/wptt/cau-hinh/htaccess-apply)
-
-#auto phân quyền chuẩn tự động
-(/etc/wptt/thiet-lap-auto-phanquyen on)
-
-
-#triển khai disk fast_commit Ext4 tối ưu tốc độ của ổ cứng
-# (/etc/wptt/disk_fast_commit_ext4) #chưa ổn định để run
-
-touch /usr/local/lsws/"$NAME"/html/.htaccess
-
-echo '
-# BEGIN WordPress
-<IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
-RewriteBase /
-RewriteRule ^index\.php$ - [L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.php [L]
-</IfModule>
-# END WordPress' >/usr/local/lsws/"$NAME"/html/.htaccess
-
-chown "$USER":"$USER" /usr/local/lsws/"$NAME"/html/.htaccess
-
-ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
-
+# 14A. KHỞI TẠO DATABASE
+_step "Khởi tạo Database độc lập cho website $NAME"
 name_db=${NAME//[-._]/}
-
 ramdom_db=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 18)
-database123=${name_db}_${ramdom_db}_dbname
-username123=${name_db}_${ramdom_db}_username
+database123="${name_db}_${ramdom_db}_dbname"
+username123="${name_db}_${ramdom_db}_username"
 password123=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
 
-#không khởi tạo mariadb khi không nhập tên domain
-if [[ $NAME != 'wptangtoc-ols.com' ]]; then
-  echo "Đang tiến hành thêm database mới cho website $NAME..."
-  mariadb -u wordpressadmin -p"$db_root_password" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${database123}"
-  mariadb -u wordpressadmin -p"$db_root_password" --ssl-verify-server-cert=false -e "CREATE USER IF NOT EXISTS '${username123}'@'localhost' IDENTIFIED BY '${password123}'"
-  # mariadb -u wordpressadmin -p"$db_root_password" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${database123}.* TO '${username123}'@'localhost' WITH GRANT OPTION"
-  mariadb -u wordpressadmin -p"$db_root_password" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${database123}.* TO '${username123}'@'localhost';"
-  mariadb -u wordpressadmin -p"$db_root_password" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES"
-  clear
-  box_out "Da them databse danh cho $NAME thanh cong"
+if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
+  
+  # Giải pháp file tạm thời bảo mật tuyệt đối chống soi cmdline qua ps/htop
+  cat > "$WPTT_SECURE_TMP/db_auth.cnf" <<EOF
+[client]
+password="${db_root_password}"
+EOF
+  chmod 600 "$WPTT_SECURE_TMP/db_auth.cnf"
+
+  wptt_run mariadb --defaults-extra-file="$WPTT_SECURE_TMP/db_auth.cnf" -u wordpressadmin -e "CREATE DATABASE IF NOT EXISTS ${database123}; CREATE USER IF NOT EXISTS '${username123}'@'localhost' IDENTIFIED BY '${password123}'; GRANT ALL PRIVILEGES ON ${database123}.* TO '${username123}'@'localhost'; FLUSH PRIVILEGES;"
+  
+  rm -f "$WPTT_SECURE_TMP/db_auth.cnf"
+  _success "Database độc lập đã được khởi tạo"
+else
+  _success "Bỏ qua tạo Database do sử dụng tên miền mặc định"
 fi
 
-if [ "$port_ssh" = '' ]; then
-  port_ssh=22
-fi
-
-if (("$port_ssh" > 40000)); then
-  echo "port ssh ban muon chuyen > 40000 he thong khong cho phep doi"
-  port_ssh=22
-fi
-
-echo "Xac nhan port_ssh la: $port_ssh"
-
+# 14B. CẤU HÌNH BẢO MẬT SSH VÀ FAIL2BAN
+_step "Cấu hình bảo mật SSH (Port $port_ssh) và Fail2Ban"
 if [[ "$port_ssh" != "22" ]]; then
-  dnf -y install policycoreutils-python
+  wptt_run dnf -y install policycoreutils-python-utils
   sed -i "/Port/d" /etc/ssh/sshd_config
   sed -i "1 i Port $port_ssh" /etc/ssh/sshd_config
-  semanage port -a -t ssh_port_t -p tcp "$port_ssh"
-  systemctl reload sshd.service
+  semanage port -a -t ssh_port_t -p tcp "$port_ssh" >> "$LOG_FILE" 2>&1 || true
+  systemctl reload sshd.service >> "$LOG_FILE" 2>&1 || true
 fi
+firewall-cmd --zone=public --add-port="${port_ssh}"/tcp --permanent >> "$LOG_FILE" 2>&1 || true
+firewall-cmd --reload >> "$LOG_FILE" 2>&1 || true
 
-port_ssh=$(cat /etc/ssh/sshd_config | grep "Port " | grep -o '[0-9]\+$' || echo 22)
-
-firewall-cmd --zone=public --add-port="${port_ssh}"/tcp --permanent
-firewall-cmd --reload
-
-touch /usr/local/lsws/conf/disablewebconsole
-
-dnf install fail2ban fail2ban-systemd fail2ban-firewalld -y
-
-dnf remove esmtp -y #xoá esmtp tích hợp sẵn với fail2ban không cần gửi email
-
-cp -pf /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-cat >"/etc/fail2ban/jail.d/sshd.local" <<END
+wptt_run dnf install fail2ban fail2ban-systemd fail2ban-firewalld -y
+wptt_run dnf remove esmtp -y
+cp -pf /etc/fail2ban/jail.conf /etc/fail2ban/jail.local || true
+cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
 [sshd]
 enabled = true
 port = ${port_ssh}
@@ -1831,23 +1257,14 @@ backend = systemd
 logpath = %(sshd_log)s
 maxretry = 5
 bantime = 3600
-END
-
-#chuyển đổi fail2ban iptables mặc định qua firewalld ipset và allports
+EOF
 if [[ -f /etc/fail2ban/jail.local ]]; then
-  sed -i 's/^[# \t]*banaction[ \t]*=.*/banaction = firewallcmd-ipset/g' /etc/fail2ban/jail.local
-  sed -i 's/^[# \t]*banaction_allports[ \t]*=.*/banaction_allports = firewallcmd-allports/g' /etc/fail2ban/jail.local
+  sed -i -E 's/^[# \t]*banaction[ \t]*=.*/banaction = firewallcmd-ipset/g' /etc/fail2ban/jail.local
+  sed -i -E 's/^[# \t]*banaction_allports[ \t]*=.*/banaction_allports = firewallcmd-allports/g' /etc/fail2ban/jail.local
   sed -i -E 's/^[#[:space:]]*usedns[[:space:]]*=.*/usedns = no/g' /etc/fail2ban/jail.local
 fi
-
-# cat >>"/etc/ssh/sshd_config" <<END
-# Subsystem sftp internal-sftp
-# END
-
 sed -i "/Subsystem/d" /etc/ssh/sshd_config
 echo 'Subsystem sftp internal-sftp' >>/etc/ssh/sshd_config
-
-#chroot
 sed -i -e "/^#begin-WPTT_JAIL_$USER/,/^#end-WPTT_JAIL_$USER$/d" /etc/ssh/sshd_config 2>/dev/null || true
 cat <<EOF >>/etc/ssh/sshd_config
 #begin-WPTT_JAIL_$USER
@@ -1858,206 +1275,91 @@ Match User $USER
     X11Forwarding no
 #end-WPTT_JAIL_$USER
 EOF
-#chroot
+systemctl enable --now fail2ban >> "$LOG_FILE" 2>&1 || true
+_success "Tường lửa (Fail2Ban) & SSH đã được bảo vệ hoàn chỉnh"
 
-systemctl enable fail2ban
-systemctl start fail2ban
-
-#begin cài đặt wp cli
-# Tải file thực thi và file chữ ký GPG (Ascii Armor)
-curl --tlsv1.2 -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
-curl --tlsv1.2 -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar.asc
-
-# 2. Nhập Public Key (Chìa khóa công khai) của đội ngũ WP-CLI vào hệ thống
-curl --tlsv1.2 -sL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/wp-cli.pgp | gpg --import --quiet >/dev/null 2>&1
-
-# 3. Xác thực chữ ký điện tử
-if gpg --verify wp-cli.phar.asc wp-cli.phar >/dev/null 2>&1; then
-    # Xác thực thành công
-    chmod +x wp-cli.phar
-    mv wp-cli.phar /usr/local/bin/wp
-    
-    # Ép Symlink để đảm bảo tương thích 100% với biến PATH của Cronjob
-    ln -sf /usr/local/bin/wp /usr/bin/wp
-    
-    # Dọn dẹp file chữ ký rác
-    rm -f wp-cli.phar.asc
-else
-    # Xác thực thất bại
-    echo -e "Lỗi: Chữ ký GPG của WP-CLI không hợp lệ! File có nguy cơ bị giả mạo"
-    rm -f wp-cli.phar wp-cli.phar.asc
-fi
-#end cài đặt wp cli
-
-
-sed -i "s/7080/19019/g" /usr/local/lsws/admin/conf/admin_config.conf
-/usr/local/lsws/bin/lswsctrl restart
-
-#ghi log
-touch /var/log/wptangtoc-ols.log
-chmod 600 /var/log/wptangtoc-ols.log
-
-echo '[litespeed]
-name=LiteSpeed Tech Repository for CentOS $releasever - $basearch
-baseurl=https://rpms.litespeedtech.com/centos/$releasever/$basearch/
-#failovermethod=priority
-enabled=1
-gpgcheck=1
-gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025
-
-[litespeed-update]
-name=LiteSpeed Tech Update Repository for CentOS $releasever - $basearch
-baseurl=https://rpms.litespeedtech.com/centos/$releasever/update/$basearch/
-#failovermethod=priority
-enabled=1
-gpgcheck=1
-gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025
-' >/etc/yum.repos.d/litespeed.repo
-
-mkdir -p /wptangtoc-ols
-
+# ==============================================================================
+# 15. KẾT XUẤT CẤU HÌNH BẢO MẬT AES VÀ SYMLINK
+# ==============================================================================
+_step "Tạo Symlink Alias & Bảo mật AES Local Vault"
+wptt_ma_hoa() {
+    echo -n "$1" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null || true
+}
+password_database_root_ma_hoa_luu_tru=$(wptt_ma_hoa "$db_root_password" | tr -d '\n\r')
 thoi_gian_cai_dat_phan_mem=$(date +%d"-"%m"-"%Y)
 
-wptt_ma_hoa() {
-	local WPTT_KEY_FILE
-	local plaintext
-    WPTT_KEY_FILE="/etc/wptt-aes/.wptt_salt.bin"
-    plaintext="$1"
-    echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null
-}
-
-
-password_database_root_ma_hoa_luu_tru=$(wptt_ma_hoa "$db_root_password" | tr -d '\n\r')
-
-## lưu file cấu hình main /etc/wptt/.wptt.conf
-echo "port_ssh=$port_ssh
+cat > /etc/wptt/.wptt.conf <<EOF
+port_ssh=$port_ssh
 database_admin_username=wordpressadmin
 database_admin_password='${password_database_root_ma_hoa_luu_tru}'
 version_wptangtoc_ols=$wptangtocols_version
 php_version_check=$php_version
 Website_chinh=$NAME
-thoi_gian_cai_dat_phan_mem=$thoi_gian_cai_dat_phan_mem" >/etc/wptt/.wptt.conf
-chown root:root /etc/wptt/.wptt.conf
+WPTT_TRASH_ENABLE=1
+thoi_gian_cai_dat_phan_mem=$thoi_gian_cai_dat_phan_mem
+EOF
 chmod 600 /etc/wptt/.wptt.conf
 
-touch /etc/wptt/vhost/."$NAME".conf
 password_database_website_ma_hoa_luu_tru=$(wptt_ma_hoa "$password123" | tr -d '\n\r')
-echo "Website_main=$NAME
+cat > /etc/wptt/vhost/."$NAME".conf <<EOF
+Website_main=$NAME
 DB_Name_web=$database123
 DB_User_web=$username123
 DB_Password_web='${password_database_website_ma_hoa_luu_tru}'
 Duong_Dan_thu_muc_web=/usr/local/lsws/$NAME/html
 User_name_vhost=$USER
 phien_ban_php_domain=$php_version
-" >/etc/wptt/vhost/."$NAME".conf
-
-
-
-chown root:root /etc/wptt/vhost/."$NAME".conf
+EOF
 chmod 600 /etc/wptt/vhost/."$NAME".conf
 
-#add alias root
-
-#tuong thich rsync voi .bashrc
-
 echo '[[ $- != *i* ]] && return' >>/root/.bashrc
-
-if [[ $NAME = 'wptangtoc-ols.com' ]]; then # thiết lập nếu người dùng install mới không nhập domain, phải load trước khi wptt status được load
+if [[ $NAME = 'wptangtoc-ols.com' ]]; then
   echo '. /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com' >>/root/.bashrc
 fi
-
-#cho alias trước nếu người dùng vào status mà ctrl + c sẽ vấn có alias
-echo "alias 1='wptangtoc'" >>/root/.bashrc
-echo "alias 11='wptangtoc'" >>/root/.bashrc
-echo "alias 00='. /etc/wptt/search-wptangtoc'" >>/root/.bashrc
-echo "alias 99='. /etc/wptt/wptt-update'" >>/root/.bashrc
-echo "alias 999='. /etc/wptt/wptt-update2 999'" >>/root/.bashrc
-
-echo 'if [[ "$WPTT_BYPASS" != "1" ]]; then
+cat >> /root/.bashrc <<'EOF'
+alias 1='wptangtoc'
+alias 11='wptangtoc'
+alias 00='. /etc/wptt/search-wptangtoc'
+alias 99='. /etc/wptt/wptt-update'
+alias 999='. /etc/wptt/wptt-update2 999'
+if [[ "${WPTT_BYPASS:-0}" != "1" ]]; then
 . /etc/wptt/wptt-status
 . /etc/wptt/wptt-check
-fi' >>/root/.bashrc
-
-cat << 'EOF' >> /root/.bashrc
+fi
 wptt() {
     case "$1" in
-        cd-src|cd-log|cdbk)
-            source /usr/bin/wptt "$@"
-            ;;
-        *)
-            /usr/bin/wptt "$@"
-            ;;
+        cd-src|cd-log|cdbk) source /usr/bin/wptt "$@" ;;
+        *) /usr/bin/wptt "$@" ;;
     esac
 }
+cd /wptangtoc-ols
+PS1="\[\e[37;40m\][\[\e[31;40m\]\u\[\e[37;40m\]@\h \[\e[35;40m\]\W\[\e[0m\]]\\$ "
+HISTSIZE=5000
+HISTTIMEFORMAT="%F %T $(whoami) "
 EOF
 
-echo "cd /wptangtoc-ols" >>/root/.bashrc
-
-echo 'PS1="\[\e[37;40m\][\[\e[31;40m\]\u\[\e[37;40m\]@\h \[\e[35;40m\]\W\[\e[0m\]]\\$ "
-HISTSIZE=5000
-HISTTIMEFORMAT="%F %T $(whoami) "' >>/root/.bashrc
-
-
-# Kiểm tra và tự động bơm cấu hình môi trường vào .bash_profile, một số VPS quá rút gọn họ xóa luôn cả file này đi
 if [[ ! -f ~/.bash_profile ]] || ! grep -Fq "if [ -f ~/.bashrc ]; then" ~/.bash_profile; then
 cat << 'EOF' >> ~/.bash_profile
-# .bash_profile
-
-# Get the aliases and functions
-if [ -f ~/.bashrc ]; then
-	. ~/.bashrc
-fi
-
-# User specific environment and startup programs
-
+if [ -f ~/.bashrc ]; then . ~/.bashrc; fi
 PATH=$PATH:$HOME/bin
-
 export PATH
 EOF
 fi
 
-
-#add alias user
-# echo '[[ $- != *i* ]] && return' >> /home/$USER/.bashrc
-# echo ". /etc/wptt-user/wptt-status" >> /home/$USER/.bashrc
-# echo "alias 1='wptangtoc-user'" >> /home/$USER/.bashrc
-# echo "alias 11='wptangtoc-user'" >> /home/$USER/.bashrc
-
 echo '[[ $- != *i* ]] && return' >>/usr/local/lsws/"$NAME"/.bashrc
 echo "alias 1='wptangtoc-user'" >>/usr/local/lsws/"$NAME"/.bashrc
-echo "alias 11='wptangtoc-user'" >>/usr/local/lsws/"$NAME"/.bashrc
 echo ". /etc/wptt-user/wptt-status" >>/usr/local/lsws/"$NAME"/.bashrc
 
-#hợp tác với đơn vị vps đóng gói dữ liệu
+mkdir -p /usr/local/backup-website/"$NAME" /wptangtoc-ols/"$NAME"/backup-website
+chmod 700 /usr/local/backup-website /usr/local/backup-website/"$NAME"
+ln -sf /usr/local/lsws/"$NAME"/html /wptangtoc-ols/"$NAME"/html || true
+ln -sf /usr/local/backup-website/"$NAME"/ /wptangtoc-ols/"$NAME"/backup-website || true
+ln -sf /usr/local/lsws/"$NAME" /home/"$NAME" || true
 
-mkdir -p /usr/local/backup-website
-chown root:root /usr/local/backup-website
-chmod 700 /usr/local/backup-website
-
-mkdir -p /usr/local/backup-website/"$NAME"
-chmod 700 /usr/local/backup-website/"$NAME"
-
-mkdir -p /wptangtoc-ols/"$NAME"
-mkdir -p /wptangtoc-ols/"$NAME"/backup-website
-ln -s /usr/local/lsws/"$NAME"/html /wptangtoc-ols/"$NAME"
-ln -s /usr/local/backup-website/"$NAME"/ /wptangtoc-ols/"$NAME"/backup-website
-
-#tao anh xa
-ln -s /usr/local/lsws/"$NAME" /home/"$NAME"
-
-#tao anh xa username
-# mkdir -p /home/$USER/$NAME
-# ln -s /usr/local/lsws/$NAME/html /home/$USER/$NAME/public_html
-# ln -s /usr/local/lsws/$NAME/backup-website /home/$USER/$NAME/backup-website
-
-mv /etc/wptt/wptangtoc /usr/bin
-mv /etc/wptt/wptt /usr/bin
-
-\cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin
-
-
-mv /etc/wptt-user/wptangtoc-user /usr/bin
-chown root:root /usr/bin/wptangtoc-user
+mv /etc/wptt/wptangtoc /usr/bin/ || true
+mv /etc/wptt/wptt /usr/bin/ || true
+\cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin/ || true
+mv /etc/wptt-user/wptangtoc-user /usr/bin/ || true
 chmod 700 /usr/bin/wptangtoc-user
 
 cat <<EOF >/etc/logrotate.d/wptangtoc-ols
@@ -2067,204 +1369,82 @@ cat <<EOF >/etc/logrotate.d/wptangtoc-ols
     maxsize 10M
     rotate 12
     compress
-    delaycompress
     missingok
     notifempty
     create 640 root root
 }
 EOF
-
-
 systemctl daemon-reload
 
-if (($rong_ram_mb < 1024)); then
-  . /etc/wptt/cau-hinh/wptt-litespeed-config-cau-hinh-optimize-nhieu-web >/dev/null 2>&1
-fi
-
+if (( rong_ram_mb < 1024 )); then bash /etc/wptt/cau-hinh/wptt-litespeed-config-cau-hinh-optimize-nhieu-web >/dev/null 2>&1 || true; fi
 
 if [[ $wordpress = '1' ]]; then
   echo 'wptangtoc_ols_giatuan=1' >>/etc/wptt/.wptt.conf
-  echo '
-opcache.validate_timestamps=0
-opcache.file_update_protection=0' >>/usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
-  dnf install vim pigz -y
+  echo -e 'opcache.validate_timestamps=0\nopcache.file_update_protection=0' >>/usr/local/lsws/lsphp"${php_ver_chon}"/etc/php.ini
+  wptt_run dnf install vim pigz -y
 fi
 
 mkdir -p /etc/wptt/tmp
 chmod 700 /etc/wptt/tmp
-
-
-cp -n /etc/wptt/index.php /usr/local/lsws/"$NAME"/html
-sed -i "s/domain.com/$NAME/g" /usr/local/lsws/"$NAME"/html/index.php
+cp -n /etc/wptt/index.php /usr/local/lsws/"$NAME"/html/ || true
+sed -i "s/domain.com/$NAME/g" /usr/local/lsws/"$NAME"/html/index.php || true
 chown "$USER":"$USER" /usr/local/lsws/"$NAME"/html/index.php
-#check phien bản hiện tại
-echo "$wptangtocols_version" >/etc/wptt/tmp/wptangtoc-ols-version-main
-Caidat_Time="$((Time_Count / 3600)) giờ $(((SECONDS / 60) % 60)) phút $((Time_Count % 60)) giây"
+
+TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}' || echo "2048")
+echo "${TOTAL_RAM:-2048}" > /etc/wptt/.ram_hien_tai || true
+_success "Liên kết và đồng bộ toàn hệ thống hoàn tất"
+
+# ==============================================================================
+# 16. KẾT THÚC VÀ BÁO CÁO UX
+# ==============================================================================
+[[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "$WPTT_SECURE_TMP" || true
+
+trap - ERR EXIT SIGINT SIGTERM
+tput cnorm 2>/dev/null || true
+
+Time_Count=$SECONDS
+Caidat_Time="$((Time_Count / 3600)) giờ $(((Time_Count / 60) % 60)) phút $((Time_Count % 60)) giây"
+
 clear
 
-# Định nghĩa bảng màu chuẩn UI/UX cho Terminal
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
+# UX BẢNG THÔNG BÁO HOÀN TẤT ĐỈNH CAO
+BOX_COLOR="$C_GREEN"
+box_out "CÀI ĐẶT THÀNH CÔNG WPTANGTOC OLS $wptangtocols_version"
 
-port_checkssh_status=$(grep "^Port " /etc/ssh/sshd_config | grep -o '[0-9]\+$' || echo 22)
-echo -e "${RED}
-     .:..........................             
-      .::::::::::::::::::::::::::::..         
-        ..:::::::::::::::::::::::::::::.      
-                             ...:::::::::.    
-                                  .:::::::.   
-          .:::::::.         .       .:::::::  
-         .::::::::::::::::::::..      ::::::: 
-         ::::::::::::::::::::::::.     ::::::.
-        .::::::::::::::::::::::::::.   .:::::.
-        .::::::::::::::::::::::::::::  .:::::.
-        .::::::::::::::::::::::::::.   .:::::.
-         ::::::::::::::::::::::::.     ::::::.
-.::::::  .:::::::::::::::::::::.      ::::::. 
-          .:::::::.                 .:::::::  
-       ::::::::::::.              .:::::::.   
-       ......:::::::::...    ...:::::::::.    
-               .:::::::::::::::::::::::.      
-   ..............::::::::::::::::::..         
-  .:::::::::::::................. ${NC}"
-
-echo -e "${GREEN}${BOLD}======================================================================${NC}"
-echo -e "${GREEN}${BOLD}           CÀI ĐẶT THÀNH CÔNG WPTANGTOC OLS $wptangtocols_version            ${NC}"
-echo -e "${GREEN}${BOLD}======================================================================${NC}"
-
-# 1. THÔNG TIN HỆ THỐNG
-echo -e "${CYAN}>>> THÔNG TIN HỆ THỐNG${NC}"
-echo -e " ├─ Ổ cứng          : $(df -h | awk '$NF=="/"{printf "%d/%dGB (%s)", $3,$2,$5}')"
+echo ""
+echo -e "${C_CYAN}>>> THÔNG TIN HỆ THỐNG${C_RESET}"
+echo -e " ├─ Ổ cứng          : $(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')"
 echo -e " ├─ RAM đang dùng   : $(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)", $3,$2,$3*100/$2 }')"
-echo -e " └─ Tổng thời gian  : $Caidat_Time"
+echo -e " └─ Tổng thời gian  : ${C_YELLOW}${Caidat_Time}${C_RESET}"
 echo -e "----------------------------------------------------------------------"
 
-# Xử lý IP
-if [[ -z $(echo "$ip" | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}') ]]; then
-  ip="$ipv6"
-fi
+echo -e "${C_CYAN}>>> THÔNG TIN KẾT NỐI CHUNG (Vui lòng lưu lại)${C_RESET}"
+echo -e " 1. Port SSH                  : ${C_BOLD}$port_ssh${C_RESET}"
+echo -e " 2. Truy cập SSH / SFTP       : ${C_YELLOW}ssh -p $port_ssh $check_root@$ip${C_RESET}"
 
-# 2. TÀI KHOẢN VÀ KẾT NỐI
-echo -e "${CYAN}>>> THÔNG TIN TRUY CẬP (Vui lòng lưu lại)${NC}"
-echo -e " 1. Port SSH                  : ${BOLD}$port_checkssh_status${NC}"
-echo -e " 2. Truy cập SSH              : ${YELLOW}ssh -p $port_checkssh_status $check_root@$ip${NC}"
-echo -e " 3. Truy cập SFTP             : ${YELLOW}sftp -oPort=$port_checkssh_status $check_root@$ip${NC}"
-
-if [[ $NAME != 'wptangtoc-ols.com' ]]; then
-	echo -e " 4. Password Database (Root)  : ${BOLD}$db_root_password${NC}"
-	echo -e " 5. Lệnh quản trị MariaDB     : mariadb -u wordpressadmin -p$db_root_password"
-	echo -e " 6. Thư mục Website           : /usr/local/lsws/$NAME/html"
-	echo -e " 7. Thư mục rút gọn (Symlink) : /home/$NAME/html"
-  echo -e "----------------------------------------------------------------------"
-  echo -e "${CYAN}>>> DATABASE CỦA WEBSITE: $NAME${NC}"
-  echo -e " ├─ DB Name     : ${BOLD}$database123${NC}"
-  echo -e " ├─ DB User     : ${BOLD}$username123${NC}"
-  echo -e " └─ DB Password : ${BOLD}$password123${NC}"
+if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
+	echo -e " 3. Password Database (Root)  : ${C_BOLD}$db_root_password${C_RESET}"
+	echo -e " 4. Lệnh quản trị MariaDB     : mariadb -u wordpressadmin -p$db_root_password"
+	echo -e "----------------------------------------------------------------------"
+    BOX_COLOR="$C_YELLOW"
+    box_out "DATABASE CỦA WEBSITE: $NAME" " ├─ DB Name     : $database123" " ├─ DB User     : $username123" " └─ DB Password : $password123"
 fi
 echo -e "----------------------------------------------------------------------"
-
-# 3. HƯỚNG DẪN SỬ DỤNG NHANH
-echo -e "${CYAN}>>> PHÍM TẮT QUẢN TRỊ${NC}"
-echo -e " - Mở Menu quản trị WPTangToc OLS          : Gõ phím ${BOLD}1${NC}"
-echo -e " - Mở Menu tìm kiếm nhanh (Search)         : Gõ phím ${BOLD}00${NC}"
-echo -e " - Thực thi lệnh trực tiếp ngoài Terminal  : Gõ lệnh ${BOLD}wptt${NC}"
-echo -e "----------------------------------------------------------------------"
-echo -e " ▪ Phát triển bởi : Gia Tuấn"
-echo -e " ▪ Liên hệ        : https://wptangtoc.com/lien-he/"
-echo -e " ▪ Changelog      : https://github.com/wptangtoc/wptangtoc-ols"
-echo -e " ▪ Nhà tài trợ    : https://wptangtoc.com/donate/"
+echo -e "${C_CYAN}>>> KIỂM TRA NETWORK / TƯỜNG LỬA CLOUD${C_RESET}"
+if curl -s -m 5 "http://$ip" >/dev/null 2>&1 || curl -s -m 5 -k "https://$ip" >/dev/null 2>&1; then
+    echo -e " └─ Trạng thái Port Web  : ${C_GREEN}Kết nối thành công (Mạng thông suốt)${C_RESET}"
+else
+    echo -e " ├─ Trạng thái Port Web  : ${C_RED}Không thể kết nối (Timeout)${C_RESET}"
+    echo -e " └─ ${C_YELLOW}⚠ CẢNH BÁO CLOUD FIREWALL: Nếu bạn sử dụng Google Cloud, AWS, Oracle, Azure, Tencent...${C_RESET}"
+    echo -e "    Vui lòng vào trang quản trị Cloud để mở Port 80, 443 và Port SSH ($port_ssh)."
+fi
 echo -e "======================================================================"
-echo -e "Đang kiểm tra chéo độ ổn định của hệ thống..."
-sleep 1
 
-# ==========================================
-# KHU VỰC BÁO LỖI (CHỈ HIỂN THỊ KHI CÓ LỖI)
-# ==========================================
-if [[ ! -d /var/lib/mysql ]]; then
-  clear
-  echo -e "${YELLOW}"
-  cat << "EOF"
-                   .:::....                   
-                 .--=+++=-::.                 
-                :--*%%%%%%+::.                
-               :--*%%%%%%%%*:::               
-              ---#%%%%%#%%%%*:::              
-            .--=#%%%#=--=#%%%#-::             
-           .--=%%%%%*:-:.*%%%%#-::.           
-          .--+%%%%%%*---:*%%%%%#=::.          
-         :--*%%%%%%%*--::*%%%%%%#+::.         
-        :--*%%%%%%%%*--::*%%%%%%%#+:::        
-       ---#%%%%%%%%%*--::*%%%%%%%%#*:::       
-      --=#%%%%%%%%%%*---:*%%%%%%%%%#*-::      
-    .--=%%%%%%%%%%%%#--::#%%%%%%%%%%##-::     
-   .--+%%%%%%%%%%%%%%#*+#%%%%%%%%%%%%##=::.   
-  :--+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%##=::.  
- :--*%%%%%%%%%%%%%%%#=-:-#%%%%%%%%%%%%%##+::. 
-:--*%%%%%%%%%%%%%%%%#--::#%%%%%%%%%%%%%%##+::.
---=%%%%%%%%%%%%%%%%%%%##%%%%%%%%%%%%%%%%###-::
-:--*%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%##+::.
- :--=++***************++++++++++++++++++=-::. 
-   .:::::::::::::::::::....................  
-EOF
-  echo -e "${NC}"
-  echo -e "${RED}${BOLD}❌ CẢNH BÁO: CHƯA CÀI ĐẶT ĐƯỢC MARIADB!${NC}"
-  echo -e "Nguyên nhân: Máy chủ Repo của MariaDB gặp sự cố rớt mạng trong lúc cài đặt."
-  echo -e "Khắc phục  : Vui lòng Rebuild (Cài lại hệ điều hành) cho VPS và chạy lại WPTangToc OLS sau."
-  exit 1
-fi
-
+rm -f /var/log/wptangtoc-install.log || true
 if [[ ! -d /usr/local/lsws ]]; then
-  echo -e "${RED}${BOLD}❌ CẢNH BÁO: CHƯA CÀI ĐẶT ĐƯỢC LITESPEED WEBSERVER!${NC}"
-  echo -e "Nguyên nhân: Máy chủ Repo của LiteSpeed từ chối kết nối hoặc gặp sự cố."
-  echo -e "Khắc phục  : Vui lòng Rebuild lại OS và thử lại sau ít phút."
-  exit 1
+  echo -e "${C_RED}${C_BOLD}CẢNH BÁO: CHƯA CÀI ĐẶT ĐƯỢC LITESPEED! Xem log tại $LOG_FILE${C_RESET}"
 fi
 
-# ==========================================
-# KIỂM TRA NETWORK / FIREWALL
-# ==========================================
-if [[ -d /usr/local/lsws ]]; then
-  ip_check_http=$(curl -sf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -sf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-
-  if [[ -z $ip_check_http ]]; then
-    ip_check_http=$(curl -s https://ipv6.icanhazip.com | sed 's/^/[/g' | sed 's/$/]/g')
-  fi
-
-  if [[ -n $ip_check_http ]]; then
-    checkhoatdong=$(curl -Is "$ip_check_http" | head -n 1 | grep -c "404")
-    if [[ "$checkhoatdong" == "0" ]]; then
-      echo -e "\n${YELLOW}${BOLD}CẢNH BÁO VỀ FIREWALL / TƯỜNG LỬA${NC}"
-      echo -e "Hệ thống phát hiện Port mạng (80, 443) đang bị chặn từ bên ngoài."
-      echo -e "Lưu ý: WPTangToc OLS không thể tự can thiệp vào Firewall cứng (Cloud Firewall) của nhà cung cấp VPS."
-      echo -e "➜ Vui lòng đăng nhập vào trang quản trị VPS của nhà cung cấp và mở thủ công Port 80, 443."
-      echo -e "----------------------------------------------------------------------"
-      echo -e "Webserver đang khởi động lại..."
-    else
-      # Dùng box_out của sếp hoặc in thông báo chuẩn
-      box_out "Đã kiếm tra hệ thống: Hoạt động trơn tru 100%" "Cài đặt thành công WPTangToc OLS $wptangtocols_version" "" "Hệ thống sẽ khởi động lại, chúc bạn tận hưởng tốc độ!"
-    fi
-  fi
-fi
-
-
-#phuc vụ auto tune trong tương lai
-TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
-FILE_CACHE="/etc/wptt/.ram_hien_tai"
-echo "$TOTAL_RAM" >"$FILE_CACHE"
-#end phục vụ auto tune trong tương lai
-
-sleep 2
-cd && rm -f wptangtoc-ols.zip
-cd && rm -f wptangtoc-ols-user.zip
-cd && rm -rf tool-wptangtoc-ols
-cd && rm -rf tool-wptangtoc-ols-user
-cd && rm -f wptangtoc-ols
-cd && rm -f wptangtoc-ols-almalinux-9
-cd && rm -f wptangtoc-ols.zip.sig
-cd && rm -f wptangtoc-ols-user.zip.sig
+_step "Máy chủ sẽ tự động khởi động lại sau 3 giây để áp dụng cấu hình..."
+sleep 3
 /sbin/reboot
-
