@@ -2,10 +2,15 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
+# @description: Bootstrapper Cài đặt WPTangToc OLS
 # @since: 2026
-# Bộ cài đặt WPTangToc OLS
 
+# ==============================================================================
+# 1. BASH STRICT MODE & ERROR TRAP (CHUẨN ENTERPRISE)
+# ==============================================================================
 set -Eeuo pipefail
+
+WPTT_SECURE_TMP=$(mktemp -d)
 
 wptt_error_trap() {
     local exit_code=$?
@@ -15,9 +20,17 @@ wptt_error_trap() {
     echo -e "\n\e[31m✖ TIẾN TRÌNH KHỞI TẠO BỊ ĐỨT GÃY TẠI DÒNG: $line_no (Mã lỗi: $exit_code)\e[0m"
     echo -e "\e[33mLệnh gây lỗi: $err_cmd\e[0m"
     echo -e "Vui lòng kiểm tra lại môi trường hệ điều hành hoặc liên hệ: giatuan@wptangtoc.com"
+    [[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "$WPTT_SECURE_TMP" || true
 }
 trap 'wptt_error_trap ${LINENO} "$BASH_COMMAND"' ERR
 
+export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=en_US.UTF-8 2>/dev/null || true
+stty iutf8 2>/dev/null || true
+
+# ==============================================================================
+# 2. KIỂM TRA HỆ ĐIỀU HÀNH & KIẾN TRÚC
+# ==============================================================================
 OUTPUT=$(cat /etc/*release 2>/dev/null || true)
 if echo "$OUTPUT" | grep -q "AlmaLinux 8\|Rocky Linux 8\|Red Hat Enterprise Linux 8\|Oracle Linux Server 8"; then
   SERVER_OS='almalinux'
@@ -28,20 +41,41 @@ elif echo "$OUTPUT" | grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise 
 elif echo "$OUTPUT" | grep -q "Ubuntu 22.04\|Ubuntu 24.04"; then
   SERVER_OS='ubuntu'
 else
-  echo "Hiện tại WPTangToc OLS không hỗ trợ hệ điều hành $(hostnamectl 2>/dev/null | grep System | cut -f2 -d':' | sed 's/^ //g' || echo 'hiện tại') của bạn."
+  echo -e "\e[31mHiện tại WPTangToc OLS không hỗ trợ hệ điều hành $(hostnamectl 2>/dev/null | grep System | cut -f2 -d':' | sed 's/^ //g' || echo 'hiện tại') của bạn.\e[0m"
   echo "Hệ điều hành khuyên dùng: AlmaLinux 8, 9 | Rocky Linux 8, 9 | Ubuntu 22.04, 24.04."
   rm -f wptangtoc-ols || true
   exit 1
 fi
 
 if [[ "$SERVER_OS" == 'almalinux-10' ]]; then
-  echo "Hệ điều hành AlmaLinux 10 đang tạm ngừng do một số thư viện chưa tương thích hoàn toàn."
+  echo -e "\e[33mHệ điều hành AlmaLinux 10 đang tạm ngừng do một số thư viện chưa tương thích hoàn toàn.\e[0m"
   echo "Khuyến nghị từ Gia Tuấn: Vui lòng chuyển qua sử dụng AlmaLinux 9."
   rm -f wptangtoc-ols || true
   exit 1
 fi
 
-# HÀM THÔNG BÁO PANEL CŨ
+if uname -m | grep -q 'aarch64'; then
+  if [[ "$SERVER_OS" == 'almalinux' ]]; then # ARM không support AlmaLinux 8, chỉ từ bản 9 trở lên
+    clear
+    echo -e "\e[31mWPTangToc OLS không hỗ trợ CPU ARM trên phiên bản AlmaLinux 8.\e[0m"
+    echo "Để chạy trên kiến trúc ARM, vui lòng sử dụng AlmaLinux 9, Rocky Linux 9 hoặc Ubuntu."
+    rm -f wptangtoc-ols || true
+    exit 1
+  fi
+fi
+
+# YÊU CẦU QUYỀN ROOT
+check_root=$(whoami 2>/dev/null || who | awk '{print $1}' | head -n 1 || echo "root")
+if [[ "$check_root" != "root" ]]; then
+  echo -e "\e[31mLỗi: Vui lòng sử dụng tài khoản root để cài đặt WPTangToc OLS.\e[0m"
+  echo "Hướng dẫn login root: https://wptangtoc.com/wptangtoc-ols-cau-hoi-thuong-gap/#Yeu_cau_tai_khoan_root_moi_cai_duoc_wptangtoc_ols"
+  rm -f wptangtoc-ols || true
+  exit 1
+fi
+
+# ==============================================================================
+# 3. QUÉT MÔI TRƯỜNG & PANEL CŨ CẠNH TRANH
+# ==============================================================================
 function canh_bao_panel_cu() {
   local ten_panel="$1"
   clear
@@ -52,16 +86,14 @@ function canh_bao_panel_cu() {
   exit 1
 }
 
-# KIỂM TRA ĐÃ CÀI WPTANGTOC OLS
 if [[ -d /etc/wptt ]]; then
   clear
-  echo "Máy chủ của bạn đã được cài đặt WPTangToc OLS từ trước!"
+  echo -e "\e[32mMáy chủ của bạn đã được cài đặt WPTangToc OLS từ trước!\e[0m"
   echo "Yêu cầu hỗ trợ: Gia Tuấn - Email: giatuan@wptangtoc.com"
   rm -f wptangtoc-ols || true
   exit 0
 fi
 
-# MẢNG QUÉT CÁC PANEL / SCRIPT KHÁC
 declare -A cac_panel_khac=(
   ["/var/cpanel/cpanel.config"]="WHM/cPanel"
   ["/usr/local/lscp"]="CyberPanel"
@@ -89,35 +121,14 @@ declare -A cac_panel_khac=(
   ["/home/lsws"]="LiteSpeed Webserver"
 )
 
-# quét danh sách
 for path in "${!cac_panel_khac[@]}"; do
   if [[ -e "$path" ]]; then
     canh_bao_panel_cu "${cac_panel_khac[$path]}"
   fi
 done
 
-# KIỂM TRA KIẾN TRÚC CPU ARM
-if uname -m | grep -q 'aarch64'; then
-  if [[ "$SERVER_OS" == 'almalinux' ]]; then #arm không support almalinx 8, chỉ support từ bản 9 trở lên
-    clear
-    echo "WPTangToc OLS không hỗ trợ CPU ARM trên phiên bản AlmaLinux 8."
-    echo "Để chạy trên kiến trúc ARM, vui lòng sử dụng AlmaLinux 9, Rocky Linux 9 hoặc Ubuntu."
-    rm -f wptangtoc-ols || true
-    exit 1
-  fi
-fi
-
-# YÊU CẦU QUYỀN ROOT
-check_root=$(whoami 2>/dev/null || who | awk '{print $1}' | head -n 1 || echo "root")
-if [[ "$check_root" != "root" ]]; then
-  echo "Lỗi: Vui lòng sử dụng tài khoản root để cài đặt WPTangToc OLS."
-  echo "Hướng dẫn login root: https://wptangtoc.com/wptangtoc-ols-cau-hoi-thuong-gap/#Yeu_cau_tai_khoan_root_moi_cai_duoc_wptangtoc_ols"
-  rm -f wptangtoc-ols || true
-  exit 1
-fi
-
 # ==============================================================================
-# TỰ ĐỘNG XỬ LÝ LỖI PHÂN VÙNG /home DUNG LƯỢNG LỚN (LVM AUTO-MERGE AN TOÀN 100%)
+# 4. TỰ ĐỘNG XỬ LÝ LỖI PHÂN VÙNG /home DUNG LƯỢNG LỚN (LVM AUTO-MERGE)
 # ==============================================================================
 HOME_DEV=$(df -P /home 2>/dev/null | awk 'NR==2 {print $1}' || echo "")
 ROOT_DEV=$(df -P / 2>/dev/null | awk 'NR==2 {print $1}' || echo "")
@@ -234,7 +245,7 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
 fi
 
 # ==============================================================================
-# XÁC THỰC BẢO MẬT GPG & TÍNH TOÀN VẸN MÃ NGUỒN (GPG + SHA256)
+# 5. XÁC THỰC BẢO MẬT GPG & TÍNH TOÀN VẸN MÃ NGUỒN (GPG + SHA256)
 # ==============================================================================
 rm -f "wptangtoc-ols" "wptangtoc-ols-$SERVER_OS" || true
 
@@ -260,32 +271,32 @@ for tool in curl gpg sha256sum; do
   fi
 done
 
-# XÓA LINE "Đang chuẩn bị môi trường..."
 echo -en "\033[1A\033[2K\r"
 
-# 2. Nhập và kiểm định Fingerprint Public Key
+# 2. Nhập và kiểm định Fingerprint Public Key (Sử dụng WPTT_SECURE_TMP thay vì /tmp)
 EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
 KEY_EMAIL="giatuan@wptangtoc.com"
+PUB_KEY_TMP="$WPTT_SECURE_TMP/wptangtoc-gpg-pub.key"
 
 if ! gpg --list-keys "$KEY_EMAIL" >/dev/null 2>&1; then
   echo "Đang nạp và đối soát Khóa bảo mật GPG WPTangToc..."
   
-  # Kèm User-Agent vào CURL lấy Key
-  curl --tlsv1.3 -sfL -A "checksum wptangtoc ols" --connect-timeout 15 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" -o /tmp/wptangtoc-gpg-pub.key || \
-  curl --tlsv1.2 -sfL -A "checksum wptangtoc ols" --connect-timeout 15 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" -o /tmp/wptangtoc-gpg-pub.key
+  # Kèm User-Agent vào CURL lấy Key an toàn
+  curl --tlsv1.3 -sfL -A "checksum wptangtoc ols" --connect-timeout 15 "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" -o "$PUB_KEY_TMP" || \
+  curl --tlsv1.2 -sfL -A "checksum wptangtoc ols" --connect-timeout 15 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" -o "$PUB_KEY_TMP"
 
-  if [[ ! -s /tmp/wptangtoc-gpg-pub.key ]]; then
+  if [[ ! -s "$PUB_KEY_TMP" ]]; then
     echo -e "\e[31mLỖI: Không thể tải Khóa bảo mật GPG từ máy chủ chính và GitHub!\e[0m"
     exit 1
   fi
 
-  REAL_FP=$(gpg --show-keys --with-colons /tmp/wptangtoc-gpg-pub.key 2>/dev/null | awk -F: '$1 == "fpr" {print $10}' | head -n 1 || echo "")
+  REAL_FP=$(gpg --show-keys --with-colons "$PUB_KEY_TMP" 2>/dev/null | awk -F: '$1 == "fpr" {print $10}' | head -n 1 || echo "")
 
   if [[ -n "$REAL_FP" && "$REAL_FP" == "$EXPECTED_FP" ]]; then
-    gpg --import /tmp/wptangtoc-gpg-pub.key >/dev/null 2>&1 || true
-    rm -f /tmp/wptangtoc-gpg-pub.key || true
+    gpg --import "$PUB_KEY_TMP" >/dev/null 2>&1 || true
+    rm -f "$PUB_KEY_TMP" || true
   else
-    rm -f /tmp/wptangtoc-gpg-pub.key || true
+    rm -f "$PUB_KEY_TMP" || true
     clear
     echo -e "\n\e[31m╭──────────────────────────────────────────────────────────────────────────────╮\e[0m"
     echo -e "\e[31m│\e[0m \e[1;33mCẢNH BÁO BẢO MẬT: PHÁT HIỆN PUBLIC KEY BỊ GIẢ MẠO!\e[0m                           \e[31m│\e[0m"
@@ -296,7 +307,6 @@ if ! gpg --list-keys "$KEY_EMAIL" >/dev/null 2>&1; then
     echo -e "\e[31m╰──────────────────────────────────────────────────────────────────────────────╯\e[0m\n"
     exit 1
   fi
-  # XÓA LINE "Đang nạp..."
   echo -en "\033[1A\033[2K\r"
 fi
 
@@ -306,44 +316,34 @@ function download_and_verify() {
   local url_checksum="$2"
   local url_sig="$3"
 
-  local tmp_checksum
-  local tmp_sig
-  tmp_checksum=$(mktemp -p "/tmp" WPTT_SHA256SUMS_XXXXXX.txt)
-  tmp_sig=$(mktemp -p "/tmp" WPTT_SHA256SUMS_XXXXXX.sig)
+  local tmp_checksum="$WPTT_SECURE_TMP/SHA256SUMS.txt"
+  local tmp_sig="$WPTT_SECURE_TMP/SHA256SUMS.txt.sig"
 
   if ! curl -sfL -A "checksum wptangtoc ols" --connect-timeout 20 "$url_checksum" -o "$tmp_checksum"; then
-    rm -f "$tmp_checksum" "$tmp_sig" || true
     return 1
   fi
 
   if ! curl -sfL -A "checksum wptangtoc ols" --connect-timeout 20 "$url_sig" -o "$tmp_sig"; then
-    rm -f "$tmp_checksum" "$tmp_sig" || true
     return 1
   fi
 
-  # Bước A: Xác thực chữ ký số GPG của file Checksum
   local gpg_verify_output
   gpg_verify_output=$(gpg --batch --status-fd 1 --verify "$tmp_sig" "$tmp_checksum" 2>/dev/null || echo "")
   
   if ! echo "$gpg_verify_output" | grep -q '^\[GNUPG:\] GOODSIG ' || \
      ! echo "$gpg_verify_output" | grep -q "$EXPECTED_FP"; then
     echo -e "\e[31m[CẢNH BÁO] Chữ ký số GPG của file checksum không hợp lệ hoặc bị can thiệp!\e[0m"
-    rm -f "$tmp_checksum" "$tmp_sig" || true
     return 1
   fi
 
-  # Bước B: Tải script cài đặt cho OS tương ứng (Kèm User-Agent)
   if ! curl -sfLO -A "checksum wptangtoc ols" --connect-timeout 30 "$url_script"; then
-    rm -f "$tmp_checksum" "$tmp_sig" "wptangtoc-ols-$SERVER_OS" || true
+    rm -f "wptangtoc-ols-$SERVER_OS" || true
     return 1
   fi
 
-  # Bước C: Kiểm tra mã băm SHA256 từ file checksum
   local expected_hash actual_hash
   expected_hash=$(grep -E "[[:space:]]wptangtoc-ols-$SERVER_OS$" "$tmp_checksum" | tr -d '\r' | awk '{print $1}' || echo "")
   actual_hash=$(sha256sum "wptangtoc-ols-$SERVER_OS" 2>/dev/null | awk '{print $1}' || echo "")
-
-  rm -f "$tmp_checksum" "$tmp_sig" || true
 
   if [[ -n "$expected_hash" && "$expected_hash" == "$actual_hash" ]]; then
     return 0
@@ -376,7 +376,6 @@ else
   fi
 fi
 
-# CHỐT CHẶN BẢO MẬT CUỐI CÙNG
 if [[ $DOWNLOAD_SUCCESS -eq 0 ]]; then
   echo ""
   echo -e "\e[31m╭──────────────────────────────────────────────────────────────────────────────╮\e[0m"
@@ -393,5 +392,9 @@ echo -e "\e[32m✔ Xác minh Chữ ký số GPG & SHA256 hoàn tất: Bản cài
 sleep 1
 echo -en "\033[1A\033[2K\r"
 
-# THỰC THI GÓI CÀI ĐẶT
+# ==============================================================================
+# 6. THỰC THI GÓI CÀI ĐẶT CHÍNH THỨC & DỌN DẸP
+# ==============================================================================
+[[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "${WPTT_SECURE_TMP:?}" || true
+trap - ERR EXIT SIGINT SIGTERM
 bash "wptangtoc-ols-$SERVER_OS" "$@"
