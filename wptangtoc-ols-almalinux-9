@@ -148,6 +148,8 @@ if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then
   NAME='wptangtoc-ols.com'
 fi
 
+echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 2606:4700:4700::1111\nnameserver 2001:4860:4860::8888" | sudo tee /etc/resolv.conf >/dev/null 2>&1
+
 if ! grep -q "LANG=en_US.utf-8" /etc/environment 2>/dev/null; then
   cat >"/etc/environment" <<END
 LANG=en_US.utf-8
@@ -368,7 +370,7 @@ if [[ ! -f /proc/user_beancounters ]]; then
     if [ -d /etc/sysctl.d ]; then
         if ! grep -q 'wptangtoc-ols' /etc/sysctl.d/101-sysctl.conf 2>/dev/null; then
             touch /etc/sysctl.d/101-sysctl.conf
-            echo 131072 >/sys/module/nf_conntrack/parameters/hashsize 2>/dev/null || true
+            echo 131072 >/sys/module/nf_conntrack/parameters/hashsize >/dev/null 2>&1 || true
             echo 'options nf_conntrack hashsize=131072' >/etc/modprobe.d/nf_conntrack.conf
             if ! grep -q 'hashsize' /etc/rc.local 2>/dev/null; then
                 echo "echo 131072 > /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null" >>/etc/rc.local
@@ -1208,7 +1210,19 @@ _success "Nạp tiện ích WP-CLI thành công"
 # ==============================================================================
 # 14. KHỞI TẠO WEBSITE & BẢO MẬT SSH
 # ==============================================================================
+
+# CHUẨN HÓA IP: Ưu tiên IPv4, nếu IPv4 rỗng (IPv6-only VPS) thì tự động lấy IPv6
 ip=$(curl -skf --connect-timeout 5 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)
+
+if [[ -z "$ip" ]]; then
+    # Lấy Public IPv6, nếu lỗi mạng thì dự phòng bằng lệnh đọc IP nội bộ của OS
+    ip=$(curl -skf --connect-timeout 5 https://ipv6.icanhazip.com)
+fi
+
+
+#nếu ipv4 cũng không có, và ipv6 cũng chả có thì thôi stop cho lỗi
+
+# ip=$(curl -skf --connect-timeout 5 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 https://checkip.amazonaws.com | grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)
 
 # 14A. KHỞI TẠO DATABASE
 _step "Khởi tạo Database độc lập cho website $NAME"
@@ -1263,7 +1277,7 @@ if [[ -f /etc/fail2ban/jail.local ]]; then
   sed -i -E 's/^[# \t]*banaction_allports[ \t]*=.*/banaction_allports = firewallcmd-allports/g' /etc/fail2ban/jail.local
   sed -i -E 's/^[#[:space:]]*usedns[[:space:]]*=.*/usedns = no/g' /etc/fail2ban/jail.local
 fi
-sed -i "/Subsystem/d" /etc/ssh/sshd_config
+sed -i "/Subsystem/d" /etc/ssh/sshd_config || true
 echo 'Subsystem sftp internal-sftp' >>/etc/ssh/sshd_config
 sed -i -e "/^#begin-WPTT_JAIL_$USER/,/^#end-WPTT_JAIL_$USER$/d" /etc/ssh/sshd_config 2>/dev/null || true
 cat <<EOF >>/etc/ssh/sshd_config
@@ -1404,10 +1418,11 @@ tput cnorm 2>/dev/null || true
 
 Time_Count=$SECONDS
 Caidat_Time="$((Time_Count / 3600)) giờ $(((Time_Count / 60) % 60)) phút $((Time_Count % 60)) giây"
+Caidat_Time=${Caidat_Time:-}
 
 clear
 
-# UX BẢNG THÔNG BÁO HOÀN TẤT ĐỈNH CAO
+# UX BẢNG THÔNG BÁO HOÀN TẤT
 BOX_COLOR="$C_GREEN"
 box_out "CÀI ĐẶT THÀNH CÔNG WPTANGTOC OLS $wptangtocols_version"
 
@@ -1415,7 +1430,9 @@ echo ""
 echo -e "${C_CYAN}>>> THÔNG TIN HỆ THỐNG${C_RESET}"
 echo -e " ├─ Ổ cứng          : $(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')"
 echo -e " ├─ RAM đang dùng   : $(free -m | awk 'NR==2{printf "%s/%sMB (%.2f%%)", $3,$2,$3*100/$2 }')"
+if [[ -n "$Caidat_Time" ]];then
 echo -e " └─ Tổng thời gian  : ${C_YELLOW}${Caidat_Time}${C_RESET}"
+fi
 echo -e "----------------------------------------------------------------------"
 
 echo -e "${C_CYAN}>>> THÔNG TIN KẾT NỐI CHUNG (Vui lòng lưu lại)${C_RESET}"
@@ -1431,7 +1448,9 @@ if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
 fi
 echo -e "----------------------------------------------------------------------"
 echo -e "${C_CYAN}>>> KIỂM TRA NETWORK / TƯỜNG LỬA CLOUD${C_RESET}"
-if curl -s -m 5 "http://$ip" >/dev/null 2>&1 || curl -s -m 5 -k "https://$ip" >/dev/null 2>&1; then
+check_ip="$ip"
+if [[ "$ip" == *":"* ]]; then check_ip="[$ip]"; fi #tương thích với ipv6
+if curl -s -m 5 "http://$check_ip" >/dev/null 2>&1 || curl -s -m 5 -k "https://$check_ip" >/dev/null 2>&1; then
     echo -e " └─ Trạng thái Port Web  : ${C_GREEN}Kết nối thành công (Mạng thông suốt)${C_RESET}"
 else
     echo -e " ├─ Trạng thái Port Web  : ${C_RED}Không thể kết nối (Timeout)${C_RESET}"
@@ -1440,9 +1459,10 @@ else
 fi
 echo -e "======================================================================"
 
-rm -f /var/log/wptangtoc-install.log || true
 if [[ ! -d /usr/local/lsws ]]; then
-  echo -e "${C_RED}${C_BOLD}CẢNH BÁO: CHƯA CÀI ĐẶT ĐƯỢC LITESPEED! Xem log tại $LOG_FILE${C_RESET}"
+	echo -e "${C_RED}${C_BOLD}CẢNH BÁO: CHƯA CÀI ĐẶT ĐƯỢC LITESPEED! Xem log tại $LOG_FILE${C_RESET}"
+else
+	rm -f /var/log/wptangtoc-install.log || true
 fi
 
 _step "Máy chủ sẽ tự động khởi động lại sau 3 giây để áp dụng cấu hình..."
