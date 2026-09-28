@@ -376,52 +376,73 @@ cd "$TMP_DIR" || exit
 echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
 
 # Hàm tải file tích hợp giao diện PV UX Tàng Hình
-function wptt_download_wp_ux() {
-  local url="$1"
-  # Lấy kích thước file từ Header để mớm cho PV tính %
-  local fsize
-  fsize=$(curl -sI --max-time 5 "$url" | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+wptt_download_wp_ux() {
+    local url="$1"
+    local fsize
+    fsize=$(curl -sI --connect-timeout 5 --max-time 10 "$url" | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
 
-  if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
-    # Dùng wget lấy luồng đổ vào pv vẽ biểu đồ, rồi xuất ra file
-    wget -qO- --timeout=15 --tries=3 "$url" | pv -s "$fsize" -N "Tải WordPress" -p -t -e -r -b -w 90 >latest.tar.gz
+    if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+        wget -qO- --timeout=15 --tries=3 "$url" | pv -s "$fsize" -N "Tải WordPress" -p -t -e -r -b -w 90 >latest.tar.gz
+    else
+        wget -q --show-progress --timeout=15 --tries=3 "$url"
+    fi
     # Tàng hình: lùi lên 1 dòng, xóa sạch tiến trình
     echo -en "\033[1A\033[2K\r"
-  else
-    # Phương án dự phòng nếu máy chủ khách thiếu lệnh pv
-    wget -q --show-progress --timeout=15 --tries=3 "$url"
     echo -en "\033[1A\033[2K\r"
-  fi
 }
 
-# Tiến hành tải bản chuẩn HTTPS
+# Hàm xác thực toàn vẹn dữ liệu (Chống treo & Chữa cháy)
+wptt_verify_wp_download() {
+    [[ ! -f latest.tar.gz ]] && return 1
+
+    local remote_sha1 local_sha1
+    # Thêm timeout bảo vệ curl khỏi việc chờ đợi vô tận khi rớt mạng
+    remote_sha1=$(curl -sLf --connect-timeout 5 --max-time 10 "https://wordpress.org/latest.tar.gz.sha1" | head -n 1 || true)
+    
+    # KỊCH BẢN 1: Lỗi mạng không lấy được mã SHA1 từ WordPress
+    if [[ -z "$remote_sha1" ]]; then
+        # Fallback: Thay vì crash, kiểm tra thử cấu trúc file nén
+        if gzip -t latest.tar.gz 2>/dev/null; then
+            return 0 # File nguyên vẹn, cho phép đi tiếp
+        else
+            rm -f latest.tar.gz
+            return 1 # File hỏng, yêu cầu tải lại
+        fi
+    fi
+
+    # KỊCH BẢN 2: Có SHA1, so sánh bảo mật khắt khe
+    local_sha1=$(sha1sum latest.tar.gz 2>/dev/null | awk '{print $1}')
+    if [[ "$remote_sha1" == "$local_sha1" ]]; then
+        return 0
+    else
+        rm -f latest.tar.gz
+        return 1
+    fi
+}
+
+# ================= ÁP DỤNG VÀO LUỒNG CHÍNH =================
+
+# Lần tải 1
 wptt_download_wp_ux "https://wordpress.org/latest.tar.gz"
 
-# DÙNG SHA1 THAY VÌ MD5 ĐỂ NÂNG CAO BẢO MẬT
-id_checksum_wordpress=$(curl -s https://wordpress.org/latest.tar.gz.sha1 | head -1)
-[[ "${id_checksum_wordpress:?}" != $(sha1sum latest.tar.gz 2>/dev/null | awk '{print $1}') ]] && rm -f latest.tar.gz
-
-# # Dự phòng tải lại
-if [[ ! -f latest.tar.gz ]]; then
-	#chờ đợi 5 giây sau tải lại nếu ở lần đầu bị thất bại
-	sleep 5
-	wptt_download_wp_ux "https://wordpress.org/latest.tar.gz"
-	id_checksum_wordpress=$(curl -s https://wordpress.org/latest.tar.gz.sha1 | head -1)
-	[[ "${id_checksum_wordpress:?}" != $(sha1sum latest.tar.gz 2>/dev/null | awk '{print $1}') ]] && rm -f latest.tar.gz
+# Kiểm tra & Tải dự phòng lần 2 nếu lỗi
+if ! wptt_verify_wp_download; then
+    sleep 5
+    wptt_download_wp_ux "https://wordpress.org/latest.tar.gz"
+    wptt_verify_wp_download || true
 fi
-echo -en "\033[1A\033[2K\r"
 
+# Chốt chặn cuối cùng
 if [[ ! -f latest.tar.gz ]]; then
-  _runloi "$tai $ma_nguon WordPress"
-  echo -e "${C_RED}Lỗi: Chưa thể download mã nguồn WordPress, vui lòng thử lại sau!${C_RESET}"
-  cd "$OLD_PWD" || cd /root || exit
-  rm -rf "${TMP_DIR:?}"
-  [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
-  return 2>/dev/null
-  exit
+    _runloi "$tai $ma_nguon WordPress"
+    echo -e "${C_RED}Lỗi: Mạng quá yếu, không thể tải hoặc xác thực mã nguồn WordPress!${C_RESET}"
+    cd "${OLD_PWD:-/root}" || cd /root || exit
+    rm -rf "${TMP_DIR:-/tmp/wptt_fallback}"
+    [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
+    return 1 2>/dev/null || exit 1
 fi
+
 _rundone "$tai $ma_nguon WordPress mới nhất"
-
 _runing "$giai_nen $ma_nguon WordPress"
 
 #kiểm tra xem đã có thư viện tar hay chưa nhiều hãng vps họ xóa luôn thư viện tar đi
