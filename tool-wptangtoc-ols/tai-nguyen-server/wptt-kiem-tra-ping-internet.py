@@ -159,4 +159,20 @@ def main():
                 print(f"Lỗi không xác định: {e}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n" + "─" * 78)
+        print("⚠ TIẾN TRÌNH ĐÃ BỊ HỦY BỞI NGƯỜI DÙNG (Ctrl+C)")
+        print("─" * 78)
+        
+        # Xử lý trả về menu WPTangToc nếu người dùng chạy từ menu (có đối số "98")
+        if len(sys.argv) > 1 and sys.argv[1] == "98":
+            try:
+                subprocess.run(["/etc/wptt/wptt-tai-nguyen-main", "1"], check=True)
+            except FileNotFoundError:
+                print("Lỗi: Không tìm thấy file /etc/wptt/wptt-tai-nguyen-main")
+            except Exception as e:
+                pass
+                
+        sys.exit(130) # 130 là mã thoát chuẩn của Linux cho SIGINT (Ctrl+C)
