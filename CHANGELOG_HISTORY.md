@@ -1,3 +1,14 @@
+## WPTangToc OLS 8.1.4.1
+
+### 🐛 Sửa lỗi
+- **Kiểm tra tính toàn vẹn mã nguồn WordPress:** Tăng cường cơ chế xác thực gói dữ liệu khi tải về, chủ động phát hiện và xử lý lỗi giải nén do đường truyền mạng chập chờn hoặc tải thiếu file.
+
+### 🛠️ Tối ưu hệ thống
+- **Tinh gọn lịch sử thay đổi (Changelog History):** Tối ưu hóa dung lượng lưu trữ bằng cách duy trì 10 phiên bản phát hành gần nhất, giúp việc tra cứu thông tin nhanh chóng và thuận tiện hơn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS v8.1.4.0
 
 ### 🚀 Tính năng mới
