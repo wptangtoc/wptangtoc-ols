@@ -26,17 +26,22 @@ if [[ -f "/usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadA
   
   # Bọc ngoặc kép an toàn cho đường dẫn include
   . "/etc/wptt/vhost/.${NAME}.conf" 2>/dev/null
-  . "/etc/wptt/php/php-cli-domain-config" "$NAME" 2>/dev/null
-  
-  wptt_logs "INFO" "Preload Cache PHP html cache website $NAME"
+
+	if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
+		wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
+		_runloi "Không xác định được phiên bản PHP"
+		return 1 2>/dev/null || exit 1
+	fi
 
   # Bọc ngoặc kép chuẩn chỉ cho các biến của Runuser và WP-CLI
-  /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'WPTangToc\PreloadAllPHP::preload_cache();' --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1
-
-  random=$(tr -dc '0-9' </dev/urandom | head -c 10)
-  
-  # Bọc toàn bộ URL vào một cặp ngoặc kép duy nhất
-  curl -s "https://${NAME}/?wptangtoc_cache=${random}" -A "WPTangToc OLS preload cache" >/dev/null 2>&1
+	if /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'WPTangToc\PreloadAllPHP::preload_cache();' --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1;then
+		wptt_logs "INFO" "Preload Cache PHP html cache website $NAME"
+		random=$(tr -dc '0-9' </dev/urandom | head -c 10)
+		# Bọc toàn bộ URL vào một cặp ngoặc kép duy nhất
+		curl -s "https://${NAME}/?wptangtoc_cache=${random}" -A "WPTangToc OLS preload cache" >/dev/null 2>&1
+	else
+		wptt_logs "ERROR" "Preload Cache PHP html cache website $NAME"
+	fi
   
   echo "Triển khai Preload Cache PHP"
 fi
