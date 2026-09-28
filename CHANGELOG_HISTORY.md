@@ -1,3 +1,17 @@
+# WPTangToc OLS v8.1.4.0
+
+### 🚀 Tính năng mới
+- **Hỗ trợ trở lại AlmaLinux 10:** Khôi phục khả năng tương thích toàn diện với nền tảng AlmaLinux 10, giúp quản trị viên tự tin triển khai hệ thống trên phiên bản hệ điều hành thế hệ mới.
+
+### 🐛 Sửa lỗi
+- **Khắc phục lỗi thư viện Certbot:** Xử lý triệt để sự cố phụ thuộc gói của Certbot trên môi trường mới, đảm bảo tính năng cấp phát và tự động gia hạn chứng chỉ bảo mật SSL/TLS hoạt động hoàn toàn ổn định.
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp bộ cài đặt:** Tinh chỉnh và tối ưu hóa luồng kịch bản cài đặt tự động, giúp rút ngắn thời gian khởi tạo và hạn chế tối đa nguy cơ xung đột gói phần mềm.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS v8.1.4
 
 ### 🛠️ Tối ưu hệ thống
