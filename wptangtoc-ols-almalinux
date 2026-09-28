@@ -1,318 +1,7 @@
-#!/bin/bash
-# @author: Gia Tuấn
-# @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
-# @description: Bộ cài đặt (AlmaLinux 8)
-# @since: 2026
-
-set -Eeuo pipefail
-
-LOG_FILE="/var/log/wptangtoc-install.log"
-touch "$LOG_FILE" && chmod 600 "$LOG_FILE"
-echo "=== BẮT ĐẦU CÀI ĐẶT WPTANGTOC OLS: $(date) ===" > "$LOG_FILE"
-
-C_RED='\033[1;31m'
-C_GREEN='\033[1;32m'
-C_CYAN='\033[1;36m'
-C_YELLOW='\033[1;33m'
-C_BOLD_WHITE='\033[1;37m'
-C_BOLD='\033[1m'
-C_RESET='\033[0m'
-
-CURRENT_STEP=""
-WPTT_SECURE_TMP=$(mktemp -d)
-
-port_ssh="22"
-su_dung_repo_du_phong="0"
-query_cache_type=""
-query_cache_size=""
-gio=""; gio2=""; gio3=""; phut=""
-
-_step() { 
-    CURRENT_STEP="$1"
-    echo -e "${C_CYAN} ➜ $1...${C_RESET}" 
-}
-_success() { echo -e "${C_GREEN}   ✔ $1${C_RESET}"; }
-_warn() { echo -e "${C_YELLOW}   ⚠ $1${C_RESET}" | tee -a "$LOG_FILE"; }
-_error() { 
-    echo -e "\n${C_RED}✖ LỖI NGHIÊM TRỌNG: $1${C_RESET}"
-    echo -e "${C_YELLOW}Chi tiết log: $LOG_FILE${C_RESET}"
-    tput cnorm 2>/dev/null || true
-    [[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "$WPTT_SECURE_TMP" || true
-    exit 1
-}
-
-BOX_COLOR="$C_CYAN"
-box_out() {
-  local s=("$@") b w=0 l
-  for l in "${s[@]}"; do
-    ((w < ${#l})) && w="${#l}"
-  done
-  local pad=$((w + 2))
-  local border=$(printf '─%.0s' $(seq 1 $pad))
-  echo -e "${BOX_COLOR}╭${border}╮${C_RESET}"
-  for l in "${s[@]}"; do
-    local spaces=$(( w - ${#l} ))
-    local spc_str=""
-    [[ $spaces -gt 0 ]] && spc_str=$(printf ' %.0s' $(seq 1 $spaces))
-    echo -e "${BOX_COLOR}│${C_RESET} ${C_BOLD_WHITE}${l}${spc_str}${C_RESET} ${BOX_COLOR}│${C_RESET}"
-  done
-  echo -e "${BOX_COLOR}╰${border}╯${C_RESET}"
-}
-
-wptt_error_trap() {
-    local exit_code=$?
-    local line_no=$1
-    local err_cmd="$2"
-    tput cnorm 2>/dev/null || true
-    echo -e "\n\n${C_RED}✖ TIẾN TRÌNH CÀI ĐẶT BỊ ĐỨT GÃY TẠI DÒNG: $line_no (Mã lỗi: $exit_code)${C_RESET}"
-    echo -e "${C_YELLOW}Lệnh gây lỗi: $err_cmd${C_RESET}"
-    echo -e "Vui lòng kiểm tra file $LOG_FILE để tìm nguyên nhân."
-    [[ -n "${WPTT_SECURE_TMP:-}" && -d "$WPTT_SECURE_TMP" ]] && rm -rf "$WPTT_SECURE_TMP" || true
-}
-trap 'wptt_error_trap ${LINENO} "$BASH_COMMAND"' ERR
-
-wptt_run() {
-    local n=1 max=3 delay_retry=5
-    while true; do
-        "$@" >> "$LOG_FILE" 2>&1 &
-        local pid=$!
-        local spin='-\|/'
-        local i=0
-        local start_time=$SECONDS
-        
-        tput civis 2>/dev/null || true
-        while kill -0 "$pid" 2>/dev/null; do
-            local elapsed=$(( SECONDS - start_time ))
-            i=$(( (i + 1) % 4 ))
-            printf "\e[1A\r\033[K${C_CYAN} ➜ %s... [%c] %ds ${C_RESET}\n" "$CURRENT_STEP" "${spin:$i:1}" "$elapsed"
-            sleep 0.15
-        done
-        tput cnorm 2>/dev/null || true
-        
-        local exit_code=0
-        wait "$pid" || exit_code=$?
-        
-        if [[ $exit_code -eq 0 ]]; then
-            printf "\e[1A\r\033[K${C_CYAN} ➜ %s... ${C_RESET}\n" "$CURRENT_STEP"
-            return 0
-        else
-            if [[ $n -lt $max ]]; then
-                printf "\e[1A\r\033[K${C_YELLOW} ➜ %s... (Lỗi %d, đang thử lại %d/%d) ${C_RESET}\n" "$CURRENT_STEP" "$exit_code" "$n" "$max"
-                sleep $delay_retry
-                ((n++))
-            else
-                printf "\e[1A\r\033[K${C_CYAN} ➜ %s... ${C_RESET}\n" "$CURRENT_STEP"
-                return $exit_code
-            fi
-        fi
-    done
-}
-
-# ==============================================================================
-# 2. KHỞI TẠO BIẾN & MÔI TRƯỜNG
-# ==============================================================================
-export LC_ALL=en_US.UTF-8 2>/dev/null || true
-export LANG=en_US.UTF-8 2>/dev/null || true
-stty iutf8 2>/dev/null || true
-
-UNATTENDED=0
-for arg in "$@"; do
-    if [[ "$arg" == "--auto" ]]; then UNATTENDED=1; break; fi
-done
-
-NAME=""
-if [[ "$UNATTENDED" -eq 1 ]]; then
-    NAME='wptangtoc-ols.com'
-else
-    clear 2>/dev/null || true #tính đến tình huống một số bản mini cắt giảm quá mức bỏ luôn cả clear nên vậy cho || true để bypass ở bên dưới sẽ cài đặt thư viện sau
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}CẤU HÌNH TÊN MIỀN CHÍNH (WEBSITE MAIN)${C_RESET}                               ${C_CYAN}│${C_RESET}"
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    read -rp " ➜ Nhập domain của bạn (Vd: wptangtoc.com) [Enter = Bỏ Qua]: " NAME
-    echo ""
-fi
-
-NAME="${NAME:-wptangtoc-ols.com}"
-NAME="${NAME,,}"
-NAME="${NAME//$'\r'/}"
-NAME="${NAME//[[:space:]]/}"
-[[ "$NAME" == *"://"* ]] && NAME=$(echo "$NAME" | cut -f3 -d '/')
-[[ "$NAME" == www.* ]] && NAME="${NAME#www.}"
-
-check_root=$(who | awk '{print $1}' | head -1 || echo "root")
-wordpress=${1:-0}
-
-if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then
-  echo -e "${C_YELLOW} ⚠ Domain không hợp lệ. Đổi về mặc định wptangtoc-ols.com${C_RESET}"
-  NAME='wptangtoc-ols.com'
-fi
-
-# Dual-Stack DNS tương thích v4/v6
-[[ -w /etc/resolv.conf ]] && echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 2606:4700:4700::1111\nnameserver 2001:4860:4860::8888" | sudo tee /etc/resolv.conf >/dev/null 2>&1
-
-if ! grep -q "LANG=en_US.utf-8" /etc/environment 2>/dev/null; then
-  cat >"/etc/environment" <<END
-LANG=en_US.utf-8
-LC_ALL=en_US.utf-8
-END
-fi
-
-_step "Kiểm tra phiên bản WPTangToc OLS"
-wptangtocols_version=$(curl --tlsv1.3 -s --connect-timeout 10 "https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-install=$NAME" || true)
-if [[ -z "${wptangtocols_version:-}" ]]; then
-  wptangtocols_version=$(curl --tlsv1.2 -s --connect-timeout 10 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt" || echo "4.0.0")
-fi
-_success "Phiên bản cài đặt: $wptangtocols_version"
-
-# ==============================================================================
-# 3. GIAO DIỆN TƯƠNG TÁC (CHỌN MARIADB & SSH ĐẸP MẮT)
-# ==============================================================================
-php_version="8.3"
-mariadb_version="10.11"
-
-if [[ "$UNATTENDED" -eq 0 ]]; then
-    _step "Đang quét danh sách phiên bản MariaDB từ máy chủ"
-    rest_api_mariadb_verison=$(curl -s "https://downloads.mariadb.org/rest-api/mariadb" | tr "}" "\n" | grep '"release_support_type": "Long Term Support"' | grep '"release_status": "Stable"' | sed -E 's/.*"release_name": "([^"]+)".*/\1/' || true)
-    
-    clear 2>/dev/null || true #tính đến tình huống một số bản mini cắt giảm quá mức bỏ luôn cả clear nên vậy cho || true để bypass ở bên dưới sẽ cài đặt thư viện sau
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}BẠN HÃY LỰA CHỌN PHIÊN BẢN MARIADB MUỐN SỬ DỤNG${C_RESET}                      ${C_CYAN}│${C_RESET}"
-    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    
-    if [[ -n "${rest_api_mariadb_verison:-}" ]]; then
-        mapfile -t selects <<< "$rest_api_mariadb_verison"
-        for i in "${!selects[@]}"; do
-            if [[ "${selects[$i]}" == "10.11" ]]; then
-                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-10s ${C_YELLOW}(LTS - Khuyên dùng)%-23s${C_CYAN}│${C_RESET}\n" "$((i+1))" "${selects[$i]}" ""
-            else
-                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-52s ${C_CYAN}│${C_RESET}\n" "$((i+1))" "${selects[$i]}"
-            fi
-        done
-        echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
-        
-        while true; do
-            read -rp " ➜ Nhập lựa chọn của bạn [1-${#selects[@]}]: " choice
-            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#selects[@]} )); then
-                mariadb_version="${selects[$((choice-1))]}"
-                break
-            else
-                echo -e "${C_YELLOW} ⚠ Lựa chọn không hợp lệ, vui lòng nhập lại!${C_RESET}"
-            fi
-        done
-    else
-        options=("11.4" "10.11" "10.6")
-        for i in "${!options[@]}"; do
-            if [[ "${options[$i]}" == "10.11" ]]; then
-                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-10s ${C_YELLOW}(LTS - Khuyên dùng)%-23s${C_CYAN}│${C_RESET}\n" "$((i+1))" "${options[$i]}" ""
-            else
-                printf "${C_CYAN}│${C_RESET}  ${C_GREEN}[%d]${C_RESET} Phiên bản: %-52s ${C_CYAN}│${C_RESET}\n" "$((i+1))" "${options[$i]}"
-            fi
-        done
-        echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
-        
-        while true; do
-            read -rp " ➜ Nhập lựa chọn của bạn [1-${#options[@]}]: " choice
-            if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#options[@]} )); then
-                mariadb_version="${options[$((choice-1))]}"
-                break
-            else
-                echo -e "${C_YELLOW} ⚠ Lựa chọn không hợp lệ, vui lòng nhập lại!${C_RESET}"
-            fi
-        done
-    fi
-    _success "Đã chọn MariaDB bản: ${C_BOLD_WHITE}$mariadb_version${C_RESET}"
-    
-    echo ""
-    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}CẤU HÌNH PORT SSH (NÂNG CAO BẢO MẬT)${C_RESET}                                 ${C_CYAN}│${C_RESET}"
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    read -rp " ➜ Nhập port SSH mới (Mặc định: 22) [Enter = Bỏ Qua]: " port_ssh
-    port_ssh="${port_ssh:-22}"
-    while [[ ! "$port_ssh" =~ ^[0-9]+$ ]] || ((port_ssh < 1 || port_ssh > 65535 || port_ssh == 80 || port_ssh == 443)); do
-        echo -e "${C_YELLOW} ⚠ Port không hợp lệ! Vui lòng nhập từ 1 - 65535 (trừ 80, 443).${C_RESET}"
-        read -rp " ➜ Nhập port SSH mới [Enter = Bỏ Qua]: " port_ssh
-        port_ssh="${port_ssh:-22}"
-    done
-    _success "Port SSH được cấu hình: ${C_BOLD_WHITE}$port_ssh${C_RESET}\n"
-fi
-
-clear 2>/dev/null || true
-echo -e "${C_RED}
-     .:..........................             
-      .::::::::::::::::::::::::::::..         
-        ..:::::::::::::::::::::::::::::.      
-                             ...:::::::::.    
-                                  .:::::::.   
-          .:::::::.         .       .:::::::  
-         .::::::::::::::::::::..      ::::::: 
-         ::::::::::::::::::::::::.     ::::::.
-        .::::::::::::::::::::::::::.   .:::::.
-        .::::::::::::::::::::::::::::  .:::::.
-        .::::::::::::::::::::::::::.   .:::::.
-         ::::::::::::::::::::::::.     ::::::.
-.::::::  .:::::::::::::::::::::.      ::::::. 
-          .:::::::.                 .:::::::  
-       ::::::::::::.              .:::::::.   
-       ......:::::::::...    ...:::::::::.    
-               .:::::::::::::::::::::::.      
-   ..............::::::::::::::::::..         
-  .:::::::::::::................. ${C_RESET}"
-sleep 2
-
-BOX_COLOR="$C_CYAN"
-if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
-  box_out "Xin chào $NAME" "Chào mừng bạn đến với WPTANGTOC OLS version $wptangtocols_version" "Phần mềm phát triển bởi Gia Tuấn"
-else
-  box_out "Chào mừng bạn đến với WPTANGTOC OLS version $wptangtocols_version" "Phần mềm phát triển bởi Gia Tuấn"
-fi
-sleep 2
-
-# ==============================================================================
-# 4. TỐI ƯU HỆ THỐNG OS & DỌN DẸP (ALMALINUX 8 SPECIFIC)
-# ==============================================================================
-_step "Tối ưu hóa trình quản lý gói DNF"
-if grep -q "AlmaLinux 8" /etc/*release 2>/dev/null; then
-  wptt_run dnf -y clean packages
-  rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux >> "$LOG_FILE" 2>&1 || true
-fi
-
-if [[ -f /etc/dnf/dnf.conf ]]; then
-    sed -i -E '/fastestmirror|max_parallel_downloads|minrate|timeout|retries/d' /etc/dnf/dnf.conf
-    cat >> /etc/dnf/dnf.conf <<EOF
-fastestmirror=True
-max_parallel_downloads=10
-timeout=15
-retries=10
-EOF
-fi
-_success "Tối ưu DNF hoàn tất"
-
-_step "Dọn dẹp các dịch vụ rác và xung đột"
-rbb_services=(apache apache2 httpd nginx postfix chrony acpid Sendmail Xfs Autofs Isdn Nfslock Apmd yum-cron php-fpm php-common)
-for svc in "${rbb_services[@]}"; do
-    systemctl stop "$svc" >> "$LOG_FILE" 2>&1 || true
-    systemctl disable "$svc" >> "$LOG_FILE" 2>&1 || true
-    killall -9 "$svc" >> "$LOG_FILE" 2>&1 || true
-    dnf remove -y "$svc" >> "$LOG_FILE" 2>&1 || true
-done
-_success "Dọn dẹp hệ thống sạch sẽ"
-
-_step "Cập nhật hệ điều hành (OS Upgrade) an toàn"
-ROOT_DEV=$(df -P / | tail -1 | awk '{print $1}')
-BOOT_DEV=$(df -P /boot | tail -1 | awk '{print $1}')
-if [ "$ROOT_DEV" != "$BOOT_DEV" ]; then 
-    wptt_run dnf update -y --exclude=kernel* --exclude=grub2* --exclude=shim* --exclude=centos-release* --exclude=redhat-release* --exclude=almalinux-release* --exclude=rocky-release* --exclude=microcode_ctl
-else
-    wptt_run dnf update -y
-fi
-_success "Hệ điều hành đã được nâng cấp"
-
-_step "Cài đặt thư viện cốt lõi"
-wptt_run dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm || wptt_run dnf install epel-release -y
+dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm || wptt_run dnf install epel-release -y
 wptt_run dnf clean all
 # AL8 cần python2 và python3
-wptt_run dnf install -y --skip-broken --setopt=strict=0 nano wget zip unzip curl git certbot bind-utils firewalld gcc gcc-c++ make autoconf glibc rcs bc python2 python3 pv tar gnupg2 fzf ipset cronie glibc-langpack-en ncurses
+wptt_run dnf install -y --skip-broken --setopt=strict=0 nano wget zip unzip curl git certbot openssl bind-utils firewalld gcc gcc-c++ make autoconf glibc rcs bc python2 python3 pv tar gnupg2 fzf ipset cronie glibc-langpack-en ncurses
 systemctl enable --now crond >> "$LOG_FILE" 2>&1 || true
 _success "Cài đặt thư viện lõi thành công"
 
@@ -617,6 +306,9 @@ if ! wptt_run dnf install openlitespeed -y; then
 fi
 _success "Cài đặt OpenLiteSpeed hoàn tất"
 
+goi_ls_php_bat_buoc=$(dnf deplist openlitespeed 2>/dev/null | grep -oP 'lsphp\K[0-9]+' | tail -n1 || true) #như 74
+goi_ls_php_bat_buoc=${goi_ls_php_bat_buoc:-00}
+if [[ -z $(dnf -q list available 2>/dev/null | grep "lsphp${goi_ls_php_bat_buoc}") ]]; then #sử lý tình huống khi php hết hạn mà lại là thư viện bắt buộc của ols
 _step "Tải bộ nạp cấu trúc mở rộng PHP EOL dự phòng (CentOS 8)"
 wptt_run bash -c '
     goi_ls_php_bat_buoc=$(dnf deplist openlitespeed | grep -oP "lsphp\K[0-9]+" | tail -n1 || echo "")
@@ -661,6 +353,7 @@ wptt_run bash -c '
     fi
 '
 _success "Nạp cấu trúc dự phòng hoàn tất"
+fi
 
 _step "Tạo User và phân quyền WebRoot"
 random_suffix=$(openssl rand -base64 32 | tr -dc 'a-z0-9' | head -c 3)
@@ -1281,7 +974,7 @@ fi
 # 14B. CẤU HÌNH BẢO MẬT SSH VÀ FAIL2BAN
 _step "Cấu hình bảo mật SSH (Port $port_ssh) và Fail2Ban"
 if [[ "$port_ssh" != "22" ]]; then
-  wptt_run dnf -y install policycoreutils-python-utils
+  wptt_run dnf -y install policycoreutils-python-utils || true
   sed -i "/Port/d" /etc/ssh/sshd_config
   sed -i "1 i Port $port_ssh" /etc/ssh/sshd_config
   semanage port -a -t ssh_port_t -p tcp "$port_ssh" >> "$LOG_FILE" 2>&1 || true
@@ -1467,7 +1160,7 @@ echo -e "----------------------------------------------------------------------"
 
 echo -e "${C_CYAN}>>> THÔNG TIN KẾT NỐI CHUNG (Vui lòng lưu lại)${C_RESET}"
 echo -e " 1. Port SSH                  : ${C_BOLD}$port_ssh${C_RESET}"
-echo -e " 2. Truy cập SSH / SFTP       : ${C_YELLOW}ssh -p $port_ssh$check_root@$ip${C_RESET}"
+echo -e " 2. Truy cập SSH / SFTP       : ${C_YELLOW}ssh -p $port_ssh ${check_root:-root}@$ip${C_RESET}"
 
 if [[ "$NAME" != 'wptangtoc-ols.com' ]]; then
 	echo -e " 3. Password Database (Root)  : ${C_BOLD}$db_root_password${C_RESET}"
