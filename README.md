@@ -82,7 +82,7 @@
     <li><b>Tối ưu chuyên sâu WordPress:</b> Hỗ trợ quản trị mạnh mẽ qua WP-CLI. Tự động thiết lập tính năng siêu bảo mật LockDown WordPress và thay thế WP-Cron bằng Linux Cron để giảm tải CPU.</li>
     <li><b>Quản trị Database Thông minh:</b> Tự động Auto-tune cấu hình MariaDB (Query Cache, Buffer Pool) khớp với lượng RAM hiện có. Tích hợp sẵn PHPMyAdmin và hỗ trợ chuyển đổi Engine (InnoDB, MyISAM, Aria).</li>
     <li><b>Tương thích Cloudflare CDN:</b> Hỗ trợ SSL full Cloudflare và show real ip Cloudflare...</li>
-    <li><b>An toàn Dữ liệu & Tự động hóa:</b> Tự động sao lưu định kỳ. và đẩy thẳng lên Cloud (Amazon S3, Cloudflare R2, Google Drive, Telegram...).</li>
+    <li><b>An toàn Dữ liệu & Tự động hóa:</b> Tự động sao lưu định kỳ. và đẩy thẳng lên Cloud (Amazon S3, Cloudflare R2, Google Drive, OneDrive, Telegram...).</li>
     <li><b>Giám sát & Tự phục hồi:</b> Cảnh báo đăng nhập lạ qua Telegram. Giám sát tài nguyên máy chủ (wtop) thời gian thực và tự động Restart các dịch vụ nếu phát hiện tình trạng treo, đảm bảo Uptime tối đa.</li>
     <li><b>Hỗ trợ Apply .Htaccess Realtime</b></li>
     <li><b>Còn nhiều tính năng khác đợi bạn trải nghiệm...</b></li>
