@@ -127,8 +127,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
       done
 
       if [[ "$ggdriver" = "1998" ]]; then
-        kiem_tra_xem_cloud_drive_co_hoat_dong_khong=$(rclone about wptangtoc: 2>/dev/null | grep 'Free:')
-        if [[ $kiem_tra_xem_cloud_drive_co_hoat_dong_khong ]]; then
           echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây $drive_name không?"
           prompt="$nhap_lua_chon_cua_ban [1-2]: "
           ggdriver2="12345"
@@ -150,7 +148,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
               ;;
             esac
           done
-        fi
       fi
     fi
   fi
@@ -224,30 +221,52 @@ if [[ $NAME = 'Tất cả website' ]]; then
     # [UX ĐỈNH CAO] - TRUY VẤN O(1) VỚI QUOTA API BỎ QUA RPLONE SIZE CHẬM CHẠP
     if [[ $ggdriver = '1998' ]]; then
       drive_name=$(get_cloud_name)
-      rclone_about_info=$(rclone about wptangtoc: 2>/dev/null)
-      drive_total=$(echo "$rclone_about_info" | awk '/^Total:/{print $2" "$3}')
-      drive_used=$(echo "$rclone_about_info" | awk '/^Used:/{print $2" "$3}')
-      drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
+			# Tối ưu: Lấy trực tiếp thư mục theo chuẩn không qua hàm rườm rà
+			CLOUD_DIR_ALL="wptangtoc_ols_backup"
+			if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' /root/.config/rclone/rclone.conf 2>/dev/null; then
+				CLOUD_DIR_ALL="wptangtoc-ols-backup"
+			elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+				CLOUD_DIR_ALL="wptangtoc-ols-backup"
+			fi
 
-      [[ -z "$drive_total" ]] && drive_total="Không xác định (Cloud không hỗ trợ)"
-      [[ -z "$drive_used" ]] && drive_used="Không xác định"
-      [[ -z "$drive_free" ]] && drive_free="Không xác định"
+			# 1. Gọi lệnh rclone about để kiểm tra xem có phải Google Drive/OneDrive không
+			rclone_about_info=$(rclone about wptangtoc: 2>/dev/null)
+			if echo "$rclone_about_info" | grep -q "Used:"; then
+				# === XỬ LÝ CHO GOOGLE DRIVE / ONEDRIVE ===
+				drive_total=$(echo "$rclone_about_info" | awk '/^Total:/{print $2" "$3}')
+				drive_used=$(echo "$rclone_about_info" | awk '/^Used:/{print $2" "$3}')
+				drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
+			else
+				# === XỬ LÝ CHO S3 STORAGE (Không có about, dùng rclone size) ===
+				rclone_size_info=$(rclone size "wptangtoc:$CLOUD_DIR_ALL" 2>/dev/null)
 
-      # Tái sử dụng biến CLOUD_DIR_ALL
-      CLOUD_DIR_ALL="wptangtoc_ols_backup"
-      if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' /root/.config/rclone/rclone.conf 2>/dev/null; then
-        CLOUD_DIR_ALL="wptangtoc-ols-backup"
-      elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
-        CLOUD_DIR_ALL="wptangtoc-ols-backup"
-      fi
+					# Bóc tách "33.005 GiB" từ dòng "Total size: 33.005 GiB (35438709360 Byte)"
+					s3_used_size=$(echo "$rclone_size_info" | awk '/Total size:/{print $3" "$4}')
 
-      echo "==================================================================="
-      echo "Thống kê không gian lưu trữ $drive_name sau sao lưu:"
-      echo " ▪ Tổng dung lượng : $drive_total"
-      echo " ▪ Đã sử dụng      : $drive_used"
-      echo " ▪ Còn trống       : $drive_free"
-      echo " ▪ Vị trí lưu file : ➜ $CLOUD_DIR_ALL/"
-      echo "==================================================================="
+					# Bóc tách "76" từ dòng "Total objects: 76"
+					s3_objects=$(echo "$rclone_size_info" | awk '/Total objects:/{print $3}')
+
+					drive_total="Không xác định (S3 Object Storage)"
+					drive_free="Không xác định"
+
+					if [[ -n "$s3_used_size" ]]; then
+						drive_used="$s3_used_size (Tổng: $s3_objects files backup)"
+					else
+						drive_used="Đang cập nhật..."
+					fi
+			fi
+
+			# Fallback an toàn nếu cả 2 phương thức đều lỗi (VD: Rớt mạng, Token lỗi)
+			[[ -z "$drive_total" ]] && drive_total="Không xác định"
+			[[ -z "$drive_used" ]] && drive_used="Không xác định"
+			[[ -z "$drive_free" ]] && drive_free="Không xác định"
+
+			# In ra giao diện
+			left_text "Thống kê không gian lưu trữ $drive_name sau sao lưu:"
+			left_text " ▪ Tổng dung lượng : $drive_total"
+			left_text " ▪ Đã sử dụng      : $drive_used"
+			left_text " ▪ Còn trống       : $drive_free"
+			left_text " ▪ Vị trí lưu file : ➜ $CLOUD_DIR_ALL/"
     fi
 
     rm "$END_TIMESTAMP_FILE"
