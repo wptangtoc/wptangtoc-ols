@@ -95,8 +95,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
       done
 
       if [[ "$ggdriver" = "1998" ]]; then
-        kiem_tra_xem_cloud_drive_co_hoat_dong_khong=$(rclone about wptangtoc: 2>/dev/null | grep 'Free:')
-        if [[ $kiem_tra_xem_cloud_drive_co_hoat_dong_khong ]]; then
           echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây $drive_name không?"
           prompt="$nhap_lua_chon_cua_ban [1-2]: "
           ggdriver2="12345"
@@ -110,7 +108,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
             *) printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break;;
             esac
           done
-        fi
       fi
     fi
   fi
@@ -189,20 +186,44 @@ if [[ $NAME = 'Tất cả website' ]]; then
         CLOUD_DIR_ALL="wptangtoc-ols-backup"
       fi
 
-      rclone_about_info=$(rclone about wptangtoc: 2>/dev/null)
-      drive_total=$(echo "$rclone_about_info" | awk '/^Total:/{print $2" "$3}')
-      drive_used=$(echo "$rclone_about_info" | awk '/^Used:/{print $2" "$3}')
-      drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
+			# 1. Gọi lệnh rclone about để kiểm tra xem có phải Google Drive/OneDrive không
+			rclone_about_info=$(rclone about wptangtoc: 2>/dev/null)
+			if echo "$rclone_about_info" | grep -q "Used:"; then
+				# === XỬ LÝ CHO GOOGLE DRIVE / ONEDRIVE ===
+				drive_total=$(echo "$rclone_about_info" | awk '/^Total:/{print $2" "$3}')
+				drive_used=$(echo "$rclone_about_info" | awk '/^Used:/{print $2" "$3}')
+				drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
+			else
+				# === XỬ LÝ CHO S3 STORAGE (Không có about, dùng rclone size) ===
+				rclone_size_info=$(rclone size "wptangtoc:$CLOUD_DIR_ALL" 2>/dev/null)
 
-      [[ -z "$drive_total" ]] && drive_total="Không xác định (Cloud không hỗ trợ)"
-      [[ -z "$drive_used" ]] && drive_used="Không xác định"
-      [[ -z "$drive_free" ]] && drive_free="Không xác định"
+					# Bóc tách "33.005 GiB" từ dòng "Total size: 33.005 GiB (35438709360 Byte)"
+					s3_used_size=$(echo "$rclone_size_info" | awk '/Total size:/{print $3" "$4}')
 
-      left_text "Thống kê không gian lưu trữ $drive_name sau sao lưu:"
-      left_text " ▪ Tổng dung lượng : $drive_total"
-      left_text " ▪ Đã sử dụng      : $drive_used"
-      left_text " ▪ Còn trống       : $drive_free"
-      left_text " ▪ Vị trí lưu file : ➜ $CLOUD_DIR_ALL/"
+					# Bóc tách "76" từ dòng "Total objects: 76"
+					s3_objects=$(echo "$rclone_size_info" | awk '/Total objects:/{print $3}')
+
+					drive_total="Không xác định (S3 Object Storage)"
+					drive_free="Không xác định"
+
+					if [[ -n "$s3_used_size" ]]; then
+						drive_used="$s3_used_size (Tổng: $s3_objects files backup)"
+					else
+						drive_used="Đang cập nhật..."
+					fi
+			fi
+
+			# Fallback an toàn nếu cả 2 phương thức đều lỗi (VD: Rớt mạng, Token lỗi)
+			[[ -z "$drive_total" ]] && drive_total="Không xác định"
+			[[ -z "$drive_used" ]] && drive_used="Không xác định"
+			[[ -z "$drive_free" ]] && drive_free="Không xác định"
+
+			# In ra giao diện
+			left_text "Thống kê không gian lưu trữ $drive_name sau sao lưu:"
+			left_text " ▪ Tổng dung lượng : $drive_total"
+			left_text " ▪ Đã sử dụng      : $drive_used"
+			left_text " ▪ Còn trống       : $drive_free"
+			left_text " ▪ Vị trí lưu file : ➜ $CLOUD_DIR_ALL/"
     fi
     
     print_border_bot
@@ -685,29 +706,51 @@ if [[ $disk_kha_dung =~ ^-?[0-9]+$ ]]; then
 fi
 
 if [[ "$uploads" = "y" ]]; then
-  print_border_top
-  
-  # [UX ĐỈNH CAO] - TRUY VẤN O(1) VỚI QUOTA API BỎ QUA RPLONE SIZE CHẬM CHẠP
-  wait $PID_CLOUD_SIZE 2>/dev/null
-  rclone_about_info=$(cat "$FILE_TEMP_CLOUD_SIZE" 2>/dev/null)
-  rm -f "$FILE_TEMP_CLOUD_SIZE" 2>/dev/null
+	print_border_top
 
-  drive_total=$(echo "$rclone_about_info" | awk '/^Total:/{print $2" "$3}')
-  drive_used=$(echo "$rclone_about_info" | awk '/^Used:/{print $2" "$3}')
-  drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
+	# [UX ĐỈNH CAO] - TRUY VẤN O(1) VỚI QUOTA API BỎ QUA RPLONE SIZE CHẬM CHẠP
+	wait $PID_CLOUD_SIZE 2>/dev/null
+	rclone_about_info=$(cat "$FILE_TEMP_CLOUD_SIZE" 2>/dev/null)
+	rm -f "$FILE_TEMP_CLOUD_SIZE" 2>/dev/null
 
-  [[ -z "$drive_total" ]] && drive_total="Không xác định (Cloud không hỗ trợ)"
-  [[ -z "$drive_used" ]] && drive_used="Không xác định"
-  [[ -z "$drive_free" ]] && drive_free="Không xác định"
 
-  left_text "Thống kê không gian lưu trữ $drive_name sau sao lưu:"
-  left_text " ▪ Tổng dung lượng : $drive_total"
-  left_text " ▪ Đã sử dụng      : $drive_used"
-  left_text " ▪ Còn trống       : $drive_free"
-  
-  left_text " ▪ Vị trí lưu file : ➜ $CLOUD_DIR/$NAME/"
-  
-  print_border_bot
+	if echo "$rclone_about_info" | grep -q "Used:"; then
+		# === XỬ LÝ CHO GOOGLE DRIVE / ONEDRIVE ===
+		drive_total=$(echo "$rclone_about_info" | awk '/^Total:/{print $2" "$3}')
+		drive_used=$(echo "$rclone_about_info" | awk '/^Used:/{print $2" "$3}')
+		drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
+	else
+		# === XỬ LÝ CHO S3 STORAGE (Không có about, dùng rclone size) ===
+		rclone_size_info=$(rclone size "wptangtoc:$CLOUD_DIR_ALL" 2>/dev/null)
+
+					# Bóc tách "33.000 GiB" từ dòng "Total size: 33.000 GiB (35438709360 Byte)"
+					s3_used_size=$(echo "$rclone_size_info" | awk '/Total size:/{print $3" "$4}')
+
+					# Bóc tách "76" từ dòng "Total objects: 76"
+					s3_objects=$(echo "$rclone_size_info" | awk '/Total objects:/{print $3}')
+
+					drive_total="Không xác định (S3 Object Storage)"
+					drive_free="Không xác định"
+
+			if [[ -n "$s3_used_size" ]]; then
+					drive_used="$s3_used_size (Tổng: $s3_objects files backup)"
+			else
+					drive_used="Đang cập nhật..."
+			fi
+	fi
+
+			# Fallback an toàn nếu cả 2 phương thức đều lỗi (VD: Rớt mạng, Token lỗi)
+			[[ -z "$drive_total" ]] && drive_total="Không xác định"
+			[[ -z "$drive_used" ]] && drive_used="Không xác định"
+			[[ -z "$drive_free" ]] && drive_free="Không xác định"
+
+			# In ra giao diện
+			left_text "Thống kê không gian lưu trữ $drive_name sau sao lưu:"
+			left_text " ▪ Tổng dung lượng : $drive_total"
+			left_text " ▪ Đã sử dụng      : $drive_used"
+			left_text " ▪ Còn trống       : $drive_free"
+			left_text " ▪ Vị trí lưu file : ➜ $CLOUD_DIR/$NAME/"
+			print_border_bot
 fi
 
 
