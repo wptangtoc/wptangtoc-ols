@@ -75,8 +75,9 @@
 <ul>
     <li><b>Nền tảng lõi tối thượng:</b> Vận hành trên OpenLiteSpeed, LSPHP tùy biến đa phiên bản (7.1 đến 8.5 chạy song song) và hệ quản trị cơ sở dữ liệu MariaDB LTS (10.11 đến 12.3).</li>
     <li><b>Tối ưu Hệ điều hành & Mạng (Kernel Tuning):</b> Tự động cấu hình sysctl, ulimit, kích hoạt thuật toán chống nghẽn mạng TCP BBR và phân bổ tối ưu Zram/Swap theo đúng phần cứng vật lý.</li>
-    <li><b>Quản lý Website toàn diện:</b> Khởi tạo không giới hạn Domain/Subdomain, cấp phát chứng chỉ SSL Let's Encrypt tự động gia hạn. Dễ dàng nhân bản (Clone) và tạo môi trường thử nghiệm (Staging) chỉ với 1 thao tác.</li>
-    <li><b>Bảo mật Cô lập (Defense in Depth):</b> Ứng dụng công nghệ PhpSuExec + Chroot + Namespace giam lỏng từng website. Chống "cháy lan" mã độc 100%. Tự động đổi Port SSH bảo vệ máy chủ.</li>
+    <li><b>Quản lý Website toàn diện:</b> Khởi tạo không giới hạn Domain/Subdomain, cấp phát chứng chỉ SSL Let's Encrypt tự động gia hạn.</li>
+    <li><b>Dễ dàng nhân bản (Clone)</b> Tạo môi trường thử nghiệm (Staging cấp sẵn miễn phí domain *.wptangtoc-ols.com để giả lập) chỉ với 1 thao tác.</li>
+    <li><b>Bảo mật Cô lập (Defense in Depth):</b> Ứng dụng công nghệ PhpSuExec + Chroot + Namespace giam lỏng từng website. Chống "cháy lan" mã độc. Tự động đổi Port SSH bảo vệ máy chủ.</li>
     <li><b>Tường lửa & Quét mã độc:</b> Tích hợp 8G Firewall, CSF/Firewalld/NFtables bảo vệ. Trang bị Yara, Fail2ban chống Brute Force, Khóa IP xấu và thiết lập chặn truy cập theo Quốc gia.</li>
     <li><b>Cache Đa tầng Tiên tiến:</b> Bật sẵn OPcache, Page Cache HTML, Browser Cache. Hỗ trợ cấu hình Object Cache siêu tốc (Redis, Memcached, Valkey, KeyDB) giao tiếp trực tiếp qua UNIX Socket.</li>
     <li><b>Tối ưu chuyên sâu WordPress:</b> Hỗ trợ quản trị mạnh mẽ qua WP-CLI. Tự động thiết lập tính năng siêu bảo mật LockDown WordPress và thay thế WP-Cron bằng Linux Cron để giảm tải CPU.</li>
