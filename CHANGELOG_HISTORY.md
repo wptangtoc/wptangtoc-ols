@@ -1,3 +1,11 @@
+## [8.2.0.3]
+
+### 🛠️ Tối ưu hệ thống
+- **Cải tiến tiến trình tải xuống qua Rclone:** Tối ưu hóa tốc độ và độ ổn định khi tải dữ liệu từ các nền tảng lưu trữ đám mây, giúp các tác vụ sao lưu, khôi phục và đồng bộ website diễn ra mượt mà, nhanh chóng hơn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0.2]
 
 ### 🛠️ Tối ưu hệ thống
