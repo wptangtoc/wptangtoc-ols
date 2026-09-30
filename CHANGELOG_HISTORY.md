@@ -8,6 +8,16 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+## [8.2.0.2]
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp bộ lọc Smart Exclude thông minh:** Tích hợp đối chiếu checksum toàn diện qua WP-CLI cho Core, Plugins, Themes cùng nhận diện tệp ngôn ngữ (`.l10n.php`), giúp tự động bỏ qua tệp sạch và tập trung tối đa vào các tệp tin nghi vấn.
+- **Tối ưu hóa đa luồng quét YARA:** Cải tiến tiến trình quét mã độc với cơ chế đa luồng kết hợp giới hạn mức ưu tiên tài nguyên thấp nhất (`nice` / `ionice`), đảm bảo máy chủ vận hành ổn định tuyệt đối, không gây chậm trễ hay quá tải CPU.
+- **Hoàn thiện báo cáo tổng kết bảo mật:** Tinh chỉnh giao diện hiển thị kết quả kiểm tra mã độc toàn hệ thống, giúp quản trị viên dễ dàng nắm bắt trực quan trạng thái an toàn của từng website.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0.1]
 
 ### 🛠️ Tối ưu hệ thống
