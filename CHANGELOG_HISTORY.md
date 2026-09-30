@@ -1,3 +1,13 @@
+## [8.2.0.2]
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp bộ lọc Smart Exclude thông minh:** Tích hợp đối chiếu checksum toàn diện qua WP-CLI cho Core, Plugins, Themes cùng nhận diện tệp ngôn ngữ (`.l10n.php`), giúp tự động bỏ qua tệp sạch và tập trung tối đa vào các tệp tin nghi vấn.
+- **Tối ưu hóa đa luồng quét YARA:** Cải tiến tiến trình quét mã độc với cơ chế đa luồng kết hợp giới hạn mức ưu tiên tài nguyên thấp nhất (`nice` / `ionice`), đảm bảo máy chủ vận hành ổn định tuyệt đối, không gây chậm trễ hay quá tải CPU.
+- **Hoàn thiện báo cáo tổng kết bảo mật:** Tinh chỉnh giao diện hiển thị kết quả kiểm tra mã độc toàn hệ thống, giúp quản trị viên dễ dàng nắm bắt trực quan trạng thái an toàn của từng website.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0.1]
 
 ### 🛠️ Tối ưu hệ thống
@@ -92,20 +102,6 @@
 
 ### 🛠️ Tối ưu hệ thống
 - **Tối ưu hóa bộ cài đặt:** Tinh chỉnh luồng kịch bản cài đặt tự động, giúp rút ngắn thời gian thiết lập máy chủ và loại bỏ triệt để nguy cơ xung đột gói phần mềm trong quá trình khởi tạo.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-# WPTangToc OLS v8.1.4.0
-
-### 🚀 Tính năng mới
-- **Hỗ trợ trở lại AlmaLinux 10:** Khôi phục khả năng tương thích toàn diện với nền tảng AlmaLinux 10, giúp quản trị viên tự tin triển khai hệ thống trên phiên bản hệ điều hành thế hệ mới.
-
-### 🐛 Sửa lỗi
-- **Khắc phục lỗi thư viện Certbot:** Xử lý triệt để sự cố phụ thuộc gói của Certbot trên môi trường mới, đảm bảo tính năng cấp phát và tự động gia hạn chứng chỉ bảo mật SSL/TLS hoạt động hoàn toàn ổn định.
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cấp bộ cài đặt:** Tinh chỉnh và tối ưu hóa luồng kịch bản cài đặt tự động, giúp rút ngắn thời gian khởi tạo và hạn chế tối đa nguy cơ xung đột gói phần mềm.
 
 
 ---
