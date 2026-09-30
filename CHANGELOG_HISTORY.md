@@ -1,3 +1,15 @@
+## [8.2.0.1]
+
+### 🛠️ Tối ưu hệ thống
+- **Tối ưu hóa công cụ quét mã độc YARA:** Tinh chỉnh bộ quy tắc quét mã độc trên mã nguồn WordPress, giúp tăng tốc độ rà soát webshell/backdoor và tiết kiệm tối đa tài nguyên CPU/RAM khi chạy định kỳ.
+- **Cải thiện độ ổn định hệ thống:** Nâng cấp cơ chế xử lý ngoại lệ trong các tiến trình tự động hóa, đảm bảo các tác vụ quản trị máy chủ vận hành mượt mà và an toàn tuyệt đối.
+
+### 🐛 Sửa lỗi
+- **Khắc phục lỗi quét mã nguồn:** Xử lý triệt để sự cố xung đột quyền hạn khi tiến hành rà soát các tệp tin có cấu trúc bảo mật đặc thù trên môi trường Chroot, giúp quá trình kiểm tra bảo mật diễn ra hoàn toàn trơn tru.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0.0]
 
 ### 🛠️ Tối ưu hệ thống
