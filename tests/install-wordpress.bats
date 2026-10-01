@@ -18,24 +18,16 @@ setup() {
   [[ "$output" =~ "không tồn tại trên hệ thống này" ]]
 }
 
-# =================================================================
-# NHÓM 2: KIỂM THỬ CHUẨN BỊ MÔI TRƯỜNG & TẠO WEB MỚI
-# =================================================================
-
-@test "Integration [WP Install]: Khởi tạo Website mới để làm môi trường cài đặt" {
-  run bash "$SCRIPT_THEM" "wp-install-test.com"
-  [ "$status" -eq 0 ]
-  [ -d "/usr/local/lsws/wp-install-test.com/html" ]
-}
 
 # =================================================================
-# NHÓM 3: KIỂM THỬ THỰC CHIẾN - CÀI ĐẶT WORDPRESS
+# NHÓM 2: KIỂM THỬ THỰC CHIẾN - CÀI ĐẶT WORDPRESS
 # =================================================================
 
 @test "Integration [WP Install]: TẢI, GIẢI NÉN và TẠO BASIC AUTH thành công" {
   # TIÊM BIẾN MÔI TRƯỜNG: Ép hàm wptt_xac_nhan trả về 1 (Không đồng ý thiết lập Admin ngay)
   export WPTT_AUTO_CONFIRM=2
   
+  run bash "$SCRIPT_THEM" "wp-install-test.com"
   run bash "$SCRIPT_INSTALL_WP" "wp-install-test.com"
   
   # Giải phóng biến môi trường để không ảnh hưởng các test khác (nếu có)
