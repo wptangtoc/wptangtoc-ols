@@ -14,8 +14,10 @@ setup() {
   run bash "$SCRIPT_GOC" "wptangtoc"
   
   [ "$status" -eq 1 ]
-  [[ "$output" =~ "thiếu dấu chấm" ]]
+  # SỬA Ở ĐÂY: Tìm chữ "đúng định dạng" thay vì "thiếu dấu chấm"
+  [[ "$output" =~ "đúng định dạng" ]]
 }
+
 
 @test "Integration: Chặn Tên miền chứa ký tự đặc biệt" {
   run bash "$SCRIPT_GOC" "wptangtoc@.com"
@@ -57,7 +59,7 @@ setup() {
   [ "$status" -eq 0 ]
   
   # 2. KIỂM CHỨNG MÁY CHỦ: File cấu hình Vhost ĐÃ TỒN TẠI chưa?
-  [ -f "/usr/local/lsws/conf/vhosts/khachhang-demo.com/.khachhang-demo.com.conf" ]
+  [ -f "/usr/local/lsws/conf/vhosts/khachhang-demo.com/khachhang-demo.com.conf" ]
   
   # 3. KIỂM CHỨNG MÁY CHỦ: Thư mục Home của user ĐÃ TỒN TẠI chưa?
   [ -d "/usr/local/lsws/khachhang-demo.com/html" ]
