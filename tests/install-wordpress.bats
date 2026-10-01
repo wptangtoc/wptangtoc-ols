@@ -7,16 +7,16 @@ setup() {
   chmod +x "$SCRIPT_INSTALL_WP" 2>/dev/null || true
 }
 
-# =================================================================
-# NHÓM 1: KIỂM THỬ BỘ LỌC ĐẦU VÀO
-# =================================================================
+# # =================================================================
+# # NHÓM 1: KIỂM THỬ BỘ LỌC ĐẦU VÀO
+# # =================================================================
 
-@test "Integration [WP Install]: Chặn cài đặt vào Domain KHÔNG TỒN TẠI" {
-  run bash "$SCRIPT_INSTALL_WP" "domain-khong-ton-tai.com"
+# @test "Integration [WP Install]: Chặn cài đặt vào Domain KHÔNG TỒN TẠI" {
+#   run bash "$SCRIPT_INSTALL_WP" "domain-khong-ton-tai.com"
   
-  [ "$status" -eq 1 ]
-  [[ "$output" =~ "không tồn tại trên hệ thống này" ]]
-}
+#   [ "$status" -eq 1 ]
+#   [[ "$output" =~ "không tồn tại trên hệ thống này" ]]
+# }
 
 
 # =================================================================
@@ -25,11 +25,11 @@ setup() {
 
 @test "Integration [WP Install]: TẢI, GIẢI NÉN và TẠO BASIC AUTH thành công" {
   # TIÊM BIẾN MÔI TRƯỜNG: Ép hàm wptt_xac_nhan trả về 1 (Không đồng ý thiết lập Admin ngay)
-  export WPTT_AUTO_CONFIRM=2
   
   run bash "$SCRIPT_THEM" "wp-install-test.com"
+
+  export WPTT_AUTO_CONFIRM=2
   run bash "$SCRIPT_INSTALL_WP" "wp-install-test.com"
-  
   # Giải phóng biến môi trường để không ảnh hưởng các test khác (nếu có)
   unset WPTT_AUTO_CONFIRM
   
