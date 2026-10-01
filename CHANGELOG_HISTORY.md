@@ -89,12 +89,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## [8.1.4.3]
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cấp công cụ chẩn đoán:** Tối ưu hóa cơ chế rà soát và kiểm tra lỗi hệ thống, giúp quản trị viên phát hiện sớm các sự cố tiềm ẩn và định vị nguyên nhân chính xác, nhanh chóng hơn.
-- **Cải thiện tiện ích kiểm tra mạng (Ping):** Tinh chỉnh công cụ đo độ trễ mạng; xử lý tín hiệu dừng lệnh (`Ctrl + C`) mượt mà và hiển thị thông số thống kê trực quan, sạch đẹp, loại bỏ hoàn toàn các đoạn mã lỗi thô trên màn hình terminal.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
