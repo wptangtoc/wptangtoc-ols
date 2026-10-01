@@ -2,8 +2,11 @@
 
 setup() {
   export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
-  export SCRIPT_CLONE="/etc/wptt/wptt-sao-chep-website" # Bác sửa lại tên file gốc nếu khác nhé
+  export SCRIPT_INSTALL_WP="/etc/wptt/wptt-install-wordpress2"
+  export SCRIPT_CLONE="/etc/wptt/wptt-sao-chep-website"
+  
   chmod +x "$SCRIPT_THEM" 2>/dev/null || true
+  chmod +x "$SCRIPT_INSTALL_WP" 2>/dev/null || true
   chmod +x "$SCRIPT_CLONE" 2>/dev/null || true
 }
 
@@ -11,34 +14,48 @@ setup() {
 # NHÓM 1: CHUẨN BỊ MÔI TRƯỜNG
 # =================================================================
 
-@test "Integration [Clone]: Khởi tạo Website Nguồn để làm mẫu" {
-  # Tạo trước một website nguồn. Nếu bài test này Fail, các bài test sau cũng vô nghĩa.
-  run bash "$SCRIPT_THEM" "nguon-clone.com"
+@test "Integration [Clone]: Khởi tạo 2 Website Nguồn (1 có WP, 1 không có WP)" {
+  # 1. Tạo website nguồn số 1: KHÔNG CÓ WordPress (chỉ có vhost rỗng)
+  run bash "$SCRIPT_THEM" "nguon-khong-wp.com"
   [ "$status" -eq 0 ]
-  [ -d "/usr/local/lsws/nguon-clone.com/html" ]
+
+  # 2. Tạo website nguồn số 2: CÓ WORDPRESS THẬT
+  run bash "$SCRIPT_THEM" "nguon-wp.com"
+  [ "$status" -eq 0 ]
+  
+  # Cài đặt WordPress tự động cho web số 2 (Truyền 'y' xác nhận và 'n' bỏ qua cấu hình admin)
+  run bash -c '{ echo "y"; echo "n"; } | bash "$SCRIPT_INSTALL_WP" "nguon-wp.com"'
+  [ "$status" -eq 0 ]
 }
 
 # =================================================================
 # NHÓM 2: KIỂM THỬ BỘ LỌC ĐẦU VÀO (VALIDATION)
 # =================================================================
 
+@test "Integration [Clone]: Chặn nhân bản nếu Website Nguồn KHÔNG PHẢI WordPress" {
+  # Dùng web số 1 (web trắng) làm nguồn để xem script có chặn lại không
+  run bash "$SCRIPT_CLONE" "nguon-khong-wp.com" "dich-clone.com"
+  
+  [ "$status" -eq 1 ]
+  # Bác hãy sửa cụm từ "không tìm thấy" hoặc "không phải" cho khớp với câu báo lỗi thực tế trong file bash của bác
+  [[ "$output" =~ "không tìm thấy" ]] || [[ "$output" =~ "không phải" ]]
+}
+
 @test "Integration [Clone]: Chặn nhân bản từ Tên miền Nguồn KHÔNG TỒN TẠI" {
   run bash "$SCRIPT_CLONE" "domain-khong-co-that.com" "dich-clone.com"
-  
   [ "$status" -eq 1 ]
   [[ "$output" =~ "không tồn tại" ]]
 }
 
 @test "Integration [Clone]: Chặn Website Đích thiếu dấu chấm" {
-  run bash "$SCRIPT_CLONE" "nguon-clone.com" "webdich"
-  
+  # Từ bước này trở đi, ta dùng nguồn chuẩn là nguon-wp.com
+  run bash "$SCRIPT_CLONE" "nguon-wp.com" "webdich"
   [ "$status" -eq 1 ]
   [[ "$output" =~ "không đúng định dạng" ]]
 }
 
 @test "Integration [Clone]: Chặn Website Đích chứa ký tự đặc biệt" {
-  run bash "$SCRIPT_CLONE" "nguon-clone.com" "dich@clone.com"
-  
+  run bash "$SCRIPT_CLONE" "nguon-wp.com" "dich@clone.com"
   [ "$status" -eq 1 ]
   [[ "$output" =~ "sai cấu trúc" ]]
 }
@@ -48,31 +65,27 @@ setup() {
 # =================================================================
 
 @test "Integration [Clone]: NHÂN BẢN THÀNH CÔNG sang Website Đích" {
-  # Chạy script với $1 là Nguồn và $2 là Đích
-  run bash "$SCRIPT_CLONE" "nguon-clone.com" "dich-clone.com"
+  # Chạy script clone từ nguồn CHUẨN (đã có WP) sang đích
+  run bash "$SCRIPT_CLONE" "nguon-wp.com" "dich-clone.com"
   
-  # 1. Kịch bản phải chạy qua hết không báo lỗi
   [ "$status" -eq 0 ]
   
-  # 2. KIỂM CHỨNG HỆ THỐNG: Vhost của Đích đã được sinh ra chưa?
+  # Kiểm chứng Vhost và Thư mục đã được sinh ra
   [ -f "/usr/local/lsws/conf/vhosts/dich-clone.com/dich-clone.com.conf" ]
-  
-  # 3. KIỂM CHỨNG THƯ MỤC: Source code đã được chép sang chưa?
   [ -d "/usr/local/lsws/dich-clone.com/html" ]
   
-  # 4. KIỂM CHỨNG CONFIG: Đã nối thành công vào httpd_config chưa?
+  # Đảm bảo mã nguồn WP (ví dụ wp-config.php) đã được chép sang web đích thành công
+  [ -f "/usr/local/lsws/dich-clone.com/html/wp-config.php" ]
+  
   run grep "dich-clone.com" /usr/local/lsws/conf/httpd_config.conf
   [ "$status" -eq 0 ]
 }
 
 @test "Integration [Clone]: GHI ĐÈ THÀNH CÔNG khi dùng cờ 'no-config'" {
-  # Cố tình nhân bản đè lên cái Đích vừa tạo ở bài test trên
-  # Truyền thêm tham số thứ 3 "no-config" để kích hoạt tính năng tự động xóa/ghi đè của bác
-  run bash "$SCRIPT_CLONE" "nguon-clone.com" "dich-clone.com" "no-config"
+  # Nhân bản đè lên chính cái web đích vừa tạo ở trên
+  run bash "$SCRIPT_CLONE" "nguon-wp.com" "dich-clone.com" "no-config"
   
   [ "$status" -eq 0 ]
-  
-  # Đảm bảo sau khi ghi đè, hệ thống đích vẫn sống khỏe mạnh
   [ -f "/usr/local/lsws/conf/vhosts/dich-clone.com/dich-clone.com.conf" ]
   [ -d "/usr/local/lsws/dich-clone.com/html" ]
 }
