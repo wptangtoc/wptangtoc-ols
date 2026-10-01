@@ -43,7 +43,7 @@ setup() {
 @test "Integration: CHẶN THÀNH CÔNG Domain đã tồn tại (Trùng Domain chính)" {
   # Ở bước Khởi tạo CI/CD, ta đã ép hệ thống cài đặt domain chính là "wptangtoc.com"
   # Bây giờ BATS thò tay thêm nó một lần nữa, hệ thống PHẢI phát hiện ra và chặn lại!
-  run bash "$SCRIPT_GOC" "wptangtoc.com"
+  run bash "$SCRIPT_GOC" "gihub.wptangtoc.com"
   
   [ "$status" -eq 1 ]
   [[ "$output" =~ "tồn tại trên hệ thống" ]]
