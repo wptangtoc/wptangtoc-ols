@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.0.4
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cao độ ổn định khi tải lên qua Rclone:** Bổ sung cơ chế tự động thử lại (retry) thông minh và kiểm soát lỗi chặt chẽ hơn trong quá trình tải dữ liệu lên dịch vụ đám mây, đảm bảo các tác vụ sao lưu hoạt động liền mạch, không bị gián đoạn ngay cả khi đường truyền mạng chập chờn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0.3]
 
 ### 🛠️ Tối ưu hệ thống
