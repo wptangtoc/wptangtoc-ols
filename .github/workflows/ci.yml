@@ -129,14 +129,11 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Quét Vệ sinh Repository"
-          # Đã loại trừ (whitelist) file wptangtoc-gpg-pub.key
           SUSPICIOUS_KEYS=$(find . -type d -name .git -prune -o -type f \( -name '*.pem' -o -name '*.key' -o -name 'id_rsa' -o -name 'id_ed25519' \) ! -name 'wptangtoc-gpg-pub.key' -print)
           
           if [[ -n "$SUSPICIOUS_KEYS" ]]; then
             echo "::error::Cảnh báo: Phát hiện tệp tin có đuôi mở rộng nhạy cảm (.key, .pem...)!"
-            echo -e "\nDANH SÁCH FILE BỊ NGHI NGỜ:"
             echo "$SUSPICIOUS_KEYS"
-            echo -e "\nNếu đây là các file an toàn (vd: license, file rác), hãy đổi tên đuôi file hoặc cấu hình bỏ qua chúng."
             FAILED=1
           fi
 
@@ -148,7 +145,7 @@ jobs:
           if (( FAILED != 0 )); then exit 1; fi
 
 # ============================================================
-# JOB 3: INTEGRATION TESTS (KIỂM THỬ MÔI TRƯỜNG THẬT)
+# JOB 3: INTEGRATION TESTS (UBUNTU MÔI TRƯỜNG THẬT)
 # ============================================================
   integration-tests:
     name: Kiểm thử BATS trên WPTangToc OLS Thật
@@ -158,57 +155,48 @@ jobs:
       - name: 📥 Tải mã nguồn test
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
         with:
-         persist-credentials: false
+          persist-credentials: false
 
       - name: ⚙️ Cài đặt BATS
         run: sudo apt-get update && sudo apt-get install -y bats
 
-      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS (Unattended)
+      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS
         run: |
-          # 1. Tải script cài đặt
           export TERM=xterm
           export CI=true
 
           curl -sO https://wptangtoc.com/share/wptangtoc-ols
           
-          # 2. Vô hiệu hóa lệnh reboot
           sudo rm -f /sbin/reboot
           echo -e '#!/bin/bash\necho "Đã chặn lệnh reboot thành công để tiếp tục chạy BATS!"' | sudo tee /sbin/reboot
           sudo chmod +x /sbin/reboot
           
           sudo sh -c 'echo "" > /root/.bashrc'
-          # 3. Chạy tự động
           sudo bash wptangtoc-ols --auto
  
-          # 3. FIX LỖI GETCWD: Đưa runner về lại thư mục an toàn sau khi script cài đặt xóa rác
           cd $GITHUB_WORKSPACE
           
-          # 4. ÉP GHI ĐÈ CODE MỚI bác vừa push lên
-          # sudo cp -a ./tool-wptangtoc-ols/* /etc/wptt/
-          sudo chmod -R 755 /etc/wptt/ #sanbox bats test không cần phải phân quyền quá gắt
+          # Đã FIX: Mở khóa lệnh copy để đè code bác vừa commit lên bản cài gốc
+          sudo cp -a ./* /etc/wptt/ 2>/dev/null || true
+          sudo chmod -R 755 /etc/wptt/
           
-          # 5. CHẶN UPDATE lúc đầu build mới: Bơm version để lừa script gốc không gọi file update nữa
           sudo mkdir -p /etc/wptt/tmp
           curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' | sudo tee /etc/wptt/tmp/wptangtoc-ols-version-main > /dev/null
 
-          # 4. Xóa trắng /root/.bashrc để triệt tiêu lỗi treo môi trường CI
           sudo sh -c 'echo "" > /root/.bashrc'
-          
-          # 5. Cài đặt domain chính (Lưu ý: file này phải đã được bác sửa để nhận tham số $1)
           sudo bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
 
       - name: 🧪 Chạy Kiểm thử BATS Integration
         shell: bash
         run: |
           if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
-            # Lúc này BATS chạy trên một máy chủ OLS thật 100%
             sudo bats tests/
           else
             echo "Không tìm thấy file test (.bats). Bỏ qua."
           fi
 
 # ============================================================
-# INSTALLATION TESTS (ALMALINUX VM MATRIX)
+# JOB 4: INSTALLATION TESTS (ALMALINUX VM MATRIX)
 # ============================================================
   install-tests-almalinux:
     name: Test Install - AlmaLinux ${{ matrix.release }}
@@ -216,11 +204,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: ['8', '9'] # Khi nào Alma 10 ổn định, thêm '10' vào đây
+        release: ['8', '9']
     timeout-minutes: 40
     steps:
       - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
 
       - name: 🚀 Khởi chạy Máy ảo AlmaLinux & Test Cài đặt
         uses: vmactions/almalinux-vm@v1
@@ -231,24 +221,21 @@ jobs:
             export TERM=xterm
             export CI=true
             
-            # Cài đặt các gói phụ trợ cơ bản (Bỏ BATS)
             dnf install -y epel-release sudo curl
 
             curl -sO https://wptangtoc.com/share/wptangtoc-ols
             
-            # Vô hiệu hóa lệnh reboot
             rm -f /sbin/reboot
             echo -e '#!/bin/bash\necho "Đã chặn lệnh reboot!"' > /sbin/reboot
             chmod +x /sbin/reboot
             
             echo "" > /root/.bashrc
             
-            # CHẠY NGHIỆM THU CÀI ĐẶT GỐC
-            # Nếu lệnh này văng lỗi, Job sẽ tự động báo Đỏ (Fail)
             bash wptangtoc-ols --auto
             
-            # Fix lỗi thư mục và ép ghi đè code mới
             cd $GITHUB_WORKSPACE
+            
+            # cp -a ./* /etc/wptt/ 2>/dev/null || true
             chmod -R 755 /etc/wptt/
             
             mkdir -p /etc/wptt/tmp
@@ -256,7 +243,6 @@ jobs:
 
             echo "" > /root/.bashrc
             
-            # Chạy thử một lệnh thiết lập lõi để đảm bảo hệ thống đã hoạt động bình thường
             bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
             
             echo "✅ Cài đặt thành công trên AlmaLinux ${{ matrix.release }}!"
