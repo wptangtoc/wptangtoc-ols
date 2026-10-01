@@ -90,10 +90,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## 📌 Lịch sử cập nhật WPTangToc OLS 8.1.4.4
-
-- 71c1797a cải tiến bảo mật
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
