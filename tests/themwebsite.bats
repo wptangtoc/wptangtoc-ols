@@ -2,6 +2,7 @@
 
 setup() {
   # BATS sẽ lấy thẳng file mã nguồn MỚI NHẤT mà bác vừa push lên nhánh để test
+  export CI="true"
   export SCRIPT_GOC="/etc/wptt/domain/wptt-themwebsite"
   chmod +x "$SCRIPT_GOC"
 }
