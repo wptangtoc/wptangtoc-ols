@@ -4,8 +4,6 @@ setup_file() {
 export CI="true"
 export TEST_DOMAIN="test-yara-scan.com"
   
-  echo "Đang tạo website và cài đặt WordPress mồi. Vui lòng đợi..." >&3
-  
   # 1. Khởi tạo Website
 bash /etc/wptt/domain/wptt-themwebsite "$TEST_DOMAIN" >/dev/null 2>&1 || true
 

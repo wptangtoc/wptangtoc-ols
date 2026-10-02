@@ -1,11 +1,21 @@
 #!/usr/bin/env bats
-
+#
+# tests/09-sao-luu.bats — Kiểm thử tính năng Sao lưu (Backup) của WPTangToc OLS
+#
+# File này chia làm 2 phần rõ rệt:
+#
+#   PHẦN A — "Unit": Chỉ dùng flock/zip/tar/bash thuần. Mục tiêu: khóa chặt các cơ
+#   chế cốt lõi (locking, loại trừ file nhạy cảm, validate input chống injection).
+#
+#   PHẦN B — "Integration": Chạy thực tế trên môi trường VPS / CI/CD có OS thật.
+#   Kiểm tra tính toàn vẹn của mã nguồn, database dump, phân quyền file vật lý,
+#   và xử lý khôi phục cấu hình hoàn hảo nhờ hàm Teardown thông minh.
 
 SCRIPT_GOC="${WPTT_SAOLUU_SCRIPT:-/etc/wptt/backup-restore/wptt-saoluu}"
 TEST_DOMAIN="${WPTT_TEST_DOMAIN:-wptest-saoluu-demo.com}"
 BACKUP_ROOT="/usr/local/backup-website"
 
-# --- HÀM GỠ LỖI 
+# --- HÀM VŨ KHÍ GỠ LỖI ---
 in_log_neu_loi() {
   local ma_ky_vong="$1"
   if [ "$status" -ne "$ma_ky_vong" ]; then
@@ -16,7 +26,7 @@ in_log_neu_loi() {
 }
 
 # =================================================================
-# PHẦN A — UNIT TEST (chạy được trên ubuntu-latest, không cần OLS)
+# PHẦN A — UNIT TEST (Độc lập, siêu tốc)
 # =================================================================
 
 setup_file() {
@@ -29,29 +39,20 @@ teardown_file() {
 }
 
 # -----------------------------------------------------------------
-# A1. Cơ chế khóa (flock) — chống 2 tiến trình backup cùng 1 domain
-#
-# Đây là cơ chế quan trọng nhất của script: nếu lock bị lỗi, 2 tiến trình
-# backup/restore chạy song song trên cùng 1 website có thể làm hỏng dữ
-# liệu. Test này mô phỏng chính xác logic lock trong script gốc
-# (exec 200>"$LOCK_FILE"; flock -n 200) mà không cần chạy cả script.
+# A1. Cơ chế khóa (flock)
 # -----------------------------------------------------------------
 
 @test "Unit: Lock chặn được tiến trình backup thứ 2 trên CÙNG 1 domain" {
   local lock_file="$UNIT_TMP/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock"
 
-  # Tiến trình 1: giữ lock trong nền (giả lập backup đang chạy)
   (
     exec 200>"$lock_file"
     flock -n 200 || exit 1
     sleep 3
   ) &
   local pid_proc1=$!
-
-  # Đợi tiến trình 1 chắc chắn đã lấy được lock
   sleep 0.5
 
-  # Tiến trình 2: phải bị chặn (flock -n trả về khác 0) ngay lập tức
   run bash -c "
     exec 200>\"$lock_file\"
     flock -n 200
@@ -94,7 +95,6 @@ teardown_file() {
     flock -n 200 || exit 1
   "
 
-  # Tiến trình đã thoát, FD 200 đã đóng tự động -> lock phải lấy được ngay
   run bash -c "
     exec 200>\"$lock_file\"
     flock -n 200
@@ -104,12 +104,7 @@ teardown_file() {
 }
 
 # -----------------------------------------------------------------
-# A2. Chống SQL/Shell Injection qua tên Database & User
-#
-# Script xác thực DB_Name_web / DB_User_web bằng regex
-# ^[a-zA-Z0-9_]+$ trước khi đưa vào file .cnf và lệnh mariadb-dump. Test
-# này kiểm thử ĐÚNG regex đó một cách độc lập, không phụ thuộc DB thật,
-# để bất kỳ ai sửa regex trong tương lai cũng không vô tình làm yếu đi.
+# A2. Chống SQL/Shell Injection
 # -----------------------------------------------------------------
 
 check_db_identifier() {
@@ -137,12 +132,7 @@ check_db_identifier() {
 }
 
 # -----------------------------------------------------------------
-# A3. Exclude pattern — file nhạy cảm / rác KHÔNG được lọt vào bản backup
-#
-# Test thực nghiệm (không đoán mò) y hệt cách script thật gọi zip/tar, vì
-# đây là tính năng bảo mật: nếu exclude pattern bị gõ sai khi sửa code,
-# debug.log hay cache của plugin backup khác có thể bị gói nhầm vào bản
-# sao lưu rồi đẩy lên cloud.
+# A3. Exclude pattern — file nhạy cảm / rác
 # -----------------------------------------------------------------
 
 @test "Unit: Zip loại trừ đúng wp-content/cache nhưng vẫn giữ uploads thật" {
@@ -181,13 +171,12 @@ check_db_identifier() {
 }
 
 # -----------------------------------------------------------------
-# A4. Cú pháp bash hợp lệ — regression test cho các lỗi "(?:...)"/biến
-# không dùng từng gặp ở ruleset YARA: ở đây là bash nên dùng "bash -n".
+# A4. Cú pháp bash hợp lệ
 # -----------------------------------------------------------------
 
 @test "Unit: Script sao lưu không có lỗi cú pháp bash (bash -n)" {
   if [[ ! -f "$SCRIPT_GOC" ]]; then
-    skip "Không tìm thấy $SCRIPT_GOC trên môi trường này — bỏ qua (chạy trên VPS OLS thật để kiểm tra đầy đủ)"
+    skip "Không tìm thấy $SCRIPT_GOC trên môi trường này — bỏ qua"
   fi
   run bash -n "$SCRIPT_GOC"
   [ "$status" -eq 0 ]
@@ -195,37 +184,51 @@ check_db_identifier() {
 
 
 # =================================================================
-# PHẦN B — INTEGRATION TEST (cần VPS WPTangToc OLS thật)
+# PHẦN B — INTEGRATION TEST (Cần môi trường OS / CI thực tế)
 # =================================================================
-#
-# Toàn bộ nhóm này tự động "skip" (không fail CI) nếu không tìm thấy
-# script thật hoặc domain test thật trên hệ thống — để không làm đỏ CI
-# trên GitHub-hosted runner. Khi chạy trên self-hosted runner trỏ về VPS
-# staging có sẵn domain $TEST_DOMAIN đã cài WordPress, các test này sẽ
-# tự động chạy đầy đủ.
 
 setup() {
   if [[ ! -x "$SCRIPT_GOC" ]]; then
-    skip "Không tìm thấy script thật ($SCRIPT_GOC) — test Integration cần chạy trên VPS OLS"
+    skip "Không tìm thấy script thật ($SCRIPT_GOC) — bỏ qua Integration Test"
   fi
   if [[ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]]; then
-    skip "Domain test ($TEST_DOMAIN) chưa tồn tại trên hệ thống này — xem WPTT_TEST_DOMAIN"
+    skip "Domain test ($TEST_DOMAIN) chưa tồn tại — bỏ qua Integration Test"
   fi
 }
 
+teardown() {
+  # BẢO HIỂM 100%: Dọn dẹp tất cả các file mock hoặc backup cấu hình
+  # để trả lại nguyên trạng VPS sau mỗi bài test, kể cả khi test fail/crash.
+
+  # 1. Phục hồi core-functions (từ test MariaDB sập)
+  if [[ -f "/tmp/core-functions.bak" && -f "/etc/wptt/core-functions" ]]; then
+    mv "/tmp/core-functions.bak" "/etc/wptt/core-functions"
+  fi
+
+  # 2. Phục hồi script check-disk (từ test Full Disk)
+  if [[ -f "/tmp/wptt-check-disk.bak" && -f "/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup" ]]; then
+    mv "/tmp/wptt-check-disk.bak" "/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup"
+  fi
+
+  # 3. Phục hồi Vhost (từ test đổi extension nén tar.zst)
+  if [[ -f "/tmp/vhost_conf.bak" && -f "/etc/wptt/vhost/.${TEST_DOMAIN}.conf" ]]; then
+    mv "/tmp/vhost_conf.bak" "/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
+  fi
+
+  # 4. Gỡ bỏ mọi khóa lock ảo và file log nền còn sót lại
+  rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock" 2>/dev/null || true
+  rm -f "/tmp/wptt_bats_bg_backup.log" 2>/dev/null || true
+}
+
+# -----------------------------------------------------------------
+
 @test "Integration: Chặn sao lưu khi MariaDB đang sập" {
-  # Mock wptt_check_mariadb luôn thất bại, không đụng vào MariaDB thật
-  local core_bak
-  core_bak="$(mktemp)"
-  cp /etc/wptt/core-functions "$core_bak" 2>/dev/null || true
+  cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
   cat <<'EOF' >> /etc/wptt/core-functions
 wptt_check_mariadb() { return 1; }
 EOF
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
-
-  cp "$core_bak" /etc/wptt/core-functions 2>/dev/null || true
-  rm -f "$core_bak"
 
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
@@ -249,8 +252,8 @@ EOF
   [ -s "$sql_file" ]
 
   # Quyền file phải là 600 — chỉ root được đọc file backup (umask 077)
-  [ "$(stat -c '%a' "$zip_file")" = "600" ]
-  [ "$(stat -c '%a' "$sql_file")" = "600" ]
+  [ "$(stat -c '\%a' "$zip_file")" = "600" ]
+  [ "$(stat -c '\%a' "$sql_file")" = "600" ]
 
   # File zip phải toàn vẹn, mở được
   run unzip -tq "$zip_file"
@@ -277,41 +280,31 @@ EOF
   rm -rf "/usr/local/lsws/$TEST_DOMAIN/html/wp-content/cache"
 }
 
-@test "Integration: Hai lệnh sao lưu đồng thời trên CÙNG domain — lệnh thứ 2 bị từ chối rõ ràng" {
+@test "Integration: Hai lệnh sao lưu đồng thời trên CÙNG domain — lệnh 2 bị chặn" {
   bash "$SCRIPT_GOC" "$TEST_DOMAIN" >/tmp/wptt_bats_bg_backup.log 2>&1 &
   local pid_proc1=$!
-  sleep 1 # đợi tiến trình 1 chắc chắn đã lấy được lock
+  sleep 1 # đợi tiến trình 1 lấy lock
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
 
   wait "$pid_proc1" 2>/dev/null
-  rm -f /tmp/wptt_bats_bg_backup.log
 
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
   [[ "$output" =~ "Đụng Độ Tiến Trình" ]]
 }
 
-@test "Integration: Không đủ dung lượng đĩa — từ chối sao lưu VÀ giải phóng lock ngay (không kẹt lock)" {
-  # Mock bước kiểm tra đĩa luôn báo không đủ điều kiện, không cần làm đầy
-  # ổ cứng thật.
+@test "Integration: Không đủ dung lượng đĩa — từ chối sao lưu VÀ giải phóng lock ngay" {
   local check_script="/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup"
-  local check_bak
-  check_bak="$(mktemp)"
-  cp "$check_script" "$check_bak" 2>/dev/null || true
+  cp "$check_script" "/tmp/wptt-check-disk.bak" 2>/dev/null || true
   echo 'dieu_kien_disk="0"' > "$check_script"
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
 
-  cp "$check_bak" "$check_script" 2>/dev/null || true
-  rm -f "$check_bak"
-
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
 
-  # Quan trọng nhất: lock PHẢI được giải phóng ngay, không để kẹt vĩnh
-  # viễn — nếu không, mọi lần backup sau của domain này sẽ báo "Đụng Độ
-  # Tiến Trình" giả mãi mãi dù không có tiến trình nào đang chạy thật.
+  # Đảm bảo lock đã được nhả ra để các lần backup sau không bị kẹt vĩnh viễn
   run bash -c "
     exec 200>\"/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock\"
     flock -n 200
@@ -319,7 +312,7 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Integration: Cấu hình nén mã nguồn tar.zst tạo đúng đuôi .tar.zst (không phải .zip)" {
+@test "Integration: Cấu hình nén mã nguồn tar.zst tạo đúng đuôi .tar.zst" {
   local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
   if [[ ! -f "$vhost_conf" ]]; then
     skip "Không tìm thấy vhost conf thật của domain test"
@@ -334,9 +327,6 @@ EOF
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
 
-  cp "/tmp/vhost_conf.bak" "$vhost_conf"
-  rm -f "/tmp/vhost_conf.bak"
-
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
 
@@ -345,4 +335,3 @@ EOF
   [ -n "$zst_file" ]
   [ -s "$zst_file" ]
 }
-
