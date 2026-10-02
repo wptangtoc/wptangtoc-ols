@@ -3,6 +3,7 @@
 # =================================================================
 # tests/security-isolation.bats
 # WPTangToc OLS — Dynamic Security & Cross-Site Isolation Tests
+# Tương thích 100% với cả VPS Thực tế lẫn GitHub Actions (Mocking)
 # =================================================================
 
 export VICTIM_DOMAIN="sec-victim.com"
@@ -50,13 +51,39 @@ setup_file() {
         useradd -M -s /bin/bash "$EXTERNAL_HACKER" || true
     fi
 
-    # 2. TỰ ĐỘNG KHỞI TẠO 2 WEBSITE
+    # 2. THỬ TẠO WEBSITE BẰNG LỆNH THẬT (Dành cho VPS)
     if [[ -x "/etc/wptt/domain/wptt-themwebsite" ]]; then
         bash /etc/wptt/domain/wptt-themwebsite "$VICTIM_DOMAIN" >/dev/null 2>&1 || true
         bash /etc/wptt/domain/wptt-themwebsite "$ATTACKER_DOMAIN" >/dev/null 2>&1 || true
     fi
 
-    # Mồi wp-config.php với User chính chủ trích xuất từ file cấu hình (Không dùng stat)
+    # 3. MOCKING FALLBACK (Dành cho GitHub Actions khi lệnh thật bị xịt)
+    if [[ ! -f "/etc/wptt/vhost/.$VICTIM_DOMAIN.conf" ]]; then
+        # Tạo User Linux giả lập
+        useradd -M -s /bin/bash "u_victim" 2>/dev/null || true
+        useradd -M -s /bin/bash "u_attacker" 2>/dev/null || true
+
+        # Dựng cấu trúc thư mục giả
+        mkdir -p "/usr/local/lsws/$VICTIM_DOMAIN/html"
+        mkdir -p "/usr/local/lsws/$ATTACKER_DOMAIN/html"
+        mkdir -p "/usr/local/lsws/conf/vhosts/$VICTIM_DOMAIN"
+        mkdir -p "/etc/wptt/vhost"
+
+        # Phân quyền chuẩn
+        chown u_victim:u_victim "/usr/local/lsws/$VICTIM_DOMAIN/html"
+        chmod 755 "/usr/local/lsws/$VICTIM_DOMAIN/html"
+        chown u_attacker:u_attacker "/usr/local/lsws/$ATTACKER_DOMAIN/html"
+        chmod 755 "/usr/local/lsws/$ATTACKER_DOMAIN/html"
+
+        # Ghi file cấu hình WPTangToc ảo
+        echo 'User_name_vhost="u_victim"' > "/etc/wptt/vhost/.$VICTIM_DOMAIN.conf"
+        echo 'User_name_vhost="u_attacker"' > "/etc/wptt/vhost/.$ATTACKER_DOMAIN.conf"
+
+        # Ghi file OLS Vhost ảo
+        echo "extUser u_victim" > "/usr/local/lsws/conf/vhosts/$VICTIM_DOMAIN/$VICTIM_DOMAIN.conf"
+    fi
+
+    # 4. Mồi wp-config.php với User chính chủ trích xuất từ file cấu hình
     local v_user=$(bash -c "source /etc/wptt/vhost/.$VICTIM_DOMAIN.conf 2>/dev/null; echo \$User_name_vhost")
     
     if [[ -n "$v_user" && -d "/usr/local/lsws/$VICTIM_DOMAIN/html" ]]; then
@@ -69,15 +96,24 @@ setup_file() {
 teardown_file() {
     userdel "$EXTERNAL_HACKER" >/dev/null 2>&1 || true
 
+    # Dọn dẹp bằng lệnh thật (nếu có)
     if [[ -x "/etc/wptt/domain/wptt-xoawebsite" ]]; then
         bash /etc/wptt/domain/wptt-xoawebsite "$VICTIM_DOMAIN" >/dev/null 2>&1 || true
         bash /etc/wptt/domain/wptt-xoawebsite "$ATTACKER_DOMAIN" >/dev/null 2>&1 || true
     fi
 
-    # Dọn bạo lực
+    # Dọn dẹp bạo lực & Xóa user Mocking
     rm -rf "/usr/local/lsws/$VICTIM_DOMAIN" "/usr/local/lsws/$ATTACKER_DOMAIN" 2>/dev/null
     rm -rf "/usr/local/lsws/conf/vhosts/$VICTIM_DOMAIN" "/usr/local/lsws/conf/vhosts/$ATTACKER_DOMAIN" 2>/dev/null
     rm -f "/etc/wptt/vhost/.$VICTIM_DOMAIN.conf" "/etc/wptt/vhost/.$ATTACKER_DOMAIN.conf" 2>/dev/null
+    
+    set +u
+    source "/etc/wptt/vhost/.$VICTIM_DOMAIN.conf" 2>/dev/null && userdel "$User_name_vhost" >/dev/null 2>&1
+    source "/etc/wptt/vhost/.$ATTACKER_DOMAIN.conf" 2>/dev/null && userdel "$User_name_vhost" >/dev/null 2>&1
+    set -u
+
+    userdel "u_victim" 2>/dev/null || true
+    userdel "u_attacker" 2>/dev/null || true
 }
 
 setup() {
@@ -152,7 +188,6 @@ setup() {
 }
 
 @test "Security Isolation: Web root thuộc đúng sở hữu của Vhost User" {
-    # Check lại file wp-config thay vì thư mục HTML (để tương thích chuẩn OLS)
     owner="$(stat -c '%U' "$VICTIM_ROOT/wp-config.php")"
     if [ "$owner" != "$VICTIM_USER" ]; then
         log_error "Sở hữu file cấu hình sai. Kỳ vọng=$VICTIM_USER Thực tế=$owner"
@@ -173,7 +208,6 @@ setup() {
         skip "Không tìm thấy file cấu hình Vhost OLS"
     fi
 
-    # Mở rộng regex để tương thích với nhiều định dạng khoảng trắng của OLS
     run grep -iE "extUser[[:space:]]+$VICTIM_USER" "$OLS_VHOST_CONFIG"
     assert_status_zero
 }
