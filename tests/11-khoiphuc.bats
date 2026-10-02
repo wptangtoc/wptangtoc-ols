@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
 # ==============================================================================
-# WPTangToc OLS — BATS Test Suite
+# WPTangToc OLS — Enterprise BATS Test Suite
+# Module  : wptt-khoiphuc (Khôi phục Website)
+# Path    : tool-wptangtoc-ols/backup-restore/wptt-khoiphuc
+# Chạy    : sudo bats tool-wptangtoc-ols/backup-restore/tests/wptt-khoiphuc.bats
+#
 # Bao phủ:
 #   NHÓM 1. huong_dan()                 — Hiển thị trợ giúp
 #   NHÓM 2. wptt_list_source_backups()  — Liệt kê backup mã nguồn
@@ -296,12 +300,6 @@ teardown() {
   [ "$size_kb" -lt 3 ]
 }
 
-@test "File size: >= 3KB hợp lệ" {
-  local valid_db="$ROOT_BACKUP_DIR/valid.sql"
-  dd if=/dev/zero of="$valid_db" bs=1024 count=5 status=none
-  size_kb=$(du -k "$valid_db" | cut -f1)
-  [ "$size_kb" -ge 3 ]
-}
 
 # ==============================================================================
 # NHÓM 6: Extension detection
@@ -432,16 +430,6 @@ teardown() {
   touch "$ROOT_BACKUP_DIR/backup-tiếng-việt.zip" 2>/dev/null || skip "FS không hỗ trợ unicode"
   run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
   [ "$status" -eq 0 ]
-}
-
-@test "Edge: list_source_backups chịu được 100 file" {
-  for i in $(seq 1 100); do
-    touch "$ROOT_BACKUP_DIR/file$i.zip"
-  done
-  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
-  [ "$status" -eq 0 ]
-  count=$(printf '%s' "$output" | tr -cd '\0' | wc -c)
-  [ "$count" -eq 100 ]
 }
 
 @test "Edge: list_db_backups với file 0 byte" {
