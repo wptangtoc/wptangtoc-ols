@@ -1,3 +1,15 @@
+## WPTangToc OLS v8.2.0.10
+
+### 🚀 Tính năng mới
+- **Hoàn thiện và mở rộng kịch bản kiểm thử bảo mật cô lập:** Bổ sung các bài kiểm tra chuyên sâu nhằm củng cố tính năng phân tách tuyệt đối giữa các website, ngăn chặn triệt để nguy cơ tấn công chéo và truy cập trái phép giữa các tài khoản trên máy chủ.
+
+### 🛠️ Tối ưu hệ thống
+- **Mở rộng hỗ trợ kiến trúc ARM trên AlmaLinux 9:** Tích hợp và tối ưu hóa hệ thống kiểm thử tự động trên nền tảng kiến trúc ARM cho AlmaLinux 9, đảm bảo khả năng vận hành mượt mà, ổn định trên các hạ tầng phần cứng đa dạng.
+- **Nâng cấp hệ thống kiểm thử tự động (BATS):** Cải tiến toàn diện các kịch bản kiểm tra hệ thống, nâng cao độ tin cậy và sự ổn định cho các tính năng cốt lõi trong quá trình quản trị máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.0.9
 
 ### 🚀 Tính năng mới
