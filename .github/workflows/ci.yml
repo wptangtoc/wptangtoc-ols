@@ -34,13 +34,39 @@ jobs:
         run: |
           find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r -P "$(nproc)" -I {} bash -n {}
 
-      - name: 🔍 2. Chạy ShellCheck phân tích Logic (Đa luồng)
+      - name: 🔍 2. Chạy ShellCheck
+        shell: bash
         env:
           SHELLCHECK_OPTS: "-e SC1091 -e SC1090 -e SC2154 -e SC2102 -e SC2211 -e SC2034"
         run: |
+          set -Eeuo pipefail
           sudo apt-get update && sudo apt-get install -y shellcheck
-          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r -P "$(nproc)" shellcheck
-        continue-on-error: true
+
+          mapfile -t FILES < <(
+            find . -type d -name ".git" -prune -o -type f \
+              \( -name "*.sh" -o ! -name "*.*" \) \
+              -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} +
+          )
+
+          if (( ${#FILES[@]} == 0 )); then
+            echo "Không tìm thấy file shell nào."
+            exit 0
+          fi
+
+          echo "::group::📋 Toàn bộ issue (warning + error)"
+          printf '%s\0' "${FILES[@]}" | xargs -0 -r -P "$(nproc)" -n 1 shellcheck --severity=warning --format=gcc || true
+          echo "::endgroup::"
+
+          echo "::group::🚨 Chỉ ERROR (dùng để gate CI)"
+          ERRORS=$(printf '%s\0' "${FILES[@]}" \
+            | xargs -0 -r -P "$(nproc)" -n 1 shellcheck --severity=error --format=gcc 2>&1 || true)
+          if [[ -n "$ERRORS" ]]; then
+            echo "$ERRORS"
+            echo "::error::Phát hiện lỗi ShellCheck nghiêm trọng!"
+            exit 1
+          fi
+          echo "✅ Không có error."
+          echo "::endgroup::"
 
       - name: 📝 3. Validate YAML Configuration
         run: |
@@ -176,7 +202,6 @@ jobs:
  
           cd $GITHUB_WORKSPACE
           
-          # sudo cp -a ./* /etc/wptt/ 2>/dev/null || true
           sudo chmod -R 755 /etc/wptt/
           
           sudo mkdir -p /etc/wptt/tmp
@@ -185,40 +210,35 @@ jobs:
           sudo sh -c 'echo "" > /root/.bashrc'
           
           sudo bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
+
       - name: 🖨️ In Log cài đặt nếu thất bại
-        if: ${{ failure() }} # Chỉ in ra khi các bước trên bị lỗi
+        if: ${{ failure() }}
         run: cat /var/log/wptangtoc-install.log || echo "Không tìm thấy file log"
 
-      - name: 🛠️ Vô hiệu hóa lệnh gọi Menu (Chống treo BATS) vì menu CI không thể tương tác chọn
+      - name: 🛠️️ Vô hiệu hóa lệnh gọi Menu (Chống treo BATS)
         run: |
-          # 1. Ghi đè dứt điểm các file độc lập (Thêm Shebang #!/bin/bash cho chuẩn)
           echo -e '#!/bin/bash\nexit 0' | sudo tee /usr/bin/wptangtoc > /dev/null
           echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status > /dev/null
           echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status2 > /dev/null
 
-          # 2. Quét và ghi đè toàn bộ họ hàng nhà "main" (Dùng vòng lặp để xử lý ký tự *)
           for file in /etc/wptt/wptt-*main; do
-          if [ -f "$file" ]; then
-          echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" > /dev/null
-          fi
+            if [ -f "$file" ]; then
+              echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" > /dev/null
+            fi
           done
 
       - name: 🛠️ Bypass (Mocking) công cụ ionice và nice cho CI/CD
         run: |
-          # Tạo script đóng thế: Nuốt các cờ (như -c 3, -n 19) và chạy lệnh gốc phía sau
           cat << 'EOF' | sudo tee /usr/local/bin/ionice > /dev/null
           #!/bin/bash
           while [[ $# -gt 0 ]]; do
             if [[ "$1" != -* ]]; then break; fi
-            shift 2 # Bỏ qua cờ và giá trị (VD: Bỏ qua "-c" và "3")
+            shift 2
           done
-          exec "$@" # Thực thi phần lệnh còn lại (VD: chown, chmod...)
+          exec "$@"
           EOF
 
-          # Copy kịch bản y hệt cho lệnh nice
           sudo cp /usr/local/bin/ionice /usr/local/bin/nice
-
-          # Cấp quyền thực thi cho 2 công cụ giả
           sudo chmod +x /usr/local/bin/ionice /usr/local/bin/nice
 
       - name: 🧪 Chạy Kiểm thử BATS Integration
@@ -233,14 +253,13 @@ jobs:
 # ============================================================
 # JOB 4: INSTALLATION TESTS (ALMALINUX VM MATRIX)
 # ============================================================
-#https://github.com/vmactions/almalinux-vm nếu muốn lấy SHA thì truy cập vào commit mà xem lấy SHA rồi điền vào
   install-tests-almalinux:
     name: Test Install AlmaLinux ${{ matrix.release }} và Kiểm thử BATS
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        release: ['9','10'] #bản 9 là bản ổn định nhất CI, còn bản 8 thì không còn support
+        release: ['9', '10']
     timeout-minutes: 40
     steps:
       - name: 📥 Tải mã nguồn
@@ -248,7 +267,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🚀 Khởi chạy Máy ảo AlmaLinux 9 và 10 & Test Cài đặt và BATS
+      - name: 🚀 Khởi chạy Máy ảo AlmaLinux & Test Cài đặt và BATS
         uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
         with:
           release: ${{ matrix.release }}
@@ -262,27 +281,18 @@ jobs:
 
             curl -sO https://wptangtoc.com/share/wptangtoc-ols
             
-            #vô hiệu hóa khả năng reboot
-            # --- VŨ KHÍ TỐI THƯỢNG: CHẶN REBOOT BẤT TỬ ---
-            # 1. Khóa ở tầng systemd (cấm kernel nhận lệnh reboot)
             systemctl mask reboot.target halt.target poweroff.target shutdown.target
             
-            # 2. Tạo file giả và khóa cứng bằng chattr
             for cmd in reboot shutdown halt poweroff; do
               rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-              
               echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
               chmod +x /usr/sbin/$cmd
-              
               ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
               ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
-              
-              # Lệnh chattr +i biến file thành bất tử, dnf/yum không thể ghi đè
               chattr +i /usr/sbin/$cmd 2>/dev/null || true
               chattr +i /sbin/$cmd 2>/dev/null || true
             done
 
-            #chặn update và upgrade để triển khai cho nó nhanh
             mv /usr/bin/dnf /usr/bin/dnf_real
             cat << 'EOF' > /usr/bin/dnf
             #!/bin/bash
@@ -293,16 +303,13 @@ jobs:
             exec /usr/bin/dnf_real "$@"
             EOF
             chmod +x /usr/bin/dnf
-
-            # ----------------------------------------------
             
             echo "" > /root/.bashrc
             
             bash wptangtoc-ols --auto
-       
+         
             cd $GITHUB_WORKSPACE
             
-            # cp -a ./* /etc/wptt/ 2>/dev/null || true
             chmod -R 755 /etc/wptt/
             
             mkdir -p /etc/wptt/tmp
@@ -314,9 +321,6 @@ jobs:
             
             echo "✅ Cài đặt thành công trên AlmaLinux ${{ matrix.release }}!"
 
-            # ============================================================
-            # TÍCH HỢP BATS TEST TRÊN ALMALINUX VM
-            # ============================================================
             echo "🛠️ Đang vô hiệu hóa Menu để chuẩn bị chạy BATS..."
             echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
             echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
@@ -335,5 +339,5 @@ jobs:
             fi
 
       - name: 🖨️ In Log cài đặt nếu thất bại
-        if: ${{ failure() }} # Chỉ in ra khi các bước trên bị lỗi
+        if: ${{ failure() }}
         run: cat /var/log/wptangtoc-install.log || echo "Không tìm thấy file log"
