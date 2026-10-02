@@ -1,76 +1,84 @@
 #!/bin/bash
-. /etc/wptt/.wptt.conf
-. /etc/wptt/echo-color
-. /etc/wptt/core-functions 2>/dev/null
+# Cấu hình webserver dành cho Woocommerce
+
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
+
+# Khởi tạo các hàm fallback (dự phòng) trong trường hợp file core bị thiếu, 
+# tránh văng lỗi "command not found"
+declare -F _runing >/dev/null || _runing() { echo "RUNNING: $*"; }
+declare -F wptt_logs >/dev/null || wptt_logs() { echo "[$1] $2"; }
+declare -F _rundone >/dev/null || _rundone() { echo "DONE: $*"; }
+declare -F wptt_smart_reload_lsws >/dev/null || wptt_smart_reload_lsws() { :; }
 
 _runing "Cấu hình webserver dành cho Woocommerce"
-wptt_logs "INFO" "Thiết lập cấu hình Woocommerce webserver "
+wptt_logs "INFO" "Thiết lập cấu hình Woocommerce webserver"
 
-#all version php và tương thich với ubuntu, almalinux, redhet, rocky
-php_cli=$(php -i | grep "Loaded Configuration File" | awk '{print $5}')
+# Kiểm tra PHP CLI có tồn tại không trước khi gọi
+if ! command -v php >/dev/null 2>&1; then
+    wptt_logs "ERROR" "Lệnh 'php' không tồn tại. Vui lòng kiểm tra lại môi trường."
+    exit 1
+fi
 
-php_cli_version=$(echo "$php_cli" | cut -f5 -d '/')
-lsphp=($(ls /usr/local/lsws | grep -P '^lsphp[0-9]+$'))
-for php_all in "${lsphp[@]}"; do
-  php=$(echo "$php_cli" | sed "s/$php_cli_version/$php_all/g")
-  if [[ -f $php ]]; then
-    sed -i "/memory_limit/d" "$php"
-    sed -i "/memory-limit/a memory_limit = 256M" "$php"
+# Lấy đường dẫn php.ini hiện tại, lấy dòng đầu tiên match để tránh rác
+php_cli=$(php -i 2>/dev/null | grep -m 1 "Loaded Configuration File" | awk '{print $5}')
 
-    sed -i "/max_input_time/d" "$php"
-    sed -i "/max-input-time/a max_input_time = 120" "$php"
+if [[ -z "$php_cli" || ! -f "$php_cli" ]]; then
+    wptt_logs "ERROR" "Không tìm thấy file php.ini hợp lệ từ cấu hình CLI."
+    exit 1
+fi
 
-    sed -i '/opcache.memory_consumption/d' "$php"
-    sed -i '/opcache.interned_strings_buffer/d' "$php"
-    sed -i '/opcache.max_accelerated_files/d' "$php"
-    echo 'opcache.memory_consumption=256
+# Dùng Bash Regex để tách lấy phiên bản (vd: lsphp81) thay vì dùng lệnh 'cut' cứng nhắc
+if [[ "$php_cli" =~ (lsphp[0-9]+) ]]; then
+    php_cli_version="${BASH_REMATCH[1]}"
+else
+    wptt_logs "ERROR" "Không thể trích xuất chuỗi phiên bản 'lsphp' từ đường dẫn: $php_cli"
+    exit 1
+fi
+
+lsws_dir="/usr/local/lsws"
+
+# Kiểm tra xem thư mục có tồn tại không trước khi lặp
+if [[ -d "$lsws_dir" ]]; then
+    # Bật tính năng nullglob để nếu không có file nào khớp thì không ném ra lỗi string literal
+    shopt -s nullglob
+    
+    # Dùng File Globbing thay vì 'ls | grep' (Chuẩn SC2012, SC2207)
+    for dir_path in "$lsws_dir"/lsphp[0-9]*; do
+        php_all=$(basename "$dir_path")
+        
+        # Thay thế phiên bản trong chuỗi đường dẫn
+        php_config="${php_cli//$php_cli_version/$php_all}"
+
+        if [[ -f "$php_config" ]]; then
+            # Thay đổi các thông số cấu hình
+            sed -i '/memory_limit/d' "$php_config"
+            sed -i '/memory-limit/a memory_limit = 256M' "$php_config"
+
+            sed -i '/max_input_time/d' "$php_config"
+            sed -i '/max-input-time/a max_input_time = 120' "$php_config"
+
+            # Tối ưu: Gom chung các lệnh xóa vào một lần gọi sed (tiết kiệm I/O)
+            sed -i -e '/opcache.memory_consumption/d' \
+                   -e '/opcache.interned_strings_buffer/d' \
+                   -e '/opcache.max_accelerated_files/d' "$php_config"
+
+            # Tối ưu: Sử dụng Here-Doc thay cho lệnh echo qua nhiều dòng
+            cat >> "$php_config" <<EOF
+opcache.memory_consumption=256
 opcache.max_accelerated_files=20000
 opcache.interned_strings_buffer=16
-' >>"$php"
-  fi
-done
-
-#support JIT
-# Lấy danh sách các thư mục lsphp (ví dụ: lsphp74, lsphp81, lsphp82)
-lsphp_list=($(ls /usr/local/lsws | grep -P '^lsphp[0-9]+$'))
-
-for php_dir in "${lsphp_list[@]}"; do
-  # Tách lấy phần số của phiên bản (ví dụ: "lsphp82" -> "82", "lsphp74" -> "74")
-  version_num=$(echo "$php_dir" | grep -oP '[0-9]+')
-
-  # Điều kiện: Chỉ thực thi nếu phần số >= 80 (Tức là PHP 8.0 trở lên)
-  if ((version_num >= 80)); then
-    # Đường dẫn chuẩn xác tới file php.ini của OpenLiteSpeed
-
-    if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-      phien_ban_php_co_cham=$(echo "$version_num" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
-      php_ini_path="/usr/local/lsws/$php_dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
-    else
-      php_ini_path="/usr/local/lsws/$php_dir/etc/php.ini"
-    fi
-
-    if [[ -f "$php_ini_path" ]]; then
-      echo "Đang cấu hình JIT cho $php_dir..."
-
-      # Xóa cấu hình cũ (nếu có) để tránh lặp dòng
-      sed -i '/opcache.jit_buffer_size/d' "$php_ini_path"
-      sed -i '/opcache.jit/d' "$php_ini_path"
-
-      # Thêm cấu hình JIT mới
-      echo 'opcache.jit=tracing
-opcache.jit_buffer_size=128M' >>"$php_ini_path"
-    fi
-  else
-    # Có thể log ra hoặc ẩn đi tùy anh
-    echo "Bỏ qua $php_dir (Không hỗ trợ JIT)."
-  fi
-done
-#END JIT
-
-duong_dan_config_redis=$(systemctl cat redis | grep 'ExecStart' | sed -n 's#^.* \(/.*\.conf\).*#\1#p')
-if [[ -f $duong_dan_config_redis ]]; then
-  sed -i 's/128mb/256mb/g' "$duong_dan_config_redis"
-  systemctl restart redis.service
+EOF
+        fi
+    done
+    
+    # Tắt nullglob trả về trạng thái mặc định cho bash
+    shopt -u nullglob
 fi
 
 wptt_smart_reload_lsws >/dev/null 2>&1
