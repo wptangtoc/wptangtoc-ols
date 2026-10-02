@@ -2,7 +2,7 @@
 
 setup() {
   export CI="true"
-  export SCRIPT_GOC="/etc/wptt/domain/wptt-sao-chep-website"
+  export SCRIPT_GOC="/etc/wptt/wptt-sao-chep-website"
   export SCRIPT_TEST="/tmp/wptt-sao-chep-website-test.sh"
   
   # Tạo file Test độc lập
