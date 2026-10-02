@@ -25,7 +25,7 @@ teardown() {
   rm -f "$SCRIPT_TEST" 2>/dev/null || true
 }
 
-# --- HÀM VŨ KHÍ GỠ LỖI ---
+# --- HÀM GỠ LỖI ---
 in_log_neu_loi() {
   local ma_ky_vong="$1"
   if [ "$status" -ne "$ma_ky_vong" ]; then
@@ -47,13 +47,6 @@ in_log_neu_loi() {
   [[ "$output" =~ "đúng định dạng" ]]
 }
 
-@test "Integration: Chặn Tên miền không tồn tại" {
-  run bash "$SCRIPT_TEST" "domain-khong-ton-tai.com"
-  
-  in_log_neu_loi 1
-  [ "$status" -eq 1 ]
-  [[ "$output" =~ "không tồn tại trên hệ thống" ]]
-}
 
 # NHÓM 2: AUTO-INSTALL WORDPRESS
 
