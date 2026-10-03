@@ -170,7 +170,7 @@ jobs:
           if (( FAILED != 0 )); then exit 1; fi
 
 # ============================================================
-# JOB 3: INTEGRATION TESTS (UBUNTU MÔI TRƯỜNG THẬT)
+# JOB 3: INTEGRATION TESTS (UBUNTU MÔI TRƯỜNG THẬT x86_64)
 # ============================================================
   integration-tests:
     name: Test Install Ubuntu và Kiểm thử BATS
@@ -473,7 +473,7 @@ jobs:
               "$LOG" 2>/dev/null || true
           done
 
-      - name: 🖨️ In Log cài đặt nếu thất bại
+      - name: 🖨️️ In Log cài đặt nếu thất bại
         if: ${{ failure() }}
         run: cat wptangtoc-install-alma9-arm.log || echo "Không tìm thấy file log"
 
@@ -485,5 +485,113 @@ jobs:
           path: |
             wptangtoc-install-alma9-arm.log
             bats-test-alma9-arm.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+# ============================================================
+# JOB 6: INTEGRATION TESTS (UBUNTU 24.04 ARM64)
+# ============================================================
+  integration-tests-ubuntu-arm:
+    name: Test Install Ubuntu 24.04 ARM và Kiểm thử BATS
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 50
+    steps:
+      - name: 📥 Tải mã nguồn test
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
+
+      - name: ⚙️ Cài đặt BATS
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS
+        run: |
+          export TERM=xterm
+          export CI=true
+
+          curl -sO https://wptangtoc.com/share/wptangtoc-ols
+          
+          sudo rm -f /sbin/reboot
+          echo -e '#!/bin/bash\necho "Đã chặn lệnh reboot thành công để tiếp tục chạy BATS!"' | sudo tee /sbin/reboot
+          sudo chmod +x /sbin/reboot
+          
+          sudo bash wptangtoc-ols --auto
+ 
+          cd $GITHUB_WORKSPACE
+          sudo chmod -R 755 /etc/wptt/
+          
+          sudo mkdir -p /etc/wptt/tmp
+          curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' | sudo tee /etc/wptt/tmp/wptangtoc-ols-version-main > /dev/null
+          
+          sudo bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
+
+      - name: 🛠 Vô hiệu hóa lệnh gọi Menu (Chống treo BATS)
+        run: |
+          echo -e '#!/bin/bash\nexit 0' | sudo tee /usr/bin/wptangtoc > /dev/null
+          echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status > /dev/null
+          echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status2 > /dev/null
+
+          for file in /etc/wptt/wptt-*main; do
+            if [ -f "$file" ]; then
+              echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" > /dev/null
+            fi
+          done
+
+      - name: 🛠️ Bypass (Mocking) công cụ ionice và nice cho CI/CD
+        run: |
+          cat << 'EOF' | sudo tee /usr/local/bin/ionice > /dev/null
+          #!/bin/bash
+          while [[ $# -gt 0 ]]; do
+            if [[ "$1" != -* ]]; then break; fi
+            shift 2
+          done
+          exec "$@"
+          EOF
+
+          sudo cp /usr/local/bin/ionice /usr/local/bin/nice
+          sudo chmod +x /usr/local/bin/ionice /usr/local/bin/nice
+
+      - name: 🧪 Chạy Kiểm thử BATS Integration
+        shell: bash
+        run: |
+          if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
+            set -o pipefail
+            sudo bats tests/ | tee bats-test-ubuntu-arm.log
+          else
+            exit 1
+          fi
+
+      - name: 📋 Copy log ra workspace để upload
+        if: always()
+        run: |
+          sudo cp /var/log/wptangtoc-install.log ./wptangtoc-install-ubuntu-arm.log 2>/dev/null || true
+          sudo chown "$USER:$USER" ./wptangtoc-install-ubuntu-arm.log 2>/dev/null || true
+
+      - name: 🔐 Redact thông tin nhạy cảm trong log
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for LOG in ./wptangtoc-install-ubuntu-arm.log ./bats-test-ubuntu-arm.log; do
+            [[ -f "$LOG" ]] || continue
+            sudo sed -i -E \
+              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
+              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
+              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
+              "$LOG" 2>/dev/null || true
+          done
+
+      - name: 🖨 In Log cài đặt nếu thất bại
+        if: ${{ failure() }}
+        run: cat ./wptangtoc-install-ubuntu-arm.log || echo "Không tìm thấy file log"
+
+      - name: 📤 Upload Artifacts (Logs Ubuntu ARM)
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: logs-ubuntu-24.04-arm
+          path: |
+            wptangtoc-install-ubuntu-arm.log
+            bats-test-ubuntu-arm.log
           if-no-files-found: ignore
           retention-days: 7
