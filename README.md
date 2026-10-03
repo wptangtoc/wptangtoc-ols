@@ -3,6 +3,7 @@
     <p><b>Giải pháp Thiết lập & Quản trị Webserver Miễn phí, Siêu tốc độ, Dành riêng cho WordPress</b></p>
     <p>
     <a href="https://github.com/wptangtoc/wptangtoc-ols/actions/workflows/ci.yml"><img src="https://github.com/wptangtoc/wptangtoc-ols/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build & Test"></a>
+    <a href="https://github.com/aquasecurity/trivy"><img src="https://img.shields.io/badge/Security_Scan-Trivy-blue.svg" alt="Trivy Security"></a>
     <a href="https://wptangtoc.com"><img src="https://img.shields.io/badge/Optimized%20for-WordPress-21759b.svg" alt="Optimized for WordPress"></a>
     <a href="https://github.com/wptangtoc/wptangtoc-ols/releases"><img src="https://img.shields.io/github/v/release/wptangtoc/wptangtoc-ols?label=stable&color=007ec6" alt="Stable Version"></a>
     <a href="https://github.com/wptangtoc/wptangtoc-ols?tab=GPL-3.0-1-ov-file"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3"></a>
@@ -21,6 +22,7 @@
     <li>🛡️ <b>Bảo mật cô lập:</b> Sử dụng công nghệ <code>PhpSuExec + Chroot + Namespace</code> để giam lỏng (cô lập) từng website. Nếu một trang web trên máy chủ bị hack, hacker cũng vĩnh viễn không thể "cháy lan" sang các trang web khác. nhiều lớp giúp giảm thiểu nguy cơ lây lan mã độc giữa các website.</li>
     <li>🤖 <b>Tự động hóa thông minh:</b> Mọi thao tác cấu hình phức tạp, tối ưu Database, hay quản lý Firewall đều được giải quyết tự động chỉ bằng phím bấm.</li>
     <li>☁️ <b>Bảo vệ dữ liệu toàn diện:</b> Hệ thống sao lưu thông minh vận hành hoàn toàn tự động đóng gói và đẩy thẳng dữ liệu của bạn lên đa nền tảng Cloud (Amazon S3, Google Drive, OneDrive, Telegram, Cloudflare R2...). Giải phóng bạn khỏi nỗi lo rủi ro phần cứng, hỏng ổ cứng... Đảm bảo website luôn có sẵn phương án khôi phục thần tốc trước mọi sự cố hay thảm họa không lường trước.</li>
+    <li>✅ <b>An tâm tuyệt đối (DevSecOps):</b> Quét bảo mật tự động (Trivy, Gitleaks, ShellCheck) và kiểm thử khắt khe qua BATS trên đa nền tảng máy ảo CI của GitHub Actions (x86_64 & ARM64), đảm bảo sự ổn định tuyệt đối trước khi đến tay bạn.</li>
 </ul>
 
 <hr>
@@ -104,6 +106,7 @@
     <a href="https://openlitespeed.org/">OpenLiteSpeed</a> | 
     <a href="https://downloads.mariadb.org/">MariaDB</a> | 
     <a href="https://www.php.net/">PHP</a> | 
+    <a href="https://wordpress.org/">WordPress</a> | 
     <a href="https://wp-cli.org/">WP-CLI</a> | 
     <a href="https://rclone.org/">Rclone</a> | 
     <a href="https://www.fail2ban.org/">Fail2ban</a> | 
@@ -112,7 +115,10 @@
     <a href="https://valkey.io/">Valkey</a> | 
     <a href="https://virustotal.github.io/yara/">Yara</a> | 
     <a href="https://tinyfilemanager.github.io/">TinyFileManager</a> |
-    <a href="https://perishablepress.com/8g-firewall/">8G Firewall</a>
+    <a href="https://perishablepress.com/8g-firewall/">8G Firewall</a> |
+    <a href="https://aquasecurity.github.io/trivy/">Aqua Trivy (Bảo mật)</a> |
+    <a href="https://github.com/gitleaks/gitleaks">Gitleaks</a> |
+    <a href="https://www.shellcheck.net/">ShellCheck</a>
 </p>
 
 <hr>
