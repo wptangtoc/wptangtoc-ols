@@ -1,19 +1,13 @@
 #!/usr/bin/env bats
-#
-# tests/09-sao-luu.bats — Kiểm thử tính năng Sao lưu (Backup) của WPTangToc OLS
-#
-# File này chia làm 2 phần rõ rệt:
-#
-#   PHẦN A — "Unit": Chỉ dùng flock/zip/tar/bash thuần. Mục tiêu: khóa chặt các cơ
-#   chế cốt lõi (locking, loại trừ file nhạy cảm, validate input chống injection).
-#
-#   PHẦN B — "Integration": Chạy thực tế trên môi trường VPS / CI/CD có OS thật.
-#   Kiểm tra tính toàn vẹn của mã nguồn, database dump, phân quyền file vật lý,
-#   và xử lý khôi phục cấu hình hoàn hảo nhờ hàm Teardown thông minh.
 
-SCRIPT_GOC="${WPTT_SAOLUU_SCRIPT:-/etc/wptt/backup-restore/wptt-saoluu}"
-TEST_DOMAIN="${WPTT_TEST_DOMAIN:-wptest-saoluu-demo.com}"
-BACKUP_ROOT="/usr/local/backup-website"
+#Kiểm thử tính năng Sao lưu (Backup) của WPTangToc OLS
+
+export SCRIPT_GOC="${WPTT_SAOLUU_SCRIPT:-/etc/wptt/backup-restore/wptt-saoluu}"
+export SCRIPT_THEM="${WPTT_THEMWEBSITE_SCRIPT:-/etc/wptt/domain/wptt-themwebsite}"
+export SCRIPT_XOA="${WPTT_XOAWEBSITE_SCRIPT:-/etc/wptt/domain/wptt-xoa-website}"
+export SCRIPT_CAI_WP="${WPTT_CAI_WP_SCRIPT:-/etc/wptt/wptt-install-wordpress2}"
+export BACKUP_ROOT="/usr/local/backup-website"
+export FILE_DUNG_CHUNG="/tmp/wptt_bats_bien_dung_chung_$$.sh"
 
 # --- HÀM VŨ KHÍ GỠ LỖI ---
 in_log_neu_loi() {
@@ -32,10 +26,75 @@ in_log_neu_loi() {
 setup_file() {
   export UNIT_TMP
   UNIT_TMP="$(mktemp -d)"
+
+  export TEST_DOMAIN="wptest-saoluu-$(date +\%s)-$$.com"
+
+  echo "export TEST_DOMAIN=\"$TEST_DOMAIN\"" > "$FILE_DUNG_CHUNG"
+  return 0
 }
 
 teardown_file() {
-  rm -rf "${UNIT_TMP:?}" 2>/dev/null || true
+  rm -rf "${UNIT_TMP:-/tmp/dummy_wptt}" 2>/dev/null || true
+  
+  # Dùng IF thuần túy thay cho logic phẳng để tương thích mọi bản Bash
+  if [ -f "$FILE_DUNG_CHUNG" ]; then
+    source "$FILE_DUNG_CHUNG" 2>/dev/null || true
+    if [ -n "$TEST_DOMAIN" ]; then
+      if [ -x "$SCRIPT_XOA" ]; then
+        cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
+        cat <<'EOF' > /etc/wptt/core-functions
+source /tmp/core-functions.bak
+wptt_xac_nhan() { return 0; }
+EOF
+        bash "$SCRIPT_XOA" "$TEST_DOMAIN" >/dev/null 2>&1 || true
+        mv /tmp/core-functions.bak /etc/wptt/core-functions 2>/dev/null || true
+      fi
+    fi
+    rm -f "$FILE_DUNG_CHUNG" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# =================================================================
+# PHẦN B — INTEGRATION TEST (Cần môi trường OS / CI thực tế)
+# =================================================================
+
+setup() {
+  if [ -f "$FILE_DUNG_CHUNG" ]; then
+      source "$FILE_DUNG_CHUNG" 2>/dev/null || true
+  fi
+
+  # Dùng lệnh GREP siêu lành tính thay vì [[ ... =~ ... ]] gây lỗi syntax
+  if echo "$BATS_TEST_DESCRIPTION" | grep -q "Integration"; then
+    if [ ! -x "$SCRIPT_GOC" ] \vert{}\vert{} [ ! -x "$SCRIPT_THEM" ] || [ ! -x "$SCRIPT_XOA" ] \vert{}\vert{} [ ! -x "$SCRIPT_CAI_WP" ]; then
+      skip "Thiếu script môi trường (Thêm/Xóa/Cài/Sao Lưu). Bỏ qua Integration Test"
+    fi
+  fi
+  return 0
+}
+
+teardown() {
+  if [ -f "/tmp/core-functions.bak" ]; then
+    if [ -f "/etc/wptt/core-functions" ]; then
+      mv "/tmp/core-functions.bak" "/etc/wptt/core-functions" 2>/dev/null || true
+    fi
+  fi
+
+  if [ -f "/tmp/wptt-check-disk.bak" ]; then
+    if [ -f "/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup" ]; then
+      mv "/tmp/wptt-check-disk.bak" "/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup" 2>/dev/null || true
+    fi
+  fi
+
+  if [ -f "/tmp/vhost_conf.bak" ]; then
+    if [ -f "/etc/wptt/vhost/.${TEST_DOMAIN}.conf" ]; then
+      mv "/tmp/vhost_conf.bak" "/etc/wptt/vhost/.${TEST_DOMAIN}.conf" 2>/dev/null || true
+    fi
+  fi
+
+  rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock" 2>/dev/null || true
+  rm -f "/tmp/wptt_bats_bg_backup.log" 2>/dev/null || true
+  return 0
 }
 
 # -----------------------------------------------------------------
@@ -49,7 +108,7 @@ teardown_file() {
     exec 200>"$lock_file"
     flock -n 200 || exit 1
     sleep 3
-  ) &
+  ) 3>&- &
   local pid_proc1=$!
   sleep 0.5
 
@@ -58,8 +117,8 @@ teardown_file() {
     flock -n 200
   "
 
-  kill "$pid_proc1" 2>/dev/null
-  wait "$pid_proc1" 2>/dev/null
+  kill "$pid_proc1" 2>/dev/null || true
+  wait "$pid_proc1" 2>/dev/null || true
 
   [ "$status" -ne 0 ]
 }
@@ -72,7 +131,7 @@ teardown_file() {
     exec 200>"$lock_a"
     flock -n 200 || exit 1
     sleep 2
-  ) &
+  ) 3>&- &
   local pid_proc1=$!
   sleep 0.3
 
@@ -81,8 +140,8 @@ teardown_file() {
     flock -n 201
   "
 
-  kill "$pid_proc1" 2>/dev/null
-  wait "$pid_proc1" 2>/dev/null
+  kill "$pid_proc1" 2>/dev/null || true
+  wait "$pid_proc1" 2>/dev/null || true
 
   [ "$status" -eq 0 ]
 }
@@ -175,54 +234,54 @@ check_db_identifier() {
 # -----------------------------------------------------------------
 
 @test "Unit: Script sao lưu không có lỗi cú pháp bash (bash -n)" {
-  if [[ ! -f "$SCRIPT_GOC" ]]; then
+  if [ ! -f "$SCRIPT_GOC" ]; then
     skip "Không tìm thấy $SCRIPT_GOC trên môi trường này — bỏ qua"
   fi
   run bash -n "$SCRIPT_GOC"
   [ "$status" -eq 0 ]
 }
 
-
-# =================================================================
-# PHẦN B — INTEGRATION TEST (Cần môi trường OS / CI thực tế)
-# =================================================================
-
-setup() {
-  if [[ ! -x "$SCRIPT_GOC" ]]; then
-    skip "Không tìm thấy script thật ($SCRIPT_GOC) — bỏ qua Integration Test"
-  fi
-  if [[ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]]; then
-    skip "Domain test ($TEST_DOMAIN) chưa tồn tại — bỏ qua Integration Test"
-  fi
-}
-
-teardown() {
-  # BẢO HIỂM 100%: Dọn dẹp tất cả các file mock hoặc backup cấu hình
-  # để trả lại nguyên trạng VPS sau mỗi bài test, kể cả khi test fail/crash.
-
-  # 1. Phục hồi core-functions (từ test MariaDB sập)
-  if [[ -f "/tmp/core-functions.bak" && -f "/etc/wptt/core-functions" ]]; then
-    mv "/tmp/core-functions.bak" "/etc/wptt/core-functions"
-  fi
-
-  # 2. Phục hồi script check-disk (từ test Full Disk)
-  if [[ -f "/tmp/wptt-check-disk.bak" && -f "/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup" ]]; then
-    mv "/tmp/wptt-check-disk.bak" "/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup"
-  fi
-
-  # 3. Phục hồi Vhost (từ test đổi extension nén tar.zst)
-  if [[ -f "/tmp/vhost_conf.bak" && -f "/etc/wptt/vhost/.${TEST_DOMAIN}.conf" ]]; then
-    mv "/tmp/vhost_conf.bak" "/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
-  fi
-
-  # 4. Gỡ bỏ mọi khóa lock ảo và file log nền còn sót lại
-  rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock" 2>/dev/null || true
-  rm -f "/tmp/wptt_bats_bg_backup.log" 2>/dev/null || true
-}
-
+# -----------------------------------------------------------------
+# B. INTEGRATION TESTS
 # -----------------------------------------------------------------
 
+@test "Integration: Chuẩn bị Môi trường — Tạo Website & Cài WordPress" {
+  run bash "$SCRIPT_THEM" "$TEST_DOMAIN"
+  in_log_neu_loi 0
+  [ "$status" -eq 0 ]
+  [ -d "/usr/local/lsws/$TEST_DOMAIN/html" ]
+
+  export SCRIPT_TEST="/tmp/wptt-install-wp-test.sh"
+  cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
+  cat << 'EOF' > /etc/wptt/core-functions
+source /tmp/core-functions.bak
+wptt_xac_nhan() { return 0; }
+EOF
+
+  cp "$SCRIPT_CAI_WP" "$SCRIPT_TEST"
+  sed -i 's/exec \/etc\/wptt\/wptt-wordpress-main.*/exit 0/g' "$SCRIPT_TEST"
+  sed -i 's/exec \/usr\/bin\/wptangtoc.*/exit 0/g' "$SCRIPT_TEST"
+  echo "exit 0" >> "$SCRIPT_TEST"
+  chmod +x "$SCRIPT_TEST"
+
+  local WP_TITLE="Website Test Auto"
+  local WP_USER="admin_$(date +%s)"
+  local WP_PASS="PassKh0_$(date +%N)"
+  local WP_EMAIL="admin@$TEST_DOMAIN"
+  local INPUTS="${WP_TITLE}\n${WP_USER}\n${WP_PASS}\n${WP_EMAIL}\n"
+
+  run bash -c "echo -e \"$INPUTS\" | bash $SCRIPT_TEST \"$TEST_DOMAIN\""
+  in_log_neu_loi 0
+  [ "$status" -eq 0 ]
+  
+  rm -f "$SCRIPT_TEST"
+}
+
 @test "Integration: Chặn sao lưu khi MariaDB đang sập" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
   cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
   cat <<'EOF' >> /etc/wptt/core-functions
 wptt_check_mariadb() { return 1; }
@@ -236,6 +295,10 @@ EOF
 }
 
 @test "Integration: SAO LƯU THÀNH CÔNG tạo đủ file .zip và .sql với quyền 600" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
   rm -f "${BACKUP_ROOT:?}/${TEST_DOMAIN:?}"/*.zip "${BACKUP_ROOT:?}/${TEST_DOMAIN:?}"/*.sql 2>/dev/null || true
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
@@ -245,22 +308,25 @@ EOF
   [[ "$output" =~ "thành công" ]]
 
   local zip_file sql_file
-  zip_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.zip" -newer /tmp -print -quit 2>/dev/null)
+  zip_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.zip" -print -quit 2>/dev/null)
   sql_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql" -print -quit 2>/dev/null)
 
   [ -s "$zip_file" ]
   [ -s "$sql_file" ]
 
-  # Quyền file phải là 600 — chỉ root được đọc file backup (umask 077)
-  [ "$(stat -c '\%a' "$zip_file")" = "600" ]
-  [ "$(stat -c '\%a' "$sql_file")" = "600" ]
+	# Code đúng phải là thế này:
+  [ "$(stat -c '%a' "$zip_file")" = "600" ]
+  [ "$(stat -c '%a' "$sql_file")" = "600" ]
 
-  # File zip phải toàn vẹn, mở được
   run unzip -tq "$zip_file"
   [ "$status" -eq 0 ]
 }
 
 @test "Integration: Bản sao lưu KHÔNG chứa debug.log hay wp-content/cache" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
   mkdir -p "/usr/local/lsws/$TEST_DOMAIN/html/wp-content/cache"
   echo "rac-cache" > "/usr/local/lsws/$TEST_DOMAIN/html/wp-content/cache/test-object.php"
   echo "du-lieu-nhay-cam" > "/usr/local/lsws/$TEST_DOMAIN/html/error_log"
@@ -281,13 +347,18 @@ EOF
 }
 
 @test "Integration: Hai lệnh sao lưu đồng thời trên CÙNG domain — lệnh 2 bị chặn" {
-  bash "$SCRIPT_GOC" "$TEST_DOMAIN" >/tmp/wptt_bats_bg_backup.log 2>&1 &
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
+  bash "$SCRIPT_GOC" "$TEST_DOMAIN" >/tmp/wptt_bats_bg_backup.log 2>&1 3>&- &
   local pid_proc1=$!
   sleep 1 # đợi tiến trình 1 lấy lock
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
 
-  wait "$pid_proc1" 2>/dev/null
+  kill "$pid_proc1" 2>/dev/null || true
+  wait "$pid_proc1" 2>/dev/null || true
 
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
@@ -295,6 +366,10 @@ EOF
 }
 
 @test "Integration: Không đủ dung lượng đĩa — từ chối sao lưu VÀ giải phóng lock ngay" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
   local check_script="/etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup"
   cp "$check_script" "/tmp/wptt-check-disk.bak" 2>/dev/null || true
   echo 'dieu_kien_disk="0"' > "$check_script"
@@ -304,7 +379,6 @@ EOF
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
 
-  # Đảm bảo lock đã được nhả ra để các lần backup sau không bị kẹt vĩnh viễn
   run bash -c "
     exec 200>\"/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock\"
     flock -n 200
@@ -312,9 +386,41 @@ EOF
   [ "$status" -eq 0 ]
 }
 
-@test "Integration: Cấu hình nén mã nguồn tar.zst tạo đúng đuôi .tar.zst" {
+@test "Integration: Test backup nén mã nguồn tar.zst tạo đúng đuôi .tar.zst" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
+	# --- BỔ SUNG: KIỂM TRA VÀ TỰ ĐỘNG CÀI ĐẶT ZSTD NẾU THIẾU ---
+  if ! command -v zstd >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -y >/dev/null 2>&1 || true
+      apt-get install -y zstd >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y zstd >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y zstd >/dev/null 2>&1
+    else
+      skip "Không thể tự động cài zstd (không tìm thấy apt/dnf/yum). Bỏ qua test."
+    fi
+  fi
+
+
+	if ! command -v tar >/dev/null 2>&1; then
+		if command -v apt-get >/dev/null 2>&1; then
+			apt-get install -y tar >/dev/null 2>&1
+		elif command -v dnf >/dev/null 2>&1; then
+			dnf install -y tar >/dev/null 2>&1
+		elif command -v yum >/dev/null 2>&1; then
+			yum install -y tar >/dev/null 2>&1
+		else
+			skip "Không thể tự động cài tar (không tìm thấy apt/dnf/yum). Bỏ qua test."
+		fi
+	fi
+
+
   local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
-  if [[ ! -f "$vhost_conf" ]]; then
+  if [ ! -f "$vhost_conf" ]; then
     skip "Không tìm thấy vhost conf thật của domain test"
   fi
 
@@ -335,3 +441,61 @@ EOF
   [ -n "$zst_file" ]
   [ -s "$zst_file" ]
 }
+
+
+@test "Integration: Test backup nén mã nguồn tar.gz tạo đúng đuôi .tar.gz" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
+	# --- BỔ SUNG: KIỂM TRA VÀ TỰ ĐỘNG CÀI ĐẶT ZSTD NẾU THIẾU ---
+  if ! command -v gzip >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y gzip >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y gzip >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y gzip >/dev/null 2>&1
+    else
+      skip "Không thể tự động cài gzip (không tìm thấy apt/dnf/yum). Bỏ qua test."
+    fi
+  fi
+
+
+	if ! command -v tar >/dev/null 2>&1; then
+		if command -v apt-get >/dev/null 2>&1; then
+			apt-get install -y tar >/dev/null 2>&1
+		elif command -v dnf >/dev/null 2>&1; then
+			dnf install -y tar >/dev/null 2>&1
+		elif command -v yum >/dev/null 2>&1; then
+			yum install -y tar >/dev/null 2>&1
+		else
+			skip "Không thể tự động cài tar (không tìm thấy apt/dnf/yum). Bỏ qua test."
+		fi
+	fi
+
+
+  local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
+  if [ ! -f "$vhost_conf" ]; then
+    skip "Không tìm thấy vhost conf thật của domain test"
+  fi
+
+  cp "$vhost_conf" "/tmp/vhost_conf.bak"
+  if grep -q '^dinh_dang_nen_ma_nguon=' "$vhost_conf"; then
+    sed -i "s/^dinh_dang_nen_ma_nguon=.*/dinh_dang_nen_ma_nguon='2'/" "$vhost_conf"
+  else
+    echo "dinh_dang_nen_ma_nguon='2'" >> "$vhost_conf"
+  fi
+
+  run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
+
+  in_log_neu_loi 0
+  [ "$status" -eq 0 ]
+
+  local zst_file
+  zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.gz" -print -quit 2>/dev/null)
+  [ -n "$zst_file" ]
+  [ -s "$zst_file" ]
+}
+
+
