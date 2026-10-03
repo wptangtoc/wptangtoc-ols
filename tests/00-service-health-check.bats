@@ -37,3 +37,58 @@
   # Kết quả đếm số lượng bản PHP phải lớn hơn 0
   [ "$output" -gt 0 ]
 }
+
+@test "✅ Website github.wptangtoc.com (CI Test) đã nhận diện đúng nội dung Document html" {
+  # 1. Tạo file tĩnh độc lập để né xử lý PHP/MySQL nặng nề trên CI
+  run bash -c "echo 'GiaTuanDz' > /usr/local/lsws/github.wptangtoc.com/html/bats-test.html"
+  [ "$status" -eq 0 ]
+
+  # 2. Curl vào cổng 80 qua localhost để xác minh OLS trả về đúng nội dung
+  run bash -c "curl -m 5 -sS -H 'Host: github.wptangtoc.com' http://127.0.0.1/bats-test.html"
+  
+  # 3. CHỐT CHẶN DỌN DẸP: Xóa luôn file ngay khi curl xong (tránh BATS ngắt ngang không kịp xóa)
+  rm -f /usr/local/lsws/github.wptangtoc.com/html/bats-test.html
+  
+  if [ "$status" -ne 0 ]; then
+      echo -e "\n=== LỖI CURL ===" >&3
+      echo "Mã thoát: $status | Output: $output" >&3
+  fi
+
+  # 4. Chấm điểm đúng/sai
+  [ "$status" -eq 0 ]
+  # Nếu output đúng bằng chữ GiaTuanDz chứng tỏ domain đã được thêm hoàn hảo
+  [[ "$output" == "GiaTuanDz" ]]
+}
+
+@test "✅ Website github.wptangtoc.com (CI Test) thực thi mã PHP CLI" {
+  local doc_root="/usr/local/lsws/github.wptangtoc.com/html"
+  local test_file="$doc_root/bats-test.php"
+
+  # 1. Lấy thông tin username chủ sở hữu của website
+  local vhost_user
+  vhost_user=$(stat -c '%U' "$doc_root")
+
+  # 2. Tạo file PHP tĩnh độc lập để test
+  run bash -c "echo '<?php echo \"GiaTuanDz_PHP_CLI\"; ?>' > $test_file"
+  [ "$status" -eq 0 ]
+  
+  # Cấp quyền đúng cho file để lệnh sudo phía sau có thể đọc được
+  run bash -c "chown $vhost_user $test_file"
+
+  # 3. Thực thi trực tiếp qua lsphp CLI dưới quyền của user website
+  # Dùng lsphp* để tự động nhận diện phiên bản PHP (vd: lsphp81, lsphp83...)
+  run bash -c "sudo -u $vhost_user /usr/local/lsws/lsphp*/bin/lsphp $test_file"
+  
+  # 4. CHỐT CHẶN DỌN DẸP: Xóa file ngay sau khi chạy xong
+  rm -f -- "$test_file"
+  
+  if [ "$status" -ne 0 ]; then
+      echo -e "\n=== LỖI PHP CLI ===" >&3
+      echo "Mã thoát: $status | Output: $output" >&3
+  fi
+
+  # 5. Chấm điểm đúng/sai
+  [ "$status" -eq 0 ]
+  # Kiểm tra xem kết quả in ra có chứa chuỗi mong muốn không
+  [[ "$output" == *"GiaTuanDz_PHP_CLI"* ]]
+}
