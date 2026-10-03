@@ -54,7 +54,7 @@ in_log_neu_loi() {
 # =================================================================
 
 @test "Integration: CHẶN THÀNH CÔNG Domain đã tồn tại (Trùng Domain chính)" {
-  run bash "$SCRIPT_GOC" "gihub.wptangtoc.com"
+  run bash "$SCRIPT_GOC" "github.wptangtoc.com"
  
   in_log_neu_loi 1
 
