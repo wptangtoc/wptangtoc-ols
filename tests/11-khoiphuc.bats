@@ -256,6 +256,27 @@ EOF
   [[ "$output" =~ "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_ZST" ]]
 }
 
+@test "Integration: Bẫy Bảo Mật — Bảo toàn Database nếu file SQL bị hỏng" {
+  set_backup_format '0' '0'
+  rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
+  bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
+
+  local database_file_sql
+  database_file_sql=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql" -print -quit 2>/dev/null)
+  [ -n "$database_file_sql" ]
+
+  # Tiêm lỗi
+  rm -f "$database_file_sql"
+  for i in {1..100}; do echo "DAY_LA_FILE_GZ_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$database_file_sql"; done
+
+  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  
+  in_log_neu_loi 1
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "hỏng cấu trúc" ]] || [[ "$output" =~ "Corrupt" ]] || [[ "$output" =~ "lỗi" ]]
+}
+
+
 @test "Integration: Bẫy Bảo Mật — Bảo toàn Database nếu file SQL.GZ bị hỏng" {
   set_backup_format '2' '1'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
