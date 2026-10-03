@@ -88,3 +88,25 @@ EOF
   run wp core is-installed --path="/usr/local/lsws/$TEST_DOMAIN/html" --allow-root
   [ "$status" -eq 0 ]
 }
+
+
+@test "Integration: CÀI ĐẶT LSCache WordPress" {
+  local TEST_DOMAIN="wptest-auto.com"
+
+  # 1. TIỀN ĐIỀU KIỆN: Gọi kịch bản Thêm website để hệ thống TỰ ĐỘNG sinh DB biên chế
+  export SCRIPT_THEM="/etc/wptt/wordpress/nhap-du-lieu-litespeed-wptangtoc"
+  bash "$SCRIPT_THEM" "$TEST_DOMAIN" >/dev/null 2>&1 || true
+
+  in_log_neu_loi 0
+
+  # 3. KIỂM CHỨNG KẾT QUẢ CỦA LỆNH RUN TRÊN
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "[ THÀNH CÔNG ] CÀI ĐẶT LSCache thành công" ]]
+  
+  # 4. Kiểm tra sâu: Thư mục plugin litespeed-cache phải tồn tại (dùng -d)
+  [ -d "/usr/local/lsws/$TEST_DOMAIN/html/wp-content/plugins/litespeed-cache" ]
+  
+  # 5. Nghiệm thu cuối cùng bằng WP-CLI (Dùng lệnh is-active chuẩn của wp-cli)
+  run wp plugin is-active litespeed-cache --path="/usr/local/lsws/$TEST_DOMAIN/html" --allow-root
+  [ "$status" -eq 0 ]
+}
