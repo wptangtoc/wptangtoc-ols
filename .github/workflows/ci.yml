@@ -15,6 +15,7 @@ concurrency:
 
 permissions:
   contents: read
+  security-events: write
 
 jobs:
 # ============================================================
@@ -30,7 +31,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🛠 1. Kiểm tra Cú pháp Bash thuần (Đa luồng)
+      - name: 🛠 1. Kiểm tra Cú pháp Bash thuần
         run: |
           find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r -P "$(nproc)" -I {} bash -n {}
 
@@ -107,13 +108,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: 📥 Tải mã nguồn (Full History)
+      - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
         with:
           fetch-depth: 0 
           persist-credentials: false
 
-      - name: 🛡️ Quét rò rỉ Secret/API (Gitleaks v3)
+      - name: 🛡️ Quét rò rỉ Secret/API (Gitleaks)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -124,7 +125,6 @@ jobs:
           set -Eeuo pipefail
           FAILED=0
           
-          echo "::group::Quét Shell Patterns nguy hiểm"
           if grep -RInE --exclude-dir=.git --exclude-dir=tests --exclude='*.bats' 'curl[^|]*\|[[:space:]]*(ba)?sh' .; then
             echo "::error::Phát hiện mẫu lệnh nguy hiểm (curl pipe to bash)."
             FAILED=1
@@ -136,7 +136,7 @@ jobs:
           fi
 
           if grep -RInE --exclude-dir=.git --exclude-dir=tests --exclude='*.bats' 'chmod[[:space:]]+(-R[[:space:]]+)?(0)?777([[:space:]]|$)' .; then
-            echo "::error::CẢNH BÁO: Phát hiện quyền nguy hiểm 777. Hãy dùng 755 hoặc 644!"
+            echo "::error::CẢNH BÁO: Phát hiện quyền nguy hiểm 777!"
             FAILED=1
           fi
 
@@ -144,20 +144,15 @@ jobs:
             echo "::error::CẢNH BÁO: Cấp quyền ghi cho World-writable (o+w) là không an toàn!"
             FAILED=1
           fi
-          echo "::endgroup::"
 
-          echo "::group::Quét Anti-Log-Leak"
           if grep -RInE --exclude-dir=.git --exclude-dir=tests --exclude='*.bats' '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*x' .; then
-            echo "::error::Phát hiện lệnh 'set -x'. Xóa ngay để tránh lộ Password trên GitHub Logs!"
+            echo "::error::Phát hiện lệnh 'set -x'. Xóa ngay để tránh lộ Password trên Logs!"
             FAILED=1
           fi
-          echo "::endgroup::"
 
-          echo "::group::Quét Vệ sinh Repository"
           SUSPICIOUS_KEYS=$(find . -type d -name .git -prune -o -type f \( -name '*.pem' -o -name '*.key' -o -name 'id_rsa' -o -name 'id_ed25519' \) ! -name 'wptangtoc-gpg-pub.key' -print)
-          
           if [[ -n "$SUSPICIOUS_KEYS" ]]; then
-            echo "::error::Cảnh báo: Phát hiện tệp tin có đuôi mở rộng nhạy cảm (.key, .pem...)!"
+            echo "::error::Phát hiện tệp tin nhạy cảm (.key, .pem...)!"
             echo "$SUSPICIOUS_KEYS"
             FAILED=1
           fi
@@ -165,16 +160,73 @@ jobs:
           if find . -type d -name .git -prune -o -type f \( -name '*.sql' -o -name '*.sql.gz' -o -name '*.sql.zst' \) -print | grep -q .; then
             echo "::warning::Phát hiện Database Dumps (.sql / .gz / .zst)!"
           fi
-          echo "::endgroup::"
 
           if (( FAILED != 0 )); then exit 1; fi
 
 # ============================================================
-# JOB 3: INTEGRATION TESTS (UBUNTU MÔI TRƯỜNG THẬT x86_64)
+# JOB 2B: QUÉT CVE CHUYÊN SÂU VỚI TRIVY
 # ============================================================
-  integration-tests:
-    name: Test Install Ubuntu và Kiểm thử BATS
+  cve-scan:
+    name: Quét CVE (Trivy)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - name: 📥 Tải mã nguồn
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
+
+      - name: 🛡️ Quét CVE Filesystem (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e3c3a3c6d1b0b6db3f5e7f9f5c
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+          scanners: 'vuln,secret'
+          skip-dirs: '.git,.github,tests,node_modules,vendor'
+          skip-files: '*.sql,*.sql.gz,*.sql.zst,*.key,*.pem'
+
+      - name: 📊 In tóm tắt CVE
+        if: always()
+        shell: bash
+        run: |
+          if command -v jq &>/dev/null && [[ -f trivy-results.sarif ]]; then
+            jq -r '.runs[].results[]?.level // empty' trivy-results.sarif 2>/dev/null | sort | uniq -c || echo "Không parse được SARIF"
+          fi
+
+      - name: 📤 Upload SARIF lên GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@4dd16135b69a43b6c8b853b6a12d148d6f11a3e5
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-filesystem'
+
+      - name: 📦 Upload SARIF Artifact
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: trivy-sarif-report
+          path: trivy-results.sarif
+          retention-days: 30
+
+# ============================================================
+# JOB 3: INTEGRATION TESTS (UBUNTU MÔI TRƯỜNG THẬT) - GỘP MATRIX x86_64 & ARM64
+# ============================================================
+  integration-tests-ubuntu:
+    name: Test Install Ubuntu (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
     timeout-minutes: 50
     steps:
       - name: 📥 Tải mã nguồn test
@@ -193,7 +245,7 @@ jobs:
           curl -sO https://wptangtoc.com/share/wptangtoc-ols
           
           sudo rm -f /sbin/reboot
-          echo -e '#!/bin/bash\necho "Đã chặn lệnh reboot thành công để tiếp tục chạy BATS!"' | sudo tee /sbin/reboot
+          echo -e '#!/bin/bash\necho "Đã chặn lệnh reboot trên CI!"' | sudo tee /sbin/reboot
           sudo chmod +x /sbin/reboot
           
           sudo bash wptangtoc-ols --auto
@@ -206,19 +258,14 @@ jobs:
           
           sudo bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
 
-      - name: 🛠 Vô hiệu hóa lệnh gọi Menu (Chống treo BATS)
+      - name: 🛠 Vô hiệu hóa lệnh gọi Menu (Chống treo)
         run: |
-          echo -e '#!/bin/bash\nexit 0' | sudo tee /usr/bin/wptangtoc > /dev/null
-          echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status > /dev/null
-          echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status2 > /dev/null
-
+          echo -e '#!/bin/bash\nexit 0' | sudo tee /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 > /dev/null
           for file in /etc/wptt/wptt-*main; do
-            if [ -f "$file" ]; then
-              echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" > /dev/null
-            fi
+            if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" > /dev/null; fi
           done
 
-      - name: 🛠️ Bypass (Mocking) công cụ ionice và nice cho CI/CD
+      - name: 🛠️ Bypass (Mocking) ionice & nice
         run: |
           cat << 'EOF' | sudo tee /usr/local/bin/ionice > /dev/null
           #!/bin/bash
@@ -228,32 +275,31 @@ jobs:
           done
           exec "$@"
           EOF
-
           sudo cp /usr/local/bin/ionice /usr/local/bin/nice
           sudo chmod +x /usr/local/bin/ionice /usr/local/bin/nice
 
-      - name: 🧪 Chạy Kiểm thử BATS Integration
+      - name: 🧪 Chạy Kiểm thử BATS
         shell: bash
         run: |
           if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
             set -o pipefail
-            sudo bats tests/ | tee bats-test-ubuntu.log
+            sudo bats tests/ | tee bats-test-${{ matrix.os }}.log
           else
             exit 1
           fi
 
-      - name: 📋 Copy log ra workspace để upload
+      - name: 📋 Copy log ra workspace
         if: always()
         run: |
-          sudo cp /var/log/wptangtoc-install.log ./wptangtoc-install-ubuntu.log 2>/dev/null || true
-          sudo chown "$USER:$USER" ./wptangtoc-install-ubuntu.log 2>/dev/null || true
+          sudo cp /var/log/wptangtoc-install.log ./wptangtoc-install-${{ matrix.os }}.log 2>/dev/null || true
+          sudo chown "$USER:$USER" ./wptangtoc-install-${{ matrix.os }}.log 2>/dev/null || true
 
       - name: 🔐 Redact thông tin nhạy cảm trong log
         if: always()
         shell: bash
         run: |
           set -Eeuo pipefail
-          for LOG in ./wptangtoc-install-ubuntu.log ./bats-test-ubuntu.log; do
+          for LOG in ./wptangtoc-install-${{ matrix.os }}.log ./bats-test-${{ matrix.os }}.log; do
             [[ -f "$LOG" ]] || continue
             sudo sed -i -E \
               -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
@@ -262,51 +308,60 @@ jobs:
               "$LOG" 2>/dev/null || true
           done
 
-      - name: 🖨 In Log cài đặt nếu thất bại
+      - name: 🖨 In Log nếu thất bại
         if: ${{ failure() }}
-        run: cat ./wptangtoc-install-ubuntu.log || echo "Không tìm thấy file log"
+        run: cat ./wptangtoc-install-${{ matrix.os }}.log || echo "Không có log"
 
       - name: 📤 Upload Artifacts (Logs Ubuntu)
         if: always()
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
-          name: logs-ubuntu-24.04
+          name: logs-${{ matrix.os }}
           path: |
-            wptangtoc-install-ubuntu.log
-            bats-test-ubuntu.log
+            wptangtoc-install-${{ matrix.os }}.log
+            bats-test-${{ matrix.os }}.log
           if-no-files-found: ignore
           retention-days: 7
 
 # ============================================================
-# JOB 4: INSTALLATION TESTS (ALMALINUX VM MATRIX - x86_64)
+# JOB 4: INSTALLATION TESTS (ALMALINUX VM MATRIX - GỘP x86_64 & ARM64)
 # ============================================================
   install-tests-almalinux:
-    name: Test Install AlmaLinux ${{ matrix.release }} (x86_64)
-    runs-on: ubuntu-latest
+    name: Test Install AlmaLinux ${{ matrix.release }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        release: ['9', '10']
-    timeout-minutes: 40
+        include:
+          - release: '9'
+            arch: x86_64
+            runner: ubuntu-24.04
+          - release: '10'
+            arch: x86_64
+            runner: ubuntu-24.04
+          - release: '9'
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+    timeout-minutes: 90
     steps:
       - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
         with:
           persist-credentials: false
 
-      - name: 🚀 Khởi chạy Máy ảo AlmaLinux & Test
+      - name: 🚀 Khởi chạy Máy ảo & Test
         uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
         with:
           release: ${{ matrix.release }}
+          arch: ${{ matrix.arch }}
           usesh: true
           run: |
             export TERM=xterm
             export CI=true
             
-            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}.log" 2>/dev/null || true' EXIT
+            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log" 2>/dev/null || true' EXIT
             
-            dnf install -y epel-release sudo curl
-            dnf install -y bats
+            dnf install -y epel-release sudo curl bats
             curl -sO https://wptangtoc.com/share/wptangtoc-ols
             
             systemctl mask reboot.target halt.target poweroff.target shutdown.target
@@ -339,8 +394,6 @@ jobs:
 
             bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
             
-            echo "✅ Cài đặt thành công trên AlmaLinux ${{ matrix.release }} (x86_64)!"
-
             echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
             echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
             echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
@@ -349,10 +402,9 @@ jobs:
             done
             chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
 
-            echo "🧪 Đang chạy BATS..."
             if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
               set -o pipefail
-              bats tests/ | tee "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}.log"
+              bats tests/ | tee "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
             fi
 
       - name: 🔐 Redact thông tin nhạy cảm trong log
@@ -369,229 +421,17 @@ jobs:
               "$LOG" 2>/dev/null || true
           done
 
-      - name: 🖨️ In Log cài đặt nếu thất bại
+      - name: 🖨️ In Log nếu thất bại
         if: ${{ failure() }}
-        run: cat wptangtoc-install-alma${{ matrix.release }}.log || echo "Không tìm thấy file log"
+        run: cat wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log || echo "Không có log"
 
-      - name: 📤 Upload Artifacts (Logs AlmaLinux x86_64)
+      - name: 📤 Upload Artifacts (Logs AlmaLinux)
         if: always()
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
-          name: logs-almalinux-${{ matrix.release }}-x86_64
+          name: logs-almalinux-${{ matrix.release }}-${{ matrix.arch }}
           path: |
             wptangtoc-install-alma*.log
             bats-test-alma*.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-# ============================================================
-# JOB 5: INSTALLATION TESTS (ALMALINUX 9 QEMU VM - ARM64)
-# ============================================================
-  install-tests-almalinux-arm-vm:
-    name: Test Install AlmaLinux 9 ARM
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 90 #đặt lâu chứ build giả lập arm QEMU lâu lắm
-    steps:
-      - name: 📥 Tải mã nguồn
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
-        with:
-          persist-credentials: false
-
-      - name: 🚀 Khởi chạy Máy ảo AlmaLinux 9 ARM & Test Cài đặt
-        uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
-        with:
-          release: '9'
-          arch: aarch64
-          usesh: true
-          run: |
-            export TERM=xterm
-            export CI=true
-            
-            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma9-arm.log" 2>/dev/null || true' EXIT
-            
-            dnf install -y epel-release sudo curl
-            dnf install -y bats
-            curl -sO https://wptangtoc.com/share/wptangtoc-ols
-            
-            systemctl mask reboot.target halt.target poweroff.target shutdown.target
-            
-            for cmd in reboot shutdown halt poweroff; do
-              rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-              echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-              chmod +x /usr/sbin/$cmd
-              ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-              ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
-              chattr +i /usr/sbin/$cmd 2>/dev/null || true
-              chattr +i /sbin/$cmd 2>/dev/null || true
-            done
-
-            mv /usr/bin/dnf /usr/bin/dnf_real
-            cat << 'EOF' > /usr/bin/dnf
-            #!/bin/bash
-            if [[ "$1" == "update" || "$1" == "upgrade" ]]; then exit 0; fi
-            exec /usr/bin/dnf_real "$@"
-            EOF
-            chmod +x /usr/bin/dnf
-            
-            bash wptangtoc-ols --auto
-            
-            cd $GITHUB_WORKSPACE
-            chmod -R 755 /etc/wptt/
-            
-            mkdir -p /etc/wptt/tmp
-            curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
-
-            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
-            
-            echo "✅ Cài đặt thành công trên AlmaLinux 9 ARM!"
-
-            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-            for file in /etc/wptt/wptt-*main; do
-              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-            done
-            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
-
-            echo "🧪 Đang chạy BATS Integration Tests trên AlmaLinux 9 ARM..."
-            if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
-              set -o pipefail
-              bats tests/ | tee "$GITHUB_WORKSPACE/bats-test-alma9-arm.log"
-            fi
-
-      - name: 🔐 Redact thông tin nhạy cảm trong log
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for LOG in ./wptangtoc-install-alma9-arm.log ./bats-test-alma9-arm.log; do
-            [[ -f "$LOG" ]] || continue
-            sudo sed -i -E \
-              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
-              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
-              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
-              "$LOG" 2>/dev/null || true
-          done
-
-      - name: 🖨️️ In Log cài đặt nếu thất bại
-        if: ${{ failure() }}
-        run: cat wptangtoc-install-alma9-arm.log || echo "Không tìm thấy file log"
-
-      - name: 📤 Upload Artifacts (Logs AlmaLinux ARM64)
-        if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        with:
-          name: logs-almalinux-9-arm64
-          path: |
-            wptangtoc-install-alma9-arm.log
-            bats-test-alma9-arm.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-# ============================================================
-# JOB 6: INTEGRATION TESTS (UBUNTU 24.04 ARM64)
-# ============================================================
-  integration-tests-ubuntu-arm:
-    name: Test Install Ubuntu 24.04 ARM và Kiểm thử BATS
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 50
-    steps:
-      - name: 📥 Tải mã nguồn test
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
-        with:
-          persist-credentials: false
-
-      - name: ⚙️ Cài đặt BATS
-        run: sudo apt-get update && sudo apt-get install -y bats
-
-      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS
-        run: |
-          export TERM=xterm
-          export CI=true
-
-          curl -sO https://wptangtoc.com/share/wptangtoc-ols
-          
-          sudo rm -f /sbin/reboot
-          echo -e '#!/bin/bash\necho "Đã chặn lệnh reboot thành công để tiếp tục chạy BATS!"' | sudo tee /sbin/reboot
-          sudo chmod +x /sbin/reboot
-          
-          sudo bash wptangtoc-ols --auto
- 
-          cd $GITHUB_WORKSPACE
-          sudo chmod -R 755 /etc/wptt/
-          
-          sudo mkdir -p /etc/wptt/tmp
-          curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' | sudo tee /etc/wptt/tmp/wptangtoc-ols-version-main > /dev/null
-          
-          sudo bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
-
-      - name: 🛠 Vô hiệu hóa lệnh gọi Menu (Chống treo BATS)
-        run: |
-          echo -e '#!/bin/bash\nexit 0' | sudo tee /usr/bin/wptangtoc > /dev/null
-          echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status > /dev/null
-          echo -e '#!/bin/bash\nexit 0' | sudo tee /etc/wptt/wptt-status2 > /dev/null
-
-          for file in /etc/wptt/wptt-*main; do
-            if [ -f "$file" ]; then
-              echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" > /dev/null
-            fi
-          done
-
-      - name: 🛠️ Bypass (Mocking) công cụ ionice và nice cho CI/CD
-        run: |
-          cat << 'EOF' | sudo tee /usr/local/bin/ionice > /dev/null
-          #!/bin/bash
-          while [[ $# -gt 0 ]]; do
-            if [[ "$1" != -* ]]; then break; fi
-            shift 2
-          done
-          exec "$@"
-          EOF
-
-          sudo cp /usr/local/bin/ionice /usr/local/bin/nice
-          sudo chmod +x /usr/local/bin/ionice /usr/local/bin/nice
-
-      - name: 🧪 Chạy Kiểm thử BATS Integration
-        shell: bash
-        run: |
-          if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
-            set -o pipefail
-            sudo bats tests/ | tee bats-test-ubuntu-arm.log
-          else
-            exit 1
-          fi
-
-      - name: 📋 Copy log ra workspace để upload
-        if: always()
-        run: |
-          sudo cp /var/log/wptangtoc-install.log ./wptangtoc-install-ubuntu-arm.log 2>/dev/null || true
-          sudo chown "$USER:$USER" ./wptangtoc-install-ubuntu-arm.log 2>/dev/null || true
-
-      - name: 🔐 Redact thông tin nhạy cảm trong log
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for LOG in ./wptangtoc-install-ubuntu-arm.log ./bats-test-ubuntu-arm.log; do
-            [[ -f "$LOG" ]] || continue
-            sudo sed -i -E \
-              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
-              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
-              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
-              "$LOG" 2>/dev/null || true
-          done
-
-      - name: 🖨 In Log cài đặt nếu thất bại
-        if: ${{ failure() }}
-        run: cat ./wptangtoc-install-ubuntu-arm.log || echo "Không tìm thấy file log"
-
-      - name: 📤 Upload Artifacts (Logs Ubuntu ARM)
-        if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        with:
-          name: logs-ubuntu-24.04-arm
-          path: |
-            wptangtoc-install-ubuntu-arm.log
-            bats-test-ubuntu-arm.log
           if-no-files-found: ignore
           retention-days: 7
