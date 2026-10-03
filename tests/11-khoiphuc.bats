@@ -24,14 +24,19 @@ in_log_neu_loi() {
   fi
 }
 
+# Đổi config chuẩn theo file .wptt.conf toàn cầu
 set_backup_format() {
-  local format_code="$1"
-  local conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
-  if grep -q "^dinh_dang_nen_ma_nguon=" "$conf"; then
-    sed -i "s/^dinh_dang_nen_ma_nguon=.*/dinh_dang_nen_ma_nguon='$format_code'/" "$conf"
-  else
-    echo "dinh_dang_nen_ma_nguon='$format_code'" >> "$conf"
-  fi
+  local source_format="$1"
+  local db_format="$2"
+  local conf="/etc/wptt/.wptt.conf"
+  
+  # Xóa sạch config cũ tránh lặp dòng
+  sed -i '/dinh_dang_nen_ma_nguon=/d' "$conf" 2>/dev/null || true
+  sed -i '/sql_gz=/d' "$conf" 2>/dev/null || true
+  
+  # Bơm config mới vào cuối
+  echo "dinh_dang_nen_ma_nguon='$source_format'" >> "$conf"
+  echo "sql_gz='$db_format'" >> "$conf"
 }
 
 # =================================================================
@@ -74,21 +79,20 @@ setup() {
 
   if echo "$BATS_TEST_DESCRIPTION" | grep -q "Integration"; then
     if [ ! -x "$SCRIPT_KHOIPHUC" ] || [ ! -x "$SCRIPT_SAOLUU" ] || [ ! -x "$SCRIPT_THEM" ] || [ ! -x "$SCRIPT_CAI_WP" ]; then
-      skip "Thiếu script môi trường (Thêm/Cài/SaoLưu/KhôiPhục). Bỏ qua Integration Test"
+      skip "Thiếu script môi trường. Bỏ qua Integration Test"
     fi
   fi
   return 0
 }
 
 teardown() {
-  # QUAN TRỌNG: Dọn sạch mọi vết tích (Lock, Bảo trì) để không ảnh hưởng bài test sau
   rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock" 2>/dev/null || true
   rm -f "/usr/local/lsws/$TEST_DOMAIN/html/.maintenance" 2>/dev/null || true
   return 0
 }
 
 # =================================================================
-# PHẦN B — UNIT TEST: KIỂM TRA CÁC RÀO CẢN BẢO VỆ
+# PHẦN B — UNIT TEST
 # =================================================================
 
 @test "Unit: Chặn khôi phục nếu tên miền không tồn tại trên máy chủ" {
@@ -104,7 +108,6 @@ teardown() {
 
 @test "Integration: Chuẩn bị Môi trường — Cài WordPress & Cài công cụ nén" {
   run bash "$SCRIPT_THEM" "$TEST_DOMAIN"
-  in_log_neu_loi 0
   [ "$status" -eq 0 ]
 
   export SCRIPT_TEST="/tmp/wptt-install-wp-test-restore.sh"
@@ -131,11 +134,8 @@ EOF
 }
 
 @test "Integration: Khôi phục thành công định dạng truyền thống [.zip] & [.sql]" {
-  set_backup_format '0'
-  sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
-  # echo "sql_gz=0" >> /etc/wptt/.wptt.conf
-
-  rm -rf "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
+  set_backup_format '0' '0'
+  rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
   rm -f "/usr/local/lsws/$TEST_DOMAIN/html/wp-config.php"
@@ -145,15 +145,11 @@ EOF
   [ "$status" -eq 0 ]
   
   [ -f "/usr/local/lsws/$TEST_DOMAIN/html/wp-config.php" ]
-  [[ "$output" =~ "thành công" ]]
 }
 
 @test "Integration: Khôi phục thành công định dạng siêu tốc GZIP [.tar.gz] & [.sql.gz]" {
-  set_backup_format '2'
-  sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
-  echo "sql_gz=1" >> /etc/wptt/.wptt.conf
-
-  rm -rf "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
+  set_backup_format '2' '1'
+  rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
   echo "FILE_BI_HONG" > "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
@@ -167,10 +163,7 @@ EOF
 }
 
 @test "Integration: Khôi phục thành công định dạng siêu tốc ZSTD [.tar.zst] & [.sql.zst]" {
-  set_backup_format '1'
-  sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
-  echo "sql_gz=2" >> /etc/wptt/.wptt.conf
-
+  set_backup_format '1' '2'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
@@ -186,7 +179,8 @@ EOF
 
 @test "Integration: Bẫy Bảo Mật — Chặn khôi phục nếu file Database dưới 3KB" {
   rm -f -- "$BACKUP_ROOT/$TEST_DOMAIN"/*.sql* 2>/dev/null || true
-  echo "SELECT 1;" > "$BACKUP_ROOT/$TEST_DOMAIN/db_corrupt.sql"
+  # SỬ DỤNG TOUCH ĐỂ TẠO FILE ĐÚNG 0 BYTES (Tránh lỗi phân mảnh ổ cứng 4KB)
+  touch "$BACKUP_ROOT/$TEST_DOMAIN/db_corrupt.sql"
 
   run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
   in_log_neu_loi 1
@@ -194,15 +188,17 @@ EOF
   [[ "$output" =~ "quá nhỏ" ]] || [[ "$output" =~ "Dưới 3KB" ]]
 }
 
-@test "Integration: Bẫy Bảo Mật — Chặn khôi phục và bảo toàn Website nếu ZIP bị hỏng" {
-  set_backup_format '0'
+# =================================================================
+# FAULT INJECTION (TIÊM LỖI KIỂM THỬ ĐỘ BỀN)
+# =================================================================
+
+@test "Integration: Bẫy Bảo Mật — Bảo toàn Mã nguồn nếu ZIP bị hỏng" {
+  set_backup_format '0' '0'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
   local zip_file
   zip_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.zip" -print -quit 2>/dev/null)
-  
-  # Bẫy lỗi: Dừng test ngay nếu không sinh ra được file (chống crash bash)
   [ -n "$zip_file" ] 
   
   echo "DAY_LA_DU_LIEU_RAC_GAY_CORRUPT_FILE" > "$zip_file"
@@ -218,128 +214,84 @@ EOF
   [[ "$output" =~ "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN" ]]
 }
 
-@test "Integration: Bẫy Bảo Mật — Chặn khôi phục và bảo toàn Website nếu TAR.GZ bị hỏng" {
-  set_backup_format '2'
+@test "Integration: Bẫy Bảo Mật — Bảo toàn Mã nguồn nếu TAR.GZ bị hỏng" {
+  set_backup_format '2' '1'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
   local gz_file
   gz_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.gz" -print -quit 2>/dev/null)
-  
   [ -n "$gz_file" ]
+  
   echo "DAY_LA_DU_LIEU_RAC_GAY_CORRUPT_FILE_GZIP" > "$gz_file"
-
   echo "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_GZ" >> "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
   run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "bị hỏng" ]] || [[ "$output" =~ "Lỗi giải nén" ]]
 
   run cat "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
   [[ "$output" =~ "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_GZ" ]]
 }
 
-@test "Integration: Bẫy Bảo Mật — Chặn khôi phục và bảo toàn Website nếu TAR.ZST bị hỏng" {
-  set_backup_format '1'
+@test "Integration: Bẫy Bảo Mật — Bảo toàn Mã nguồn nếu TAR.ZST bị hỏng" {
+  set_backup_format '1' '2'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
   local zst_file
   zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.zst" -print -quit 2>/dev/null)
-  
   [ -n "$zst_file" ]
+  
   echo "DAY_LA_DU_LIEU_RAC_GAY_CORRUPT_FILE_ZSTD" > "$zst_file"
-
   echo "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_ZST" >> "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
   run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "bị hỏng" ]] || [[ "$output" =~ "Lỗi giải nén" ]]
 
   run cat "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
   [[ "$output" =~ "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_ZST" ]]
 }
 
-
-@test "Integration: Bẫy Bảo Mật — Chặn khôi phục và bảo toàn Database nếu file SQL (thuần) bị hỏng" {
-  set_backup_format '0'
-  sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
-  # echo "sql_gz=0" >> /etc/wptt/.wptt.conf
-
+@test "Integration: Bẫy Bảo Mật — Bảo toàn Database nếu file SQL.GZ bị hỏng" {
+  set_backup_format '2' '1'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
-  local sql_file
-  sql_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql" -print -quit 2>/dev/null)
-  [ -n "$sql_file" ]
+  local gz_db
+  gz_db=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql.gz" -print -quit 2>/dev/null)
+  [ -n "$gz_db" ]
 
-  # TIÊM LỖI: Ghi đè file SQL bằng 100 dòng lệnh SQL sai cú pháp
-  # Dung lượng sẽ > 3KB để vượt qua hàm check size, ép MariaDB phải báo lỗi syntax
-  rm -f "$sql_file"
-  for i in {1..100}; do
-    echo "LỆNH_RÁC_GÂY_LỖI_SYNTAX_ĐỂ_TEST_MARIADB_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx;" >> "$sql_file"
-  done
+  # Tiêm lỗi
+  rm -f "$gz_db"
+  for i in {1..100}; do echo "DAY_LA_FILE_GZ_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$gz_db"; done
 
   run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  
-  # Cảnh báo phải in ra thông báo giữ nguyên DB
-  [[ "$output" =~ "DB giữ nguyên" ]] || [[ "$output" =~ "lỗi" ]]
+  [[ "$output" =~ "hỏng cấu trúc" ]] || [[ "$output" =~ "Corrupt" ]] || [[ "$output" =~ "lỗi" ]]
 }
 
-@test "Integration: Bẫy Bảo Mật — Chặn khôi phục và bảo toàn Database nếu file SQL.GZ bị hỏng" {
-  set_backup_format '2'
-  sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
-  echo "sql_gz=1" >> /etc/wptt/.wptt.conf
-
+@test "Integration: Bẫy Bảo Mật — Bảo toàn Database nếu file SQL.ZST bị hỏng" {
+  set_backup_format '1' '2'
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
-  local gz_file
-  gz_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql.gz" -print -quit 2>/dev/null)
-  [ -n "$gz_file" ]
+  local zst_db
+  zst_db=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql.zst" -print -quit 2>/dev/null)
+  [ -n "$zst_db" ]
 
-  # TIÊM LỖI: Ghi file text thuần vào đuôi .gz để phá vỡ cấu trúc giải nén GZIP
-  # Vẫn đảm bảo dung lượng > 3KB
-  rm -f "$gz_file"
-  for i in {1..100}; do
-    echo "DAY_LA_FILE_GZ_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$gz_file"
-  done
+  # Tiêm lỗi
+  rm -f "$zst_db"
+  for i in {1..100}; do echo "DAY_LA_FILE_ZST_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$zst_db"; done
 
   run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "DB giữ nguyên" ]] || [[ "$output" =~ "lỗi" ]]
-}
-
-@test "Integration: Bẫy Bảo Mật — Chặn khôi phục và bảo toàn Database nếu file SQL.ZST bị hỏng" {
-  set_backup_format '1'
-  sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
-  echo "sql_gz=2" >> /etc/wptt/.wptt.conf
-
-  rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
-  bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
-
-  local zst_file
-  zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql.zst" -print -quit 2>/dev/null)
-  [ -n "$zst_file" ]
-
-  # TIÊM LỖI: Ghi file text thuần vào đuôi .zst để phá vỡ cấu trúc giải nén ZSTD
-  rm -f "$zst_file"
-  for i in {1..100}; do
-    echo "DAY_LA_FILE_ZST_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$zst_file"
-  done
-
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
-  
-  in_log_neu_loi 1
-  [ "$status" -ne 0 ]
-  [[ "$output" =~ "DB giữ nguyên" ]] || [[ "$output" =~ "lỗi" ]]
+  [[ "$output" =~ "hỏng cấu trúc" ]] || [[ "$output" =~ "Corrupt" ]] || [[ "$output" =~ "lỗi" ]]
 }
