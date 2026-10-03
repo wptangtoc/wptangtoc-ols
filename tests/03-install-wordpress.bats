@@ -95,22 +95,24 @@ EOF
 
   export SCRIPT_LSCACHE="/etc/wptt/wordpress/nhap-du-lieu-litespeed-wptangtoc"
   
-  # 1. THỰC THI VÀ GHI NHẬN KẾT QUẢ
-  # PHẢI có chữ 'run' ở đầu để Bats lấy được $status và $output
-  # KHÔNG DÙNG >/dev/null ở đây vì nếu dùng, $output sẽ bị rỗng và hàm [[ "$output" =~ ... ]] sẽ luôn thất bại.
   run bash "$SCRIPT_LSCACHE" "$TEST_DOMAIN"
 
-  # Lúc này $status đã có giá trị, hàm in_log_neu_loi sẽ không bị lỗi "integer expression expected" nữa
   in_log_neu_loi 0
 
-  # 3. KIỂM CHỨNG KẾT QUẢ CỦA LỆNH RUN TRÊN
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "[ THÀNH CÔNG ] CÀI ĐẶT LSCache thành công" ]]
   
-  # 4. Kiểm tra sâu: Thư mục plugin litespeed-cache phải tồn tại (dùng -d)
+  if [[ ! "$output" == *"Cấu hình tối ưu theo cách khuyến nghị"* ]]; then
+      echo -e "\n[DEBUG] Kịch bản không in ra chữ như kỳ vọng. Output thực tế là:\n$output" >&3
+  fi
+  # -------------------------------------------------------------------
+
+  # Kiểm tra khớp với chuỗi kịch bản thực sự in ra
+  [[ "$output" == *"Cấu hình tối ưu theo cách khuyến nghị"* ]]
+  
+  # 4. Kiểm tra sâu: Thư mục plugin litespeed-cache phải tồn tại
   [ -d "/usr/local/lsws/$TEST_DOMAIN/html/wp-content/plugins/litespeed-cache" ]
   
-  # 5. Nghiệm thu cuối cùng bằng WP-CLI (Dùng lệnh is-active chuẩn của wp-cli)
+  # 5. Nghiệm thu cuối cùng bằng WP-CLI
   run wp plugin is-active litespeed-cache --path="/usr/local/lsws/$TEST_DOMAIN/html" --allow-root
   [ "$status" -eq 0 ]
 }

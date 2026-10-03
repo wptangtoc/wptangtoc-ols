@@ -38,7 +38,7 @@
   [ "$output" -gt 0 ]
 }
 
-@test "✅ Website github.wptangtoc.com (CI Test) đã nhận diện đúng nội dung Document html" {
+@test "✅ Website github.wptangtoc.com (CI Test) đã nhận diện đúng nội dung Document" {
   # 1. Tạo file tĩnh độc lập để né xử lý PHP/MySQL nặng nề trên CI
   run bash -c "echo 'GiaTuanDz' > /usr/local/lsws/github.wptangtoc.com/html/bats-test.html"
   [ "$status" -eq 0 ]
