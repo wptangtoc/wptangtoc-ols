@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.1.1
+
+### 🛠️ Tối ưu hệ thống
+- **Mở rộng tương thích trên Rocky Linux 9 và 10:** Hoàn thiện và tối ưu hóa hệ thống kiểm thử, đảm bảo khả năng vận hành ổn định, an toàn và mượt mà khi triển khai trên các hệ điều hành doanh nghiệp Rocky Linux 9 và Rocky Linux 10.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.0
 
 ### 🛠️ Tối ưu hệ thống
