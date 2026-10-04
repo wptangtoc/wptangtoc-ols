@@ -67,7 +67,7 @@ setup() {
 
   # Dùng lệnh GREP siêu lành tính thay vì [[ ... =~ ... ]] gây lỗi syntax
   if echo "$BATS_TEST_DESCRIPTION" | grep -q "Integration"; then
-    if [ ! -x "$SCRIPT_GOC" ] || [ ! -x "$SCRIPT_THEM" ] \vert{}\vert{} [ ! -x "$SCRIPT_XOA" ] || [ ! -x "$SCRIPT_CAI_WP" ] \vert{}\vert{} [ ! -x "$SCRIPT_DB" ]; then
+    if [ ! -x "$SCRIPT_GOC" ] || [ ! -x "$SCRIPT_THEM" ] || [ ! -x "$SCRIPT_XOA" ] || [ ! -x "$SCRIPT_CAI_WP" ] || [ ! -x "$SCRIPT_DB" ]; then
       skip "Thiếu script môi trường (Thêm/Xóa/Cài/Sao Lưu). Bỏ qua Integration Test"
     fi
   fi
