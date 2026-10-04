@@ -393,104 +393,115 @@ _rundone "$lam_sach_toan_bo_du_lieu_ma_nguon_cua $NAME"
 # ==============================================================================
 # 4. TẢI VÀ GIẢI NÉN MÃ NGUỒN
 # ==============================================================================
+# ==============================================================================
+# 4. TẢI VÀ GIẢI NÉN MÃ NGUỒN (LOCAL CACHE - ENTERPRISE EDITION)
+# ==============================================================================
 _runing "$tai $ma_nguon WordPress mới nhất"
 
 OLD_PWD=$(pwd)
 TMP_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX)
 cd "$TMP_DIR" || exit
+echo "" # Tạo dòng trống cho thanh PV chạy mượt
 
-echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
+LOCAL_CACHE_FILE="/etc/wptt/tmp/wordpress-latest.tar.gz"
+CACHE_HIT=0
 
-# Hàm tải file tích hợp giao diện PV UX Tàng Hình
-wptt_download_wp_ux() {
-    local url="$1"
-    local fsize
-    fsize=$(curl -sI --connect-timeout 5 --max-time 10 "$url" | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+# 4.1. Kéo mã SHA1 từ WordPress.org
+remote_sha1=$(curl -sLf --connect-timeout 5 --max-time 10 "https://wordpress.org/latest.tar.gz.sha1" | head -n 1 || true)
 
-    if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
-        wget -qO- --timeout=15 --tries=3 "$url" | pv -s "$fsize" -N "Tải WordPress" -p -t -e -r -b -w 90 >latest.tar.gz
-    else
-        wget -q --show-progress --timeout=15 --tries=3 "$url"
-    fi
-    # Tàng hình: lùi lên 1 dòng, xóa sạch tiến trình
-    echo -en "\033[1A\033[2K\r"
-    echo -en "\033[1A\033[2K\r"
-}
-
-# Hàm xác thực toàn vẹn dữ liệu (Chống treo & Chữa cháy)
-wptt_verify_wp_download() {
-    [[ ! -f latest.tar.gz ]] && return 1
-
-    local remote_sha1 local_sha1
-    # Thêm timeout bảo vệ curl khỏi việc chờ đợi vô tận khi rớt mạng
-    remote_sha1=$(curl -sLf --connect-timeout 5 --max-time 10 "https://wordpress.org/latest.tar.gz.sha1" | head -n 1 || true)
-    
-    # KỊCH BẢN 1: Lỗi mạng không lấy được mã SHA1 từ WordPress
-    if [[ -z "$remote_sha1" ]]; then
-        # Fallback: Thay vì crash, kiểm tra thử cấu trúc file nén
-        if gzip -t latest.tar.gz 2>/dev/null; then
-            return 0 # File nguyên vẹn, cho phép đi tiếp
+# 4.2. Khớp lệnh Local Cache
+if [[ -f "$LOCAL_CACHE_FILE" ]]; then
+     echo -en "\033[1A\033[2K\r"
+    if [[ -n "$remote_sha1" ]]; then
+        local_sha1=$(sha1sum "$LOCAL_CACHE_FILE" 2>/dev/null | awk '{print $1}')
+        if [[ "$remote_sha1" == "$local_sha1" ]]; then
+            CACHE_HIT=1
+            # echo -e "${C_CYAN}Phát hiện Local Cache hợp lệ! Bỏ qua tải mạng...${C_RESET}"
         else
-            rm -f latest.tar.gz
-            return 1 # File hỏng, yêu cầu tải lại
+            rm -f "$LOCAL_CACHE_FILE"
+        fi
+    else
+        if gzip -t "$LOCAL_CACHE_FILE" 2>/dev/null; then
+            CACHE_HIT=1
+            # echo -e "${C_YELLOW}Mạng chập chờn! Đang sử dụng Local Cache dự phòng...${C_RESET}"
+        else
+            rm -f "$LOCAL_CACHE_FILE"
         fi
     fi
-
-    # KỊCH BẢN 2: Có SHA1, so sánh bảo mật khắt khe
-    local_sha1=$(sha1sum latest.tar.gz 2>/dev/null | awk '{print $1}')
-    if [[ "$remote_sha1" == "$local_sha1" ]]; then
-        return 0
-    else
-        rm -f latest.tar.gz
-        return 1
-    fi
-}
-
-# ================= ÁP DỤNG VÀO LUỒNG CHÍNH =================
-
-# Lần tải 1
-wptt_download_wp_ux "https://wordpress.org/latest.tar.gz"
-
-# Kiểm tra & Tải dự phòng lần 2 nếu lỗi
-if ! wptt_verify_wp_download; then
-    sleep 5
-    wptt_download_wp_ux "https://wordpress.org/latest.tar.gz"
-    wptt_verify_wp_download || true
 fi
 
-# Chốt chặn cuối cùng
-if [[ ! -f latest.tar.gz ]]; then
-    _runloi "$tai $ma_nguon WordPress"
-    echo -e "${C_RED}Lỗi: Mạng quá yếu, không thể tải hoặc xác thực mã nguồn WordPress!${C_RESET}"
-    cd "${OLD_PWD:-/root}" || cd /root || exit
-    rm -rf "${TMP_DIR:-/tmp/wptt_fallback}"
-    [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
-    return 1 2>/dev/null || exit 1
+# 4.3. Tiến hành tải mới (Với cơ chế Atomic Write chống Race Condition)
+if [[ "$CACHE_HIT" -eq 0 ]]; then
+    wptt_download_wp_ux() {
+        local url="$1"
+        local dest_file="$2"
+        local fsize
+        fsize=$(curl -sI --connect-timeout 5 --max-time 10 "$url" | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+
+        if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+            wget -qO- --timeout=15 --tries=3 "$url" | pv -s "$fsize" -N "Tải WordPress" -p -t -e -r -b -w 90 > "$dest_file"
+        else
+            wget -qO "$dest_file" --show-progress --timeout=15 --tries=3 "$url"
+        fi
+        echo -en "\033[1A\033[2K\r"
+        echo -en "\033[1A\033[2K\r"
+    }
+
+    wptt_verify_and_commit() {
+        local temp_file="$1"
+        [[ ! -f "$temp_file" ]] && return 1
+        
+        if [[ -n "$remote_sha1" ]]; then
+            local_sha1=$(sha1sum "$temp_file" 2>/dev/null | awk '{print $1}')
+            [[ "$remote_sha1" == "$local_sha1" ]] || { rm -f "$temp_file"; return 1; }
+        else
+            gzip -t "$temp_file" 2>/dev/null || { rm -f "$temp_file"; return 1; }
+        fi
+        
+        # Đưa file tạm vào Cache chính thức một cách an toàn tuyệt đối
+        mv -f "$temp_file" "$LOCAL_CACHE_FILE"
+        return 0
+    }
+
+    TEMP_DL_FILE="${LOCAL_CACHE_FILE}.part.$$"
+    wptt_download_wp_ux "https://wordpress.org/latest.tar.gz" "$TEMP_DL_FILE"
+
+    if ! wptt_verify_and_commit "$TEMP_DL_FILE"; then
+        sleep 3
+        wptt_download_wp_ux "https://wordpress.org/latest.tar.gz" "$TEMP_DL_FILE"
+        wptt_verify_and_commit "$TEMP_DL_FILE" || true
+    fi
+
+    if [[ ! -f "$LOCAL_CACHE_FILE" ]]; then
+        _runloi "$tai $ma_nguon WordPress"
+        echo -e "${C_RED}Lỗi: Mạng quá yếu, không thể tải hoặc xác thực mã nguồn WordPress!${C_RESET}"
+        cd "${OLD_PWD:-/root}" || cd /root || exit
+        rm -rf "${TMP_DIR:-/tmp/wptt_fallback}"
+        [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
+        return 1 2>/dev/null || exit 1
+    fi
 fi
 
 _rundone "$tai $ma_nguon WordPress mới nhất"
 _runing "$giai_nen $ma_nguon WordPress"
 
-#kiểm tra xem đã có thư viện tar hay chưa nhiều hãng vps họ xóa luôn thư viện tar đi
-if ! command -v tar &>/dev/null; then #đề phòng máy chủ xoá mất tar khi cài đặt sẽ phải chạy lại
+if ! command -v tar &>/dev/null; then 
   if [ -f /etc/redhat-release ]; then
     dnf install tar -y -q >/dev/null 2>&1 || yum install tar -y -q >/dev/null 2>&1
   elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install tar -y -q >/dev/null 2>&1; fi
 fi
 
-
-#kiểm tra xem đã có thư viện gzip hay chưa nhiều hãng vps họ xóa luôn thư viện gzip đi
-if ! command -v gzip &>/dev/null; then #đề phòng máy chủ xoá mất gzip khi cài đặt sẽ phải chạy lại
+if ! command -v gzip &>/dev/null; then 
   if [ -f /etc/redhat-release ]; then
     dnf install gzip -y -q >/dev/null 2>&1 || yum install gzip -y -q >/dev/null 2>&1
   elif [ -f /etc/debian_version ]; then apt-get update -q >/dev/null 2>&1 && apt-get install gzip -y -q >/dev/null 2>&1; fi
 fi
 
-
 touch "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active" 2>/dev/null
 
-tar -zxf latest.tar.gz
-mv wordpress/* "/usr/local/lsws/${NAME:?}/html" && rm -rf wordpress latest.tar.gz
+# TRÍCH XUẤT TRỰC TIẾP TỪ CACHE (Bỏ qua khâu Copy thừa thãi)
+tar -zxf "$LOCAL_CACHE_FILE"
+mv wordpress/* "/usr/local/lsws/${NAME:?}/html" && rm -rf wordpress
 cd "$OLD_PWD" || cd /root || exit
 rm -rf "${TMP_DIR:?}"
 _rundone "$giai_nen $ma_nguon WordPress"
@@ -832,5 +843,3 @@ echo ""
 
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
 [[ "${1:-}" == "99" ]] && exec /usr/bin/wptangtoc 1
-
-
