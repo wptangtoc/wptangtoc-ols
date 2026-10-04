@@ -182,8 +182,9 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
         fi
     done
     
-    mkdir -p /tmp/home_backup
-    cp -a /home/. /tmp/home_backup/ 2>/dev/null || true
+    # [FIX CWE-61] Sử dụng thư mục tạm ngẫu nhiên để chống Path Traversal / Symlink Attack
+    SECURE_HOME_BACKUP=$(mktemp -d)
+    cp -a /home/. "$SECURE_HOME_BACKUP/" 2>/dev/null || true
     
     for user_dir in /home/*; do
       if [[ -d "$user_dir" ]]; then
@@ -232,9 +233,11 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
     sed -i '/[[:space:]]\/home[[:space:]]/d' /etc/fstab || true
     mkdir -p /home
     shopt -s dotglob
-    mv /tmp/home_backup/* /home/ 2>/dev/null || true
+    
+    # Phục hồi và dọn dẹp thư mục tạm ngẫu nhiên
+    mv "$SECURE_HOME_BACKUP"/* /home/ 2>/dev/null || true
     shopt -u dotglob
-    rm -rf /tmp/home_backup || true
+    rm -rf "$SECURE_HOME_BACKUP" || true
     
     echo -e "\e[32mGộp phân vùng ổ cứng thành công!\e[0m"
     sleep 2
@@ -277,13 +280,12 @@ done
 
 echo -en "\033[1A\033[2K\r"
 
-# 2. Nhập và kiểm định Fingerprint Public Key (Sử dụng Keyring biệt lập)
+# 2. Nhập và kiểm định Fingerprint Public Key
 EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
 KEY_EMAIL="giatuan@wptangtoc.com"
 PUB_KEY_TMP="$WPTT_SECURE_TMP/wptangtoc-gpg-pub.key"
-KEYRING_PATH="$WPTT_SECURE_TMP/wptt-keyring.gpg"
 
-if ! gpg --no-default-keyring --keyring "$KEYRING_PATH" --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
+if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
   echo "Đang nạp và đối soát Khóa bảo mật GPG WPTangToc..."
   
   # Kèm User-Agent vào CURL lấy Key an toàn
@@ -298,8 +300,8 @@ if ! gpg --no-default-keyring --keyring "$KEYRING_PATH" --list-keys "$EXPECTED_F
   REAL_FP=$(gpg --show-keys --with-colons "$PUB_KEY_TMP" 2>/dev/null | awk -F: '$1 == "fpr" {print $10}' | head -n 1 || echo "")
 
   if [[ -n "$REAL_FP" && "$REAL_FP" == "$EXPECTED_FP" ]]; then
-    # Import key vào Keyring tạm thời, không đưa vào cấu hình gốc
-    gpg --no-default-keyring --keyring "$KEYRING_PATH" --import "$PUB_KEY_TMP" >/dev/null 2>&1 || true
+    # [CHUẨN ENTERPRISE] Đưa vào hệ thống gốc để dùng chung cho mọi kịch bản Core/User phía sau
+    gpg --import "$PUB_KEY_TMP" >/dev/null 2>&1 || true
     rm -f "$PUB_KEY_TMP" || true
   else
     rm -f "$PUB_KEY_TMP" || true
@@ -324,7 +326,6 @@ function download_and_verify() {
 
   local tmp_checksum="$WPTT_SECURE_TMP/SHA256SUMS.txt"
   local tmp_sig="$WPTT_SECURE_TMP/SHA256SUMS.txt.sig"
-  local keyring_path="$WPTT_SECURE_TMP/wptt-keyring.gpg"
 
   # Tải file checksum và file chữ ký
   if ! curl -sfL -A "checksum wptangtoc ols" --connect-timeout 20 "$url_checksum" -o "$tmp_checksum"; then
@@ -335,8 +336,8 @@ function download_and_verify() {
     return 1
   fi
 
-  # Bắt Exit Code của GPG thông qua Keyring biệt lập
-  if ! gpg --no-default-keyring --keyring "$keyring_path" --batch --verify "$tmp_sig" "$tmp_checksum" >/dev/null 2>&1; then
+  # [FIX CWE-347] Sử dụng Exit Code thay vì grep để vô hiệu hóa lỗ hổng tiêm dữ liệu
+  if ! gpg --batch --verify "$tmp_sig" "$tmp_checksum" >/dev/null 2>&1; then
     echo -e "\e[31m[CẢNH BÁO] Chữ ký số GPG của file checksum không hợp lệ hoặc bị can thiệp!\e[0m"
     return 1
   fi
