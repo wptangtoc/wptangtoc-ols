@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.1.2
+
+### 🛠️ Tối ưu hệ thống
+- **Tăng cường cơ chế bảo mật và phân quyền:** Siết chặt quy chuẩn kiểm soát quyền hạn (permissions/ownership) đối với tập tin và thư mục, ngăn ngừa rủi ro truy cập trái phép, bảo vệ tính toàn vẹn của mã nguồn và gia tăng độ an toàn cho các website vận hành trên máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.1
 
 ### 🛠️ Tối ưu hệ thống
