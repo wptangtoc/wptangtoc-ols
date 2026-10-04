@@ -90,12 +90,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.0.7
-
-### 🛠️ Tối ưu hệ thống
-- **Cải tiến cơ chế kiểm tra tham số cài đặt WordPress:** Tối ưu hóa quá trình xác thực tham số đầu vào khi triển khai WordPress, giúp ngăn ngừa lỗi cấu hình và đảm bảo quá trình thiết lập website mới diễn ra chính xác, mượt mà.
-- **Mở rộng hệ thống kiểm thử tự động (BATS):** Tích hợp các kịch bản kiểm thử tự động cho tính năng sao chép website và quy trình vận hành, nâng cao độ ổn định và tin cậy cho toàn bộ hệ thống quản trị.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
