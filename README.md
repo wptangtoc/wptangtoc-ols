@@ -68,7 +68,7 @@
     <summary><i>🛡️ Dành cho Sysadmin: Mã SHA256 kiểm tra toàn vẹn file (Click để xem)</i></summary>
     <br>
     <blockquote>
-        <code>wptangtoc-ols: <!-- SHA256_START -->1a7147c2c1a133bcea9231543f9f4989bcf39ebfa0092aca7abde82f6419f2c6<!-- SHA256_END --></code>
+        <code>wptangtoc-ols: <!-- SHA256_START -->23c9c695b7cc794e5b088c2f463b8ac840fc5a3bc6389aae40243a43d1edd338<!-- SHA256_END --></code>
     </blockquote>
 </details>
 <hr>
