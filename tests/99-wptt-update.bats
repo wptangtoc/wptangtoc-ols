@@ -108,7 +108,7 @@ EOF
   [[ "$output" =~ "GPG AUTHENTICATION FAILED" ]]
 }
 
-@test "Update: Cập nhật thành công & Website Không Bị Sập (Zero-Downtime)" {
+@test "Update: Kiểm chứng Self-Healing (Khôi phục File) & Zero-Downtime" {
   if [[ "$WPTT_ALLOW_REAL_UPDATE" != "1" ]]; then
     skip "Bỏ qua test Update thật."
   fi
@@ -117,35 +117,56 @@ EOF
 
   # 1. KIỂM TRA SỨC KHỎE TRƯỚC UPDATE
   local http_truoc=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1)
-  
   if [[ "$http_truoc" == "000" || "$http_truoc" == "503" ]]; then
     echo -e "\n[CURL ERROR] OLS đang bị sập trước cả khi Update! (Mã HTTP: $http_truoc)" >&3
     false
   fi
 
-  # 2. MOCKING PROXY: Đồng ý Update & Bỏ qua Ping
+  # 2. KIỂM THỬ SELF-HEALING: Cố tình xóa thư mục và file thực thi lõi
+  local TEST_DIR="/etc/wptt/backup-restore"
+  local TEST_BIN="/usr/bin/wptangtoc"
+  
+  rm -rf "$TEST_DIR"
+  rm -f "$TEST_BIN"
+
+  # Đảm bảo đã xóa thành công trước khi test
+  [ ! -d "$TEST_DIR" ]
+  [ ! -f "$TEST_BIN" ]
+
+  # 3. MOCKING PROXY: Đồng ý Update & Bỏ qua Ping
   cat << 'EOF' > /etc/wptt/core-functions
 source /tmp/core-functions.bak
 wptt_xac_nhan() { return 0; }
 ping() { return 0; }
 EOF
 
-  # 3. THỰC THI LỆNH UPDATE THẬT
+  # 4. THỰC THI LỆNH UPDATE THẬT
   run bash -c "bash $SCRIPT_GOC < /dev/null"
   
   local STATUS_UPDATE=$status
   local OUT_UPDATE="$output"
 
-  # 4. [CHÉN THÁNH] KIỂM TRA ZERO-DOWNTIME SAU UPDATE
+  # 5. [CHÉN THÁNH 1] KIỂM TRA TÍNH CHÍNH XÁC (SELF-HEALING)
+  if [ ! -d "$TEST_DIR" ]; then
+     echo -e "\n[LỖI CẬP NHẬT] Thư mục '$TEST_DIR' KHÔNG được phục hồi! Giải nén thất bại." >&3
+     false
+  fi
+
+  if [ ! -f "$TEST_BIN" ]; then
+     echo -e "\n[LỖI CẬP NHẬT] File Binary '$TEST_BIN' KHÔNG được phục hồi! Lỗi chép file." >&3
+     false
+  fi
+
+  # 6. [CHÉN THÁNH 2] KIỂM TRA ZERO-DOWNTIME SAU UPDATE
   local http_sau=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1)
 
-  # Đánh giá kết quả Update
+  # Đánh giá kết quả Update tổng quát
   status=$STATUS_UPDATE
   output="$OUT_UPDATE"
   in_log_neu_loi 0
   [ "$STATUS_UPDATE" -eq 0 ]
   [[ "$OUT_UPDATE" =~ "Xác thực GPG Thành Công" ]]
-  [[ "$OUT_UPDATE" =~ "đã cập nhật Hệ thống lên bản" ]]
+  [[ "$OUT_UPDATE" =~ "đã cập nhật Hệ thống" ]]
   
   # Đánh giá kết quả Zero-Downtime
   if [[ "$http_sau" == "000" || "$http_sau" == "503" ]]; then
