@@ -443,13 +443,12 @@ if [[ $checkdathietlap ]]; then
       CLOUD_DIR="wptangtoc-ols-backup"
     fi
 
-    # -------------------------------------------------------------
-    # BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE) tránh tình trạng quá tải
+	# -------------------------------------------------------------
+    # BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE)
     # -------------------------------------------------------------
     TOTAL_CORES=$(nproc 2>/dev/null || echo 1)
     TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
 
-    # 1. Cấu hình cơ bản dựa trên sức mạnh phần cứng (Phân loại yếu/khỏe)
     if (( TOTAL_CORES <= 2 )) || (( TOTAL_RAM_MB <= 2048 )); then
       OPT_TRANSFERS=2
       OPT_CHUNK="32M"
@@ -458,38 +457,60 @@ if [[ $checkdathietlap ]]; then
       OPT_CHUNK="64M"
     fi
 
-    # 2. Điều tốc theo ngữ cảnh: Cronjob (Nền) vs Thủ công (User)
     if [[ "$ggdriver" == "1998" ]]; then
-	# TÍNH NĂNG VÀNG: "Đồng hồ sinh học" cho Rclone
-    # - Ban ngày (07:00 - 23:00): Bóp về 10MB/s (Tránh kẹt web nếu file quá to chạy lố sang ban ngày)
-    # - Ban đêm (23:00 - 07:00): OFF (Bung Max 100% sức mạnh đường truyền của mọi VPS)
-        OPT_BWLIMIT="--bwlimit 07:00,10M 23:00,off"
-      if (( TOTAL_CORES == 1 )); then
-        # Máy siêu yếu, giảm kịch sàn để không đơ I/O
-        OPT_TRANSFERS=1
-      fi
+      OPT_BWLIMIT="--bwlimit 07:00,10M 23:00,off"
+      if (( TOTAL_CORES == 1 )); then OPT_TRANSFERS=1; fi
     else
-      # Chạy Thủ công: Khách đang đợi, thả băng thông (Không set limit)
       OPT_BWLIMIT=""
     fi
 
-    # 3. Gói gọn thành tham số tối ưu hoàn chỉnh
-    RCLONE_OPTS="--transfers=$OPT_TRANSFERS --checkers=$OPT_TRANSFERS --drive-chunk-size=$OPT_CHUNK --s3-upload-concurrency=$OPT_TRANSFERS $OPT_BWLIMIT"
+    # Thêm cờ --log-level ERROR để bịt mõm các dòng NOTICE rác của Rclone
+    RCLONE_OPTS="--transfers=$OPT_TRANSFERS --checkers=$OPT_TRANSFERS --drive-chunk-size=$OPT_CHUNK --s3-upload-concurrency=$OPT_TRANSFERS $OPT_BWLIMIT --log-level ERROR"
 
-    if [[ $dinh_dang_nen_ma_nguon = '1' ]]; then #nén mã nguồn zstd
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$times.tar.zst wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS 2>/dev/null
+    # =============================================================
+    # HÀM UPLOAD GIAO DIỆN CHUẨN UX (KẾT HỢP PV + RCAT + AUTO CLEAN)
+    # =============================================================
+    function wptt_upload_ux() {
+      local src_file="$1"
+      local dest_dir="$2"
+      local file_type="$3" # Nhận diện đang đẩy Mã Nguồn hay Database
+      local fname=$(basename "$src_file")
+
+      if [[ "$ggdriver" == "1998" ]]; then
+        # Chạy ngầm Cronjob: Im lặng tuyệt đối
+        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy "$src_file" "$dest_dir" $RCLONE_OPTS --quiet
+      else
+        # Chạy tay: Vẽ tiến trình và Tự động dọn dẹp
+        if command -v pv &>/dev/null; then
+          local fsize=$(du -b "$src_file" | cut -f1)
+          # In tên tiến trình rõ ràng: "Upload Mã Nguồn" hoặc "Upload Database"
+          pv -s "$fsize" -N "Upload $file_type" -p -t -e -r -b -w 90 "$src_file" | rclone rcat "$dest_dir/$fname" $RCLONE_OPTS
+          
+          # Tuyệt kỹ Tàng Hình: Vừa chạy xong 100% -> Nhảy lên 1 dòng -> Xóa sạch thanh tiến trình
+          echo -en "\033[1A\033[2K\r"
+        else
+          rclone copy "$src_file" "$dest_dir" $RCLONE_OPTS --progress --stats-one-line
+          echo -en "\033[1A\033[2K\r"
+        fi
+      fi
+    }
+
+    # 1. Gọi hàm đẩy Mã Nguồn lên Cloud
+    if [[ $dinh_dang_nen_ma_nguon = '1' ]]; then
+      wptt_upload_ux "/usr/local/backup-website/$NAME/$NAME$times.tar.zst" "wptangtoc:$CLOUD_DIR/$NAME" "Mã Nguồn"
     elif [[ $dinh_dang_nen_ma_nguon = '2' ]]; then
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$times.tar.gz wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS 2>/dev/null
+      wptt_upload_ux "/usr/local/backup-website/$NAME/$NAME$times.tar.gz" "wptangtoc:$CLOUD_DIR/$NAME" "Mã Nguồn"
     else
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$times.zip wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS 2>/dev/null
+      wptt_upload_ux "/usr/local/backup-website/$NAME/$NAME$times.zip" "wptangtoc:$CLOUD_DIR/$NAME" "Mã Nguồn"
     fi
 
+    # 2. Gọi hàm đẩy Database lên Cloud
     if [[ $sql_gz = '1' ]]; then
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$times.sql.gz wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS 2>/dev/null
+      wptt_upload_ux "/usr/local/backup-website/$NAME/$NAME$times.sql.gz" "wptangtoc:$CLOUD_DIR/$NAME" "Database"
     elif [[ $sql_gz = '2' ]]; then
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$times.sql.zst wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS 2>/dev/null
+      wptt_upload_ux "/usr/local/backup-website/$NAME/$NAME$times.sql.zst" "wptangtoc:$CLOUD_DIR/$NAME" "Database"
     else
-      $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy /usr/local/backup-website/"$NAME"/$NAME$times.sql wptangtoc:$CLOUD_DIR/$NAME $RCLONE_OPTS 2>/dev/null
+      wptt_upload_ux "/usr/local/backup-website/$NAME/$NAME$times.sql" "wptangtoc:$CLOUD_DIR/$NAME" "Database"
     fi
 
     kiem_tra_xem_file_da_uploads=$(rclone lsf wptangtoc:$CLOUD_DIR/$NAME 2>/dev/null | grep "$NAME$times")
