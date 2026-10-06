@@ -226,9 +226,6 @@ cap_nhat_thanh_cong="Update successful"
 ban_co_muon_reboot_lai_may_chu_khong="Do you want to reboot the entire server"
 
 
-
-
-
 #WebGuiAdmin menu main
 kich_hoat_webguiadmin="Enable"
 huy_kich_hoat_webguiadmin="Disnable"
@@ -238,9 +235,16 @@ xem_lai_thong_tin_tai_khoan_webguiadmin="Review account information"
 
 #cau hinh webserver main menu
 chinh_sua="Edit"
-thay_doi_cong_cu_cau_hinh="Change tool Edit"
+cong_cu_cau_hinh="Tool Edit"
 ghi_chu_muc_nay_chi_danh_cho_nguoi_nang_cao="Note: This category is advanced for professional users"
 hay_het_suc_can_than_trong_qua_trinh_chinh_sua="Be very careful while editing the configuration"
+khoi_dong_lai="restart"
+de_cap_nhat_gia_tri="to update the value"
+xong="done"
+de="to"
+luu_lai="save"
+
+
 
 #cau hinh php menu main
 cau_hinh_uploads_max_php="Setting uploads max php.ini"

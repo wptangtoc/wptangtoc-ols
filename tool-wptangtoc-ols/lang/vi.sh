@@ -224,9 +224,15 @@ xem_lai_thong_tin_tai_khoan_webguiadmin="Xem lại thông tin tài khoản"
 
 #cau hinh webserver main menu
 chinh_sua="Cấu hình"
-thay_doi_cong_cu_cau_hinh="Thay đổi công cụ cấu hình"
+cong_cu_cau_hinh="công cụ cấu hình"
 ghi_chu_muc_nay_chi_danh_cho_nguoi_nang_cao="Ghi chú : Danh mục này là nâng cao dành cho người dùng chuyên nghiệp"
 hay_het_suc_can_than_trong_qua_trinh_chinh_sua="Hãy hết sức cẩn thận trong quá trình chỉnh sửa cấu hình"
+khoi_dong_lai="Khởi động lại"
+de_cap_nhat_gia_tri="để cập nhật giá trị"
+xong="xong"
+de="để"
+luu_lai="lưu lại"
+
 
 #cau hinh php menu main
 cau_hinh_uploads_max_php="Cấu hình uploads max php.ini"
