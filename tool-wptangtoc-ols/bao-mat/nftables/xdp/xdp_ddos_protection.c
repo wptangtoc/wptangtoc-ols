@@ -33,7 +33,7 @@ struct {
 // Map 3: Rate limit counters
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 65535);
+    __uint(max_entries, 125535);
     __type(key, __u32);
     __type(value, struct rate_limit_entry);
 } rl_counters SEC(".maps");
