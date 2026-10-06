@@ -1,0 +1,70 @@
+#!/bin/bash
+
+TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+# 1. Tính toán mốc RAM dành riêng cho Object Cache
+if [ "$TOTAL_RAM_MB" -le 1200 ]; then
+  OBJ_CACHE_MEM="64" # VPS 1GB: 64MB là quá đủ cho các query cơ bản
+elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
+  OBJ_CACHE_MEM="128" # VPS 2GB: 128MB
+elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
+  OBJ_CACHE_MEM="256" # VPS 4GB: 256MB
+elif [ "$TOTAL_RAM_MB" -le 8500 ]; then
+  OBJ_CACHE_MEM="512" # VPS 8GB: 512MB
+else
+  OBJ_CACHE_MEM="1024" # Mức trần: 1GB (Kể cả máy 32GB cũng không nên set quá 1GB cho WP)
+fi
+
+# ------------------------------------------
+# A. XỬ LÝ MEMCACHED
+# ------------------------------------------
+if systemctl is-active --quiet memcached 2>/dev/null || [[ -f /etc/memcached.conf ]] || [[ -f /etc/sysconfig/memcached ]]; then
+
+  # Dành cho Ubuntu/Debian
+  if [[ -f /etc/memcached.conf ]]; then
+    sed -i -E "s/^-m .*/-m $OBJ_CACHE_MEM/" /etc/memcached.conf
+  fi
+
+  # Dành cho RHEL/CentOS/AlmaLinux
+  if [[ -f /etc/sysconfig/memcached ]]; then
+    sed -i -E "s/^CACHESIZE=.*/CACHESIZE=\"$OBJ_CACHE_MEM\"/" /etc/sysconfig/memcached
+  fi
+
+  systemctl restart memcached >/dev/null 2>&1
+  echo "Đã Tune Memcached: Giới hạn ${OBJ_CACHE_MEM}MB" >>/var/log/wptangtoc-ols.log
+fi
+
+# ------------------------------------------
+# B. XỬ LÝ NHÓM REDIS, VALKEY, KEYDB
+# ------------------------------------------
+# Cấu trúc của 3 phần mềm này giống hệt nhau về tham số cấu hình lõi
+DANH_SACH_CONFIG_REDIS=(
+  "/etc/redis/redis.conf"
+  "/etc/redis.conf"
+  "/etc/valkey/valkey.conf"
+  "/etc/valkey.conf"
+  "/etc/keydb/keydb.conf"
+  "/etc/keydb.conf"
+)
+
+for conf_file in "${DANH_SACH_CONFIG_REDIS[@]}"; do
+  if [[ -f "$conf_file" ]]; then
+    # 1. Dọn dẹp rác cấu hình cũ (nếu có)
+    sed -i '/^maxmemory /d' "$conf_file"
+    sed -i '/^maxmemory-policy /d' "$conf_file"
+
+    # 2. Bơm cấu hình mới xuống cuối file
+    # - maxmemory: Giới hạn RAM tối đa không cho nó phình to gây sập VPS
+    # - maxmemory-policy allkeys-lru: Thuật toán TỰ ĐỘNG XÓA key cũ ít dùng khi đầy RAM
+    echo "maxmemory ${OBJ_CACHE_MEM}mb" >>"$conf_file"
+    echo "maxmemory-policy allkeys-lru" >>"$conf_file"
+
+    # 3. Khởi động lại dịch vụ tương ứng
+    if [[ "$conf_file" == *"valkey"* ]]; then
+      systemctl restart valkey >/dev/null 2>&1
+    elif [[ "$conf_file" == *"keydb"* ]]; then
+      systemctl restart keydb >/dev/null 2>&1
+    else
+      systemctl restart redis >/dev/null 2>&1 || systemctl restart redis-server >/dev/null 2>&1
+    fi
+  fi
+done
