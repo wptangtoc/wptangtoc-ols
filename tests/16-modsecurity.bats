@@ -122,9 +122,14 @@ EOF
   rm -f "$script_test"
   cp "$CORE_BAK" /etc/wptt/core-functions 2>/dev/null || true
 
-  # 5. Restart OLS để ăn cấu hình mới
-  systemctl restart lshttpd
-  sleep 3
+echo "127.0.0.1 ${TEST_DOMAIN}" >> /etc/hosts
+
+	if [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
+      /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  else
+  systemctl restart lsws || systemctl restart lshttpd
+  fi
+  sleep 10
 
   echo "[Modsecurity Test] Đã Setup WordPress thật trên domain $TEST_DOMAIN (HTTPS Port 443 + Resolve)" >&3
 }
