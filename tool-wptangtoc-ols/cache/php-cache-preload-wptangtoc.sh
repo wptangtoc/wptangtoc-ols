@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 # shellcheck disable=SC1090,SC1091,SC2154,SC2317
 
 NAME="$1"

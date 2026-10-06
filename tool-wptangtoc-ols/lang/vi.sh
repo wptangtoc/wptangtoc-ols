@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 # shellcheck disable=all
 #wptangtoc main
 quan_ly_="Quản lý"

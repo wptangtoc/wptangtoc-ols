@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 # shellcheck disable=SC1091
 
 nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)

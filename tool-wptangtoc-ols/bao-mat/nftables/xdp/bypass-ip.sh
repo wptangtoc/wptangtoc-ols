@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 
 # Kịch bản để thêm một địa chỉ IP vào danh sách trắng của XDP
 

@@ -1,4 +1,5 @@
 #!/bin/bash
+. /etc/wptt/core-functions 2>/dev/null
 
 # Thêm cờ -s vào curl để ẩn progress bar, tránh làm hỏng định dạng text
 cloudflare_raw=$(curl -s https://www.cloudflare.com/ips-v4)
