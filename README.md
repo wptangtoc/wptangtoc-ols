@@ -44,3 +44,10 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 <h3>Tác giả phần mềm</h3>
 
 <ul><li>Gia Tuấn</li></ul>
+
+<h3>License: GPLv3</h3>
+
+Đây là phần mềm miễn phí cống hiến cho cộng đồng Việt Nam; bạn có thể phân phối lại và hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU GPLv3 theo tiêu chuẩn quốc tế.
+
+Phần mềm này bạn được phép phân phối sửa đổi với hy vọng rằng nó sẽ hữu ích hơn cho cộng đồng.
+
