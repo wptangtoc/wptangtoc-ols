@@ -50,7 +50,6 @@ span#hostname {
 <script type="text/javascript">
 var element = document.getElementById("hostname");
 element.textContent = document.location.hostname;
-element.textContent = 'wptangtoc.com';
 var a = element.textContent.length; //Biến a sẽ có giá trị là 23
 console.log(a);
 if ( a < 12 ){
