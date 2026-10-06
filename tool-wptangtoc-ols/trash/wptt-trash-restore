@@ -216,21 +216,6 @@ fi
 # Dọn dẹp file cấu hình bảo mật tạm
 rm -f "$TEMP_CNF_ROOT"
 
-# D. WP-CLI: Bơm tài khoản Database mới vào file wp-config.php cũ
-wp_config_php_path="/usr/local/lsws/$domain/html/wp-config.php"
-if [[ -f "$wp_config_php_path" ]]; then
-    # Mở khóa file (nếu bị bảo vệ)
-    if [[ $(lsattr "$wp_config_php_path" 2>/dev/null | cut -f1 -d ' ' | grep 'i') ]]; then
-        chattr -i "$wp_config_php_path" 2>/dev/null
-    fi
-
-    password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
-    [[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
-
-    wp config set DB_NAME "$DB_Name_web" --type=constant --allow-root --path="/usr/local/lsws/$domain/html" --quiet
-    wp config set DB_USER "$DB_User_web" --type=constant --allow-root --path="/usr/local/lsws/$domain/html" --quiet
-    wp config set DB_PASSWORD "$password_database_website_giai_ma" --type=constant --allow-root --path="/usr/local/lsws/$domain/html" --quiet
-fi
 
 if [[ -f "$full_trash_path"/.php_version ]];then #thay đổi phiên bản đúng với phiên bản php hồi xưa sử dụng
 	unset php_version_cham
@@ -241,16 +226,43 @@ if [[ -f "$full_trash_path"/.php_version ]];then #thay đổi phiên bản đún
 	echo "phien_ban_php_domain=$php_version_cham" >>/etc/wptt/vhost/."$domain".conf
 fi
 
-rm -rf "$full_trash_path"
+if [[ -n "$full_trash_path" && -d "$full_trash_path" ]];then
+	rm -rf "${full_trash_path:?}"
+fi
 
-# E. Dọn dẹp xác thùng rác và sửa phân quyền
-. /etc/wptt/wptt-phanquyen "$domain" >/dev/null 2>&1
+# Dọn dẹp xác thùng rác và sửa phân quyền
+# bọc sub shell để trách bị chèn biến
+(. /etc/wptt/wptt-phanquyen "$domain" >/dev/null 2>&1)
+
+# WP-CLI: Bơm tài khoản Database mới vào file wp-config.php cũ
+wp_config_php_path="/usr/local/lsws/$domain/html/wp-config.php"
+if [[ -f "$wp_config_php_path" && ! -L "$wp_config_php_path" ]]; then
+	# Mở khóa file (nếu bị bảo vệ)
+	if [[ $(lsattr "$wp_config_php_path" 2>/dev/null | cut -f1 -d ' ' | grep 'i') ]]; then
+		chattr -i "$wp_config_php_path" 2>/dev/null
+	fi
+
+	. /etc/wptt/php/php-cli-domain-config "$domain"
+	WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
+	password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
+	[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
+
+	"${WP_EXEC[@]}" config set DB_NAME "$DB_Name_web" --type=constant --path="/usr/local/lsws/$domain/html" --quiet
+	"${WP_EXEC[@]}" config set DB_USER "$DB_User_web" --type=constant --path="/usr/local/lsws/$domain/html" --quiet
+	"${WP_EXEC[@]}" config set DB_PASSWORD "$password_database_website_giai_ma" --type=constant --path="/usr/local/lsws/$domain/html" --quiet
+fi
 
 wptt_smart_reload_lsws
 
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}CHÚC MỪNG! WEBSITE ĐÃ HỒI SINH HOÀN TOÀN!${C_RESET}"
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+if [[ -f "$wp_config_php_path" && -L "$wp_config_php_path" ]]; then
+	echo "File wp-config.php bị symlink phần mềm không thể kết nối tài khoản database"
+	echo "Vì lý do bảo mật leo thang đặc quyền"
+	echo "Bạn hãy tự xử lý thủ công vấn đề này"
+fi
 # ==============================================================================
 # 5. UX SMART HINT TÌNH TRẠNG SSL
 # ==============================================================================
@@ -265,6 +277,9 @@ else
 		echo -e "vui lòng cài đặt lại chứng chỉ bằng lệnh: ${C_CYAN}wptt ssl -d $domain hoặc menu quản lý SSL${C_RESET}"
 	fi
 fi
+
+systemctl restart wptt-htaccess >/dev/null 2>&1
+systemctl restart wptt-phanquyen >/dev/null 2>&1
 
 cd /root 2>/dev/null || cd /
 

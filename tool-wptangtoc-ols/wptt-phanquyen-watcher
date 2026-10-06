@@ -1,0 +1,84 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Realtime Auto Chmod/Chown Watcher Engine (Depth 1 + PHP, TXT, HTACCESS)
+
+. /etc/wptt/core-functions
+
+shopt -s nullglob
+WATCH_DIRS=()
+declare -A DOMAIN_USERS
+
+# 1. NẠP DANH SÁCH USER VÀ THƯ MỤC CẦN GIÁM SÁT VÀO RAM
+for conf in /etc/wptt/vhost/.*.conf; do
+    domain="${conf##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    
+    [[ "$domain" != ?*.?* ]] && continue
+    
+    html_dir="/usr/local/lsws/$domain/html"
+    if [[ -d "$html_dir" ]]; then
+        user=$(grep '^User_name_vhost=' "$conf" 2>/dev/null | cut -d'=' -f2 | tr -d '"'"'")
+        lock=$(grep '^lock_down=' "$conf" 2>/dev/null | cut -d'=' -f2 | tr -d '"'"'")
+        
+        # Chỉ tự động sửa quyền cho các domain KHÔNG bật lock_down
+        if [[ -n "$user" && -z "$lock" ]]; then
+            DOMAIN_USERS["$domain"]="$user"
+            
+            # [TỐI ƯU SIÊU NHẸ] Chỉ gắn mắt thần vào đúng gốc thư mục /html/ (Depth 1)
+            WATCH_DIRS+=("$html_dir")
+        fi
+    fi
+done
+
+# Ngủ đông nếu máy chủ chưa có website nào cần giám sát
+if [[ ${#WATCH_DIRS[@]} -eq 0 ]]; then
+    sleep 60
+    exit 0
+fi
+
+mkdir -p /etc/wptt/tmp
+
+# 2. LẮNG NGHE SỰ KIỆN TẠO MỚI / DI CHUYỂN FILE QUA KERNEL (Độ sâu 1)
+inotifywait -m -q -e create,moved_to "${WATCH_DIRS[@]}" --format "%w%f" | while read -r filepath; do
+    
+    # CHỈ xử lý file có đuôi .php, .txt hoặc .htaccess
+    # Nếu file KHÔNG thuộc 3 loại này thì bỏ qua ngay lập tức
+    [[ "$filepath" != *".php" && "$filepath" != *".txt" && "$filepath" != *".htaccess" ]] && continue
+    
+    # [TỐI ƯU CỰC HẠN 2] Bỏ qua PhpMyAdmin để chống vòng lặp (Loop)
+    [[ "$filepath" == *"/phpmyadmin"* ]] && continue
+    
+    # Kiểm tra chủ sở hữu của file vừa được tạo
+    file_owner=$(stat -c %U "$filepath" 2>/dev/null)
+    [[ -z "$file_owner" ]] && continue
+    
+    # Trích xuất domain từ đường dẫn
+    domain=$(echo "$filepath" | awk -F'/' '{print $5}')
+    expected_user="${DOMAIN_USERS["$domain"]}"
+    
+    # Nếu người tạo file KHÁC với chủ sở hữu chuẩn của Vhost
+    if [[ -n "$expected_user" && "$file_owner" != "$expected_user" ]]; then
+        
+        # Kiểm tra Cờ khóa (Lock Watcher) để tránh Spam khi giải nén/copy hàng loạt
+        if [[ ! -f "/etc/wptt/tmp/lock_chmod_watcher_${domain}.active" ]]; then
+            touch "/etc/wptt/tmp/lock_chmod_watcher_${domain}.active"
+            
+            # Đưa tiến trình vào background để Inotifywait không bị nghẽn
+            (
+                # Ngủ 5 giây chờ người dùng/tiến trình thao tác xong
+                sleep 5 
+                
+                # Gọi kịch bản phân quyền lõi (Đã có sẵn flock 201 siêu an toàn bên trong)
+                ionice -c 3 nice -n 19 /etc/wptt/wptt-phanquyen "$domain" >/dev/null 2>&1
+                
+                # Mở khóa Watcher
+                rm -f "/etc/wptt/tmp/lock_chmod_watcher_${domain}.active"
+            ) &
+        fi
+        
+        # Debounce: Hút bỏ các sự kiện rác còn kẹt trong ống dẫn (Pipe)
+        while read -r -t 0.1 discard; do :; done
+    fi
+done
