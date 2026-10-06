@@ -153,3 +153,10 @@ kiem_tra_phien_ban_cac_service="Kiểm tra phiên bản các service"
 chuyen_nhanh_wptangtoc_ols_chinh_thuc="cài đặt chuyển nhánh wptangtoc version chính thức"
 chuyen_nhanh_wptangtoc_ols_beta="cài đặt chuyển nhánh wptangtoc version beta"
 
+#WebGuiAdmin menu main
+kich_hoat_webguiadmin="Kích hoạt"
+huy_kich_hoat_webguiadmin="Huỷ kích hoạt"
+doi_port_webguiadmin="Đổi cổng port"
+thay_doi_id_va_password="Thay đổi ID va Password"
+xem_lai_thong_tin_tai_khoan_webguiadmin="Xem lại thông tin tài khoản"
+
