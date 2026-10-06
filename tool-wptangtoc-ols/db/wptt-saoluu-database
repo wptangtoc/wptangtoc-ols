@@ -537,6 +537,7 @@ fi
 	# =============================================================
 	# HÀM UPLOAD GIAO DIỆN CHUẨN UX (KẾT HỢP PV + RCAT + AUTO CLEAN)
 	# =============================================================
+
 	function wptt_upload_db_ux() {
 		local src_file="$1"
 		local dest_dir="$2"
@@ -544,23 +545,77 @@ fi
 		local fname
 		fname=$(basename "$src_file")
 
-		if [[ "$ggdriver" == "1998" ]]; then
-			# 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
-			$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" >/dev/null 2>&1
-		else
-			if command -v pv &>/dev/null; then
-				local fsize
-				fsize=$(du -b "$src_file" | cut -f1)
-				# 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
-				pv -s "$fsize" -N "Upload $file_type" -p -t -e -r -b -w 90 "$src_file" | rclone rcat "$dest_dir/$fname" "${RCLONE_OPTS[@]}"
-				echo -en "\033[1A\033[2K\r"
-			else
-				# 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
-				rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" --progress --stats-one-line
-				echo -en "\033[1A\033[2K\r"
+		local max_retries=3
+		local attempt=1
+		local success=false
+
+		while (( attempt <= max_retries )); do
+			if (( attempt > 1 )); then
+				if [[ "$ggdriver" != "1998" ]]; then
+					echo -e "   ${C_YELLOW}⟳ Đang thử upload lại lần $attempt/$max_retries (Kết nối lại API)...${C_RESET}"
+				fi
 			fi
-		fi
-	}
+
+			if [[ "$ggdriver" == "1998" ]]; then
+				# 1. CHẾ ĐỘ AUTO BACKUP (Chạy ngầm, không UI nhưng VẪN CÓ RETRY)
+				$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copyto "$src_file" "$dest_dir/$fname" "${RCLONE_OPTS[@]}" >/dev/null 2>&1
+				local rclone_exit=$?
+			else
+				# 2. CHẾ ĐỘ THỦ CÔNG (Đồng bộ UI Thanh tiến trình với Download + Bắt lỗi Pipeline)
+				$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copyto "$src_file" "$dest_dir/$fname" "${RCLONE_OPTS[@]}" \
+					--stats-one-line --stats=1s --log-level INFO 2>&1 | while IFS= read -r line; do
+
+							# Bắt và hiển thị lỗi rclone nếu có sự cố API
+							if [[ "$line" =~ "ERROR" || "$line" =~ "Fatal error" ]]; then
+								echo -e "\n   ${C_RED}Rclone Error: $line${C_RESET}"
+							fi
+
+							if [[ "$line" == *"%"* && "$line" == *"/"* && "$line" != *"0 B /"* ]]; then
+								local clean_stat
+								clean_stat=$(echo "$line" | sed -E 's/.*Transferred:[ \t]*//Ig' | sed 's/^[ \t]*//')
+								printf "\r\033[K   ${C_GREEN}⬆ Đang đẩy %s:${C_RESET} %s" "$file_type" "$clean_stat"
+							fi
+						done
+
+						# Tuyệt chiêu bắt Exit Code thật của rclone (chống lỗi mù)
+						local rclone_exit=${PIPESTATUS[0]}
+						echo "" # Thoát dòng tiến trình
+			fi
+
+					# 3. XỬ LÝ KẾT QUẢ VÀ RETRY BACKOFF
+					if [[ $rclone_exit -eq 0 ]]; then
+						success=true
+						break # Upload 100% thành công, thoát vòng lặp
+					else
+						if [[ "$ggdriver" != "1998" ]]; then
+							_runloi "Luồng dữ liệu đứt gãy (Mã lỗi: $rclone_exit)."
+						else
+							wptt_logs "ERROR" "Auto Backup Upload thất bại lần $attempt (Mã lỗi API: $rclone_exit)"
+						fi
+
+						if (( attempt < max_retries )); then
+							local backoff=$(( attempt * 5 ))
+							[[ "$ggdriver" != "1998" ]] && echo -e "   ➜ Hệ thống tạm nghỉ ${backoff}s để ổn định lại kết nối mạng..."
+							sleep $backoff
+						fi
+						((attempt++))
+					fi
+				done
+
+				# 4. CHỐT CHẶN CUỐI CÙNG
+				if [[ "$success" != "true" ]]; then
+					if [[ "$ggdriver" != "1998" ]]; then
+						_runloi "THẤT BẠI: Không thể upload $file_type lên Cloud sau 3 lần rớt mạng!"
+					else
+						wptt_logs "ERROR" "Auto Backup Upload $file_type THẤT BẠI HOÀN TOÀN sau 3 lần thử."
+					fi
+					# Có thể return 1 để hàm cha biết đường xử lý
+					return 1
+				fi
+
+				return 0
+			}
+
 
     echo "" # Tạo một dòng trống cho giao diện thoáng đãng
 

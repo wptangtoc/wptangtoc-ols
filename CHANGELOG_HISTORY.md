@@ -90,12 +90,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.1.4.2
-
-### 🛠️ Tối ưu hệ thống
-- **Cảnh báo mở port Cloud Firewall cho WebAdmin:** Nâng cấp cơ chế chẩn đoán truy cập WebAdmin, tự động phát hiện và thông báo mở cổng dịch vụ trên tường lửa đám mây (Cloud Firewall / Security Group) khi gặp sự cố kết nối, giúp quản trị viên xử lý nhanh lỗi chặn truy cập.
-- **Cải tiến quy trình kiểm tra kết nối mạng:** Tự động kiểm tra và xác thực các thư viện Python cần thiết trước khi ping internet, đảm bảo quá trình chẩn đoán môi trường mạng diễn ra ổn định, chính xác và không bị lỗi phụ thuộc.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
