@@ -9,6 +9,16 @@ setup() {
   chmod +x "$SCRIPT_XOA" 2>/dev/null || true
 }
 
+in_log_neu_loi() {
+  local ma_ky_vong="$1"
+  if [ "$status" -ne "$ma_ky_vong" ]; then
+      echo -e "\n[LỖI TEST] Kịch bản không trả về mã $ma_ky_vong như kỳ vọng!" >&3
+      echo "Mã trạng thái thực tế : $status" >&3
+      echo -e "Nội dung in ra màn hình:\n$output" >&3
+  fi
+}
+
+
 # =================================================================
 # NHÓM 1: KIỂM THỬ BỘ LỌC ĐẦU VÀO & BẢO VỆ (VALIDATION)
 # =================================================================
@@ -16,8 +26,10 @@ setup() {
 @test "Integration: Chặn lệnh xóa với Tên miền không hợp lệ / không tồn tại" {
   # Test với domain gõ linh tinh không có dấu chấm
   run bash "$SCRIPT_XOA" "khong-co-dau-cham"
-  [ "$status" -eq 1 ]
-  [[ "$output" =~ "không tồn tại" ]]
+
+	in_log_neu_loi 1
+	[ "$status" -eq 1 ]
+	[[ "$output" =~ "không tồn tại" ]]
 
   # Test với domain gõ đúng chuẩn nhưng chưa được cài đặt
   run bash "$SCRIPT_XOA" "website-khong-ton-tai.com"
@@ -34,12 +46,15 @@ setup() {
 
   # 1. TIỀN ĐIỀU KIỆN (PREPARE): Thêm mới website để có dữ liệu mà xóa
   run bash "$SCRIPT_THEM" "$TEST_DOMAIN"
+	in_log_neu_loi 0
   [ "$status" -eq 0 ]
   # Đảm bảo "nạn nhân" đã thực sự được tạo ra trên ổ cứng
   [ -d "/usr/local/lsws/$TEST_DOMAIN" ] 
 
   # 2. HÀNH ĐỘNG (ACTION): Gọi kịch bản tiêu diệt
   run bash "$SCRIPT_XOA" "$TEST_DOMAIN"
+	in_log_neu_loi 0
+
   [ "$status" -eq 0 ]
 
   # 3. KIỂM CHỨNG (ASSERT 1): Thư mục Home của user PHẢI BỊ XÓA (Toàn bộ source code/HTML)
