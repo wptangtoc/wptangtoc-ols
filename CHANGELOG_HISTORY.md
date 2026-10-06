@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.1.5
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cao độ tin cậy khi chuyển đổi nhánh cập nhật:** Hoàn thiện quy chuẩn kiểm thử tự động cho cơ chế chuyển đổi qua lại giữa các nhánh phiên bản (chính thức, thử nghiệm), đảm bảo tiến trình nâng cấp và chuyển nhánh luôn diễn ra an toàn, mượt mà và duy trì tính toàn vẹn dữ liệu máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.4
 
 ### 🚀 Tính năng mới
