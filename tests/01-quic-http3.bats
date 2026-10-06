@@ -18,7 +18,7 @@ setup_file() {
 
   # 3. Khởi động lại OLS để nạp Vhost
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
-  sleep 3
+  sleep 20
 }
 
 teardown_file() {

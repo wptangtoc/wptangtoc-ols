@@ -67,7 +67,7 @@ in_log_neu_loi() {
 
   # Kích hoạt quá trình xóa trên RAM (Bypass systemctl)
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
-  sleep 3
+  sleep 20
   # =================================================================
   # CHỐT CHẶN ENTERPRISE 1: KIỂM TRA CÚ PHÁP OLS
   # =================================================================

@@ -77,7 +77,7 @@ in_log_neu_loi() {
 
 #restart thủ công cơ bản smart reload là tiến trình không đồng bộ mà file bats thực thi quá nhanh nên phải đặt sleep kiểu này
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
-  sleep 10
+  sleep 20
 
   # =================================================================
   # CHỐT CHẶN ENTERPRISE 1: KIỂM TRA CÚ PHÁP OLS

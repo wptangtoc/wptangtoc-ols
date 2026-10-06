@@ -139,7 +139,7 @@ in_log_neu_loi() {
       if [[ "$CODE_NGUON" =~ ^[23][0-9][0-9]$ ]]; then
           break
       fi
-      sleep 3
+      sleep 5
       ((attempt++))
   done
 
@@ -158,7 +158,7 @@ in_log_neu_loi() {
       if [[ "$CODE_DICH" =~ ^[23][0-9][0-9]$ ]]; then
           break
       fi
-      sleep 3
+      sleep 5
       ((attempt_dich++))
   done
 

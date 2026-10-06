@@ -126,7 +126,7 @@ EOF
   
   # Kích hoạt Bypass Systemd để ép nạp Rule
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
-  sleep 4
+  sleep 20
 
   # CÚ ĐẤM THÉP: Dùng GET, xuất full header ra stdout, vứt body đi
   local CURL_CMD="curl -s -D - -o /dev/null -L -k --resolve ${TEST_DOMAIN}:80:127.0.0.1 --resolve ${TEST_DOMAIN}:443:127.0.0.1 http://${TEST_DOMAIN}/"
@@ -140,7 +140,7 @@ EOF
       false
   fi
 
-  sleep 2 # Dừng 2 giây để OLS ghi trang HTML vào RAM
+  sleep 2 #Dừng 10 giây để OLS ghi trang HTML vào RAM
 
   # D. Bắn Request Lần 2 (Đọc Cache) - Lúc này 100% phải ra HIT
   local REQ2_HEADERS=$($CURL_CMD | tr -d '\r')
