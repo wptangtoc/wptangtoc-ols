@@ -213,7 +213,9 @@ cam_on_ban_da_lua_chon="Cảm ơn bạn đã lựa chọn"
 dang_tien_hanh_cap_nhat_vui_long_doi="Đang tiến hành cập nhật. Vui lòng đợi"
 cap_nhat_thanh_cong="cập nhật thành công"
 ban_co_muon_reboot_lai_may_chu_khong="Bạn có muốn khởi động lại máy chủ không"
-
+thong_bao="Thông báo"
+ban_dang_su_dung="Bạn đang sử dụng"
+da_co_ban="đã có bản"
 
 #WebGuiAdmin menu main
 kich_hoat_webguiadmin="Kích hoạt"
