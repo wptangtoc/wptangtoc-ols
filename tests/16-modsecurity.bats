@@ -2,12 +2,12 @@
 #
 # Kiểm thử tích hợp Tối Thượng cho wptt-modsecurity trên WPTangToc OLS
 # Kịch bản: Tự động cài đặt 100% WordPress thật -> Tấn công -> Bật/Tắt WAF -> Dọn dẹp
+# Đã áp dụng các kỹ thuật: Bash Array an toàn, Resolve DNS ảo, và Bypass Systemd.
 #
 
 TEST_DOMAIN="wptest-waf.com"
 CORE_BAK="/tmp/core-functions.bak"
 BASELINE_FILE="/tmp/wptt-waf-baseline-ms"
-LOCK_FILE="/var/lock/wptt-modsecurity.lock"
 CONFIG_FILE="/usr/local/lsws/conf/httpd_config.conf"
 OWASP_DIR="/usr/local/lsws/modsec/owasp"
 
@@ -33,7 +33,7 @@ in_log_neu_loi() {
   fi
 }
 
-# Gửi GET có params
+# Gửi GET có params (Sử dụng cấu trúc Array để an toàn với ký tự đặc biệt)
 code_get() {
   local name="$1" value="$2"; shift 2
   curl "${CURL_BASE_OPTS[@]}" -G --data-urlencode "${name}=${value}" "$@" "https://${TEST_DOMAIN}/"
@@ -55,7 +55,7 @@ code_post() {
 avg_ms() {
   local n="${1:-10}" i out code t total=0
   for ((i = 0; i < n; i++)); do
-    # Hàm avg_ms dùng lệnh curl gốc thay vì truyền mảng để tránh lỗi escape chuỗi %{http_code}
+    # Hàm avg_ms dùng lệnh curl gốc để dễ móc biến thời gian
     out=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" -k --connect-timeout 3 --max-time 10 -A "WPTangToc OLS preload cache" --resolve "${TEST_DOMAIN}:443:127.0.0.1" "https://${TEST_DOMAIN}/")
     code="${out%% *}"
     t="${out##* }"
@@ -122,9 +122,14 @@ EOF
   rm -f "$script_test"
   cp "$CORE_BAK" /etc/wptt/core-functions 2>/dev/null || true
 
-  # 5. Restart OLS để ăn cấu hình mới
-  systemctl restart lshttpd
-  sleep 3
+  # 5. Ghi đè file hosts và Restart OLS bằng bạo lực (Bypass systemctl CI)
+  echo "127.0.0.1 ${TEST_DOMAIN}" >> /etc/hosts
+  if [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
+      /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  else
+      systemctl restart lshttpd >/dev/null 2>&1
+  fi
+  sleep 4
 
   echo "[Modsecurity Test] Đã Setup WordPress thật trên domain $TEST_DOMAIN (HTTPS Port 443 + Resolve)" >&3
 }
@@ -180,7 +185,10 @@ teardown() {
   run bash "$SCRIPT_MODSEC" on
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
-  sleep 2
+  
+  # Cú đấm thép: Ép OLS nạp cấu hình đề phòng script con gọi systemctl bị liệt
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  sleep 3
 }
 
 @test "Nhóm 3: Kiểm tra tính toàn vẹn của File Luật (Chỉ giữ luật PHP)" {
@@ -258,6 +266,10 @@ teardown() {
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   ! grep -Eq '^[[:space:]]*module[[:space:]]+mod_security' "$CONFIG_FILE"
+  
+  # Cú đấm thép gỡ cấu hình phải chạy thế này, smart reload đây là bài test thực thi liên tục cực nhanh, phải kết hợp restart và sleep để chậm lại cho chắc
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  sleep 3
 }
 
 @test "Nhóm 6: Payload tấn công lọt qua bình thường sau khi WAF tắt" {

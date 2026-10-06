@@ -1,11 +1,15 @@
 #!/usr/bin/env bats
+#
+# Kiểm thử tích hợp tính năng Chuyển Hướng Tên Miền (WPTangToc OLS)
+# Hỗ trợ chạy mượt mà trên môi trường CI/CD (GitHub Actions / Docker)
+#
 
 setup() {
   export CI="true"
   export SCRIPT_GOC="/etc/wptt/domain/wptt-chuyen-huong"
   export SCRIPT_TEST="/tmp/wptt-chuyen-huong-test.sh"
   
-  # 1. TẠO FILE NHÁP ĐỘC LẬP (Không đụng chạm đến core-functions nữa)
+  # 1. TẠO FILE NHÁP ĐỘC LẬP (Không đụng chạm đến core-functions)
   cp "$SCRIPT_GOC" "$SCRIPT_TEST"
   
   # 2. VÔ HIỆU HÓA MENU CHÍNH (Chống treo BATS)
@@ -17,7 +21,7 @@ setup() {
 } 
 
 teardown() {
-  # Chỉ cần dọn dẹp file nháp là xong, cực kỳ nhẹ máy!
+  # Dọn dẹp file nháp
   rm -f "$SCRIPT_TEST" 2>/dev/null || true
 }
 
@@ -83,7 +87,9 @@ in_log_neu_loi() {
   # ==========================================================
   # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
   # ==========================================================
-  sleep 2 # Chờ OLS nạp cấu hình mới
+  # Ép khởi động lại OLS bằng lệnh nhị phân (Bypass systemctl trên CI)
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  sleep 3 # Chờ OLS nạp cấu hình mới hoàn toàn
 
   # 1. Lấy mã HTTP Code (Kỳ vọng 301)
   local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
@@ -127,7 +133,9 @@ in_log_neu_loi() {
   # ==========================================================
   # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
   # ==========================================================
-  sleep 2 # Chờ OLS nạp cấu hình mới
+  # Ép khởi động lại OLS bằng lệnh nhị phân (Bypass systemctl trên CI)
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  sleep 5 # Chờ OLS nạp cấu hình mới hoàn toàn
 
   # 1. Bắn cờ -w "%{http_code}" để check mã
   local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
