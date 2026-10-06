@@ -20,39 +20,6 @@ gpgcheck=1
 module_hotfixes=1' >/etc/yum.repos.d/MariaDB.repo
 
 rpm -Uvh http://rpms.litespeedtech.com/centos/litespeed-repo-1.3-1.el8.noarch.rpm
-
-echo '[litespeed]
-name=LiteSpeed Tech Repository for CentOS $releasever - $basearch
-baseurl=http://rpms.litespeedtech.com/centos/$releasever/$basearch/
-#failovermethod=priority
-enabled=1
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed
-
-[litespeed-update]
-name=LiteSpeed Tech Update Repository for CentOS $releasever - $basearch
-baseurl=http://rpms.litespeedtech.com/centos/$releasever/update/$basearch/
-#failovermethod=priority
-enabled=1
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed
-
-[litespeed-edge]
-name=LiteSpeed Tech Edge Repository for CentOS $releasever - $basearch
-baseurl=http://rpms.litespeedtech.com/edge/centos/$releasever/$basearch/
-#failovermethod=priority
-enabled=0
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed
-
-[litespeed-edge-update]
-name=LiteSpeed Tech Edge Update Repository for CentOS $releasever - $basearch
-baseurl=http://rpms.litespeedtech.com/edge/centos/$releasever/update/$basearch/
-#failovermethod=priority
-enabled=0
-gpgcheck=1
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed
-' >/etc/yum.repos.d/litespeed.repo
 dnf clean all
 
 dnf install openlitespeed -y
