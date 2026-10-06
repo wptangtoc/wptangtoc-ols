@@ -76,6 +76,33 @@ EOF
   [ "$status" -ne 0 ]
 }
 
+@test "Security: Chặn đứng cập nhật nếu sai chữ ký số (Fake GPG / MITM Attack)" {
+  echo "version_wptangtoc_ols=0.0.1" > /etc/wptt/.wptt.conf
+
+  # MOCKING: Tiêm hàm gpg ảo
+  cat << 'EOF' > /etc/wptt/core-functions
+source /tmp/core-functions.bak
+wptt_xac_nhan() { return 0; }
+
+gpg() {
+  if [[ "$*" == *"--verify"* ]]; then
+    echo "gpg: BAD signature from WPTangToc (Lỗi được tiêm từ BATS)!" >&2
+    return 1 # Báo lỗi xác thực GPG
+  fi
+  command gpg "$@"
+}
+EOF
+
+  # THỰC THI
+  run bash -c "bash $SCRIPT_GOC < /dev/null"
+
+  # KIỂM ĐỊNH LỖI (Kỳ vọng trả về 1 vì bác đã thêm chốt chặn 'exit 1' cho môi trường CI)
+  in_log_neu_loi 1
+  [ "$status" -eq 1 ]
+  
+  [[ "$output" =~ "GPG AUTHENTICATION FAILED" ]]
+}
+
 @test "Update: Cập nhật thành công & Website Không Bị Sập (Zero-Downtime)" {
   if [[ "$WPTT_ALLOW_REAL_UPDATE" != "1" ]]; then
     skip "Bỏ qua test Update thật."
@@ -108,7 +135,7 @@ EOF
   # 4. [CHÉN THÁNH] KIỂM TRA ZERO-DOWNTIME SAU UPDATE
   local http_sau=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1)
 
-  # Đánh giá kết quả Update
+  # Đánh giá kết quả Update (Phải là mã 0 vì CI exit 0 khi update thành công)
   status=$STATUS_UPDATE
   output="$OUT_UPDATE"
   in_log_neu_loi 0
