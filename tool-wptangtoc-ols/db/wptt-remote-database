@@ -2,13 +2,18 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2022
+# @since: 2024
 
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]];then
+	ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
 echo ""
 echo ""
 echo ""
 echo "========================================================================="
-echo "|Quản lý Database => Bật Remote Database                                |"
+echo "|$quan_ly_database => $bat Remote Database                                |"
 echo "========================================================================="
 . /etc/wptt/.wptt.conf
 . /etc/wptt/tenmien
@@ -16,7 +21,7 @@ echo "========================================================================="
 
 echo ""
 echo ""
-echo "Lựa chọn website muốn Remote Database: "
+echo "$lua_chon_website_ban_muon Remote Database: "
 echo ""
 lua_chon_NAME
 
@@ -69,12 +74,16 @@ if [[ $check_remote ]];then
 		if [[ $check_con_dung_website_khac = '' ]];then
 
 
+			port_mariadb_remote=$(cat $duong_dan_cau_hinh_mariadb | grep 'port='| grep -o '[0-9]\+$')
+
 			sed -i "/bind-address/d" $duong_dan_cau_hinh_mariadb
 			sed -i '/port=/d' $duong_dan_cau_hinh_mariadb
-			firewall-cmd --permanent --zone=public --remove-port=18188/tcp >/dev/null 2>&1
-			firewall-cmd --reload >/dev/null 2>&1
 
-			port_mariadb_remote='18188'
+			if [[ $(systemctl status firewalld.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = 'active' ]];then
+			firewall-cmd --permanent --zone=public --remove-port=${port_mariadb_remote}/tcp >/dev/null 2>&1
+			firewall-cmd --reload >/dev/null 2>&1
+			fi
+
 			#đóng port csf
 			if [[ -f /etc/csf/csf.conf ]];then
 				sed -i -r '/^TCP_IN /s/"'$port_mariadb_remote'"/""/; s/([",])'$port_mariadb_remote',|,'$port_mariadb_remote'([,"])/\1\2/' /etc/csf/csf.conf
@@ -84,7 +93,7 @@ if [[ $check_remote ]];then
 
 
 			systemctl restart mysql.service >/dev/null 2>&1
-			sed -i 's/18188/3306/g' /etc/fail2ban/jail.local
+			sed -i "s/$port_mariadb_remote/3306/g" /etc/fail2ban/jail.local
 			systemctl restart fail2ban.service
 		fi
 		_rundone "Tắt kích hoạt Remote Database website $NAME"
@@ -97,27 +106,65 @@ if [[ $check_remote ]];then
 fi
 
 read -p "Bạn có muốn kích hoạt remote database website $NAME (y/n): " kichhoatremote
-
 if [[ $kichhoatremote = 'y' ]];then
-	_runing "Kích hoạt Remote Database website $NAME"
-	echo "Kích hoạt remote database website $NAME : $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
+
+	if [[ $(cat $duong_dan_cau_hinh_mariadb | grep 'Port=') = '' ]];then
+
+	read -p "$nhap port remote database $ban_muon [0=$exit_thoat]: " port
+	if ! [[ $port =~ ^[0-9]+$ ]] || (( $port < 1 || $port > 65536 )); then
+		clear
+		echo "Port $khong_dung_dinh_dang $so_nguyen_duong, vui lòng nhập port từ 1 đến 65536"
+		. /etc/wptt/wptt-db-main 1
+		exit
+	fi
+
+	# kiểm tra port ssh
+	port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | cut -f2 -d" ")
+	if [[ $port_checkssh = '' ]];then
+		port_checkssh=22
+	fi
+
+	#kiểm tra trung lặp port
+	if [[ "$port" = "$port_checkssh" || "$port" = "80" || "$port" = "443" ]]; then
+		echo "Bạn vui lòng chọn port khác cổng port này đã được sử dụng"
+		. /etc/wptt/wptt-db-main 1
+		exit;
+	fi
+
+
+	# kiểm tra trùng lặp port webguiadmin
+	if [[ ! -f /usr/local/lsws/conf/disablewebconsole ]];then
+		port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | cut -f2 -d":")
+		if [[ "$port" = "$port_webgui_openlitespeed" ]]; then
+			echo "Bạn vui lòng chọn port khác cổng port này đã được sử dụng"
+			. /etc/wptt/wptt-db-main 1
+			exit;
+		fi
+	fi
+
+	_runing "Thiết lập remote mariadb"
 	sed -i "/bind-address/d" $duong_dan_cau_hinh_mariadb
 	sed -i '/port=/d' $duong_dan_cau_hinh_mariadb
-	echo 'port=18188' >> $duong_dan_cau_hinh_mariadb
+	echo "port=$port" >> $duong_dan_cau_hinh_mariadb
 	echo 'bind-address=0.0.0.0' >> $duong_dan_cau_hinh_mariadb
-	firewall-cmd --permanent --zone=public --add-port=18188/tcp >/dev/null 2>&1
+	firewall-cmd --permanent --zone=public --add-port=$port/tcp >/dev/null 2>&1
 	firewall-cmd --reload >/dev/null 2>&1
 	#mở tường lửa csf
 	if [[ -f /etc/csf/csf.conf ]];then
-		if [[ $(cat /etc/csf/csf.conf | grep '^TCP_IN' | grep "18188,") = '' ]];then
-			sed -i "s/^TCP_IN = \"/TCP_IN = \"18188,/g" /etc/csf/csf.conf
+		if [[ $(cat /etc/csf/csf.conf | grep '^TCP_IN' | grep "$port,") = '' ]];then
+			sed -i "s/^TCP_IN = \"/TCP_IN = \"$port,/g" /etc/csf/csf.conf
 			csf -x >/dev/null 2>&1
 			csf -e >/dev/null 2>&1
 		fi
 	fi
+	sed -i "s/3306/$port/g" /etc/fail2ban/jail.local
 	systemctl restart mysql.service >/dev/null 2>&1
-	sed -i 's/3306/18188/g' /etc/fail2ban/jail.local
 	systemctl restart fail2ban.service
+	_rundone "Thiết lập remote mariadb"
+	fi
+
+	_runing "Kích hoạt Remote Database website $NAME"
+	echo "Kích hoạt remote database website $NAME : $(date '+%d-%m-%Y %H:%M')" >> /var/log/wptangtoc-ols.log
 
 	mariadb -u "$database_admin_username" -p"$database_admin_password" -e "CREATE USER IF NOT EXISTS '$DB_User_web'@'%' IDENTIFIED BY '$DB_Password_web'"
 	mariadb -u "$database_admin_username" -p"$database_admin_password" -e "GRANT ALL PRIVILEGES ON $DB_Name_web.* TO '$DB_User_web'@'%' WITH GRANT OPTION"
@@ -134,7 +181,7 @@ if [[ $kichhoatremote = 'y' ]];then
 	echo "2.  UserName 			: $DB_User_web"
 	echo "3.  PassWord 			: $DB_Password_web"
 	echo "4.  IP 				: $ip"
-	echo "5.  Port 			: 18188"
+	echo "5.  Port 			: $port"
 	echo "-------------------------------------------------------------------------"
 fi
 
