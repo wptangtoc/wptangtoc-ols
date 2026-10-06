@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.0.6
+
+### 🛠️ Tối ưu hệ thống
+- **Hoàn thiện cơ chế kiểm định và quản lý tên miền:** Nâng cấp hệ thống xác thực đầu vào, tự động chuẩn hóa định dạng ký tự và kiểm soát chặt chẽ xung đột tên miền, đảm bảo các thao tác quản trị website diễn ra mượt mà, an toàn và chính xác tuyệt đối.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.0.5
 
 ### 🛠️ Tối ưu hệ thống
