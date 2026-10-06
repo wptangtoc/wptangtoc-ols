@@ -649,6 +649,7 @@ if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL valkey
     redis_acl_user=""
     raw_redis_pass=""
     redis_acl_pass_luu=""
+    redis_db_id=""
 
     if [[ "$active_cache" != "Chưa cài đặt" && -n "$cache_cli" ]]; then
         # CHECK LỖI 1: File Socket có thực sự tồn tại để kết nối không?
@@ -660,61 +661,74 @@ if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL valkey
             raw_redis_pass=$(openssl rand -hex 16)
             redis_acl_pass_luu=$(wptt_ma_hoa "$raw_redis_pass")
 
+            # --- THUẬT TOÁN TÌM DATABASE ID CÔ LẬP KHÔNG TRÙNG LẶP ---
+            used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
+            redis_db_id=1
+            while echo "$used_ids" | grep -qw "$redis_db_id"; do
+                ((redis_db_id++))
+                # Chặn tối đa ở mức 999 để không vượt rào cấu hình Databases 1000
+                if [[ $redis_db_id -gt 999 ]]; then redis_db_id=999; break; fi
+            done
+            # ---------------------------------------------------------
+
             raw_master_pass=""
             [[ -n "$REDIS_MASTER_PASS" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
 
             # CHECK LỖI 2: Đảm bảo Master Password được giải mã thành công
             if [[ -z "$raw_master_pass" ]]; then
                 redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
+                redis_db_id=""
             else
-                # CHECK LỖI 3: Thực thi lệnh và bắt kết quả (Exit Status)
-
+                # CHECK LỖI 3: Thực thi lệnh và bắt kết quả (Exit Status) - Đã cho phép +flushdb
                 if $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_redis_pass" "~*" +@all -flushall +flushdb >/dev/null 2>&1; then
-									:
+                    :
                 else
                     redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
+                    redis_db_id=""
                 fi
             fi
         fi
     fi
 fi
 
-if [[ -n "$redis_acl_user" && -n "$redis_acl_pass_luu" ]]; then
+if [[ -n "$redis_acl_user" && -n "$redis_acl_pass_luu" && -n "$redis_db_id" ]]; then
     # Lưu thông tin biến vào file cấu hình Vhost của web mới
     echo "redis_acl_user='$redis_acl_user'" >>"/etc/wptt/vhost/.$NAME2.conf"
     echo "redis_acl_pass='$redis_acl_pass_luu'" >>"/etc/wptt/vhost/.$NAME2.conf"
+    echo "redis_db_id='$redis_db_id'" >>"/etc/wptt/vhost/.$NAME2.conf"
     
     if [[ -n "$raw_redis_pass" ]]; then
         # 1. HỖ TRỢ LITESPEED CACHE
         if [[ -d /usr/local/lsws/$NAME2/html/wp-content/plugins/litespeed-cache ]]; then
             "${PHP_EXEC[@]}" /usr/local/bin/wp litespeed-option set object-user "$redis_acl_user" --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
             "${PHP_EXEC[@]}" /usr/local/bin/wp litespeed-option set object-pswd "$raw_redis_pass" --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
+            "${PHP_EXEC[@]}" /usr/local/bin/wp litespeed-option set object-db_id "$redis_db_id" --allow-root --path="$duong_dan_nguon_moi" >/dev/null 2>&1
         fi
 
         # 2. HỖ TRỢ PANTHEON WP-REDIS
         if [[ -d /usr/local/lsws/$NAME2/html/wp-content/plugins/wp-redis && -n "$socket_path" ]]; then
             sed -i '/$redis_server = array/d' "/usr/local/lsws/$NAME2/html/wp-config.php"
-            sed -i "s|^<?php|<?php\n\$redis_server = array('host'=> '${socket_path}','port'=>null,'database'=> 0, 'auth' => array('$redis_acl_user', '$raw_redis_pass'));|" "/usr/local/lsws/$NAME2/html/wp-config.php"
+            # Cập nhật database_id vào mảng cấu hình
+            sed -i "s|^<?php|<?php\n\$redis_server = array('host'=> '${socket_path}','port'=>null,'database'=> ${redis_db_id}, 'auth' => array('$redis_acl_user', '$raw_redis_pass'));|" "/usr/local/lsws/$NAME2/html/wp-config.php"
         fi
 
-				# 3. HỖ TRỢ REDIS OBJECT CACHE (TILL KRÜSS)
+        # 3. HỖ TRỢ REDIS OBJECT CACHE (TILL KRÜSS)
         if [[ -d /usr/local/lsws/$NAME2/html/wp-content/plugins/redis-cache && -n "$socket_path" ]]; then
             # Xóa sạch các cấu hình WP_REDIS_ cũ của website nguồn
             sed -i '/WP_REDIS_/d' "/usr/local/lsws/$NAME2/html/wp-config.php"
-            # Khởi tạo Block cấu hình: Ép mảng [user, pass] vào WP_REDIS_PASSWORD theo chuẩn ACL
-            redis_cache_block="<?php\ndefine( 'WP_REDIS_SCHEME', 'unix' );\ndefine( 'WP_REDIS_DATABASE', 0 );\ndefine( 'WP_REDIS_PATH', '${socket_path}' );\ndefine( 'WP_REDIS_PREFIX', '${NAME2}:' );\ndefine( 'WP_REDIS_PASSWORD', [ '${redis_acl_user}', '${raw_redis_pass}' ] );"
+            # Khởi tạo Block cấu hình: Bơm DB_ID độc lập và mảng Pass bảo mật
+            redis_cache_block="<?php\ndefine( 'WP_REDIS_SCHEME', 'unix' );\ndefine( 'WP_REDIS_DATABASE', ${redis_db_id} );\ndefine( 'WP_REDIS_PATH', '${socket_path}' );\ndefine( 'WP_REDIS_PREFIX', '${NAME2}:' );\ndefine( 'WP_REDIS_PASSWORD', [ '${redis_acl_user}', '${raw_redis_pass}' ] );"
             
             # Bơm cấu hình mới bằng Regex
             sed -i "s|^<?php|$redis_cache_block|" "/usr/local/lsws/$NAME2/html/wp-config.php"
         fi
     fi
 
-		# systemctl restart $active_cache
+    # systemctl restart $active_cache
 fi
 
-
-unset redis_acl_user raw_redis_pass
-#ACL bảo mật redis, valkey, keydb
+unset redis_acl_user raw_redis_pass redis_db_id
+#End ACL bảo mật redis, valkey, keydb
 
 
 chown root:root /etc/wptt/vhost/."$NAME2".conf
