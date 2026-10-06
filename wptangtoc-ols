@@ -47,9 +47,8 @@ else
   exit 1
 fi
 
-
 if uname -m | grep -q 'aarch64'; then
-  if [[ "$SERVER_OS" == 'almalinux' ]]; then # ARM không support AlmaLinux 8, chỉ từ bản 9 trở lên
+  if [[ "$SERVER_OS" == 'almalinux' ]]; then
     clear
     echo -e "\e[31mWPTangToc OLS không hỗ trợ CPU ARM trên phiên bản AlmaLinux 8.\e[0m"
     echo "Để chạy trên kiến trúc ARM, vui lòng sử dụng AlmaLinux 9, Rocky Linux 9 hoặc Ubuntu."
@@ -66,7 +65,6 @@ if [[ "$check_root" != "root" ]]; then
   rm -f wptangtoc-ols || true
   exit 1
 fi
-
 
 # KIỂM TRA MÔI TRƯỜNG DOCKER / THIẾU SYSTEMD
 if [[ ! -d /run/systemd/system ]]; then
@@ -156,7 +154,7 @@ if [[ -n "$HOME_DEV" && -n "$ROOT_DEV" && "$HOME_DEV" != "$ROOT_DEV" ]]; then
   if [[ "$HOME_TYPE" == "lvm" && "$ROOT_TYPE" == "lvm" ]]; then
     clear
     echo -e "\e[33m╭──────────────────────────────────────────────────────────────────────────────╮\e[0m"
-    echo -e "\e[33m│                 CẢNH BÁO: TÁI CẤU TRÚC PHÂN VÙNG Ổ CỨNG                      │\e[0m"
+    echo -e "\e[33m│                  CẢNH BÁO: TÁI CẤU TRÚC PHÂN VÙNG Ổ CỨNG                     │\e[0m"
     echo -e "\e[33m├──────────────────────────────────────────────────────────────────────────────┤\e[0m"
     echo -e "\e[33m│\e[0m Hệ thống phát hiện VPS của bạn đang chia phần lớn dung lượng cho ổ \e[36m/home\e[0m.    \e[33m│\e[0m"
     echo -e "\e[33m│\e[0m WPTangToc OLS lưu trữ dữ liệu Web và Database tại phân vùng gốc \e[36m/\e[0m.            \e[33m│\e[0m"
@@ -265,7 +263,7 @@ for tool in curl gpg sha256sum; do
     [[ "$tool" == "sha256sum" ]] && pkg="coreutils"
     
     if command -v dnf >/dev/null 2>&1; then
-      if [[ "$SERVER_OS" == 'almalinux' ]]; then #bản almalinx 8.6 ngày xưa trở về truớc phải update gpg online lại mới install đuợc
+      if [[ "$SERVER_OS" == 'almalinux' ]]; then
         dnf -y clean packages || true
         rpm --import https://repo.almalinux.org/almalinux/RPM-GPG-KEY-AlmaLinux || true
       fi
@@ -279,12 +277,13 @@ done
 
 echo -en "\033[1A\033[2K\r"
 
-# 2. Nhập và kiểm định Fingerprint Public Key (Sử dụng WPTT_SECURE_TMP thay vì /tmp)
+# 2. Nhập và kiểm định Fingerprint Public Key (Sử dụng Keyring biệt lập)
 EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
 KEY_EMAIL="giatuan@wptangtoc.com"
 PUB_KEY_TMP="$WPTT_SECURE_TMP/wptangtoc-gpg-pub.key"
+KEYRING_PATH="$WPTT_SECURE_TMP/wptt-keyring.gpg"
 
-if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then #kiểm tra 2 điều kiện cùng 1 lúc, phải chuẩn key
+if ! gpg --no-default-keyring --keyring "$KEYRING_PATH" --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
   echo "Đang nạp và đối soát Khóa bảo mật GPG WPTangToc..."
   
   # Kèm User-Agent vào CURL lấy Key an toàn
@@ -299,7 +298,8 @@ if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then #k
   REAL_FP=$(gpg --show-keys --with-colons "$PUB_KEY_TMP" 2>/dev/null | awk -F: '$1 == "fpr" {print $10}' | head -n 1 || echo "")
 
   if [[ -n "$REAL_FP" && "$REAL_FP" == "$EXPECTED_FP" ]]; then
-    gpg --import "$PUB_KEY_TMP" >/dev/null 2>&1 || true
+    # Import key vào Keyring tạm thời, không đưa vào cấu hình gốc
+    gpg --no-default-keyring --keyring "$KEYRING_PATH" --import "$PUB_KEY_TMP" >/dev/null 2>&1 || true
     rm -f "$PUB_KEY_TMP" || true
   else
     rm -f "$PUB_KEY_TMP" || true
@@ -324,7 +324,9 @@ function download_and_verify() {
 
   local tmp_checksum="$WPTT_SECURE_TMP/SHA256SUMS.txt"
   local tmp_sig="$WPTT_SECURE_TMP/SHA256SUMS.txt.sig"
+  local keyring_path="$WPTT_SECURE_TMP/wptt-keyring.gpg"
 
+  # Tải file checksum và file chữ ký
   if ! curl -sfL -A "checksum wptangtoc ols" --connect-timeout 20 "$url_checksum" -o "$tmp_checksum"; then
     return 1
   fi
@@ -333,23 +335,22 @@ function download_and_verify() {
     return 1
   fi
 
-  local gpg_verify_output
-  gpg_verify_output=$(gpg --batch --status-fd 1 --verify "$tmp_sig" "$tmp_checksum" 2>/dev/null || echo "")
-  
-  if ! echo "$gpg_verify_output" | grep -q '^\[GNUPG:\] GOODSIG ' || \
-     ! echo "$gpg_verify_output" | grep -q "$EXPECTED_FP"; then
+  # Bắt Exit Code của GPG thông qua Keyring biệt lập
+  if ! gpg --no-default-keyring --keyring "$keyring_path" --batch --verify "$tmp_sig" "$tmp_checksum" >/dev/null 2>&1; then
     echo -e "\e[31m[CẢNH BÁO] Chữ ký số GPG của file checksum không hợp lệ hoặc bị can thiệp!\e[0m"
     return 1
   fi
 
+  # Tải Script chính
   if ! curl -sfLO -A "checksum wptangtoc ols" --connect-timeout 30 "$url_script"; then
     rm -f "wptangtoc-ols-$SERVER_OS" || true
     return 1
   fi
 
+  # Đối soát mã băm SHA256
   local expected_hash actual_hash
-  expected_hash=$(grep -E "[[:space:]]wptangtoc-ols-$SERVER_OS$" "$tmp_checksum" | tr -d '\r' | awk '{print $1}' || echo "")
-  actual_hash=$(sha256sum "wptangtoc-ols-$SERVER_OS" 2>/dev/null | awk '{print $1}' || echo "")
+  expected_hash=$(grep -E "[[:space:]]wptangtoc-ols-$SERVER_OS$" "$tmp_checksum" | tr -d '\r' | awk '{print $1}' || true)
+  actual_hash=$(sha256sum "wptangtoc-ols-$SERVER_OS" 2>/dev/null | awk '{print $1}' || true)
 
   if [[ -n "$expected_hash" && "$expected_hash" == "$actual_hash" ]]; then
     return 0
