@@ -58,24 +58,37 @@ $(tput setab 0)-//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]:$(tput sgr0) 
 
     # Sử dụng find để lấy danh sách file .conf một cách an toàn hơn ls
     # và đọc từng dòng bằng while read
-    while IFS= read -r entry_path; do
-      # Lấy tên file từ đường dẫn đầy đủ
-      local entry
-      entry=$(basename "$entry_path")
-
-      # Xử lý tên file: bỏ ký tự đầu, bỏ đuôi .conf
-      # Đảm bảo .conf chỉ bị xóa ở cuối chuỗi ($) và dấu chấm được escape (\.)
-      local name
-      name=$(echo "$entry" | sed -e 's/^.//' -e 's/\.conf$//')
-
-      # Kiểm tra xem tên có chứa dấu chấm không (để lọc domain)
-      # Sử dụng [[ ... == *.* ]] cho rõ ràng hơn
-      if [[ "$name" == *.* ]] && [ "$name" != '.' ]; then
-        options+=("$name")
-      fi
+    mapfile -t options < <(
       # Tìm tất cả các file (-type f) trong thư mục vhost_dir (không vào sâu hơn -maxdepth 1)
-      # có tên kết thúc bằng .conf
-    done < <(find "$vhost_dir" -maxdepth 1 -type f -name '*.conf')
+      # có tên kết thúc bằng .conf.
+      # -print0 dùng ký tự NULL để phân tách các đường dẫn, an toàn hơn với các tên file đặc biệt.
+      find "$vhost_dir" -maxdepth 1 -type f -name '*.conf' -print0 |
+
+        # Đọc từng đường dẫn được phân tách bằng NULL vào biến entry_path.
+        while IFS= read -r -d '' entry_path; do
+          # Lấy tên file từ đường dẫn đầy đủ (sử dụng parameter expansion, nhanh hơn `basename`).
+          local entry
+          entry=${entry_path##*/}
+
+          # Xử lý tên file bằng Shell Parameter Expansion để tăng hiệu suất:
+          # 1. Bỏ đuôi .conf
+          local name
+          name=${entry%.conf}
+          # 2. Bỏ ký tự đầu tiên
+          name=${name#?}
+
+          # Kiểm tra xem tên có chứa dấu chấm không (để lọc domain).
+          if [[ "$name" == *.* ]] && [ "$name" != '.' ]; then
+            # In tên hợp lệ ra standard output
+            echo "$name"
+          fi
+        done |
+
+        # Sắp xếp danh sách domain từ output của vòng lặp while.
+        # -u: Lọc các dòng trùng lặp (unique).
+        # -V: Sắp xếp theo kiểu "version number", giúp sắp xếp tự nhiên (ví dụ: site2.com đứng trước site10.com).
+        sort -uV
+    )
 
     # Kiểm tra xem có tìm thấy tên miền hợp lệ nào không
     if [ ${#options[@]} -eq 0 ]; then
