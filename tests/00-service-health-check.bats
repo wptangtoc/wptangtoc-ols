@@ -156,7 +156,7 @@ in_log_neu_loi() {
   [ "$status" -eq 0 ]
   
   # Đã bù khoảng trắng ở đây
-  run bash -c "chown $vhost_user$test_file"
+  run bash -c "chown $vhost_user $test_file"
 
   # Đã bù khoảng trắng ở đây
   run bash -c "sudo -u $vhost_user /usr/local/lsws/lsphp*/bin/lsphp$test_file"
