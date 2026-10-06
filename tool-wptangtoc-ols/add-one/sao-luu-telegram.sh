@@ -63,7 +63,7 @@ IP_VPS=$(curl -s4 --connect-timeout 5 ifconfig.me || curl -s4 --connect-timeout 
 
 TG_BASE_URL="https://api.telegram.org"
 if ! curl -I -s -m 3 "$TG_BASE_URL" > /dev/null 2>&1; then
-    API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
+    API_PROXY=$(curl --tlsv1.3 -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
     [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
 fi
 

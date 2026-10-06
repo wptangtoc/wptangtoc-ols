@@ -60,7 +60,7 @@ Vui lòng gia hạn tên miền để tránh gián đoạn dịch vụ."
     
     # === BẬT CHẾ ĐỘ DỰ PHÒNG: CHUYỂN QUA PROXY ===
     local API_PROXY
-    API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
+    API_PROXY=$(curl --tlsv1.3 -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
     
     local url_tele_proxy
     if [[ "$API_PROXY" == *"workers.dev"* ]]; then
