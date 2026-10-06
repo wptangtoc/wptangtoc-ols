@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.0.8
+
+### 🛠️ Tối ưu hệ thống
+- **Cải tiến hệ thống hướng dẫn:** Nâng cấp và tối ưu hóa giao diện tài liệu hướng dẫn trực quan, giúp quản trị viên dễ dàng tra cứu thông tin, nắm bắt các thao tác quản trị và vận hành hệ thống một cách nhanh chóng, hiệu quả.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.0.7
 
 ### 🛠️ Tối ưu hệ thống
