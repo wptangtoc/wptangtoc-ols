@@ -1,0 +1,110 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+
+
+function huong_dan() {
+  Tính năng Dọn sạch thùng rác [Empty Virtual Trash]
+
+  [ Mục đích và Lợi ích ]
+  Tiêu hủy vĩnh viễn toàn bộ dữ liệu [Mã nguồn và Database] đang nằm trong thùng rác ảo ngay lập tức. Giúp giải phóng triệt để dung lượng ổ cứng cho máy chủ.
+
+  [ Cảnh báo an toàn và Hướng dẫn ]
+  * Hành động này là KHÔNG THỂ HOÀN TÁC. Mọi dữ liệu sau khi dọn dẹp sẽ bị xóa vĩnh viễn khỏi hệ thống.
+  * Database sẽ được gỡ bỏ an toàn bằng lệnh DROP DATABASE để không để lại rác trong MariaDB.
+  * Nên sử dụng khi ổ cứng máy chủ [Disk Usage] báo động đầy hoặc bạn chắc chắn không cần khôi phục lại bất kỳ website nào vừa xóa.
+}
+
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+TRASH_PATH="${WPTT_TRASH_PATH:-/usr/local/.wptt_trash}"
+
+# Bắt cờ --force để tự động hóa bằng Cronjob (Bỏ qua câu hỏi xác nhận)
+is_force=0
+[[ "$1" == "-f" || "$1" == "--force" || "$1" == "-q" ]] && is_force=1
+
+clear
+
+# Kiểm tra thùng rác có dữ liệu không
+if [[ ! -d "$TRASH_PATH" || -z "$(ls -A "$TRASH_PATH" 2>/dev/null)" ]]; then
+    if [[ $is_force -eq 0 ]]; then
+        echo -e "\n${C_GREEN}Thùng rác hiện đang trống rỗng! Không có gì để dọn dẹp.${C_RESET}\n"
+        read -p "Bấm phím Enter để quay lại..."
+    fi
+    exit 0
+fi
+
+# ==============================================================================
+# 1. HỎI ĐÁP BẰNG UX CHUẨN (BỎ QUA NẾU CÓ CỜ --FORCE)
+# ==============================================================================
+confirm="no"
+if [[ $is_force -eq 1 ]]; then
+    confirm="yes"
+else
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_RED}⚠ TRUNG TÂM TIÊU HỦY DỮ LIỆU RÁC ⚠${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+    msg_title="CẢNH BÁO: DỌN SẠCH THÙNG RÁC (EMPTY TRASH)"
+    msg_info1="Hành động này sẽ XÓA VĨNH VIỄN toàn bộ mã nguồn và Database rác."
+    msg_info2="Dữ liệu sẽ KHÔNG THỂ KHÔI PHỤC SAU KHI XÓA!"
+
+    if wptt_xac_nhan "$msg_title" "$msg_info1" "$msg_info2" "Đồng ý dọn sạch" "Hủy thao tác"; then
+        confirm="yes"
+    fi
+fi
+
+# ==============================================================================
+# 2. TIẾN HÀNH TIÊU HỦY (CÓ BỌC LÓT BẢO MẬT DATABASE)
+# ==============================================================================
+if [[ "$confirm" == "yes" ]]; then
+    [[ $is_force -eq 0 ]] && echo ""
+    _runing "Đang dọn dẹp sạch sẽ Thùng rác ảo"
+
+		. /etc/wptt/.wptt.conf
+    # Tạo file xác thực MariaDB an toàn (Chống lộ pass ở process list)
+    password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
+    [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
+
+    TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
+    chmod 600 "$TEMP_CNF_ROOT"
+    cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user="${database_admin_username}"
+password="${password_database_root}"
+host=localhost
+EOF
+    unset password_database_root database_admin_password
+
+    # Quét và tiêu hủy
+    for dir in "$TRASH_PATH"/*; do
+        if [[ -d "$dir" ]]; then
+            # Rà soát Database ẩn và chém trước
+            if [[ -f "$dir/.trash_db_name" ]]; then
+                TRASH_DB=$(cat "$dir/.trash_db_name")
+                if [[ -n "$TRASH_DB" ]]; then
+                    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "DROP DATABASE IF EXISTS \`$TRASH_DB\`;" 2>/dev/null
+                fi
+            fi
+            # Tiêu hủy mã nguồn
+            rm -rf "$dir"
+        fi
+    done
+
+    rm -f "$TEMP_CNF_ROOT"
+    _rundone "Đang dọn dẹp sạch sẽ Thùng rác ảo"
+    
+    if [[ $is_force -eq 0 ]]; then
+        echo -e "\n${C_GREEN}Đã dọn sạch thùng rác thành công! Dung lượng ổ cứng đã được giải phóng.${C_RESET}"
+    fi
+else
+    echo -e "\n${C_YELLOW}Đã hủy thao tác. Thùng rác vẫn được giữ nguyên.${C_RESET}"
+fi
+
+if [[ $is_force -eq 0 ]]; then
+    echo ""
+    read -p "Bấm phím Enter để quay lại..."
+fi

@@ -1,0 +1,123 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+
+
+function huong_dan() {
+  Tính năng Bật / Tắt Thùng rác ảo [Virtual Trash Toggle]
+
+  [ Mục đích và Lợi ích ]
+  Quản lý trạng thái hoạt động của hệ thống Thùng rác ảo và tiến trình dọn dẹp ngầm [Cronjob]. Cho phép linh hoạt thay đổi cơ chế xóa website tùy theo nhu cầu và tài nguyên máy chủ.
+
+  [ Cơ chế và Hướng dẫn ]
+  * Khi BẬT: Thao tác xóa website sẽ diễn ra an toàn [Soft Delete]. Dữ liệu được lưu trữ tạm thời và tự động dọn dẹp định kỳ vào ban đêm [từ 4h00 - 4h30 sáng] để không gây nghẽn máy chủ.
+  * Khi TẮT: Hệ thống gỡ bỏ tiến trình dọn dẹp ngầm. Thao tác xóa website sẽ hoạt động theo cơ chế cũ: Xóa vĩnh viễn ngay lập tức. Phù hợp cho các máy chủ có dung lượng ổ cứng cực thấp.
+}
+
+
+# Bật thùng rác: bash /etc/wptt/trash/wptt-bat-tat-trash on
+# Tắt thùng rác: bash /etc/wptt/trash/wptt-bat-tat-trash off
+
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+CONF_FILE="/etc/wptt/.wptt.conf"
+CRON_LINK="/etc/cron.d/wptt-trash-cleaner"
+CRON_SOURCE="/etc/wptt/trash/wptt-trash-cron"
+
+# ==============================================================================
+# 1. PHÂN TÍCH ĐỐI SỐ ĐẦU VÀO (ARGUMENTS PARSING)
+# ==============================================================================
+FORCE_STATE=""
+for arg in "$@"; do
+    if [[ "${arg,,}" == "on" ]]; then
+        FORCE_STATE="on"
+    elif [[ "${arg,,}" == "off" ]]; then
+        FORCE_STATE="off"
+    fi
+done
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}CẤU HÌNH TRẠNG THÁI THÙNG RÁC ẢO${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# Đọc cấu hình thực tế, nếu chưa có thì ngầm hiểu là 1
+[[ -z "$WPTT_TRASH_ENABLE" ]] && WPTT_TRASH_ENABLE=1
+
+# Xác định trạng thái đích (TARGET_STATE)
+if [[ "$FORCE_STATE" == "on" ]]; then
+    TARGET_STATE=1
+elif [[ "$FORCE_STATE" == "off" ]]; then
+    TARGET_STATE=0
+else
+    # Chế độ Toggle (Menu gọi): Đang bật thì tắt, đang tắt thì bật
+    if [[ "$WPTT_TRASH_ENABLE" -eq 1 ]]; then
+        TARGET_STATE=0
+    else
+        TARGET_STATE=1
+    fi
+fi
+
+# ==============================================================================
+# 2. XỬ LÝ LOGIC BẬT / TẮT (AUTO HEALING & SMART DELAY)
+# ==============================================================================
+if [[ "$TARGET_STATE" -eq 0 ]]; then
+    if [[ "$FORCE_STATE" == "off" && "$WPTT_TRASH_ENABLE" -eq 0 && ! -f "$CRON_LINK" ]]; then
+        echo -e "${C_YELLOW}Tính năng Thùng rác ảo hiện tại ĐÃ TẮT SẴN, không cần thay đổi.${C_RESET}"
+    else
+        _runing "Đang cấu hình TẮT Thùng rác ảo và gỡ bỏ Cronjob"
+        
+        if grep -q "^WPTT_TRASH_ENABLE=" "$CONF_FILE"; then
+            sed -i 's/^WPTT_TRASH_ENABLE=.*/WPTT_TRASH_ENABLE=0/' "$CONF_FILE"
+        else
+            echo "WPTT_TRASH_ENABLE=0" >> "$CONF_FILE"
+        fi
+        
+        # Xóa file cấu hình dọn dẹp tự động
+        [[ -f "$CRON_LINK" ]] && rm -f "$CRON_LINK"
+        
+        _rundone "Đang cấu hình TẮT Thùng rác ảo và gỡ bỏ Cronjob"
+        
+        echo -e "\n${C_RED}ĐÃ TẮT TÍNH NĂNG THÙNG RÁC ẢO${C_RESET}"
+        echo "Từ thời điểm này, mọi thao tác xóa website sẽ diễn ra ngay lập tức."
+        echo "Dữ liệu bị xóa vĩnh viễn và KHÔNG THỂ KHÔI PHỤC!"
+    fi
+else
+    if [[ "$FORCE_STATE" == "on" && "$WPTT_TRASH_ENABLE" -eq 1 && -f "$CRON_LINK" ]]; then
+        echo -e "${C_GREEN}Tính năng Thùng rác ảo hiện tại ĐÃ BẬT SẴN, không cần thay đổi.${C_RESET}"
+    else
+        _runing "Đang cấu hình BẬT Thùng rác ảo và kích hoạt Cronjob (4h0 - 4h30 Sáng)"
+        
+        if grep -q "^WPTT_TRASH_ENABLE=" "$CONF_FILE"; then
+            sed -i 's/^WPTT_TRASH_ENABLE=.*/WPTT_TRASH_ENABLE=1/' "$CONF_FILE"
+        else
+            echo "WPTT_TRASH_ENABLE=1" >> "$CONF_FILE"
+        fi
+        
+        # Ấn định giờ chạy lúc 4:30 Sáng, kèm delay ngẫu nhiên 0-30 phút để chống I/O Storm
+        if [[ ! -f "$CRON_LINK" && -f "$CRON_SOURCE" ]]; then
+            chmod +x "$CRON_SOURCE" 2>/dev/null
+            
+            # Ghi chú: Ký tự % trong Cronjob mặc định bị hiểu là dấu ngắt dòng. Cần phải có \ ở trước (\%).
+						echo "0 4 * * * root nice -n 19 bash -c 'sleep \$((RANDOM \% 1800)) && bash $CRON_SOURCE >/dev/null 2>&1'" > "$CRON_LINK"
+        fi
+        
+        _rundone "Đang cấu hình BẬT Thùng rác ảo và kích hoạt Cronjob (4h30 - 5h00 Sáng)"
+        
+        echo -e "\n${C_GREEN}ĐÃ BẬT TÍNH NĂNG THÙNG RÁC ẢO${C_RESET}"
+        echo "Mã nguồn và Database sẽ được bảo vệ an toàn (Soft Delete) khi bạn xóa website."
+        echo "Tiến trình dọn rác ngầm sẽ tự động chạy rải rác từ 04:30 đến 05:00 Sáng."
+    fi
+fi
+
+# ==============================================================================
+# 3. ĐIỀU HƯỚNG THÔNG MINH (UX)
+# ==============================================================================
+if [[ -z "$FORCE_STATE" || "$1" == "98" ]]; then
+    echo ""
+    read -p "Bấm phím Enter để quay lại..."
+fi
