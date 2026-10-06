@@ -1,246 +1,123 @@
-# WPTangToc OLS
-Sứ mệnh của chúng tôi trong việc xây dựng một phần mềm thiết lập và quản trị webserver miễn phí mà hiệu suất tốt nhất.
+<div align="center">
+    <img src="https://wptangtoc.com/wp-content/uploads/2021/06/logo-wp-tang-toc.png" alt="WPTangToc OLS Logo" width="300">
+    <h1>🚀 WPTangToc OLS</h1>
+    <p><b>Giải pháp Thiết lập & Quản trị Webserver Miễn phí, Siêu tốc độ, Dành riêng cho WordPress</b></p>
+    <p>
+        <img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3">
+        <img src="https://img.shields.io/badge/Optimized%20for-WordPress-21759b.svg" alt="Optimized for WordPress">
+        <img src="https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM-success.svg" alt="Architecture">
+    </p>
+</div>
 
-<h2>Hướng dẫn cài đặt</h2>
-Yêu cầu hệ điều hành WPTangToc OLS hỗ trợ những hệ điều hành sau đây:
+<hr>
+
+<h2>🌟 Sứ mệnh của chúng tôi</h2>
+<p>Sứ mệnh của WPTangToc OLS là mang đến một hệ sinh thái máy chủ hoàn hảo, nơi hiệu năng chạm đỉnh và bảo mật được đặt lên hàng đầu. Đây không chỉ là một Bash Script cài đặt đơn thuần, mà là kết tinh của hàng ngàn giờ tối ưu hóa chuyên sâu. Chúng tôi tập trung <b>100% nguồn lực vào mã nguồn WordPress</b>, giúp các Sysadmin từ tay ngang đến chuyên nghiệp quản trị máy chủ một cách mượt mà, nhàn nhã và mạnh mẽ nhất.</p>
+
+<h2>🔥 Tại sao bạn nên chọn WPTangToc OLS?</h2>
 <ul>
-<li>
-AlmaLinux 8
-</li>
-<li>
-AlmaLinux 9
-</li>
-
-<li>
-AlmaLinux 10 (Đang thử nghiệm)
-</li>
-
-
-<li>
-Rocky linux 8
-</li>
-<li>
-Rocky linux 9
-</li>
-
-<li>
-Rocky linux 10 (Đang thử nghiệm)
-</li>
-
-<li>
-Red Hat Enterprise Linux 8
-</li>
-
-<li>
-Red Hat Enterprise Linux 9
-</li>
-
-
-<li>
-Red Hat Enterprise Linux 10 (Đang thử nghiệm)
-</li>
-
-<li>
-Oracle Linux Server 8
-</li>
-
-<li>
-Oracle Linux Server 9
-</li>
-
-
-<li>
-Ubuntu 22.04 (Đang thử nghiệm)
-</li>
-<li>
-Ubuntu 24.04 (Đang thử nghiệm)
-</li>
-
-</ul>
-Hệ điều hành mà mình yêu thích nhất là AlmaLinux 9:
-
-
-Bạn paste đoạn mã này vào terminal của bạn rồi phần mềm sẽ tự động thiết lập.
-
-
-<pre>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</pre>
-
-Lệnh dự phòng (từ GitHub):
-
-<pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
-
-<h2>Chế độ cài đặt Tự Động (Unattended / Zero-Touch)</h2>
-Dành cho việc triển khai hàng loạt (Cloud-init, Hãng VPS đóng template) hoặc cài đặt cực nhanh bỏ qua mọi thao tác tương tác. Bằng cách nối thêm các cờ (flags), hệ thống sẽ tự động cấu hình:
-
---auto : Bật chế độ không chạm (Unattended), hệ thống sẽ áp dụng cấu hình tối ưu mặc định mà không hỏi gì thêm tự động lựa chọn mặc định tốt nhất.
-<pre>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols --auto</pre>
-
-
-
-Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cung cấp VPS nào đó mà bạn cảm thấy uy tín bạn có thể thuê ở đó. Để có thể sử dụng công cụ này.
-
-Đây là phần mềm script cài đặt thiết lập webserver và giúp bạn dễ dàng quản trị webserver, phầm mềm này mình phát triển tập trung vào mã nguồn WordPress là chủ yếu, chỉ đơn vì công việc của mình liên quan rất nhiều về WordPress và WordPress là sở trưởng của mình vì vậy mình chỉ tập trung toàn bộ nguồn lực tối ưu webserver dành cho WordPress.
-
-Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.5 && 8.4 & 8.3 & 8.2 & 8.1 & 8.0 & 7.4 & 7.3 & 7.2 & 7.1) + MariaDB (11.8 & 11.4 & 10.11 & 10.6)... có rất nhiều tính năng khác.
-
-<h2>Cấu hình tối thiểu</h2>
-Yêu cầu phần cứng: Ram > 512MB, CPU tối thiểu 1 vcore, Ổ cứng > 8GB
-<h2>Cấu hình khuyến nghị</h2>
-Yêu cầu phần cứng: Ram > 2GB , CPU tối thiểu 1 vcore, Ổ cứng > 20GB
-
-<h3>Kiến trúc CPU được hỗ trợ theo hệ điều hành sau:</h3>
-<ul>
-<li>
-AlmaLinux 8 (hỗ trợ CPU x86_64)
-</li>
-
-<li>
-Rocky linux 8 (hỗ trợ CPU x86_64)
-</li>
-
-<li>
-Red Hat Enterprise Linux 8 (hỗ trợ CPU x86_64)
-</li>
-
-<li>
-Oracle Linux Server 8 (hỗ trợ CPU x86_64)
-</li>
-
-<li>
-AlmaLinux 9 và 10 (Hỗ trợ x86_64 & arm)
-</li>
-
-<li>
-Rocky linux 9 và 10 (Hỗ trợ x86_64 & arm)
-</li>
-
-<li>
-Red Hat Enterprise Linux 9 và 10 (Hỗ trợ x86_64 & arm)
-</li>
-
-<li>
-Oracle Linux Server 9 (Hỗ trợ x86_64 & arm)
-</li>
-
-<li>
-Ubuntu 22.04 (Hỗ trợ x86_64 & arm)
-</li>
-<li>
-Ubuntu 24.04 (Hỗ trợ x86_64 & arm)
-</li>
-
+    <li>⚡ <b>Hiệu năng xé gió:</b> Tích hợp OpenLiteSpeed, LSPHP tùy biến (nhanh hơn PHP-FPM thuần), Giao thức HTTP/3 QUIC, và tối ưu Object Cache (Redis/Memcached/Valkey) ở mức tầng UNIX Socket sâu nhất.</li>
+    <li>🛡️ <b>Bảo mật cô lập tuyệt đối:</b> Sử dụng công nghệ <code>PhpSuExec + Chroot + Namespace</code> để giam lỏng (cô lập) từng website. Nếu một trang web trên máy chủ bị hack, hacker cũng vĩnh viễn không thể "cháy lan" sang các trang web khác.</li>
+    <li>🤖 <b>Tự động hóa thông minh:</b> Mọi thao tác cấu hình phức tạp, tối ưu Database, hay quản lý Firewall đều được giải quyết tự động chỉ bằng phím bấm.</li>
+    <li>☁️ <b>Bảo vệ dữ liệu toàn diện (Zero Data Loss):</b> Hệ thống sao lưu thông minh vận hành hoàn toàn tự động đóng gói và đẩy thẳng dữ liệu của bạn lên đa nền tảng Cloud (Amazon S3, Google Drive, OneDrive, Telegram, Cloudflare R2...). Giải phóng bạn khỏi nỗi lo rủi ro phần cứng, đảm bảo website luôn có sẵn phương án khôi phục thần tốc trước mọi sự cố hay thảm họa không lường trước.</li>
 </ul>
 
+<hr>
 
-<h3>Hướng dẫn sử dụng</h3>
+<h2>💻 Hệ điều hành & Cấu hình hỗ trợ</h2>
 
-Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wptangtoc.com/wptangtoc-ols/</a>
-
-<h3>Các nguồn hỗ trợ cho WPTangToc OLS</h3>
-
+<h3>🐧 Hệ điều hành Linux (Kiến trúc x86_64 & ARM)</h3>
 <ul>
-<li>OpenLiteSpeed: <a href="https://openlitespeed.org/">https://openlitespeed.org/</a></li>
-<li>MariaDB: <a href="https://downloads.mariadb.org/">https://downloads.mariadb.org/</a></li>
-<li>PHP: <a href="https://www.php.net/">https://www.php.net/</a></li>
-<li>Rclone: <a href="https://rclone.org/">https://rclone.org/</a></li>
-<li>WP-CLI: <a href="https://wp-cli.org/">https://wp-cli.org/</a></li>
-<li>Fail2ban: <a href="https://www.fail2ban.org/">https://www.fail2ban.org/</a></li>
-<li>ClamAV: <a href="https://www.clamav.net/">https://www.clamav.net/</a></li>
-<li>PhpMyAdmin: <a href="https://www.phpmyadmin.net/">https://www.phpmyadmin.net/</a></li>
-<li>tinyfilemanager: <a href="https://tinyfilemanager.github.io/">https://tinyfilemanager.github.io/</a></li>
-<li>8G Firewall: <a href="https://perishablepress.com/8g-firewall/">https://perishablepress.com/8g-firewall/</a></li>
+    <li><b>AlmaLinux:</b> 8, 9, 10 <i>(Khuyên dùng: AlmaLinux 9)</i> 🏆</li>
+    <li><b>Rocky Linux:</b> 8, 9, 10</li>
+    <li><b>Red Hat Enterprise Linux (RHEL):</b> 8, 9, 10</li>
+    <li><b>Oracle Linux Server:</b> 8, 9</li>
+    <li><b>Ubuntu:</b> 22.04, 24.04 <i>(Thử nghiệm)</i></li>
 </ul>
 
-<h3>Liên hệ với tác giả</h3>
+<h3>⚙️ Cấu hình yêu cầu</h3>
 <ul>
-<li>Trang chủ: <a href="https://wptangtoc.com">WP Tăng Tốc</a></li>
-<li>Email: <a href="mailto:giatuan@wptangtoc.com">giatuan@wptangtoc.com</a></li>
-<li>Số Điện Thoại: 0866880462</li>
+    <li><b>Tối thiểu:</b> CPU 1 vCore | RAM > 512MB | Ổ cứng > 8GB</li>
+    <li><b>Khuyến nghị:</b> CPU 1 vCore | RAM > 2GB | Ổ cứng > 20GB</li>
+</ul>
+<p><i>💡 Lời khuyên: Nếu bạn chưa có VPS, hãy chọn các nhà cung cấp uy tín để có trải nghiệm tốt nhất với phần mềm.</i></p>
+
+<hr>
+
+<h2>⚡ Hướng dẫn cài đặt</h2>
+
+<h3>Cách 1: Cài đặt tiêu chuẩn (Có tương tác)</h3>
+<p>Bạn chỉ cần dán đoạn mã này vào Terminal (quyền <code>root</code>), hệ thống sẽ chạy và có menu hỏi bạn một số thiết lập cơ bản:</p>
+<pre><code>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</code></pre>
+<p><i>Link dự phòng từ GitHub:</i></p>
+<pre><code>curl -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols && bash wptangtoc-ols</code></pre>
+
+<h3>Cách 2: 🤖 Cài đặt Không Chạm (Unattended / Zero-Touch)</h3>
+<p>Tuyệt chiêu dành cho các Sysadmin muốn triển khai hạ tầng hàng loạt (Mass Deployment) qua Ansible, Cloud-Init, hãng VPS đóng template hoặc đơn giản là bạn "lười" bấm phím. Chỉ cần thêm cờ <code>--auto</code>, phần mềm sẽ <b>tự động bỏ qua mọi câu hỏi</b>, áp dụng ngay cấu hình mặc định an toàn, ổn định và nhanh nhất do tác giả định chuẩn (PHP 8.3, MariaDB Stable 10.11, Port mặc định).</p>
+<pre><code>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols --auto</code></pre>
+
+<hr>
+
+<h2>🛠️ Danh sách Tính năng Đồ sộ</h2>
+<p>WPTangToc OLS bao gồm đầy đủ các tính năng mà một System Admin chuyên nghiệp cần tới:</p>
+<ul>
+    <li><b>Nền tảng lõi:</b> OpenLiteSpeed + LSPHP (Hỗ trợ nhiều phiên bản từ 7.1 đến 8.5 chạy song song) + MariaDB (10.6 đến 12.3).</li>
+    <li><b>Quản lý Website:</b> Thêm không giới hạn Domain/Subdomain, Sao chép nhân bản website (Clone), Giả lập môi trường test (Staging).</li>
+    <li><b>Cache Đa tầng:</b> Hỗ trợ đầy đủ OPcache, Page Cache HTML, Browser Cache, Object Cache (Redis, Memcached, Valkey, KeyDB).</li>
+    <li><b>Bảo mật toàn diện:</b> Cài đặt SSL Let's Encrypt miễn phí tự động gia hạn vĩnh viễn, Tường lửa 8G Firewall, CSF/Firewalld/NFtables, ClamAV Antivirus, Chống Brute Force, Khóa IP, Chặn truy cập theo Quốc gia.</li>
+    <li><b>Quản trị Database & File:</b> Tích hợp PHPMyAdmin và TinyFileManager an toàn trực tiếp trên trình duyệt. Chuyển đổi siêu tốc Engine MySQL (InnoDB, MyISAM, Aria).</li>
+    <li><b>Tự động hóa hệ thống:</b> Tự động sao lưu Database & Source Code, Đẩy Backup lên Cloud, Cảnh báo đăng nhập SSH qua Telegram, Tự động restart dịch vụ khi bị treo.</li>
+    <li><b>Giám sát:</b> Theo dõi lưu lượng mạng, CPU, RAM theo thời gian thực (wtop).</li>
 </ul>
 
-<h3>Tác giả phần mềm</h3>
+<hr>
+
+<h2>📚 Nguồn tài liệu & Cộng đồng hỗ trợ</h2>
 <ul>
-<li>Người phát triển dự án : <a href="https://wptangtoc.com/gia-tuan/">Gia Tuấn</a> và cộng đồng Tăng Tốc WordPress</li>
+    <li><b>Trang chủ & Hướng dẫn chi tiết:</b> <a href="https://wptangtoc.com/wptangtoc-ols/">Tại đây</a></li>
+    <li><b>Nhật ký cập nhật (Changelog):</b> <a href="https://wptangtoc.com/changelog-wptangtoc-ols/">Tại đây</a></li>
+    <li><b>Cộng đồng hỗ trợ:</b> Tham gia <a href="https://www.facebook.com/groups/wptangtoc/">Group Tăng Tốc WordPress</a> trên Facebook để được giải đáp thắc mắc.</li>
 </ul>
 
-<h3>Thảo luận giải đáp các thắc mắc: </h3>
+<h3>Các đối tác công nghệ mở:</h3>
+<p>
+    <a href="https://openlitespeed.org/">OpenLiteSpeed</a> | 
+    <a href="https://downloads.mariadb.org/">MariaDB</a> | 
+    <a href="https://www.php.net/">PHP</a> | 
+    <a href="https://wp-cli.org/">WP-CLI</a> | 
+    <a href="https://rclone.org/">Rclone</a> | 
+    <a href="https://www.fail2ban.org/">Fail2ban</a>
+</p>
 
+<hr>
+
+<h2>🤝 Ủng hộ tác giả (Donate)</h2>
+<p>Phần mềm này là tâm huyết được phát triển hoàn toàn miễn phí và sẽ luôn như vậy. Dù vậy, bánh mì trên bàn thì không miễn phí. Nếu công cụ này giúp bạn tiết kiệm thời gian, bảo vệ máy chủ an toàn và mang lại doanh thu tốt, hãy tiếp thêm động lực (và bánh mì) để tác giả tiếp tục nâng cấp dự án nhé:</p>
+<p>👉 <b><a href="https://wptangtoc.com/donate">Tài trợ tặng bánh mì cho tác giả tại đây</a></b></p>
+
+<hr>
+
+<h2>📞 Liên hệ & Tác giả</h2>
 <ul>
-<li>Group facebook : <a href="https://www.facebook.com/groups/wptangtoc/">Cộng đồng tăng tốc WordPress</a></li>
+    <li><b>Người phát triển:</b> <a href="https://wptangtoc.com/gia-tuan/">Gia Tuấn</a> và cộng đồng Tăng Tốc WordPress.</li>
+    <li><b>Email:</b> <a href="mailto:giatuan@wptangtoc.com">giatuan@wptangtoc.com</a></li>
+    <li><b>Hotline/Zalo:</b> 0866.880.462</li>
 </ul>
 
+<hr>
 
-<h3>ChangeLog: </h3>
+<hr>
+
+<h2>⚠️ Tuyên Bố Miễn Trừ Trách Nhiệm & Tinh Thần Mã Nguồn Mở (Disclaimer)</h2>
+<p>WPTangToc OLS là một dự án mã nguồn mở (Open Source) được chia sẻ hoàn toàn miễn phí vì cộng đồng. Chúng mình xây dựng phần mềm này với tất cả tâm huyết nhằm mang lại giá trị thực tế, tuy nhiên việc sử dụng phần mềm tuân theo các nguyên tắc cốt lõi của hệ sinh thái mã nguồn mở:</p>
 <ul>
-<li>Nhật ký cập nhật phát triển : <a href="https://wptangtoc.com/changelog-wptangtoc-ols/">Changelog – WPTangToc OLS</a></li>
+    <li><b>Bản chất Có sao dùng vậy:</b> Phần mềm được cung cấp nguyên trạng mà không đi kèm với bất kỳ bảo hành hay cam kết tuyệt đối nào. Sự đa dạng cực lớn về môi trường hạ tầng (nhà cung cấp VPS, phiên bản hệ điều hành, cấu hình mạng riêng...) có thể tạo ra các tình huống ngoại lệ nằm ngoài khả năng dự tính của phần mềm.</li>
+    <li><b>Sự minh bạch & Quyền tự chủ:</b> Toàn bộ mã nguồn đều được công khai. Bạn có quyền (và được khuyến khích) kiểm tra mã nguồn trước khi thực thi. Do đó, bạn là người làm chủ 100% hệ thống của mình. Tác giả và những người đóng góp sẽ <b>miễn trừ mọi trách nhiệm pháp lý</b> đối với bất kỳ rủi ro nào liên quan đến gián đoạn dịch vụ, xung đột hệ thống, mất mát dữ liệu hay thiệt hại kinh tế phát sinh trực tiếp hoặc gián tiếp từ việc sử dụng phần mềm.</li>
+    <li><b>Quy tắc vàng của System Admin:</b> Dữ liệu là tài sản vô giá của bạn. Dù công cụ đã được kiểm thử khắt khe đến đâu, "cẩn tắc vô áy náy". Chúng tôi đặc biệt yêu cầu bạn <b>luôn chủ động tạo Bản sao lưu (Snapshots/Backup)</b> toàn bộ dữ liệu máy chủ trước khi bắt đầu cài đặt, nâng cấp, hoặc gỡ bỏ bất kỳ thành phần nào.</li>
 </ul>
+<p><i>Bằng việc chạy các tập lệnh của WPTangToc OLS, bạn đồng ý với tinh thần chia sẻ của cộng đồng mã nguồn mở, thấu hiểu các rủi ro kỹ thuật hiện hữu và tự chịu trách nhiệm hoàn toàn đối với máy chủ cũng như dữ liệu của chính mình.</i></p>
 
+<h2>⚖️ Bản quyền (License)</h2>
+<p><b>GPLv3</b></p>
+<p>Đây là dự án cống hiến cho cộng đồng mã nguồn mở (đặc biệt là cộng đồng System Admin tại Việt Nam). Bạn hoàn toàn có quyền sử dụng, phân phối lại hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU (GPLv3) tiêu chuẩn quốc tế, với hy vọng rằng nó sẽ giúp ích và làm cho môi trường web trở nên tốt đẹp hơn.</p>
 
-<h3>Tính năng gồm có: </h3>
-<ul>
-<li>Sao lưu và khôi phục website</li>
-<li>Sao lưu website tự động</li>
-<li>Sao lưu database</li>
-<li>Giao thức QUIC HTTP/3</li>
-<li>Hỗ trợ Google Drive và Onedrive, Telegram, S3 amazon, S3 Cloudflare R2... lưu trữ đám mây backup website</li>
-<li>Preload Cache</li>
-<li>Thêm Không giới hạn domain & subdomain</li>
-<li>Cài đặt SSL miễn phí và gia hạn tự động vĩnh viễn</li>
-<li>Hỗ trợ cài đặt SSL trả phí (Sectigo, Geotrust,...)</li>
-<li>PhpSuExec + chroot + namespace cô lập website để nâng cao bảo mật cháy lan (nếu có 1 website bị hack) sang website khác</li>
-<li>Hỗ trợ: opacache, object cache, page cache html, trình duyệt cache</li>
-<li>Hỗ trợ object Cache (Redis & Memcached & valkey & KeyDB)</li>
-<li>Hỗ trợ OPcache (LSOpcache)</li>
-<li>Tối ưu wp cron</li>
-<li>Hỗ trợ IPv4 và IPv6</li>
-<li>Tối ưu database</li>
-<li>Hỗ trợ nhiều phiên bản PHP cùng lúc, các website có thể sử dụng các phiên bản PHP khác nhau tuỳ theo nhu cầu</li>
-<li>Hỗ trợ PHPMyAdmin và FileManager (Trực tiếp trên web)</li>
-<li>Hỗ trợ php ioncube</li>
-<li>Sử dụng LSPHP tùy biến hiệu suất tốt hơn PHP Thuần</li>
-<li>Chống brute force WordPress</li>
-<li>Chống DDOS cơ bản</li>
-<li>Hỗ trợ nhiều IP cùng lúc trên 1 máy chủ</li>
-<li>Đăng nhập username riêng domain (Khởi tạo tài khoản username riêng để login riêng website đó)</li>
-<li>LockDown WordPress</li>
-<li>Quét virus</li>
-<li>Khóa IP</li>
-<li>Sao chép nhân bản website</li>
-<li>Giả lập website</li>
-<li>Chuyển đổi công nghệ lưu trữ (INNODB, MYISAM, Aria)</li>
-<li>Chống scan port</li>
-<li>Quản lý Database</li>
-<li>Quản lý PHP</li>
-<li>Quản lý SSH</li>
-<li>Quản lý Cache</li>
-<li>Quản lý Swap/Zram</li>
-<li>Mod Security</li>
-<li>Multi-PHP (Mỗi Web một phiên bản PHP riêng)</li>
-<li>Backup Gia tăng (Incremental Backup)</li>
-<li>Tường lửa 8G for WordPress</li>
-<li>Tối ưu Object Cache tầng Socket</li>
-<li>Tường lửa firewalld (Tường lửa CSF, NFtables tuỳ chọn)</li>
-<li>Hỗ trợ backup đám mây(Google Drive hoặc Onedrive, Telegram, s3 amazon, s3 cloudflare r2, s3 DigitalOcean, s3 vietnix, s3 contabo...)</li>
-<li>Quản lý Wordpress</li>
-<li>LockDown Wordpress bảo mật</li>
-<li>Hỗ trợ update WPTangToc OLS, WordPress, máy chủ...</li>
-<li>Hỗ trợ chặn quốc gia truy cập website hoặc chỉ cho quốc gia nào đó được phép truy cập thôi</li>
-<li>Cảnh báo login ssh thông báo qua Telegram</li>
-<li>Theo dõi lưu lượng mạng,cpu,ram...</li>
-<li>Tự động reboot lại service đó nếu nó dừng hoạt động</li>
-<li>Vân vân và mây mây... đầy đủ các tính năng cho anh em system admin cơ bản đến chuyên nghiệp</li>
-</ul>
-
-<h3>Hỗ trợ WPTangToc OLS</h3>
-Hỗ trợ phát triển phần mềm WPTangToc OLS. rất biết ơn sự đóng góp của bạn nhằm hỗ trợ sứ mệnh của chúng tôi trong việc xây dựng một phần mềm thiết lập và quản trị webserver miễn phí mà hiệu suất tốt nhất.
-<br>
-<br>
-Bánh mì trên bàn không phải là miễn phí, mặc dù phần mềm này miễn phí, và sẽ luôn như vậy. Mình thích phát triển phần mềm này và hỗ trợ các bạn, nhưng mình cũng cần bánh mì. Vui lòng tạo điều kiện để tôi tiếp tục nỗ lực vào phần mềm này:<br>
-<a href="https://wptangtoc.com/donate">Tài trợ tặng bánh mì</a>
-
-
-<h3>License: GPLv3</h3>
-
-Đây là phần mềm miễn phí cống hiến cho cộng đồng đặc biệt dành cho cộng đồng Việt Nam; bạn có thể phân phối lại và hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU GPLv3 theo tiêu chuẩn quốc tế.
-
-Phần mềm này bạn được phép phân phối sửa đổi với hy vọng rằng nó sẽ hữu ích hơn cho cộng đồng.
