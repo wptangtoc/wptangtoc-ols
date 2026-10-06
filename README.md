@@ -42,6 +42,7 @@ Ubuntu 24.04
 </li>
 
 </ul>
+<li>Hỗ trợ CPU x86_64 và arm</li>
 Hệ điều hành mà mình yêu thích nhất là AlmaLinux 8:
 
 
