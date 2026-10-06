@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.1.3
+
+### 🛠️ Tối ưu hệ thống
+- **Tối ưu tốc độ cài đặt WordPress với Local Cache:** Tích hợp cơ chế lưu bộ nhớ đệm cục bộ (local cache) cho gói mã nguồn tải từ WordPress.org kèm tính năng tự động xác thực toàn vẹn dữ liệu. Giúp rút ngắn tối đa thời gian khởi tạo website mới, tiết kiệm băng thông máy chủ và đảm bảo quá trình cài đặt luôn diễn ra liền mạch ngay cả khi đường truyền quốc tế gặp sự cố.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.2
 
 ### 🛠️ Tối ưu hệ thống
