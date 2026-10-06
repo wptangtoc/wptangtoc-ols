@@ -108,7 +108,9 @@ in_log_neu_loi() {
 
   # Cú đấm thép: Ép OLS nạp cấu hình (Bypass systemd)
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
-  sleep 4 
+  
+  # ĐÃ XÓA SLEEP 4 CỨNG NHẮC Ở ĐÂY ĐỂ CHUYỂN SANG SMART POLLING
+  
   # =================================================================
   # CHỐT CHẶN ENTERPRISE 1: KIỂM TRA CÚ PHÁP OLS
   # =================================================================
@@ -127,16 +129,39 @@ in_log_neu_loi() {
   # CHỐT CHẶN ENTERPRISE 2: CURL E2E ĐỂ CHỨNG MINH DB & PHP CHẠY
   # =================================================================
   
+  # A. Curl vào tên miền Nguồn (Dùng vòng lặp Polling chống Timeout trên ARM)
+  local max_attempts=12
+  local attempt=1
+  local CODE_NGUON="000"
 
-  # A. Curl vào tên miền Nguồn (Đảm bảo bản gốc không bị phá hỏng sau khi clone)
-  local CODE_NGUON=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
+  while [ $attempt -le $max_attempts ]; do
+      CODE_NGUON=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ || echo "000")
+      if [[ "$CODE_NGUON" =~ ^[23][0-9][0-9]$ ]]; then
+          break
+      fi
+      sleep 3
+      ((attempt++))
+  done
+
   if ! [[ "$CODE_NGUON" =~ ^[23][0-9][0-9]$ ]]; then
       echo -e "\n[LỖI NGUỒN] Website gốc bị lỗi sau khi sao chép. Mã HTTP: $CODE_NGUON" >&3
       false
   fi
 
-  # B. Curl vào tên miền Đích (Chứng minh file php + DB connect thành công)
-  local CODE_DICH=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_DICH" http://127.0.0.1/)
+  # B. Curl vào tên miền Đích (Dùng vòng lặp Polling chống Timeout trên ARM)
+  local attempt_dich=1
+  local CODE_DICH="000"
+  
+  # "Đang chờ OLS phản hồi trên Đích (Tối đa 36s cho ARM)..." >&3 ARM QEMU chạy chậm nó không nhanh như native
+  while [ $attempt_dich -le $max_attempts ]; do
+      CODE_DICH=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_DICH" http://127.0.0.1/ || echo "000")
+      if [[ "$CODE_DICH" =~ ^[23][0-9][0-9]$ ]]; then
+          break
+      fi
+      sleep 3
+      ((attempt_dich++))
+  done
+
   if ! [[ "$CODE_DICH" =~ ^[23][0-9][0-9]$ ]]; then
       echo -e "\n[LỖI ĐÍCH] Bản sao chép thất bại (Có thể lỗi DB hoặc cấu hình). Mã HTTP: $CODE_DICH" >&3
       false
