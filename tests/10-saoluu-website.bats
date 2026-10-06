@@ -1,11 +1,12 @@
 #!/usr/bin/env bats
 
-#Kiểm thử tính năng Sao lưu (Backup) của WPTangToc OLS
+#Kiểm thử tính năng Sao lưu (Backup) và cả sao lưu riêng database của WPTangToc OLS
 
 export SCRIPT_GOC="${WPTT_SAOLUU_SCRIPT:-/etc/wptt/backup-restore/wptt-saoluu}"
 export SCRIPT_THEM="${WPTT_THEMWEBSITE_SCRIPT:-/etc/wptt/domain/wptt-themwebsite}"
 export SCRIPT_XOA="${WPTT_XOAWEBSITE_SCRIPT:-/etc/wptt/domain/wptt-xoa-website}"
 export SCRIPT_CAI_WP="${WPTT_CAI_WP_SCRIPT:-/etc/wptt/wptt-install-wordpress2}"
+export SCRIPT_DB="${WPTT_DB_SCRIPT:-/etc/wptt/db/wptt-saoluu-database}"
 export BACKUP_ROOT="/usr/local/backup-website"
 export FILE_DUNG_CHUNG="/tmp/wptt_bats_bien_dung_chung_$$.sh"
 
@@ -27,7 +28,7 @@ setup_file() {
   export UNIT_TMP
   UNIT_TMP="$(mktemp -d)"
 
-  export TEST_DOMAIN="wptest-saoluu-$(date +\%s)-$$.com"
+  export TEST_DOMAIN="wptest-saoluu-$(date +%s)-$$.com"
 
   echo "export TEST_DOMAIN=\"$TEST_DOMAIN\"" > "$FILE_DUNG_CHUNG"
   return 0
@@ -66,7 +67,7 @@ setup() {
 
   # Dùng lệnh GREP siêu lành tính thay vì [[ ... =~ ... ]] gây lỗi syntax
   if echo "$BATS_TEST_DESCRIPTION" | grep -q "Integration"; then
-    if [ ! -x "$SCRIPT_GOC" ] \vert{}\vert{} [ ! -x "$SCRIPT_THEM" ] || [ ! -x "$SCRIPT_XOA" ] \vert{}\vert{} [ ! -x "$SCRIPT_CAI_WP" ]; then
+    if [ ! -x "$SCRIPT_GOC" ] || [ ! -x "$SCRIPT_THEM" ] \vert{}\vert{} [ ! -x "$SCRIPT_XOA" ] || [ ! -x "$SCRIPT_CAI_WP" ] \vert{}\vert{} [ ! -x "$SCRIPT_DB" ]; then
       skip "Thiếu script môi trường (Thêm/Xóa/Cài/Sao Lưu). Bỏ qua Integration Test"
     fi
   fi
@@ -314,7 +315,6 @@ EOF
   [ -s "$zip_file" ]
   [ -s "$sql_file" ]
 
-	# Code đúng phải là thế này:
   [ "$(stat -c '%a' "$zip_file")" = "600" ]
   [ "$(stat -c '%a' "$sql_file")" = "600" ]
 
@@ -391,7 +391,137 @@ EOF
      skip "Website $TEST_DOMAIN chưa được tạo thành công."
   fi
 
-	# --- BỔ SUNG: KIỂM TRA VÀ TỰ ĐỘNG CÀI ĐẶT ZSTD NẾU THIẾU ---
+  if ! command -v zstd >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get update -y >/dev/null 2>&1 || true
+      apt-get install -y zstd >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y zstd >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y zstd >/dev/null 2>&1
+    else
+      skip "Không thể tự động cài zstd (không tìm thấy apt/dnf/yum). Bỏ qua test."
+    fi
+  fi
+
+  if ! command -v tar >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y tar >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y tar >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y tar >/dev/null 2>&1
+    else
+      skip "Không thể tự động cài tar (không tìm thấy apt/dnf/yum). Bỏ qua test."
+    fi
+  fi
+
+  local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
+  if [ ! -f "$vhost_conf" ]; then
+    skip "Không tìm thấy vhost conf thật của domain test"
+  fi
+
+  cp "$vhost_conf" "/tmp/vhost_conf.bak"
+  if grep -q '^dinh_dang_nen_ma_nguon=' "$vhost_conf"; then
+    sed -i "s/^dinh_dang_nen_ma_nguon=.*/dinh_dang_nen_ma_nguon='1'/" "$vhost_conf"
+  else
+    echo "dinh_dang_nen_ma_nguon='1'" >> "$vhost_conf"
+  fi
+
+  rm -f -- "$BACKUP_ROOT"/"$TEST_DOMAIN"/* #xóa hết backup hiện tại
+  run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
+
+  in_log_neu_loi 0
+  [ "$status" -eq 0 ]
+
+  local zst_file
+  zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.zst" -print -quit 2>/dev/null)
+  [ -n "$zst_file" ]
+  [ -s "$zst_file" ]
+}
+
+@test "Integration: Test backup nén mã nguồn tar.gz tạo đúng đuôi .tar.gz" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
+  if ! command -v gzip >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y gzip >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y gzip >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y gzip >/dev/null 2>&1
+    else
+      skip "Không thể tự động cài gzip (không tìm thấy apt/dnf/yum). Bỏ qua test."
+    fi
+  fi
+
+  if ! command -v tar >/dev/null 2>&1; then
+    if command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y tar >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf install -y tar >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y tar >/dev/null 2>&1
+    else
+      skip "Không thể tự động cài tar (không tìm thấy apt/dnf/yum). Bỏ qua test."
+    fi
+  fi
+
+  local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
+  if [ ! -f "$vhost_conf" ]; then
+    skip "Không tìm thấy vhost conf thật của domain test"
+  fi
+
+  cp "$vhost_conf" "/tmp/vhost_conf.bak"
+  if grep -q '^dinh_dang_nen_ma_nguon=' "$vhost_conf"; then
+    sed -i "s/^dinh_dang_nen_ma_nguon=.*/dinh_dang_nen_ma_nguon='2'/" "$vhost_conf"
+  else
+    echo "dinh_dang_nen_ma_nguon='2'" >> "$vhost_conf"
+  fi
+
+  rm -f -- "$BACKUP_ROOT"/"$TEST_DOMAIN"/*
+  run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
+
+  in_log_neu_loi 0
+  [ "$status" -eq 0 ]
+
+  local zst_file
+  zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.gz" -print -quit 2>/dev/null)
+  [ -n "$zst_file" ]
+  [ -s "$zst_file" ]
+}
+
+@test "Integration: Test script sao lưu Database độc lập tạo file .sql hợp lệ" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
+  # Dọn dẹp các file DB cũ nếu có để tránh kết quả dương tính giả
+  rm -f -- "$BACKUP_ROOT"/"$TEST_DOMAIN"/*.sql* 2>/dev/null || true
+
+  # Chạy trực tiếp script backup database
+  run bash "$SCRIPT_DB" "$TEST_DOMAIN"
+
+  in_log_neu_loi 0
+  [ "$status" -eq 0 ]
+
+  # Tìm file có đuôi .sql hoặc .sql.gz (tùy cấu hình nén của script DB)
+  local db_file
+  db_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -type f -name "*.sql*" -print -quit 2>/dev/null)
+
+  # Đảm bảo file được tạo ra và có dung lượng lớn hơn 0
+  [ -n "$db_file" ]
+  [ -s "$db_file" ]
+}
+
+
+@test "Integration: Test script sao lưu Database độc lập tạo file .sql.zst hợp lệ" {
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
+     skip "Website $TEST_DOMAIN chưa được tạo thành công."
+  fi
+
   if ! command -v zstd >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
       apt-get update -y >/dev/null 2>&1 || true
@@ -406,49 +536,35 @@ EOF
   fi
 
 
-	if ! command -v tar >/dev/null 2>&1; then
-		if command -v apt-get >/dev/null 2>&1; then
-			apt-get install -y tar >/dev/null 2>&1
-		elif command -v dnf >/dev/null 2>&1; then
-			dnf install -y tar >/dev/null 2>&1
-		elif command -v yum >/dev/null 2>&1; then
-			yum install -y tar >/dev/null 2>&1
-		else
-			skip "Không thể tự động cài tar (không tìm thấy apt/dnf/yum). Bỏ qua test."
-		fi
-	fi
+  # Dọn dẹp các file DB cũ nếu có để tránh kết quả dương tính giả
+  rm -f -- "$BACKUP_ROOT"/"$TEST_DOMAIN"/* 2>/dev/null || true
 
 
-  local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
-  if [ ! -f "$vhost_conf" ]; then
-    skip "Không tìm thấy vhost conf thật của domain test"
-  fi
+	sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
+	echo "sql_gz=2" >>/etc/wptt/.wptt.conf
 
-  cp "$vhost_conf" "/tmp/vhost_conf.bak"
-  if grep -q '^dinh_dang_nen_ma_nguon=' "$vhost_conf"; then
-    sed -i "s/^dinh_dang_nen_ma_nguon=.*/dinh_dang_nen_ma_nguon='1'/" "$vhost_conf"
-  else
-    echo "dinh_dang_nen_ma_nguon='1'" >> "$vhost_conf"
-  fi
-
-  run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
+  # Chạy trực tiếp script backup database
+  run bash "$SCRIPT_DB" "$TEST_DOMAIN"
 
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
 
-  local zst_file
-  zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.zst" -print -quit 2>/dev/null)
-  [ -n "$zst_file" ]
-  [ -s "$zst_file" ]
+  # Tìm file có đuôi .sql hoặc .sql.gz (tùy cấu hình nén của script DB)
+  local db_file
+  db_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -type f -name "*.sql.zst*" -print -quit 2>/dev/null)
+
+  # Đảm bảo file được tạo ra và có dung lượng lớn hơn 0
+  [ -n "$db_file" ]
+  [ -s "$db_file" ]
 }
 
 
-@test "Integration: Test backup nén mã nguồn tar.gz tạo đúng đuôi .tar.gz" {
+
+@test "Integration: Test script sao lưu Database độc lập tạo file .sql.gz hợp lệ" {
   if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
      skip "Website $TEST_DOMAIN chưa được tạo thành công."
   fi
 
-	# --- BỔ SUNG: KIỂM TRA VÀ TỰ ĐỘNG CÀI ĐẶT ZSTD NẾU THIẾU ---
   if ! command -v gzip >/dev/null 2>&1; then
     if command -v apt-get >/dev/null 2>&1; then
       apt-get install -y gzip >/dev/null 2>&1
@@ -462,40 +578,25 @@ EOF
   fi
 
 
-	if ! command -v tar >/dev/null 2>&1; then
-		if command -v apt-get >/dev/null 2>&1; then
-			apt-get install -y tar >/dev/null 2>&1
-		elif command -v dnf >/dev/null 2>&1; then
-			dnf install -y tar >/dev/null 2>&1
-		elif command -v yum >/dev/null 2>&1; then
-			yum install -y tar >/dev/null 2>&1
-		else
-			skip "Không thể tự động cài tar (không tìm thấy apt/dnf/yum). Bỏ qua test."
-		fi
-	fi
+  # Dọn dẹp các file DB cũ nếu có để tránh kết quả dương tính giả
+  rm -f -- "$BACKUP_ROOT"/"$TEST_DOMAIN"/* 2>/dev/null || true
 
 
-  local vhost_conf="/etc/wptt/vhost/.${TEST_DOMAIN}.conf"
-  if [ ! -f "$vhost_conf" ]; then
-    skip "Không tìm thấy vhost conf thật của domain test"
-  fi
+	sed -i '/sql_gz=/d' /etc/wptt/.wptt.conf
+	echo "sql_gz=1" >>/etc/wptt/.wptt.conf
 
-  cp "$vhost_conf" "/tmp/vhost_conf.bak"
-  if grep -q '^dinh_dang_nen_ma_nguon=' "$vhost_conf"; then
-    sed -i "s/^dinh_dang_nen_ma_nguon=.*/dinh_dang_nen_ma_nguon='2'/" "$vhost_conf"
-  else
-    echo "dinh_dang_nen_ma_nguon='2'" >> "$vhost_conf"
-  fi
-
-  run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
+  # Chạy trực tiếp script backup database
+  run bash "$SCRIPT_DB" "$TEST_DOMAIN"
 
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
 
-  local zst_file
-  zst_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.tar.gz" -print -quit 2>/dev/null)
-  [ -n "$zst_file" ]
-  [ -s "$zst_file" ]
-}
+  # Tìm file có đuôi .sql hoặc .sql.gz (tùy cấu hình nén của script DB)
+  local db_file
+  db_file=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -type f -name "*.sql.gz*" -print -quit 2>/dev/null)
 
+  # Đảm bảo file được tạo ra và có dung lượng lớn hơn 0
+  [ -n "$db_file" ]
+  [ -s "$db_file" ]
+}
 
