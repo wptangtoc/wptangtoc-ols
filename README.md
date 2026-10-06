@@ -156,6 +156,13 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols/">https://wpt
 <li>Vân vân và mây mây...</li>
 </ul>
 
+<h3>Hỗ trợ WPTangToc OLS</h3>
+Hỗ trợ phát triển phần mềm WPTangToc OLS. rất biết ơn sự đóng góp của bạn nhằm hỗ trợ sứ mệnh của chúng tôi trong việc xây dựng một phần mềm thiết lập và quản trị webserver miễn phí mà hiệu suất tốt nhất.
+
+Bánh mì trên bàn không phải là miễn phí, mặc dù phần mềm này miễn phí, và sẽ luôn như vậy. Mình thích phát triển phần mềm này và hỗ trợ các bạn, nhưng mình cũng cần bánh mì. Vui lòng tạo điều kiện để tôi tiếp tục nỗ lực vào phần mềm này:
+<a href="https://wptangtoc.com/donate">Tài trợ tặng bánh mì</a>
+
+
 <h3>License: GPLv3</h3>
 
 Đây là phần mềm miễn phí cống hiến cho cộng đồng đặc biệt dành cho cộng đồng Việt Nam; bạn có thể phân phối lại và hoặc sửa đổi nó theo các điều khoản của Giấy phép Công cộng GNU GPLv3 theo tiêu chuẩn quốc tế.
