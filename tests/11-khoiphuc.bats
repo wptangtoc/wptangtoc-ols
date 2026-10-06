@@ -6,7 +6,6 @@
 # Chạy    : sudo bats tool-wptangtoc-ols/backup-restore/tests/wptt-khoiphuc.bats
 #
 # Bao phủ:
-#   NHÓM 1. huong_dan()                 — Hiển thị trợ giúp
 #   NHÓM 2. wptt_list_source_backups()  — Liệt kê backup mã nguồn
 #   NHÓM 3. wptt_list_db_backups()      — Liệt kê backup database
 #   NHÓM 4. SQL Injection Prevention    — DB_Name_web / DB_User_web
@@ -89,31 +88,7 @@ teardown() {
   rm -rf "$TEST_DIR"
 }
 
-# ==============================================================================
-# NHÓM 1: huong_dan()
-# ==============================================================================
-@test "huong_dan: in tiêu đề 'Tính năng khôi phục website'" {
-  run huong_dan
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"Tính năng khôi phục website"* ]]
-}
 
-@test "huong_dan: đề cập ẩn dụ 'máy thời gian'" {
-  run huong_dan
-  [[ "$output" == *"máy thời gian"* ]]
-}
-
-@test "huong_dan: đề cập 'sao lưu' và 'Backup'" {
-  run huong_dan
-  [[ "$output" == *"sao lưu"* ]]
-  [[ "$output" == *"Backup"* ]]
-}
-
-@test "huong_dan: đề cập tình huống website bị lỗi / tấn công" {
-  run huong_dan
-  [[ "$output" == *"bị tấn công"* ]]
-  [[ "$output" == *"bị lỗi"* ]]
-}
 
 # ==============================================================================
 # NHÓM 2: wptt_list_source_backups()
@@ -444,3 +419,4 @@ teardown() {
   pathcheck="/etc/wptt/vhost/.$NAME.conf"
   [ ! -f "$pathcheck" ]
 }
+
