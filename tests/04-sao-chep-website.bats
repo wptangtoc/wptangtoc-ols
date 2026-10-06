@@ -1,21 +1,36 @@
 #!/usr/bin/env bats
 
-setup() {
+setup_file() {
   export CI="true"
   export SCRIPT_GOC="/etc/wptt/wptt-sao-chep-website"
+  export SCRIPT_XOA="/etc/wptt/domain/wptt-xoawebsite"
+  export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
+  
+  # Khai báo sẵn 2 domain để dùng chung cho việc dọn dẹp
+  export DOMAIN_NGUON="nguon-sao-chep.com"
+  export DOMAIN_DICH="dich-sao-chep.com"
+}
+
+setup() {
+  export CI="true"
   export SCRIPT_TEST="/tmp/wptt-sao-chep-website-test.sh"
   
   # Tạo file Test độc lập
   cp "$SCRIPT_GOC" "$SCRIPT_TEST"
+  # Chặn gọi menu chính gây treo CI
+  sed -i 's/exec \/etc\/wptt\/wptt-domain-main.*/exit 0/g' "$SCRIPT_TEST"
   echo "exit 0" >> "$SCRIPT_TEST"
   chmod +x "$SCRIPT_TEST" || true
 }
 
 teardown() {
   rm -f "$SCRIPT_TEST" 2>/dev/null || true
-  # Dọn dẹp website mồi nếu có
-  bash /etc/wptt/domain/wptt-xoa-website "nguon-sao-chep.com" >/dev/null 2>&1 || true
-  bash /etc/wptt/domain/wptt-xoa-website "dich-sao-chep.com" >/dev/null 2>&1 || true
+}
+
+teardown_file() {
+  # Quét sạch cả 2 website và Database bằng bạo lực (bơm sẵn 'y')
+  echo -e "y\ny" | bash "$SCRIPT_XOA" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
+  echo -e "y\ny" | bash "$SCRIPT_XOA" "$DOMAIN_DICH" >/dev/null 2>&1 || true
 }
 
 # --- HÀM GỠ LỖI ---
@@ -41,46 +56,91 @@ in_log_neu_loi() {
 }
 
 @test "Integration: Chặn nhân bản nếu Tên miền đích sai định dạng" {
-  # FIX: Phải tạo mồi website Nguồn tồn tại thật, thì script mới chịu check tiếp tên đích!
-  export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
-  bash "$SCRIPT_THEM" "nguon-sao-chep.com" >/dev/null 2>&1 || true
+  # FIX: Phải tạo mồi website Nguồn tồn tại thật
+  bash "$SCRIPT_THEM" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
 
-  run bash "$SCRIPT_TEST" "nguon-sao-chep.com" "dich-sai-dinh-dang"
+  run bash "$SCRIPT_TEST" "$DOMAIN_NGUON" "dich-sai-dinh-dang"
   
   in_log_neu_loi 1
   [ "$status" -eq 1 ]
   [[ "$output" =~ "không đúng định dạng" || "$output" =~ "sai cấu trúc" ]]
+  
+  # Dọn mồi
+  echo -e "y\ny" | bash "$SCRIPT_XOA" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
 }
 
 # =================================================================
-# KIỂM THỬ THỰC CHIẾN SAO CHÉP
+# KIỂM THỬ THỰC CHIẾN SAO CHÉP (CÀI WP -> CLONE -> CHECK)
 # =================================================================
 
-@test "Integration: NHÂN BẢN THÀNH CÔNG từ Website Nguồn sang Website Đích" {
-  local DOMAIN_NGUON="nguon-sao-chep.com"
-  local DOMAIN_DICH="dich-sao-chep.com"
-
-  # 1. FIXTURE: Tự tạo website mồi độc lập, không phụ thuộc vào file 03
-  export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
+@test "Integration: NHÂN BẢN THÀNH CÔNG WordPress thật từ Nguồn sang Đích" {
+  # 1. FIXTURE (TẠO WEBSITE NGUỒN VÀ CÀI WP THẬT)
   bash "$SCRIPT_THEM" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
 
-  # Đổ một ít file "rác" vào thư mục Nguồn để kiểm chứng khả năng copy
-  echo "Day la file wp-config test" > "/usr/local/lsws/$DOMAIN_NGUON/html/wp-config.php"
+  local script_wp_test="/tmp/wptt-install-wp-waf.sh"
+  cp /etc/wptt/wptt-install-wordpress2 "$script_wp_test"
+  sed -i 's/exec \/etc\/wptt\/wptt-wordpress-main.*/exit 0/g' "$script_wp_test"
+  sed -i 's/exec \/usr\/bin\/wptangtoc.*/exit 0/g' "$script_wp_test"
+  
+  # Bơm data để cài WP tự động: Site Title -> User -> Pass -> Email
+  local inputs="WP Nguon Test\nadmin\nPassSieuKho123!\nadmin@${DOMAIN_NGUON}\n"
+  echo -e "$inputs" | bash "$script_wp_test" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
+  rm -f "$script_wp_test"
 
-  # 2. HÀNH ĐỘNG
-  run bash "$SCRIPT_TEST" "$DOMAIN_NGUON" "$DOMAIN_DICH"
+  # Đảm bảo website nguồn đã có wp-config.php (Cài đặt thành công)
+  if [ ! -f "/usr/local/lsws/$DOMAIN_NGUON/html/wp-config.php" ]; then
+      echo -e "\n[LỖI FIXTURE] Không thể cài đặt WordPress lên site Nguồn!" >&3
+      false
+  fi
+
+  # 2. HÀNH ĐỘNG (SAO CHÉP)
+  # Bơm tự động phím Enter hoặc Yes đề phòng script sao chép có hỏi xác nhận
+  run bash -c "echo -e 'y\ny\n' | bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\""
 
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   
-  # 3. KIỂM CHỨNG
-  # Kiểm tra website đích đã được tạo
+  # 3. KIỂM CHỨNG TỆP TIN & VHOST
   [ -d "/usr/local/lsws/$DOMAIN_DICH/html" ]
-  
-  # Kiểm tra file đã được copy sang
   [ -f "/usr/local/lsws/$DOMAIN_DICH/html/wp-config.php" ]
+  run grep "$DOMAIN_DICH" /usr/local/lsws/conf/httpd_config.conf
+  [ "$status" -eq 0 ]
+
+  # Cú đấm thép: Ép OLS nạp cấu hình (Bypass systemd)
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  sleep 4 
+  # =================================================================
+  # CHỐT CHẶN ENTERPRISE 1: KIỂM TRA CÚ PHÁP OLS
+  # =================================================================
+  # Xem quá trình nhân bản Vhost có đẻ ra rác cú pháp hay không
+  run /usr/local/lsws/bin/openlitespeed -t
   
-  # Dọn dẹp nhanh
-  rm -rf "/usr/local/lsws/$DOMAIN_NGUON"
-  rm -rf "/usr/local/lsws/$DOMAIN_DICH"
+  if [ "$status" -ne 0 ]; then
+      echo -e "\n=== [LỖI CRITICAL] SCRIPT SAO CHÉP TẠO RÁC CÚ PHÁP OLS ===" >&3
+      echo "$output" >&3
+  fi
+  
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Syntax OK" || "$output" =~ "ok" || -z "$output" ]]
+
+  # =================================================================
+  # CHỐT CHẶN ENTERPRISE 2: CURL E2E ĐỂ CHỨNG MINH DB & PHP CHẠY
+  # =================================================================
+  
+
+  # A. Curl vào tên miền Nguồn (Đảm bảo bản gốc không bị phá hỏng sau khi clone)
+  local CODE_NGUON=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
+  if ! [[ "$CODE_NGUON" =~ ^[23][0-9][0-9]$ ]]; then
+      echo -e "\n[LỖI NGUỒN] Website gốc bị lỗi sau khi sao chép. Mã HTTP: $CODE_NGUON" >&3
+      false
+  fi
+
+  # B. Curl vào tên miền Đích (Chứng minh file php + DB connect thành công)
+  local CODE_DICH=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_DICH" http://127.0.0.1/)
+  if ! [[ "$CODE_DICH" =~ ^[23][0-9][0-9]$ ]]; then
+      echo -e "\n[LỖI ĐÍCH] Bản sao chép thất bại (Có thể lỗi DB hoặc cấu hình). Mã HTTP: $CODE_DICH" >&3
+      false
+  fi
+
+  echo "[PASSED] Cả 2 Website (Nguồn: $CODE_NGUON, Đích: $CODE_DICH) đều phản hồi 2xx/3xx!" >&3
 }

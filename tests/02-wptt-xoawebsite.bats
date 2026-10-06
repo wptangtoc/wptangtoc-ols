@@ -18,7 +18,6 @@ in_log_neu_loi() {
   fi
 }
 
-
 # =================================================================
 # NHÓM 1: KIỂM THỬ BỘ LỌC ĐẦU VÀO & BẢO VỆ (VALIDATION)
 # =================================================================
@@ -27,9 +26,9 @@ in_log_neu_loi() {
   # Test với domain gõ linh tinh không có dấu chấm
   run bash "$SCRIPT_XOA" "khong-co-dau-cham"
 
-	in_log_neu_loi 1
-	[ "$status" -eq 1 ]
-	[[ "$output" =~ "không tồn tại" ]]
+  in_log_neu_loi 1
+  [ "$status" -eq 1 ]
+  [[ "$output" =~ "không tồn tại" ]]
 
   # Test với domain gõ đúng chuẩn nhưng chưa được cài đặt
   run bash "$SCRIPT_XOA" "website-khong-ton-tai.com"
@@ -44,31 +43,58 @@ in_log_neu_loi() {
 @test "Integration: XÓA SẠCH SẼ toàn bộ dữ liệu của một Website" {
   local TEST_DOMAIN="website-demo.com"
 
-  # 1. TIỀN ĐIỀU KIỆN (PREPARE): Thêm mới website để có dữ liệu mà xóa
-  run bash "$SCRIPT_THEM" "$TEST_DOMAIN"
-	in_log_neu_loi 0
+  # 1. TIỀN ĐIỀU KIỆN (PREPARE): Thêm mới website mồi
+  bash "$SCRIPT_THEM" "$TEST_DOMAIN" >/dev/null 2>&1 || true
+  
+  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN" ]; then
+      echo "[LỖI FIXTURE] Không thể tạo website mồi!" >&3
+      false
+  fi
+
+  # 2. HÀNH ĐỘNG (ACTION): Gọi kịch bản tiêu diệt (Ép phím 'y' qua luồng)
+  run bash -c "echo -e 'y\ny\n' | bash $SCRIPT_XOA \"$TEST_DOMAIN\""
+  
+  in_log_neu_loi 0
   [ "$status" -eq 0 ]
-  # Đảm bảo "nạn nhân" đã thực sự được tạo ra trên ổ cứng
-  [ -d "/usr/local/lsws/$TEST_DOMAIN" ] 
 
-  # 2. HÀNH ĐỘNG (ACTION): Gọi kịch bản tiêu diệt
-  run bash "$SCRIPT_XOA" "$TEST_DOMAIN"
-	in_log_neu_loi 0
-
-  [ "$status" -eq 0 ]
-
-  # 3. KIỂM CHỨNG (ASSERT 1): Thư mục Home của user PHẢI BỊ XÓA (Toàn bộ source code/HTML)
-  # [ ! -d ... ] có nghĩa là "Thư mục này KHÔNG CÒN tồn tại"
+  # 3. KIỂM CHỨNG (ASSERT): Thư mục và File cấu hình phải bay màu
   [ ! -d "/usr/local/lsws/$TEST_DOMAIN" ]
-
-  # 4. KIỂM CHỨNG (ASSERT 2): File cấu hình Vhost PHẢI BỊ XÓA
   [ ! -f "/usr/local/lsws/conf/vhosts/$TEST_DOMAIN/$TEST_DOMAIN.conf" ]
-
-  # 5. KIỂM CHỨNG (ASSERT 3): Thư mục chứa Vhost PHẢI BỊ XÓA
   [ ! -d "/usr/local/lsws/conf/vhosts/$TEST_DOMAIN" ]
 
-  # 6. KIỂM CHỨNG (ASSERT 4): Domain PHẢI BỊ GỠ KHỎI file httpd_config.conf chính của OLS
   run grep "$TEST_DOMAIN" /usr/local/lsws/conf/httpd_config.conf
-  # Trạng thái grep trả về 1 khi KHÔNG tìm thấy kết quả (chứng tỏ đã xóa sạch)
   [ "$status" -eq 1 ]
+
+  # Kích hoạt quá trình xóa trên RAM (Bypass systemctl)
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  sleep 3
+  # =================================================================
+  # CHỐT CHẶN ENTERPRISE 1: KIỂM TRA CÚ PHÁP OLS
+  # =================================================================
+  # Đảm bảo quá trình xóa không cắt lẹm vào ngoặc } của cấu hình khác
+  run /usr/local/lsws/bin/openlitespeed -t
+  
+  if [ "$status" -ne 0 ]; then
+      echo -e "\n=== [LỖI CRITICAL] SCRIPT XÓA LÀM HỎNG CÚ PHÁP OLS ===" >&3
+      echo "$output" >&3
+  fi
+  
+  [ "$status" -eq 0 ]
+  [[ "$output" =~ "Syntax OK" || "$output" =~ "ok" || -z "$output" ]]
+
+  # =================================================================
+  # CHỐT CHẶN ENTERPRISE 2: CURL E2E (ĐẢM BẢO WEBSITE ĐÃ CHẾT THẬT)
+  # =================================================================
+  
+
+  # Bắn Curl vào Domain vừa xóa
+  local HTTP_CODE=$(curl -m 5 -sS -o /dev/null -w "%{http_code}" -H "Host: $TEST_DOMAIN" http://127.0.0.1/)
+  
+  # Đánh giá: Vì Vhost đã bị gỡ, OpenLiteSpeed KHÔNG ĐƯỢC PHÉP trả về mã 2xx hoặc 3xx
+  if [[ "$HTTP_CODE" =~ ^[23][0-9][0-9]$ ]]; then
+      echo -e "\n[LỖI E2E] Xóa ảo! Website vẫn còn sống nhăn răng (Mã HTTP: $HTTP_CODE)" >&3
+      false
+  fi
+
+  echo "[PASSED] Website $TEST_DOMAIN đã bị tiêu diệt hoàn toàn khỏi hệ thống." >&3
 }
