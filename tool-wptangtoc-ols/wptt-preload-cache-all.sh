@@ -316,7 +316,7 @@ function crawlreq_mac_dinh() {
     fi
     case ${CHECKMATCH} in
         'CreatedSet-CookieSet-CookieSet-Cookie'|[Xx]-[Ll]ite[Ss]peed-[Cc]ache:\ miss|'X-LSADC-Cache: miss'|[Xx]-[Qq][Cc]-[Cc]ache:\ miss)
-            echoY 'Caching'
+            echoY 'Đang tiến hành tạo cache'
             cachecount 'miss'
             protect_count 0
         ;;
