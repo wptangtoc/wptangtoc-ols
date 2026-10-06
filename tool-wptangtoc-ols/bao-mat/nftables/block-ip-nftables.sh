@@ -23,12 +23,11 @@ fi
 # Nếu CẢ HAI đều bị lỗi (không khớp cái nào) -> Báo sai định dạng
 if [[ "$error_block_ipv4" == '1' && "$error_block_ipv6" == '1' ]]; then
   echo "Bạn không nhập đúng định dạng IP"
-  /etc/wptt/wptt-khoa-ip-main 1
-  return 2>/dev/null || exit 0
+  return 1 2>/dev/null || exit 1
 fi
 
 # Chỗ này em sửa lại dấu ngoặc nhọn để không bị lỗi cú pháp nftables
-nft add element ip blackblock blackaction "{ $ip }" 2>/dev/null
+# nft add element ip blackblock blackaction "{ $ip }" 2>/dev/null
 
 if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
@@ -36,4 +35,22 @@ else
   path_nftables_config="/etc/sysconfig/nftables.conf"
 fi
 
-nft list ruleset > "$path_nftables_config"
+# nft list ruleset > "$path_nftables_config"
+
+
+if ! nft add element ip blackblock blackaction "{ $ip }" 2>/etc/wptt/tmp/nft_err.log; then
+  echo "Lỗi: Không thể thêm IP vào blacklist (xem /etc/wptt/tmp/nft_err.log)"
+  cat /etc/wptt/tmp/nft_err.log
+  return 1 2>/dev/null || exit 1
+fi
+
+tmp_conf=$(mktemp -p "/etc/wptt/tmp" wptt_nftables_XXXXXX.txt)
+if nft list ruleset > "$tmp_conf" && [[ -s "$tmp_conf" ]]; then
+  mv -f "$tmp_conf" "$path_nftables_config"
+  chmod 600 "$path_nftables_config"
+else
+  echo "Lỗi: Không thể xuất ruleset — GIỮ NGUYÊN file cấu hình cũ để tránh mất firewall khi reboot!"
+  rm -f "$tmp_conf"
+fi
+
+return 0
