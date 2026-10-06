@@ -20,5 +20,5 @@ WPTangToc OLS có một cộng đồng rất sôi động. Nếu bạn gặp kh�
 
 ## 🐛 2. Báo cáo Lỗi (Bug Reports)
 
-Nếu bạn phát hiện lỗi hệ thống, vui lòng thực hiện các bước sau trước khi mở Issue mới trong GitHub hoặc nhắn tin trực tiếp cho Tác giả:
+Nếu bạn phát hiện lỗi hệ thống, vui lòng thực hiện các bước sau trước khi mở Issue mới trong GitHub hoặc nhắn tin trực tiếp cho Tác giả Gia Tuấn
 
