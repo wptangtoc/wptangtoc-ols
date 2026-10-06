@@ -22,19 +22,23 @@ function huong_dan() {
 EOF
 }
 
+
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${bao_mat} ➜ Bật / Tắt Tường lửa ModSecurity (WAF)${C_RESET}"
+center_text "${C_YELLOW}${bao_mat:-Bảo mật} ➜ Bật / Tắt Tường lửa ModSecurity (WAF)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 config_file="/usr/local/lsws/conf/httpd_config.conf"
 path_owasp="/usr/local/lsws/modsec/owasp"
+
+mkdir -p /usr/local/lsws/conf/
+touch "$config_file"
 
 # ==============================================================================
 # KIỂM TRA TRẠNG THÁI HIỆN TẠI
@@ -47,7 +51,7 @@ fi
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 if [[ $is_modsec_active -eq 1 ]]; then
   left_text "Trạng thái WAF : ${C_GREEN}ĐANG BẬT (Active)${C_RESET}" 2
-  left_text "Bộ quy tắc     : OWASP Core Rule Set (CRS 3.0)" 2
+  left_text "Bộ quy tắc     : OWASP Core Rule Set (v4.30.0 - Optimized for PHP/Linux)" 2
 else
   left_text "Trạng thái WAF : ${C_YELLOW}ĐANG TẮT (Inactive)${C_RESET}" 2
 fi
@@ -57,68 +61,74 @@ left_text "XSS, và hàng loạt rủi ro bảo mật khác trên toàn bộ Ser
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# NHÁNH 1: ĐANG TẮT -> HỎI ĐỂ BẬT LÊN
+# NHÁNH 1: BẬT WAF (ENTERPRISE ATOMIC DEPLOYMENT)
 # ==============================================================================
 if [[ $is_modsec_active -eq 0 ]]; then
   if wptt_xac_nhan "Bạn có muốn KÍCH HOẠT Tường lửa ModSecurity không?" "LƯU Ý: ModSecurity kiểm tra sâu từng gói tin, do đó nó sẽ" "tiêu thụ thêm một phần tài nguyên CPU và làm web chậm hơn đôi chút." "Đồng ý BẬT WAF" "Hủy thao tác"; then
     echo ""
 
-    _runing "Đang dọn dẹp môi trường và chuẩn bị cấu hình..."
+    _runing "Đang tải và xác thực OWASP Core Rule Set v4.30.0..."
+    TMP_DIR=$(mktemp -d /etc/wptt/tmp/wptt_waf_XXXXXX)
+    cd "$TMP_DIR" || exit 1
+
+    if ! wget -qO master.zip --timeout=15 --tries=3 "https://github.com/coreruleset/coreruleset/archive/v4.30.0/master.zip"; then
+       _runloi "Tải xuống thất bại! Vui lòng kiểm tra lại kết nối mạng."
+       rm -rf "$TMP_DIR"
+       [[ -z "$BATS_VERSION" && "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+       exit 1
+    fi
+    
+    if ! unzip -tq master.zip >/dev/null 2>&1; then
+       _runloi "File mã nguồn WAF bị hỏng. Hủy tiến trình!"
+       rm -rf "$TMP_DIR"
+       exit 1
+    fi
+    _rundone "Tải xuống và xác thực OWASP thành công"
+
+    _runing "Đang thiết lập và nạp quy tắc bảo mật động (Dynamic Include)..."
+    unzip -oq master.zip
+    
+    extracted_dir=$(find . -maxdepth 1 -type d -name "coreruleset*" | head -n 1)
+    mv "$extracted_dir" crs30
+    rm -f master.zip
+
+    mv crs30/crs-setup.conf.example crs30/crs-setup.conf
+    mv crs30/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example crs30/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
+    mv crs30/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example crs30/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+
+    # ==========================================================================
+    # [TỐI ƯU HIỆU NĂNG] Lọc bỏ các quy tắc không thuộc hệ sinh thái Linux + PHP + WordPress
+    # ==========================================================================
+    rm -f crs30/rules/*JAVA*.conf 2>/dev/null
+    rm -f crs30/rules/*NODEJS*.conf 2>/dev/null
+    rm -f crs30/rules/*IIS*.conf 2>/dev/null
+    rm -f crs30/rules/*WINDOWS*.conf 2>/dev/null
+    rm -f crs30/rules/*RUBY*.conf 2>/dev/null
+    rm -f crs30/rules/*PYTHON*.conf 2>/dev/null
+    
+    master_conf="crs30/owasp-master.conf"
+    echo "include /usr/local/lsws/modsec/owasp/crs30/crs-setup.conf" > "$master_conf"
+    
+    for rule_file in crs30/rules/*.conf; do
+        # Phòng hờ trường hợp thư mục rỗng, Bash sẽ trả về chuỗi literal '*.conf'
+        [[ -e "$rule_file" ]] || continue
+        
+        # Lấy tên file (Dùng tính năng xử lý chuỗi tích hợp của Bash thay vì gọi lệnh basename bên ngoài để tối ưu tốc độ)
+        filename="${rule_file##*/}"
+        
+        echo "include /usr/local/lsws/modsec/owasp/crs30/rules/$filename" >> "$master_conf"
+    done
+    
     rm -rf "${path_owasp:?}"
     mkdir -p "$path_owasp"
-    _rundone "Môi trường cấu hình đã sẵn sàng"
-
-    _runing "Đang tải xuống OWASP Core Rule Set từ Github..."
-    cd "$path_owasp" || exit 1
-    wget -q https://github.com/coreruleset/coreruleset/archive/v4.12.0/master.zip
-
-    if [[ ! -f "$path_owasp/master.zip" ]]; then
-      _runloi "Tải xuống thất bại! Vui lòng kiểm tra lại kết nối mạng."
-      [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-      exit 1
-    fi
-    _rundone "Tải xuống OWASP thành công"
-
-    _runing "Đang giải nén và thiết lập Rule Set (Quy tắc bảo mật)..."
-    unzip -oq "$path_owasp/master.zip"
-    mv "$path_owasp/coreruleset-4.12.0" "$path_owasp/crs30"
-    rm -f "${path_owasp:?}/master.zip"
-
-    path30="$path_owasp/crs30"
-    mv "$path30/crs-setup.conf.example" "$path30/crs-setup.conf"
-
-    path1="$path30/rules"
-    mv "$path1/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example" "$path1/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf"
-    mv "$path1/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example" "$path1/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf"
-
-    cat <<EOF >"$path30/owasp-master.conf"
-include /usr/local/lsws/modsec/owasp/crs30/crs-setup.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-901-INITIALIZATION.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-905-COMMON-EXCEPTIONS.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-911-METHOD-ENFORCEMENT.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-913-SCANNER-DETECTION.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-920-PROTOCOL-ENFORCEMENT.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-921-PROTOCOL-ATTACK.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-922-MULTIPART-ATTACK.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-930-APPLICATION-ATTACK-LFI.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-931-APPLICATION-ATTACK-RFI.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-932-APPLICATION-ATTACK-RCE.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-933-APPLICATION-ATTACK-PHP.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-941-APPLICATION-ATTACK-XSS.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-942-APPLICATION-ATTACK-SQLI.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/REQUEST-949-BLOCKING-EVALUATION.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/RESPONSE-950-DATA-LEAKAGES.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/RESPONSE-951-DATA-LEAKAGES-SQL.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/RESPONSE-953-DATA-LEAKAGES-PHP.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/RESPONSE-959-BLOCKING-EVALUATION.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/RESPONSE-980-CORRELATION.conf
-include /usr/local/lsws/modsec/owasp/crs30/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
-EOF
+    mv crs30 "$path_owasp/"
+		cd / || exit 1
+    rm -rf "${TMP_DIR:?}"
     _rundone "Thiết lập Core Rule Set hoàn tất"
 
     _runing "Đang tích hợp ModSecurity vào OpenLiteSpeed..."
+    sed -i '/^[[:space:]]*module mod_security/,/^[[:space:]]*}/d' "$config_file" 2>/dev/null
+    
     cat <<EOF >>"$config_file"
 
 module mod_security {
@@ -130,15 +140,13 @@ module mod_security {
 }
 EOF
     wptt_smart_reload_lsws >/dev/null 2>&1
-    wptt_logs "INFO" "Kích hoạt ModSecurity "
+    wptt_logs "INFO" "Kích hoạt ModSecurity"
     _rundone "Cập nhật Server Core thành công"
 
-    # BẢNG BÁO CÁO BẬT
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT TƯỜNG LỬA WAF${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Toàn bộ máy chủ của bạn hiện đã được bảo vệ bởi ModSecurity" 2
-    left_text "cùng hệ thống quy tắc OWASP Core Rule Set chuyên nghiệp." 2
+    left_text "Máy chủ đã được bảo vệ bởi tập luật tự động nhận diện mới nhất." 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
   else
@@ -146,25 +154,23 @@ EOF
   fi
 
 # ==============================================================================
-# NHÁNH 2: ĐANG BẬT -> HỎI ĐỂ TẮT ĐI
+# NHÁNH 2: TẮT WAF
 # ==============================================================================
 else
-  if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn TẮT Tường lửa ModSecurity không?" "Việc tắt WAF sẽ giúp giải phóng tài nguyên và tăng tốc độ xử lý," "nhưng máy chủ sẽ không còn được bảo vệ chống lại các tấn công Web." "Đồng ý TẮT WAF" "Hủy thao tác"; then
+  if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn TẮT Tường lửa ModSecurity không?" "Việc tắt WAF sẽ giải phóng RAM & CPU, tăng tốc xử lý nhưng" "máy chủ sẽ mất lớp khiên chống SQLi/XSS ở tầng ứng dụng." "Đồng ý TẮT WAF" "Hủy thao tác"; then
     echo ""
 
-    _runing "dọn dẹp thư mục cấu hình Rule Set..."
+    _runing "Đang dọn dẹp thư mục cấu hình Rule Set..."
     rm -rf "${path_owasp:?}"
-    _rundone "dọn dẹp thư mục cấu hình Rule Set..."
+    _rundone "Dọn dẹp thư mục cấu hình Rule Set hoàn tất"
 
-    _runing "gỡ bỏ cấu hình ModSecurity khỏi OpenLiteSpeed..."
-    # SÁT CHIÊU SED: Xóa theo vùng (Range Address) an toàn 100%
+    _runing "Đang gỡ bỏ cấu hình ModSecurity khỏi OpenLiteSpeed..."
     sed -i '/^[[:space:]]*module mod_security/,/^[[:space:]]*}/d' "$config_file"
 
     wptt_smart_reload_lsws >/dev/null 2>&1
-    wptt_logs "INFO" "Tắt ModSecurity "
-    _rundone "gỡ bỏ cấu hình ModSecurity khỏi OpenLiteSpeed..."
+    wptt_logs "INFO" "Tắt ModSecurity"
+    _rundone "Gỡ bỏ cấu hình ModSecurity khỏi OpenLiteSpeed thành công"
 
-    # BẢNG BÁO CÁO TẮT
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ TƯỜNG LỬA WAF${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -177,4 +183,5 @@ else
   fi
 fi
 
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+[[ -z "$BATS_VERSION" && "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+exit 0
