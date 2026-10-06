@@ -91,11 +91,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.0.5
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cao chất lượng và độ ổn định:** Hoàn thiện bộ kịch bản kiểm thử tự động, giúp kiểm soát chất lượng mã nguồn chặt chẽ hơn và đảm bảo các tiến trình hệ thống luôn vận hành ổn định, chính xác.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
