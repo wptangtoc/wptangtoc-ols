@@ -35,7 +35,7 @@ Oracle Linux Server 9
 </li>
 
 <li>
-Ubuntu 24.04
+Ubuntu 22.04
 </li>
 <li>
 Ubuntu 24.04
