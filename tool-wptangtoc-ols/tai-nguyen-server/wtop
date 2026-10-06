@@ -34,12 +34,32 @@ export LC_ALL=C
 
 START_ARG="${1:-}"
 
+# ==============================================================================
+# TẠO FILE CẤU HÌNH TẠM CHO MARIADB (BẢO MẬT & TỰ HỦY)
+# ==============================================================================
+TEMP_CNF_root=$(mktemp)
+chmod 600 "$TEMP_CNF_root"
+cat >"$TEMP_CNF_root" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+host=localhost
+max_allowed_packet=1G
+default-character-set=utf8mb4
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet=1G
+single-transaction
+EOF
+
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}QUẢN LÝ TÀI NGUYÊN ➜ Trình Giám Sát Hệ Thống Thời Gian Thực (WPTT-TOP)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# BƯỚC 1: KHỞI TẠO TĨNH
+# KHỞI TẠO TĨNH
 # ==============================================================================
 SYS_HZ=$(getconf CLK_TCK 2>/dev/null || echo 100)
 CPU_CORES=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
@@ -66,6 +86,7 @@ while IFS=: read -r conf_file u_name; do
 done < <(grep -H -oP "^[ \t]*User_name_vhost=['\"]?\K[^'\"]+" /etc/wptt/vhost/.*.conf /etc/wptt/vhost/*.conf 2>/dev/null)
 
 cleanup() {
+    rm -f "$TEMP_CNF_root"
     tput rmcup
     tput cnorm
     echo -e "\n${C_GREEN}Đã thoát WPTangToc Dashboard!${C_RESET}\n"
@@ -74,7 +95,7 @@ cleanup() {
     fi
     exit 0
 }
-trap cleanup SIGINT SIGTERM
+trap cleanup SIGINT SIGTERM EXIT
 
 draw_htop_bar() {
     local percent=$1; local max_len=$2; local color_code=$3
@@ -113,15 +134,13 @@ DELAY_SEC=3
 LIVE_INDICATOR="●"
 
 # ==============================================================================
-# BƯỚC 2: VÒNG LẶP CHÍNH (CHU KỲ 3 GIÂY)
+# VÒNG LẶP CHÍNH
 # ==============================================================================
 while true; do
     BUFFER=""
     
-    # Đảo trạng thái nhấp nháy cho đồng hồ
     [[ "$LIVE_INDICATOR" == "●" ]] && LIVE_INDICATOR="○" || LIVE_INDICATOR="●"
     
-    # 1. Uptime và Load Average
     read -r up_seconds _ < /proc/uptime
     up_seconds=${up_seconds%%.*}
     up_days=$((up_seconds / 86400)); up_rem=$((up_seconds % 86400))
@@ -140,13 +159,11 @@ while true; do
     users_logged=${#logged_array[@]}
     printf -v current_time "%(%H:%M:%S)T" -1 2>/dev/null || current_time=$(date +"%H:%M:%S")
 
-    # 2. Đếm Tasks
     read -r tasks_total tasks_running tasks_sleeping tasks_stopped tasks_zombie <<< $(ps -A -o state= 2>/dev/null | awk '{
         tot++; s=$1;
         if(s=="R") { r++; } else if(s=="S"||s=="D"||s=="I") { sl++; } else if(s=="T") { t++; } else if(s=="Z") { z++; }
     } END { print tot+0, r+0, sl+0, t+0, z+0; }' 2>/dev/null)
 
-    # 3. Tính toán CPU System
     while read -r name u s n i w x y z _; do
         if [[ "$name" == "cpu" ]]; then
             u2=$u; s2=$s; n2=$n; i2=$i; w2=$w; x2=$x; y2=$y; z2=$z
@@ -160,7 +177,6 @@ while true; do
     IFS='|' read -r c_us c_sy c_ni c_id c_wa c_hi c_si c_st c_tot <<< "$cpu_pcts"
     u1=$u2; s1=$s2; n1=$n2; i1=$i2; w1=$w2; x1=$x2; y1=$y2; z1=$z2
 
-    # 4. Đọc RAM
     while read -r name value _; do
         case $name in
             MemTotal:) RAM_TOT=$((value/1024)) ;;
@@ -179,7 +195,6 @@ while true; do
     RAM_PCT=$(( RAM_USE * 100 / RAM_TOT ))
     SWAP_PCT=$(( SWAP_USE * 100 / SWAP_TOT ))
 
-    # 5. QUÉT WEB STACK (Cốt lõi cực kỳ ổn định)
     read -r DB_CPU DB_RAM OC_CPU OC_RAM OLS_CPU OLS_RAM F2B_CPU F2B_RAM <<< $(ps -A -o comm,%cpu,rsz --no-headers 2>/dev/null | awk '
     {
         cmd=$1; cpu=$2; ram=$3
@@ -192,13 +207,11 @@ while true; do
         printf "%.1f %.0f %.1f %.0f %.1f %.0f %.1f %.0f\n", db_c+0, db_r/1024, oc_c+0, oc_r/1024, ols_c+0, ols_r/1024, f2b_c+0, f2b_r/1024
     }')
 
-    # Fallback dự phòng UI
     [[ -z "$DB_CPU" ]] && DB_CPU="0.0"; [[ -z "$DB_RAM" ]] && DB_RAM="0"
     [[ -z "$OC_CPU" ]] && OC_CPU="0.0"; [[ -z "$OC_RAM" ]] && OC_RAM="0"
     [[ -z "$OLS_CPU" ]] && OLS_CPU="0.0"; [[ -z "$OLS_RAM" ]] && OLS_RAM="0"
     [[ -z "$F2B_CPU" ]] && F2B_CPU="0.0"; [[ -z "$F2B_RAM" ]] && F2B_RAM="0"
 
-    # 6. Đọc Network
     rx_now=0; tx_now=0
     while read -r iface rx _ _ _ _ _ _ _ tx _; do
         [[ "$iface" == *"Inter-"* || "$iface" == *"face"* || "$iface" == *"lo:"* ]] && continue
@@ -211,9 +224,8 @@ while true; do
     net_in_color="${C_RESET}"; [[ "$rx_rate" -gt 5120 ]] && net_in_color="${C_RED}"
     net_out_color="${C_RESET}"; [[ "$tx_rate" -gt 5120 ]] && net_out_color="${C_RED}"
 
-    # --- RENDER HEADER TỐI ƯU GIAO DIỆN ---
+    # --- RENDER HEADER ---
     BAR_LEN=20
-    # Đã sửa wptt_top thành wptt-top và đưa bóng nháy lên cạnh đồng hồ
     BUFFER+="wptt-top - $current_time ${C_CYAN}${LIVE_INDICATOR}${C_RESET} | Uptime: ${C_CYAN}$uptime_info${C_RESET} | Cores: ${C_CYAN}$CPU_CORES${C_RESET} | Users: $users_logged | Load: $load_avg${C_CLEAR_LINE}\n"
     
     if [[ $SHOW_CMD -eq 0 ]]; then
@@ -243,7 +255,7 @@ while true; do
     BUFFER+="\033[7m"
     
     # -------------------------------------------------------------------------
-    # RENDER BẢNG WEBSITE MATRIX
+    # RENDER BẢNG
     # -------------------------------------------------------------------------
     if [[ $SHOW_CMD -eq 0 ]]; then
         PS_DATA=$(ps -ww -eo pid,uid,rsz,s,comm,cmd --no-headers 2>/dev/null | grep -E -i "(lsphp|lshttpd|openlitespeed|litespeed)" | awk -v mode=0 -v sys_hz="$SYS_HZ" -v delay="$DELAY_SEC" -v known_uids="$KNOWN_UIDS" '
@@ -452,13 +464,15 @@ while true; do
         fi
 
     elif [[ $SHOW_CMD -eq 2 ]]; then
-        CMD_WIDTH=$((TERM_COLS - 55))
+        # Cập nhật CMD_WIDTH để bù trừ không gian nới rộng DB_USER và DB_NAME
+        CMD_WIDTH=$((TERM_COLS - 75))
         [[ $CMD_WIDTH -lt 20 ]] && CMD_WIDTH=20
         
-        printf -v row_header " %-8s | %-16s | %-12s | %-7s | %-s " "QUERY_ID" "DB_USER" "DB_NAME" "TIME(s)" "INFO (COMMAND / QUERY)"
+        # Nới rộng DB_USER lên 26 ký tự, DB_NAME lên 22 ký tự
+        printf -v row_header " %-8s | %-26s | %-22s | %-7s | %-s " "QUERY_ID" "DB_USER" "DB_NAME" "TIME(s)" "INFO (COMMAND / QUERY)"
         BUFFER+="${row_header}\033[0m${C_CLEAR_LINE}\n"
 
-        DB_DATA=$(mysql -e "SHOW FULL PROCESSLIST" 2>/dev/null | awk -F'\t' 'NR>1 {
+        DB_DATA=$(mariadb --defaults-extra-file="$TEMP_CNF_root" -e "SHOW FULL PROCESSLIST" 2>/dev/null | awk -F'\t' 'NR>1 {
             id=$1; user=$2; host=$3; db=$4; cmd=$5; time=$6; state=$7; info=$8;
             
             if(info == "SHOW FULL PROCESSLIST") { next; }
@@ -475,8 +489,9 @@ while true; do
             while IFS='|' read -r weight db_id db_user db_name db_time db_info; do
                 [[ -z "$db_id" ]] && continue
                 if [[ $ROW_COUNT -lt $MAX_ROWS ]]; then
-                    [[ ${#db_user} -gt 15 ]] && db_user="${db_user:0:12}..."
-                    [[ ${#db_name} -gt 11 ]] && db_name="${db_name:0:9}.."
+                    # Mở rộng giới hạn hiển thị trước khi cắt (...)
+                    [[ ${#db_user} -gt 25 ]] && db_user="${db_user:0:22}..."
+                    [[ ${#db_name} -gt 21 ]] && db_name="${db_name:0:18}..."
                     
                     db_info=$(echo "$db_info" | tr -d '\r\n')
                     [[ ${#db_info} -gt $CMD_WIDTH ]] && db_info="${db_info:0:$((CMD_WIDTH - 3))}..."
@@ -490,7 +505,8 @@ while true; do
                         info_color="${C_RESET}"
                     fi
                     
-                    printf -v row_buf " %b%-8s%b | %-16s | %-12s | %b%-7s%b | %b%-s%b${C_CLEAR_LINE}" \
+                    # Áp dụng độ rộng cột mới vào vòng lặp in dữ liệu
+                    printf -v row_buf " %b%-8s%b | %-26s | %-22s | %b%-7s%b | %b%-s%b${C_CLEAR_LINE}" \
                         "${C_YELLOW}" "$db_id" "${C_RESET}" "$db_user" "$db_name" \
                         "$time_color" "$db_time" "${C_RESET}" "$info_color" "$db_info" "${C_RESET}"
                     BUFFER+="${row_buf}\n"
