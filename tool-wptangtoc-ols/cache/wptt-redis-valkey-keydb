@@ -12,7 +12,7 @@ function huong_dan() {
   * Message Broker: Trung gian truyền tin nhắn.
   * Quản lý phiên [Session Management], hàng đợi tác vụ [Job Queues], và nhiều ứng dụng thời gian thực khác.
 
-  Kết quả: Sau khi cài đặt, bạn sẽ có một máy chủ Cache đang chạy, lắng nghe trên cổng unix socket path: /var/run/ <tên_dịch_vụ >/ <tên_dịch_vụ >.sock
+  Kết quả: Sau khi cài đặt, bạn sẽ có một máy chủ Cache đang chạy, lắng nghe trên cổng unix socket path: /var/run/<tên_dịch_vụ>/<tên_dịch_vụ>.sock
 
   2. Tính Năng Hủy Cài Đặt [Uninstall]
   Hủy cài đặt là quá trình gỡ bỏ phần mềm, các tệp cấu hình và có thể cả dữ liệu của nó khỏi hệ thống.
@@ -42,15 +42,15 @@ echo -e "${C_CYAN}╰───────────────────�
 active_cache="Chưa cài đặt"
 socket_path="Không có"
 
-if systemctl is-active --quiet valkey 2>/dev/null; then
+if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
   active_cache="valkey"
   active_name_display="Valkey"
   socket_path="/var/run/valkey/valkey.sock"
-elif systemctl is-active --quiet keydb 2>/dev/null; then
+elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
   active_cache="keydb"
   active_name_display="KeyDB"
   socket_path="/var/run/keydb/keydb.sock"
-elif systemctl is-active --quiet redis 2>/dev/null; then
+elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
   active_cache="redis"
   active_name_display="Redis"
   socket_path="/var/run/redis/redis.sock"
@@ -172,11 +172,11 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     # GỠ BỎ CÁC DỊCH VỤ CŨ
     for other_service in redis valkey keydb; do
       if [[ "$other_service" != "$name_service" ]]; then
-        systemctl stop $other_service >/dev/null 2>&1
-        systemctl disable $other_service >/dev/null 2>&1
-        killall -9 ${other_service}-server >/dev/null 2>&1
+        systemctl stop $other_service ${other_service}-server >/dev/null 2>&1
+        systemctl disable $other_service ${other_service}-server >/dev/null 2>&1
+        killall -9 ${other_service}-server ${other_service} >/dev/null 2>&1
 
-        if $(cat /etc/*release | grep -q "Ubuntu\|Debian"); then
+        if $(cat /etc/*release | grep -qi "Ubuntu\|Debian"); then
           apt-get remove --purge $other_service ${other_service}-server -y >/dev/null 2>&1
         else
           yum remove $other_service -y >/dev/null 2>&1
@@ -189,10 +189,9 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     done
 
     # CÀI ĐẶT PACKAGE
-    if $(cat /etc/*release | grep -q "Ubuntu"); then
+    if $(cat /etc/*release | grep -qi "Ubuntu\|Debian"); then
       apt-get update >/dev/null 2>&1
-      apt-get install $name_service -y >/dev/null 2>&1
-      apt-get install ${name_service}-server -y >/dev/null 2>&1
+      apt-get install $name_service ${name_service}-server -y >/dev/null 2>&1
       lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
       for phpredis in ${lsphp[@]}; do
         apt-get install lsphp${phpredis}-redis -y >/dev/null 2>&1
@@ -272,36 +271,53 @@ END {
     # =========================================================
     _runing "cấu hình Unix Socket và tinh chỉnh tối ưu..."
 
-    echo "port 0
+    # Fix 1: Chèn \n ở đầu để tránh dính dòng với config cũ. Fix 2: Xoá bỏ activedefrag yes gây sập trên Ubuntu
+    echo -e "\n# WPTangToc Optimize
+port 0
 unixsocket /var/run/$name_service/$name_service.sock
 unixsocketperm 777
 maxmemory 128mb
 maxmemory-policy allkeys-lfu
 save \"\"
 appendonly no
-activedefrag yes
 tcp-keepalive 60" >>"$duong_dan_config_redis"
 
-    sed -i 's/^port 6379/#port 6379/g' "$duong_dan_config_redis"
-    sed -i 's/tcp-keepalive 300/tcp-keepalive 0/g' "$duong_dan_config_redis"
-    sed -i 's/rdbcompression yes/rdbcompression no/g' "$duong_dan_config_redis"
-    sed -i 's/rdbchecksum yes/rdbchecksum no/g' "$duong_dan_config_redis"
+    sed -i 's/^[[:space:]]*port 6379/#port 6379/g' "$duong_dan_config_redis"
+    sed -i 's/^[[:space:]]*tcp-keepalive 300/tcp-keepalive 0/g' "$duong_dan_config_redis"
+    sed -i 's/^[[:space:]]*rdbcompression yes/rdbcompression no/g' "$duong_dan_config_redis"
+    sed -i 's/^[[:space:]]*rdbchecksum yes/rdbchecksum no/g' "$duong_dan_config_redis"
 
     mkdir -p /var/run/$name_service /var/lib/$name_service /var/log/$name_service
+    
+    # Fix 3: Cấp quyền 755 cho thư mục socket để webserver (nobody) có thể đi vào
+    chmod 755 /var/run/$name_service
     chmod 700 /var/lib/$name_service
+    
     chown -R $name_service:$name_service /var/run/$name_service 2>/dev/null
     chown -R $name_service:$name_service /var/log/$name_service /var/lib/$name_service 2>/dev/null
     chown $name_service:$name_service "$duong_dan_config_redis" 2>/dev/null
-    chmod 600 "$duong_dan_config_redis"
+    
+    # Fix 4: Set 644 thay vì 600 để systemd trên Ubuntu đọc được mượt mà
+    chmod 644 "$duong_dan_config_redis"
 
-    systemctl enable $name_service.service >/dev/null 2>&1
-    systemctl start $name_service.service >/dev/null 2>&1
+    systemctl daemon-reload >/dev/null 2>&1
+    
+    # Fix 5: Tự động nhận diện Service Name (Ubuntu hay có hậu tố -server)
+    if systemctl list-unit-files | grep -q "^${name_service}-server.service"; then
+        SVC_NAME="${name_service}-server"
+    else
+        SVC_NAME="${name_service}"
+    fi
+
+    systemctl enable $SVC_NAME >/dev/null 2>&1
+    systemctl restart $SVC_NAME >/dev/null 2>&1
     systemctl restart lsws >/dev/null 2>&1
 
     (/etc/wptt/monit >/dev/null 2>&1)
     (/etc/wptt/cache/object-cache-optimize-tune >/dev/null 2>&1)
 
     _rundone "cấu hình Unix Socket và tinh chỉnh tối ưu..."
+    
     # BẢNG BÁO CÁO CÀI ĐẶT BO CONG
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT CÀI ĐẶT OBJECT CACHE${C_RESET}"
@@ -323,10 +339,10 @@ else
     echo "Huỷ kích hoạt $name_service: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
     _runing "Gỡ bỏ hoàn toàn $display_name..."
-    systemctl stop ${name_service} >/dev/null 2>&1
-    systemctl disable ${name_service} >/dev/null 2>&1
+    systemctl stop ${name_service} ${name_service}-server >/dev/null 2>&1
+    systemctl disable ${name_service} ${name_service}-server >/dev/null 2>&1
 
-    if $(cat /etc/*release | grep -q "Ubuntu\|Debian"); then
+    if $(cat /etc/*release | grep -qi "Ubuntu\|Debian"); then
       apt-get remove --purge ${name_service} ${name_service}-server -y >/dev/null 2>&1
     else
       yum remove ${name_service} -y >/dev/null 2>&1
