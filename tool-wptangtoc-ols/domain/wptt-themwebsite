@@ -83,7 +83,7 @@ if [[ "$NAME" == "${NAME/./}" ]]; then
   read -r _
     exec /etc/wptt/wptt-domain-main 1
   }
-  return 2>/dev/null || exit 1
+  return 1 2>/dev/null || exit 1
 fi
 
 # Định nghĩa Regex chuẩn cho Domain và IPv4
@@ -100,7 +100,7 @@ if [[ ! "$NAME" =~ $REGEX_DOMAIN ]] && [[ ! "$NAME" =~ $REGEX_IP ]]; then
 
     exec /etc/wptt/wptt-domain-main 1
   }
-  return 2>/dev/null || exit 1
+  return 1 2>/dev/null || exit 1
 fi
 
 # Chuyển domain punycode và chuyển thường
@@ -108,7 +108,7 @@ NAME=$(/usr/bin/php /etc/wptt/domain/punycode.php "$NAME" 2>/dev/null)
 if [[ -z "$NAME" ]]; then
   echo -e "\n${C_RED}Lỗi PHP: Không thể xử lý tên miền $NAME${C_RESET}"
   [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-  return 2>/dev/null || exit 1
+  return 1 2>/dev/null || exit 1
 fi
 
 NAME="${NAME,,}" # biến viết hoa thành viết thuờng
@@ -139,8 +139,12 @@ if [[ -f "$pathcheck_chuyen_huong" ]]; then
   echo -e "\n${C_YELLOW}Lỗi: Domain $NAME ${da_duoc_chuyen_huong_truoc_do_roi:-đã được cấu hình Chuyển hướng (301) trước đó!}${C_RESET}"
   echo -e "Vui lòng gỡ bỏ Chuyển hướng trước khi thêm thành một Website độc lập."
   sleep 4
-  exec /etc/wptt/wptt-domain-main 1
-  return 2>/dev/null || exit 1
+	[[ "${1:-}" == "98" ]] && {
+		echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+			read -r _
+			exec /etc/wptt/wptt-domain-main 1
+		}
+	return 1 2>/dev/null || exit 1
 fi
 
 wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối tạo thêm domain mới."
@@ -169,26 +173,34 @@ check_ky_tu=${#USER} #đeêmếm kyý tuự uúuseẻ name
 if ((check_ky_tu > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
 
 # Tạo User nhưng KHÔNG cấp mật khẩu (Tài khoản bị khóa đăng nhập mặc định)
-useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1
-
-if ! id "$USER" &>/dev/null; then
-  random=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 3)
-  USER=${NAME//[-._]/$random}
-  USER=$(echo "$USER" | tr '[:upper:]' '[:lower:]')
-  check_ky_tu2=${#USER}
-  if ((check_ky_tu2 > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
-  useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1
-fi
-
-if ! id "$USER" &>/dev/null; then
-  _runloi "${them:-Thêm} domain $NAME ${vao_he_thong:-vào hệ thống}"
-  echo -e "${C_RED}Lỗi: Hệ điều hành không thể tạo user mới!${C_RESET}"
-  exec /etc/wptt/wptt-domain-main 1
-  exit 1
+if ! useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
+  # Nếu tạo lần 1 thất bại, chuyển sang cơ chế dự phòng với hậu tố ngẫu nhiên (4 ký tự hệ Hex)
+  random_suffix=$(openssl rand -hex 2)
+  
+  # Vệ sinh Tên miền: Biến chữ thường, xóa sạch dấu chấm/gạch ngang
+  base_name=$(echo "$NAME" | tr -d '[-._]' | tr '[:upper:]' '[:lower:]')
+  
+  # Cắt chuỗi chuẩn Linux: Giới hạn gốc 27 ký tự + "_" + 4 ký tự random = Max 32 ký tự
+  USER="${base_name:0:27}_${random_suffix}"
+  
+  # Thử tạo user lại lần 2
+  if ! useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
+    _runloi "${them:-Thêm} domain $NAME ${vao_he_thong:-vào hệ thống}"
+    echo -e "\n${C_RED}Lỗi: Hệ điều hành không thể tạo user mới!${C_RESET}"
+		wptt_logs "ERROR" "Không thể khởi tạo username khi thêm website $NAME"
+    # Thoát an toàn chuẩn CI/CD (Tuyệt kỹ triệt tiêu vòng lặp vô tận)
+    [[ "${1:-}" == "98" ]] && {
+      echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+      read -r _
+      exec /etc/wptt/wptt-domain-main 1
+    }
+    return 1 2>/dev/null || exit 1
+  fi
 fi
 
 # Chốt chặn bảo mật bổ sung: Khóa hẳn password (L) để vô hiệu hóa hoàn toàn mọi nỗ lực login
 usermod -L "$USER" >/dev/null 2>&1
+
 
 # Tối ưu KeepAlive dựa trên RAM
 TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
@@ -477,14 +489,6 @@ fi
 rm -rf "${TEMP_CNF_ROOT:?}"
 _rundone "${them:-Khởi tạo thành công} database ${cho:-cho website} $NAME"
 
-# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS ${database}"
-# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${database}"
-# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP USER IF EXISTS '${username}'@'localhost'"
-# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE USER IF NOT EXISTS '${username}'@'localhost' IDENTIFIED BY '${password}'"
-# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${database}.* TO '${username}'@'localhost';"
-# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES"
-# rm -rf "${TEMP_CNF_ROOT:?}"
-# _rundone "${them:-Khởi tạo thành công} database ${cho:-cho website} $NAME"
 
 
 #begin ACL object cache

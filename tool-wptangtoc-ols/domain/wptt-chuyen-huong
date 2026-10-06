@@ -351,26 +351,36 @@ if [[ -z "$GOTO_FINISH" ]]; then
   check_ky_tu=${#USER}
   if ((check_ky_tu > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
 
-  useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1
+	# Tạo User nhưng KHÔNG cấp mật khẩu (Tài khoản bị khóa đăng nhập mặc định)
+if ! useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
+		# Nếu tạo lần 1 thất bại (do trùng tên hoặc lỗi ký tự), chuyển sang cơ chế dự phòng
+		random_suffix=$(openssl rand -hex 2)
 
-  if ! id "$USER" &>/dev/null; then
-	  random=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 3)
-	  USER=${NAME//[-._]/$random}
-	  USER=$(echo "$USER" | tr '[:upper:]' '[:lower:]')
-	  check_ky_tu2=${#USER}
-		  if ((check_ky_tu2 > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
-		  useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1
-  fi
+	# Vệ sinh Tên miền: Biến chữ thường, xóa sạch dấu chấm/gạch ngang
+	base_name=$(echo "$NAME" | tr -d '[-._]' | tr '[:upper:]' '[:lower:]')
 
-  if ! id "$USER" &>/dev/null; then
-	  _runloi "${them:-Thêm} domain $NAME ${vao_he_thong:-vào hệ thống}"
-	  echo -e "${C_RED}Lỗi: Hệ điều hành không thể tạo user mới!${C_RESET}"
-	  exec /etc/wptt/wptt-domain-main 1
-	  exit 1
-  fi
+	# Cắt chuỗi chuẩn Enterprise: Giới hạn gốc 27 ký tự + "_" + 4 ký tự random = Max 32 ký tự
+	# Xử lý chuỗi bằng Native Bash (${var:0:27}) siêu tốc độ, không cần gọi subshell (cut)
+	USER="${base_name:0:27}_${random_suffix}"
+
+	# Thử tạo user lại lần 2
+	if ! useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
+		_runloi "${them:-Thêm} domain $NAME ${vao_he_thong:-vào hệ thống}"
+		echo -e "\n${C_RED}Lỗi: Hệ điều hành không thể tạo user mới!${C_RESET}"
+
+		# Thoát an toàn chuẩn CI/CD (Triệt tiêu vòng lặp vô tận trên GitHub Actions)
+		[[ "${1:-}" == "98" ]] && {
+			echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+					read -r _
+					exec /etc/wptt/wptt-domain-main 1
+				}
+		return 1 2>/dev/null || exit 1
+	fi
+fi
 
 # Chốt chặn bảo mật bổ sung: Khóa hẳn password (L) để vô hiệu hóa hoàn toàn mọi nỗ lực login
 usermod -L "$USER" >/dev/null 2>&1
+
 
   work_cpucore='1024'
   cpucore=$(grep -c ^processor /proc/cpuinfo)
