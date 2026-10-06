@@ -48,6 +48,9 @@ in_log_neu_loi() {
   local LATEST_VERSION=$(curl -sL https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -n 1)
   echo "version_wptangtoc_ols=$LATEST_VERSION" > /etc/wptt/.wptt.conf
 
+  # MOCKING: Vượt rào Ping ICMP bị khóa trên Github Actions
+  echo 'ping() { return 0; }' >> /etc/wptt/core-functions
+
   run bash "$SCRIPT_GOC"
   
   in_log_neu_loi 0
@@ -58,10 +61,11 @@ in_log_neu_loi() {
 @test "Update: Hủy cập nhật khi người dùng chọn 'Để sau'" {
   echo "version_wptangtoc_ols=0.0.1" > /etc/wptt/.wptt.conf
 
-  # MOCKING PROXY: Ghi đè file, chèn hàm giả (Trả về 1 = Từ chối)
+  # MOCKING PROXY: Ghi đè file, chèn hàm giả
   cat << 'EOF' > /etc/wptt/core-functions
 source /tmp/core-functions.bak
 wptt_xac_nhan() { return 1; }
+ping() { return 0; }
 EOF
 
   run bash -c "bash $SCRIPT_GOC < /dev/null"
@@ -79,15 +83,16 @@ EOF
 @test "Security: Chặn đứng cập nhật nếu sai chữ ký số (Fake GPG / MITM Attack)" {
   echo "version_wptangtoc_ols=0.0.1" > /etc/wptt/.wptt.conf
 
-  # MOCKING: Tiêm hàm gpg ảo
+  # MOCKING: Tiêm hàm gpg và ping ảo
   cat << 'EOF' > /etc/wptt/core-functions
 source /tmp/core-functions.bak
 wptt_xac_nhan() { return 0; }
+ping() { return 0; }
 
 gpg() {
   if [[ "$*" == *"--verify"* ]]; then
     echo "gpg: BAD signature from WPTangToc (Lỗi được tiêm từ BATS)!" >&2
-    return 1 # Báo lỗi xác thực GPG
+    return 1 
   fi
   command gpg "$@"
 }
@@ -96,7 +101,7 @@ EOF
   # THỰC THI
   run bash -c "bash $SCRIPT_GOC < /dev/null"
 
-  # KIỂM ĐỊNH LỖI (Kỳ vọng trả về 1 vì bác đã thêm chốt chặn 'exit 1' cho môi trường CI)
+  # KIỂM ĐỊNH LỖI (Kỳ vọng trả về 1)
   in_log_neu_loi 1
   [ "$status" -eq 1 ]
   
@@ -110,8 +115,7 @@ EOF
 
   echo "version_wptangtoc_ols=0.0.1" > /etc/wptt/.wptt.conf
 
-  # 1. KIỂM TRA SỨC KHỎE TRƯỚC UPDATE (Chỉ lấy HTTP Code: 200, 404, 403 đều là web đang SỐNG)
-  # Lỗi 000 = Sập/Không phản hồi. Lỗi 503 = OLS bị ngưng trệ.
+  # 1. KIỂM TRA SỨC KHỎE TRƯỚC UPDATE
   local http_truoc=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1)
   
   if [[ "$http_truoc" == "000" || "$http_truoc" == "503" ]]; then
@@ -119,23 +123,23 @@ EOF
     false
   fi
 
-  # 2. MOCKING PROXY: Chèn hàm giả để Đồng ý Update tự động
+  # 2. MOCKING PROXY: Đồng ý Update & Bỏ qua Ping
   cat << 'EOF' > /etc/wptt/core-functions
 source /tmp/core-functions.bak
 wptt_xac_nhan() { return 0; }
+ping() { return 0; }
 EOF
 
   # 3. THỰC THI LỆNH UPDATE THẬT
   run bash -c "bash $SCRIPT_GOC < /dev/null"
   
-  # Giữ lại log để kiểm định
   local STATUS_UPDATE=$status
   local OUT_UPDATE="$output"
 
   # 4. [CHÉN THÁNH] KIỂM TRA ZERO-DOWNTIME SAU UPDATE
   local http_sau=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1)
 
-  # Đánh giá kết quả Update (Phải là mã 0 vì CI exit 0 khi update thành công)
+  # Đánh giá kết quả Update
   status=$STATUS_UPDATE
   output="$OUT_UPDATE"
   in_log_neu_loi 0
