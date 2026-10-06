@@ -33,7 +33,7 @@ setup() {
   [ "$status" -eq 0 ]
   
   # Kiểm chứng xem nó có tạo ra thư mục đúng chuẩn tên miền đã làm sạch chưa
-  [ -d "/home/test-sach-khoang-trang.com" ]
+  [ -d "/usr/local/lsws/test-sach-khoang-trang.com" ]
 }
 
 # =================================================================
@@ -57,10 +57,10 @@ setup() {
   [ "$status" -eq 0 ]
   
   # 2. KIỂM CHỨNG MÁY CHỦ: File cấu hình Vhost ĐÃ TỒN TẠI chưa?
-  [ -f "/usr/local/lsws/conf/vhosts/khachhang-demo.com/vhconf.conf" ]
+  [ -f "/usr/local/lsws/conf/vhosts/khachhang-demo.com/.khachhang-demo.com.conf" ]
   
   # 3. KIỂM CHỨNG MÁY CHỦ: Thư mục Home của user ĐÃ TỒN TẠI chưa?
-  [ -d "/home/khachhang-demo.com/public_html" ]
+  [ -d "/usr/local/lsws/khachhang-demo.com/html" ]
   
   # 4. KIỂM CHỨNG OLS: Domain mới đã được chèn vào file httpd_config.conf chính chưa?
   run grep "khachhang-demo.com" /usr/local/lsws/conf/httpd_config.conf
