@@ -74,16 +74,30 @@ in_log_neu_loi() {
   [ "$status" -eq 0 ]
   [[ "$output" =~ "HOÀN TẤT CHUYỂN HƯỚNG TÊN MIỀN" ]]
   
-  # KIỂM CHỨNG:
-  # 1. File cờ đánh dấu chuyển hướng phải được tạo
+  # KIỂM CHỨNG FILE:
   [ -f "/etc/wptt/chuyen-huong/.$DOMAIN_NGUON.conf" ]
-  
-  # 2. File Vhost ảo phải được hệ thống đẻ ra
   [ -f "/usr/local/lsws/conf/vhosts/$DOMAIN_NGUON/$DOMAIN_NGUON.conf" ]
-  
-  # 3. File htaccess phải chứa lệnh Redirect 301 trỏ đúng về đích
   run grep "RewriteRule (.*)\$ https://$DOMAIN_DICH/\$1 \[L, R=301,NC\]" "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess"
   [ "$status" -eq 0 ]
+
+  # ==========================================================
+  # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
+  # ==========================================================
+  sleep 2 # Chờ OLS nạp cấu hình mới
+
+  # 1. Lấy mã HTTP Code (Kỳ vọng 301)
+  local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
+  if [ "$HTTP_CODE" != "301" ]; then
+      echo -e "\n[LỖI CURL] Web Server không trả về 301. Mã thực tế: $HTTP_CODE" >&3
+      false
+  fi
+
+  # 2. Lấy URL đích từ Header Location (Kỳ vọng trỏ về https://DOMAIN_DICH/)
+  local LOCATION=$(curl -s -I -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ | grep -i "^Location:" | tr -d '\r' | awk '{print $2}')
+  if [[ "$LOCATION" != "https://$DOMAIN_DICH/" ]]; then
+      echo -e "\n[LỖI CURL] Chuyển hướng sai đích. Đích thực tế: '$LOCATION'" >&3
+      false
+  fi
 }
 
 @test "Integration: Chuyển hướng một Tên miền ĐÃ TỒN TẠI (Ghi đè htaccess)" {
@@ -94,22 +108,38 @@ in_log_neu_loi() {
   export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
   bash "$SCRIPT_THEM" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
   
-  # Xác nhận Fixture: Đảm bảo website đã được tạo thành công
   if [ ! -d "/usr/local/lsws/$DOMAIN_NGUON/html" ]; then
       echo -e "\n[LỖI FIXTURE] Không thể tạo website mồi '$DOMAIN_NGUON'!" >&3
       return 1
   fi
 
   # 2. HÀNH ĐỘNG:
-  # Nhờ sức mạnh của đoạn check CI=true do bác viết trong wptt_xac_nhan, kịch bản
-  # sẽ TỰ ĐỘNG rẽ nhánh Đồng ý Ghi Đè cực kỳ khôn ngoan mà không cần Mocking!
   run bash -c "bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\" < /dev/null"
 
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   [[ "$output" =~ "HOÀN TẤT CHUYỂN HƯỚNG TÊN MIỀN" ]]
   
-  # 3. KIỂM CHỨNG: Htaccess của website cũ phải bị ghi đè thành lệnh 301
+  # 3. KIỂM CHỨNG FILE:
   run grep "RewriteRule (.*)\$ https://$DOMAIN_DICH/\$1 \[L, R=301,NC\]" "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess"
   [ "$status" -eq 0 ]
+
+  # ==========================================================
+  # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
+  # ==========================================================
+  sleep 2 # Chờ OLS nạp cấu hình mới
+
+  # 1. Bắn cờ -w "%{http_code}" để check mã
+  local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
+  if [ "$HTTP_CODE" != "301" ]; then
+      echo -e "\n[LỖI CURL] Htaccess bị đè nhưng Web Server chưa trả về 301. Mã thực tế: $HTTP_CODE" >&3
+      false
+  fi
+
+  # 2. Bắn cờ -I để soi Header Location
+  local LOCATION=$(curl -s -I -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ | grep -i "^Location:" | tr -d '\r' | awk '{print $2}')
+  if [[ "$LOCATION" != "https://$DOMAIN_DICH/" ]]; then
+      echo -e "\n[LỖI CURL] Chuyển hướng sai đích. Đích thực tế: '$LOCATION'" >&3
+      false
+  fi
 }
