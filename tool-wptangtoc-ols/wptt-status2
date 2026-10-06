@@ -24,7 +24,7 @@ C_GREEN='\033[1;32m'
 C_RESET='\033[0m'
 trap '
   # TUYỆT KỸ DIỆT ALARM: Mượn lệnh read ảo ép Linux đập nát cái đồng hồ cũ ngay lập tức
-  read -t 1 < /dev/null 2>/dev/null #Alarm clock cho cái này vào để fix nó print ra Alarm clock khi ra ngoài shell
+  read -t 1 < /dev/null 2>/dev/null
 
   stty sane  # KHÔI PHỤC HIỂN THỊ CHỮ: Sửa lỗi gõ phím bị tàng hình
   tput cnorm # Hiện lại con trỏ chuột nhấp nháy
@@ -48,7 +48,7 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "$version_wptangt
   NEW_VERSION="$wptangtocols_version"
 fi
 
-# --- CÁC HÀM HỖ TRỢ GIAO DIỆN NÂNG CAO ---
+# --- CÁC HÀM HỖ TRỢ GIAO DIỆN NÂNG CAO (ĐÃ FIX LỆCH KHUNG) ---
 draw_bar() {
   local percent=$1
   local length=15
@@ -82,10 +82,14 @@ print_2col() {
   local col2="$2"
   local clean1=$(echo -e "$col1" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
   local len1=${#clean1}
-  local col1_width=35
+
+  # FIX LỆCH: Ép cứng độ rộng cột 1 là 34 ký tự để cột giữa luôn cố định
+  local col1_width=34
   local pad1=$((col1_width - len1))
   [[ $pad1 -lt 0 ]] && pad1=0
-  print_line "${col1}$(printf '%*s' "$pad1" "")${C_CYAN}│${C_RESET} ${col2}"
+
+  # Ghép chuỗi chuẩn xác 100%
+  print_line "${col1}$(printf '%*s' "$pad1" "") ${C_CYAN}│${C_RESET} ${col2}"
 }
 
 center_text() {
@@ -102,18 +106,6 @@ center_text() {
 }
 
 # --- HEADER TĨNH ---
-
-#Tắt bộ gõ tiếng việt
-#Nhấn tổ hợp Ctrl + Shift + U (Lúc này sẽ hiện chữ u nhỏ có gạch chân).
-#Gõ mã: 256d (đừng lo nếu nó hiện số tạm thời).
-#256d → ╭
-#256e → ╮
-
-#256f → ╰
-#2570 → ╯
-#2500 → ─
-#Quan trọng nhất: Nhấn phím Space (Dấu cách) hoặc phím Enter.
-
 echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text ""
 center_text "WPTANGTOC OLS $phien_ban: $version_wptangtoc_ols"
@@ -172,9 +164,12 @@ print_dashboard() {
   uptime_display="${d}d ${h}h ${m}m ${s}s"
 
   echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  print_line "$(printf "CPU : %3s%% %s  Load: %s" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "$load_avg")"
-  print_line "$(printf "RAM : %3s%% %s  Used: %s/%s MB" "$ram_percent" "$(draw_bar $ram_percent)" "$ram_used" "$ram_total")"
-  print_line "$(printf "Disk: %3s%% %s  Used: %s/%s GB" "$disk_percent" "$(draw_bar $disk_percent)" "$disk_used" "$disk_total")"
+
+  # FIX LỆCH: Dùng %-5s để căn trái chữ Load/Used giúp giao diện vuông vắn tuyệt đối
+  print_line "$(printf "CPU : %3s%% %s  %-5s %s" "$cpu_usage_in" "$(draw_bar $cpu_usage_in)" "Load:" "$load_avg")"
+  print_line "$(printf "RAM : %3s%% %s  %-5s %s/%s MB" "$ram_percent" "$(draw_bar $ram_percent)" "Used:" "$ram_used" "$ram_total")"
+  print_line "$(printf "Disk: %3s%% %s  %-5s %s/%s GB" "$disk_percent" "$(draw_bar $disk_percent)" "Used:" "$disk_used" "$disk_total")"
+
   echo -e "${C_CYAN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
   print_2col "Net In : $net_in_display" "OpenLiteSpeed : $ols_status_in"
@@ -247,9 +242,14 @@ while true; do
 
   prev_lines=$current_lines
 
-  # 6. Chờ nhập phím 1 giây
+  # ============================================================================
+  # 6. FIX LỖI KẸT 100% CPU KHI ĐỌC PHÍM
+  # ============================================================================
   read -t 1 -n 1 -s key_input
-  if [ $? -eq 0 ]; then
+  READ_STATUS=$? # Ghi nhận lại mã thoát của lệnh read
+
+  # TH1: Khách hàng ấn phím bình thường (Thành công = 0)
+  if [[ $READ_STATUS -eq 0 ]]; then
     if [[ "$key_input" == "0" ]]; then
       ACTION="exit"
     elif [[ "$key_input" == "2" ]]; then
@@ -258,7 +258,14 @@ while true; do
       ACTION="update"
     else ACTION="menu"; fi
     break
+
+  # TH2: Mã lỗi 1 tức là MẤT KẾT NỐI (EOF) do tắt ngang máy tính/rớt mạng
+  # Ngay lập tức kết thúc vòng lặp để bảo vệ CPU không bị treo 100%
+  elif [[ $READ_STATUS -eq 1 ]]; then
+    echo -e "\n${C_RED}⚠️ Mất kết nối Terminal (EOF). Đang thoát để bảo vệ CPU...${C_RESET}"
+    exit 1
   fi
+  # TH3: Nếu bằng 142 (timeout 1 giây trôi qua mà không gõ phím), kệ nó cho lặp tiếp.
 done
 
 trap - SIGINT
