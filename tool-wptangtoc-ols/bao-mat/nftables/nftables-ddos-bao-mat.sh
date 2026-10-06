@@ -46,12 +46,14 @@ fi
 chmod +x /usr/local/lsws/$NAME/bao-mat/anti.py
 
 sed -i '/log_file_path =/d' /usr/local/lsws/$NAME/bao-mat/anti.py
-sed -i "/__main__/a\ \ \ \ log_file_path = \"/usr/local/lsws/$NAME/access.log\"" /usr/local/lsws/$NAME/bao-mat/anti.py
+sed -i "/__main__/a\ \ \ \ log_file_path = \"/usr/local/lsws/$NAME/logs/access.log\"" /usr/local/lsws/$NAME/bao-mat/anti.py
 
 cat <(crontab -l) | sed "/bao-mat/d" | crontab -
-cat <(crontab -l) | sed "/access.log/d" | crontab -
-cat <(crontab -l) <(echo "* * * * * python3 /usr/local/lsws/$NAME/bao-mat/anti.py") | crontab -
-cat <(crontab -l) <(echo "*/1 * * * * echo '' > /usr/local/lsws/$NAME/logs/access.log") | crontab -
+cat <(crontab -l) | sed "/truncate/d" | crontab -
+
+
+cat <(crontab -l) <(echo "* * * * * /usr/bin/python3 /usr/local/lsws/$NAME/bao-mat/anti.py >/dev/null 2>&1") | crontab -
+cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/$NAME/logs/access.log") | crontab -
 
 
 	if $(cat /etc/*release | grep -q "Ubuntu") ; then
@@ -106,6 +108,8 @@ bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]
 bing_ip=$(echo $bing_ip | sed 's/ /, /g')
 bing_ip=$(echo $bing_ip | sed 's/^/{ /g' | sed 's/$/ }/g')
 nft add element inet filter BINGv4 $bing_ip
+
+nft list ruleset > /etc/sysconfig/nftables.conf
 
 systemctl restart nftables
 
