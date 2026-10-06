@@ -26,7 +26,7 @@ if [[ ! -f $path_webgui ]]; then
 fi
 
 #remote mariadb
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
 else
   duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
@@ -37,7 +37,7 @@ if [[ $port_mariadb_remote ]]; then
   firewall-cmd --zone=public --add-port=${port_mariadb_remote}/tcp --permanent
 fi
 
-if $(cat /etc/*release | grep -q "Ubuntu"); then
+if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
   path_nftables_config="/etc/nftables.conf"
 else
   path_nftables_config="/etc/sysconfig/nftables.conf"
