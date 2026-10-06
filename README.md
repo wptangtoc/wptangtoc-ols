@@ -49,7 +49,7 @@ Vui lòng truy cập: <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">h
 <h3>Thảo luận giải đáp các thắc mắc: </h3>
 
 <ul>
-<li>Group facebook : <a href="https://www.facebook.com/groups/wptangtoc/">Cộng đồng tăng tốc WordPress 2021</a></li>
+<li>Group facebook : <a href="https://www.facebook.com/groups/wptangtoc/">Cộng đồng tăng tốc WordPress 2022</a></li>
 </ul>
 
 
