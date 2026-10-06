@@ -314,7 +314,7 @@ bat_tat_object_cache_redis="Bật/tắt Redis Object Cache"
 kiem_tra_lscache="Kiểm tra LScache"
 tat_kich_hoat_lscache="Tắt kích hoạt LScache"
 xoa_opcache="Xóa OPCache"
-bat_tat_memcached="Bât/Tắt memcached"
+bat_tat_memcached="Bật/Tắt memcached"
 bat_tat_opcache_php="Bật/tắt OPCache PHP"
 ban_chua_kich_hoat="Bạn chưa kích hoạt"
 
