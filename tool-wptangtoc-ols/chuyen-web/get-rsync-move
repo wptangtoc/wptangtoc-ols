@@ -50,19 +50,19 @@ fi
 # Dọn dẹp danh sách tạm
 find /usr/local/lsws/*/html/ -name "danh-sach-website-wptangtoc-ols.txt" -delete
 
-# Lấy danh sách domain đã có trên máy chủ
-domain_da_co=()
-for filepath in /etc/wptt/vhost/.*.conf; do
-    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+# # Lấy danh sách domain đã có trên máy chủ
+# domain_da_co=()
+# for filepath in /etc/wptt/vhost/.*.conf; do
+#     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-    domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
+#     domain="${filepath##*/}"
+#     domain="${domain%.conf}"
+#     domain="${domain#.}"
 
-    if [[ "$domain" == ?*.?* ]]; then
-        domain_da_co+=("$domain")
-    fi
-done
+#     if [[ "$domain" == ?*.?* ]]; then
+#         domain_da_co+=("$domain")
+#     fi
+# done
 
 # ==============================================================================
 # KHỞI TẠO FILE TẠM VÀ BẪY LỖI (TRAP) DỌN DẸP
@@ -80,45 +80,66 @@ curl --connect-timeout 10 -m 30 --tlsv1.3 -s -o "$WPTT_TMP_IMPORT_SCRIPT" "https
 # ==============================================================================
 # BƯỚC 1: KHỞI TẠO VHOST & SUBFOLDER
 # ==============================================================================
-for NAME in $domain_them; do
-	# if [[ ! " ${domain_da_co[@]} " =~ " ${NAME} " ]]; then
-  if [[ ! " ${domain_da_co[*]} " =~ " ${NAME} " ]]; then
-    _runing "Khởi tạo website: $NAME"
-    
-    # CHỐNG VĂNG TIẾN TRÌNH: Dùng bash thay vì source (.) để chặn lệnh exit từ script con
-    bash /etc/wptt/domain/wptt-themwebsite "$NAME" >/dev/null 2>&1
-    
-    # EDGE BUG BYPASS: Kiểm tra xem file cấu hình vhost có thực sự được tạo không
-    if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
-      _runloi "Lỗi: Khởi tạo Vhost cho $NAME thất bại! Đã Bypass (Bỏ qua)."
-      echo ""
-      print_border_bot
-      echo ""
-      continue # Bỏ qua toàn bộ các bước DB phía dưới cho domain lỗi này
+# 1. Khai báo Mảng kết hợp (chuẩn Bash 4+)
+declare -A domain_da_co_map
+
+# 2. Đọc file conf và đưa tên miền vào làm "Khóa" (Key) của mảng
+for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
+        # Đánh dấu tên miền này là ĐÃ CÓ (Value = 1)
+        domain_da_co_map["$domain"]=1
     fi
-
-
-		if [[ ! -f "/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf" ]]; then
-			_runloi "Lỗi: Khởi tạo Vhost cho $NAME thất bại! Đã Bypass (Bỏ qua)."
-			echo ""
-			print_border_bot
-			echo ""
-			continue # Bỏ qua toàn bộ các bước DB phía dưới cho domain lỗi này
-		fi
-
-
-    rm -f "/usr/local/lsws/${NAME:?}/html/index.html"
-
-    # Xử lý Subfolder (Nếu có)
-    sub_file="/usr/local/lsws/$NAME/html/subfolder-wptt.txt"
-    if [[ -f "$sub_file" ]]; then
-      for thumuc in $(cat "$sub_file"); do
-        bash /etc/wptt/domain/wptt-subfolder-website "$NAME" "$thumuc" >/dev/null 2>&1
-      done
-    fi
-    _rundone "Khởi tạo website: $NAME"
-  fi
 done
+
+# ==============================================================================
+# BƯỚC 1: KHỞI TẠO VHOST & SUBFOLDER (Dùng O(1) Lookup)
+# ==============================================================================
+for NAME in $domain_them; do
+    
+    # KIỂM TRA SIÊU TỐC: Nếu Khóa $NAME chưa được set trong Map, tức là chưa tồn tại
+    if [[ -z "${domain_da_co_map[$NAME]:-}" ]]; then
+    
+        _runing "Khởi tạo website: $NAME"
+        
+        # CHỐNG VĂNG TIẾN TRÌNH: Dùng bash thay vì source (.)
+        bash /etc/wptt/domain/wptt-themwebsite "$NAME" >/dev/null 2>&1
+        
+        # EDGE BUG BYPASS: Kiểm tra xem file cấu hình vhost có thực sự được tạo không
+        if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
+            _runloi "Lỗi: Khởi tạo Vhost cho $NAME thất bại! Đã Bypass (Bỏ qua)."
+            echo ""
+            print_border_bot
+            echo ""
+            continue
+        fi
+
+        if [[ ! -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" ]]; then
+            _runloi "Lỗi: Khởi tạo Vhost cho $NAME thất bại! Đã Bypass (Bỏ qua)."
+            echo ""
+            print_border_bot
+            echo ""
+            continue
+        fi
+
+        rm -f "/usr/local/lsws/${NAME:?}/html/index.html"
+
+        # Xử lý Subfolder (Nếu có)
+        sub_file="/usr/local/lsws/$NAME/html/subfolder-wptt.txt"
+        if [[ -f "$sub_file" ]]; then
+            for thumuc in $(cat "$sub_file"); do
+                bash /etc/wptt/domain/wptt-subfolder-website "$NAME" "$thumuc" >/dev/null 2>&1
+            done
+        fi
+        
+        _rundone "Khởi tạo website: $NAME"
+    fi
+done
+
 
 # ==============================================================================
 # BƯỚC 2: XỬ LÝ DATABASE & IMPORT SQL (UX PV TÀNG HÌNH + BẮT LỖI PIPEFAIL)
@@ -314,6 +335,8 @@ left_text "Hành động tiếp theo    : Trỏ DNS các website về IP trên" 
 left_text "                         và tiến hành cài đặt SSL ngay lập tức." 2
 
 print_border_bot "${C_GREEN}"
+if [[ "$CI" != "true" ]];then
 echo -en "\n${C_GREEN}➜ nhấn [enter] để quay lại menu chuyển website...${C_RESET}"
 read -r _
+fi
 [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-chuyen-web-main 1
