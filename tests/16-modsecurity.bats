@@ -1,6 +1,4 @@
 #!/usr/bin/env bats
-#
-# Kiểm thử tích hợp Tối Thượng cho wptt-modsecurity trên WPTangToc OLS
 # Kịch bản: Tự động cài đặt 100% WordPress thật -> Tấn công -> Bật/Tắt WAF -> Dọn dẹp
 #
 
@@ -11,12 +9,11 @@ LOCK_FILE="/var/lock/wptt-modsecurity.lock"
 CONFIG_FILE="/usr/local/lsws/conf/httpd_config.conf"
 OWASP_DIR="/usr/local/lsws/modsec/owasp"
 
-# Tuyệt chiêu Curl bypass WAF UA block & ép HTTPS 443 Localhost (Dùng MẢNG để chống vỡ cú pháp)
+# Tuyệt chiêu Curl CI/CD: Đánh thẳng Port 80 qua Localhost (Bỏ qua SSL)
 CURL_BASE_OPTS=(
-  -s -o /dev/null -w "%{http_code}" -k
+  -s -o /dev/null -w "%{http_code}"
   --connect-timeout 3 --max-time 10
   -A "WPTangToc OLS preload cache"
-  --resolve "${TEST_DOMAIN}:443:127.0.0.1"
 )
 
 # =================================================================
@@ -35,26 +32,26 @@ in_log_neu_loi() {
 # Gửi GET có params
 code_get() {
   local name="$1" value="$2"; shift 2
-  curl "${CURL_BASE_OPTS[@]}" -G -H "Host: ${TEST_DOMAIN}" --data-urlencode "${name}=${value}" "$@" "https://${TEST_DOMAIN}/"
+  curl "${CURL_BASE_OPTS[@]}" -G -H "Host: ${TEST_DOMAIN}" --data-urlencode "${name}=${value}" "$@" "http://127.0.0.1/"
 }
 
 # Gửi GET path
 code_path() {
   local path="$1"; shift
-  curl "${CURL_BASE_OPTS[@]}" -H "Host: ${TEST_DOMAIN}" "$@" "https://${TEST_DOMAIN}${path}"
+  curl "${CURL_BASE_OPTS[@]}" -H "Host: ${TEST_DOMAIN}" "$@" "http://127.0.0.1${path}"
 }
 
 # Gửi POST form
 code_post() {
   local path="$1"; shift
-  curl "${CURL_BASE_OPTS[@]}" -X POST -H "Host: ${TEST_DOMAIN}" "$@" "https://${TEST_DOMAIN}${path}"
+  curl "${CURL_BASE_OPTS[@]}" -X POST -H "Host: ${TEST_DOMAIN}" "$@" "http://127.0.0.1${path}"
 }
 
 # Đo độ trễ
 avg_ms() {
   local n="${1:-10}" i out code t total=0
   for ((i = 0; i < n; i++)); do
-    out=$(curl "${CURL_BASE_OPTS[@]/\"%{http_code}\"/\"%{http_code} %{time_total}\"}" -H "Host: ${TEST_DOMAIN}" "https://${TEST_DOMAIN}/")
+    out=$(curl "${CURL_BASE_OPTS[@]/\"%{http_code}\"/\"%{http_code} %{time_total}\"}" -H "Host: ${TEST_DOMAIN}" "http://127.0.0.1/")
     code="${out%% *}"
     t="${out##* }"
     if [[ "$code" == "000" ]]; then echo "-1"; return 0; fi
@@ -101,7 +98,7 @@ setup_file() {
   # 3. Thêm website mới tinh
   bash /etc/wptt/domain/wptt-themwebsite "$TEST_DOMAIN" >/dev/null 2>&1 || true
 
-  # 4. CÀI ĐẶT WORDPRESS TỰ ĐỘNG BẰNG PIPELINE (BUNG LỤA)
+  # 4. CÀI ĐẶT WORDPRESS TỰ ĐỘNG BẰNG PIPELINE
   local script_test="/tmp/wptt-install-wp-waf.sh"
   cp /etc/wptt/wptt-install-wordpress2 "$script_test"
   sed -i 's/exec \/etc\/wptt\/wptt-wordpress-main.*/exit 0/g' "$script_test"
@@ -124,7 +121,7 @@ EOF
   systemctl restart lshttpd
   sleep 3
 
-  echo "[Modsecurity Test] Đã Setup WordPress thật trên domain $TEST_DOMAIN (HTTPS Port 443)" >&3
+  echo "[Modsecurity Test] Đã Setup WordPress thật trên domain $TEST_DOMAIN (HTTP Port 80)" >&3
 }
 
 teardown_file() {
@@ -164,6 +161,11 @@ teardown() {
   assert_passed "$(code_get s "<script>alert(1)</script>")" "XSS Tìm kiếm (WAF tắt)"
 }
 
+@test "Nhóm 2: Đo độ trễ gốc của WordPress khi WAF TẮT" {
+  local ms="$(avg_ms 10)"
+  echo "$ms" > "$BASELINE_FILE"
+  [ "$ms" -ge 0 ]
+}
 
 # =================================================================
 # NHÓM 3: BẬT WAF VÀ KIỂM TRA CẤU HÌNH
@@ -256,4 +258,3 @@ teardown() {
 @test "Nhóm 6: Payload tấn công lọt qua bình thường sau khi WAF tắt" {
   assert_passed "$(code_get id "1' OR '1'='1' -- -")" "SQLi sau khi tắt"
 }
-
