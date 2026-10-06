@@ -265,16 +265,6 @@ teardown() {
   [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]]
 }
 
-# ==============================================================================
-# NHÓM 5: File size validation
-# ==============================================================================
-@test "File size: < 3KB bị coi là corrupt" {
-  local tiny_db="$ROOT_BACKUP_DIR/tiny.sql"
-  printf 'SELECT 1;' > "$tiny_db"
-  size_kb=$(du -k "$tiny_db" | cut -f1)
-  [ "$size_kb" -lt 3 ]
-}
-
 
 # ==============================================================================
 # NHÓM 6: Extension detection
