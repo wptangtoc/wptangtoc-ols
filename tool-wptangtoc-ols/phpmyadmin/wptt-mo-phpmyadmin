@@ -1,7 +1,6 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
 # @since: 2026
 
 function huong_dan() {
@@ -28,6 +27,9 @@ function huong_dan() {
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null # Thư viện Xác nhận
+
+# Ép chuẩn UX 78 ký tự cho bảng hiển thị
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -157,15 +159,16 @@ chown -R nobody:$tuong_thich_nhom_litespeed "/usr/local/lsws/$Website_chinh/html
 chmod 555 /usr/local/lsws/phpmyadmin
 
 # ==============================================================================
-# TẠO TÀI KHOẢN BẢO MẬT 2 LỚP (HTTP BASIC AUTH)
+# TẠO TÀI KHOẢN BẢO MẬT 2 LỚP VÀ GHI VÀO VHOST
 # ==============================================================================
 mkdir -p "/usr/local/lsws/$Website_chinh/passwd"
+
+# Biến độc lập chứa Cleartext
 Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
 id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
 
-# Biến $PHP_Command giờ đã được nạp chuẩn xác!
+# Băm theo chuẩn OLS và ghi vào file htpasswd
 Encrypt_string=$($PHP_Command -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
-
 echo "$id_ols_admin:$Encrypt_string" >"/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
 
 # Dọn dẹp cấu hình cũ và tiêm cấu hình mới vào Vhost
@@ -202,11 +205,23 @@ php_admin_value open_basedir ""
 }
 EOF
 
-# Cập nhật config panel
-sed -i "/id_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
-sed -i "/password_dang_nhap_phpmyadmin/d" /etc/wptt/.wptt.conf
-echo "id_dang_nhap_phpmyadmin=$id_ols_admin" >>/etc/wptt/.wptt.conf
-echo "password_dang_nhap_phpmyadmin=$Webadmin_Pass" >>/etc/wptt/.wptt.conf
+# ==============================================================================
+# MÃ HÓA AES-256 VÀ LƯU VÀO CONFIG .wptt.conf
+# ==============================================================================
+# 1. Bộ dọn rác Syntax: Nếu file conf có dòng rớt Base64 (Lỗi cũ), dọn sạch!
+sed -i -e '/^[a-zA-Z_][a-zA-Z0-9_]*=/b' -e '/^#/b' -e '/^[[:space:]]*$/b' -e 'd' /etc/wptt/.wptt.conf
+
+# 2. Xóa thông tin phpmyadmin cũ
+sed -i "/^id_dang_nhap_phpmyadmin=/d" /etc/wptt/.wptt.conf
+sed -i "/^password_dang_nhap_phpmyadmin=/d" /etc/wptt/.wptt.conf
+
+# 3. Mã hóa bằng thuật toán Core (Ép phẳng chuỗi)
+enc_id_pma=$(wptt_ma_hoa "$id_ols_admin" | tr -d '\n\r')
+enc_pass_pma=$(wptt_ma_hoa "$Webadmin_Pass" | tr -d '\n\r')
+
+# 4. Ghi biến đã mã hóa vào Config (Bọc nháy đơn an toàn tuyệt đối)
+echo "id_dang_nhap_phpmyadmin='${enc_id_pma}'" >>/etc/wptt/.wptt.conf
+echo "password_dang_nhap_phpmyadmin='${enc_pass_pma}'" >>/etc/wptt/.wptt.conf
 
 chown nobody:$tuong_thich_nhom_litespeed "/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
 chmod 400 "/usr/local/lsws/$Website_chinh/passwd/.phpmyadmin"
@@ -231,10 +246,8 @@ _rundone "Cài đặt và kích hoạt PhpMyadmin $phpmyadmin_version"
 echo "Kích hoạt PhpMyAdmin: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
 # ==============================================================================
-# IN THÔNG TIN TÀI KHOẢN (UX BO CONG - CĂN LỀ CHUẨN XÁC)
+# IN THÔNG TIN TÀI KHOẢN (UX BO CONG - CĂN LỀ CHUẨN XÁC 78 KÝ TỰ)
 # ==============================================================================
-box_inner_width=${box_inner_width:-71}
-
 ssl_xac_thuc_kha_dung="false"
 . /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$Website_chinh" >/dev/null 2>&1
 
@@ -251,7 +264,6 @@ echo -e "${C_GREEN}├───────────────────�
 function in_dong() {
   local raw_text="$1"
   local colored_text="$2"
-  # Sửa lỗi đếm byte của bash khi gặp ký tự tiếng việt
   local len
   len=$(echo -n "$raw_text" | awk '{print length($0)}')
   local pad
@@ -263,11 +275,12 @@ function in_dong() {
 in_dong "  Đường dẫn truy cập : $url_truy_cap" "  ${C_BOLD_WHITE}Đường dẫn truy cập :${C_RESET} ${C_CYAN}$url_truy_cap${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 in_dong "  LỚP 1: BẢO MẬT MÁY CHỦ (Bắt buộc khi truy cập link)" "  ${C_BOLD_WHITE}LỚP 1: BẢO MẬT MÁY CHỦ (Bắt buộc khi truy cập link)${C_RESET}"
-in_dong "  User bảo mật       : $id_ols_admin" "  User bảo mật       : ${C_YELLOW}$id_ols_admin${C_RESET}"
-in_dong "  Password           : $Webadmin_Pass" "  Password           : ${C_YELLOW}$Webadmin_Pass${C_RESET}"
+in_dong "  ▪ User bảo mật     : $id_ols_admin" "  ▪ User bảo mật     : ${C_YELLOW}$id_ols_admin${C_RESET}"
+in_dong "  ▪ Password         : $Webadmin_Pass" "  ▪ Password         : ${C_YELLOW}$Webadmin_Pass${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 in_dong "  LỚP 2: TÀI KHOẢN CỦA CÁC DATABASE ĐANG CÓ TRÊN HỆ THỐNG" "  ${C_BOLD_WHITE}LỚP 2: TÀI KHOẢN CỦA CÁC DATABASE ĐANG CÓ TRÊN HỆ THỐNG${C_RESET}"
 
+count=0
 for filepath in /etc/wptt/vhost/.*.conf; do
   [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
   domain="${filepath##*/}"
@@ -279,11 +292,20 @@ for filepath in /etc/wptt/vhost/.*.conf; do
     DB_User_web=""
     DB_Password_web=""
     . "$filepath"
+    
+    # In vạch phân cách giữa các database
+    if [[ $count -gt 0 ]]; then
+        in_dong "  ----------------------------------------------------------------------------" "  ${C_CYAN}----------------------------------------------------------------------------${C_RESET}"
+    fi
 
-    in_dong "  ▪ Website  : $domain" "  ${C_BOLD_WHITE}▪ Website  :${C_RESET} ${C_GREEN}$domain${C_RESET}"
-    in_dong "    User DB  : ${DB_User_web:-Chưa thiết lập}" "    User DB  : ${C_YELLOW}${DB_User_web:-Chưa thiết lập}${C_RESET}"
-    in_dong "    Pass DB  : ${DB_Password_web:-Chưa thiết lập}" "    Pass DB  : ${C_YELLOW}${DB_Password_web:-Chưa thiết lập}${C_RESET}"
-    in_dong "  -------------------------------------------------" "  -------------------------------------------------"
+    # Mở rộng: Tiên lượng tương lai sếp mã hóa cả Pass DB của WP
+    pass_db_hien_thi=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
+    [[ -z "$pass_db_hien_thi" ]] && pass_db_hien_thi="$DB_Password_web"
+
+    in_dong "  🌐 Website : $domain" "  🌐 ${C_BOLD_WHITE}Website :${C_RESET} ${C_GREEN}$domain${C_RESET}"
+    in_dong "     User DB : ${DB_User_web:-Chưa thiết lập}" "     User DB : ${C_YELLOW}${DB_User_web:-Chưa thiết lập}${C_RESET}"
+    in_dong "     Pass DB : ${pass_db_hien_thi:-Chưa thiết lập}" "     Pass DB : ${C_YELLOW}${pass_db_hien_thi:-Chưa thiết lập}${C_RESET}"
+    ((count++))
   fi
 done
 
