@@ -38,7 +38,8 @@ fi
 echo ""
 
 # Kiểm tra sự tồn tại của phpMyAdmin trước khi update
-if [[ -z "$id_dang_nhap_phpmyadmin" || ! -d "/usr/local/lsws/$Website_chinh/html/phpmyadmin" ]]; then
+PMA_ROOT="/usr/local/lsws/$Website_chinh/html/phpmyadmin"
+if [[ -z "$id_dang_nhap_phpmyadmin" || ! -d "$PMA_ROOT" ]]; then
   echoDo "$ban_chua_kich_hoat PhpMyAdmin"
   sleep 3
   [[ "$check_menu_wptangtoc_active" == "97" ]] && exec /etc/wptt/wptt-phpmyadmin-main 1
@@ -49,7 +50,7 @@ fi
 # ==============================================================================
 # KIỂM TRA PHIÊN BẢN HIỆN TẠI
 # ==============================================================================
-check_version=$(ls "/usr/local/lsws/$Website_chinh/html/phpmyadmin" 2>/dev/null | grep 'RELEASE-DATE-' | sed 's/RELEASE-DATE-//g')
+check_version=$(ls "$PMA_ROOT" 2>/dev/null | grep 'RELEASE-DATE-' | sed 's/RELEASE-DATE-//g')
 phpmyadmin_version="5.2.3"
 
 if [[ "$check_version" == "$phpmyadmin_version" ]]; then
@@ -74,18 +75,9 @@ options=("$dong_y" "$khong_dong_y")
 PS3="$prompt"
 select opt in "${options[@]}"; do
   case "$REPLY" in
-  1)
-    dongy="y"
-    break
-    ;;
-  2)
-    dongy="n"
-    break
-    ;;
-  *)
-    printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-    break
-    ;;
+  1) dongy="y"; break ;;
+  2) dongy="n"; break ;;
+  *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
   esac
 done
 
@@ -105,11 +97,9 @@ if [[ "$dongy" == "y" ]]; then
 
   pma_zip="phpMyAdmin-$phpmyadmin_version-all-languages.zip"
   git_version="${phpmyadmin_version//./_}"
-
   URL_1="https://files.phpmyadmin.net/phpMyAdmin/$phpmyadmin_version/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
   URL_2="https://github.com/phpmyadmin/phpmyadmin/releases/download/RELEASE_${git_version}/phpMyAdmin-$phpmyadmin_version-all-languages.zip"
 
-  # Nhập Public Keyring
   curl -sL https://files.phpmyadmin.net/phpmyadmin.keyring | gpg --import --quiet >/dev/null 2>&1
 
   function wptt_download_pma_ux() {
@@ -121,14 +111,8 @@ if [[ "$dongy" == "y" ]]; then
   success_download=0
   for url in "$URL_1" "$URL_2"; do
     if wptt_download_pma_ux "$url"; then
-
-      # Tải Chữ ký GPG
       wget -q --timeout=15 --tries=3 "${url}.asc" -U 'checksum wptangtoc ols' -O "${pma_zip}.asc"
-
-      # Xác thực GPG
       if gpg --verify "${pma_zip}.asc" "$pma_zip" >/dev/null 2>&1; then
-
-        # Kiểm tra Zip
         if unzip -t "$pma_zip" &>/dev/null; then
           success_download=1
           break
@@ -148,38 +132,63 @@ if [[ "$dongy" == "y" ]]; then
     exit 1
   fi
 
-  # 3. Giải nén và chuẩn bị
+  # ==========================================================================
+  # 3. GIẢI NÉN & BẢO TỒN CẤU HÌNH CŨ (PRESERVE CONFIG)
+  # ==========================================================================
   unzip -oq "$pma_zip"
-  mv phpMyAdmin-$phpmyadmin_version-all-languages phpmyadmin_new
+  PMA_PREPARED="$tmp_dir/phpmyadmin_prepared"
+  mv "phpMyAdmin-$phpmyadmin_version-all-languages" "$PMA_PREPARED"
 
-  # 4. Tráo đổi thư mục (Atomic Update)
-  rm -rf "/usr/local/lsws/phpmyadmin"
-  mkdir -p /usr/local/lsws/phpmyadmin
+  if [[ -f "$PMA_ROOT/config.inc.php" ]]; then
+    # Bê nguyên cấu hình cũ sang lõi mới (Giữ lại Secret key, custom config)
+    cp -p "$PMA_ROOT/config.inc.php" "$PMA_PREPARED/config.inc.php"
+  else
+    # Chỉ tạo mới nếu file cũ bị mất/hỏng
+    cp -f "$PMA_PREPARED/config.sample.inc.php" "$PMA_PREPARED/config.inc.php"
+    secret=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32)
+    sed -i "s/\$cfg\['blowfish_secret'\] = '';/\$cfg\['blowfish_secret'\] = '$secret';/" "$PMA_PREPARED/config.inc.php"
+    echo "\$cfg['TempDir'] = '/usr/local/lsws/phpmyadmin';" >>"$PMA_PREPARED/config.inc.php"
+  fi
 
-  rm -rf "/usr/local/lsws/${Website_chinh:?}/html/phpmyadmin"
-  mv "$tmp_dir/phpmyadmin_new" "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
+  # ==========================================================================
+  # 4. CHUẨN BỊ MÔI TRƯỜNG & PHÂN QUYỀN TRƯỚC (PRE-PERMISSION)
+  # ==========================================================================
+  PMA_TMP="/usr/local/lsws/phpmyadmin"
+  mkdir -p "$PMA_TMP"
+  chown -R nobody:$tuong_thich_nhom_litespeed "$PMA_TMP"
+	chmod 555 "$PMA_TMP"
 
-  # 5. Cấu hình lại file config.inc.php
-  target_config="/usr/local/lsws/$Website_chinh/html/phpmyadmin/config.inc.php"
-  cp -f "/usr/local/lsws/$Website_chinh/html/phpmyadmin/config.sample.inc.php" "$target_config"
+  # chmod 770 "$PMA_TMP" # Bắt buộc phải là 770 (hoặc 750) để PHP có thể GHI cache
 
-  secret=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32)
-  sed -i "s/\$cfg\['blowfish_secret'\] = '';/\$cfg\['blowfish_secret'\] = '$secret';/" "$target_config"
-  echo "\$cfg['TempDir'] = '/usr/local/lsws/phpmyadmin';" >>"$target_config"
+  # Phân quyền 100% hoàn chỉnh ở khu vực nháp trước khi đưa vào thực chiến
+  chown -R nobody:$tuong_thich_nhom_litespeed "$PMA_PREPARED"
 
-  # 6. Phân quyền
-  chown -hR nobody:$tuong_thich_nhom_litespeed /usr/local/lsws/phpmyadmin
-  chown -hR nobody:$tuong_thich_nhom_litespeed "/usr/local/lsws/$Website_chinh/html/phpmyadmin"
-  chmod 555 /usr/local/lsws/phpmyadmin
+  find "$PMA_PREPARED" -type d -exec chmod 555 {} \;
+  find "$PMA_PREPARED" -type f -exec chmod 555 {} \;
 
-  # 7. Dọn dẹp
+  # ==========================================================================
+  # 5. ATOMIC SWAP (HOÁN ĐỔI NGUYÊN TỬ)
+  # ==========================================================================
+  # Chuyển dữ liệu nháp vào cùng phân vùng với thư mục web để mv chạy tức thì
+  PMA_NEW="${PMA_ROOT}_new_$(date +%s)"
+  PMA_OLD="${PMA_ROOT}_old_$(date +%s)"
+  
+  cp -a "$PMA_PREPARED" "$PMA_NEW"
+
+  # Giai đoạn Downtime = 0.001s: Đổi tên cực nhanh
+  mv "$PMA_ROOT" "$PMA_OLD" && mv "$PMA_NEW" "$PMA_ROOT"
+
+  # ==========================================================================
+  # 6. DỌN DẸP RÁC CHUẨN XÁC
+  # ==========================================================================
+  rm -rf "$PMA_OLD"
   rm -rf "${tmp_dir:?}"
   wptt_smart_reload_lsws >/dev/null 2>&1
 
   wptt_logs "INFO" "Cập nhật PhpMyAdmin lên $phpmyadmin_version"
   _rundone "$UI_STRING"
 
-  echo -e "\n\033[1;32m[OK] phpMyAdmin đã được nâng cấp lên bản $phpmyadmin_version và Xác thực an toàn thành công!\033[0m"
+  echo -e "\n\033[1;32m[OK] phpMyAdmin đã được nâng cấp lên bản $phpmyadmin_version chuẩn Enterprise!\033[0m"
   sleep 2
 fi
 
