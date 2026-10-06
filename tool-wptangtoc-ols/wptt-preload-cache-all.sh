@@ -485,7 +485,8 @@ function debugurl() {
 }
 
 function storexml() {
-    validmap
+#bình luận validmap không cần phải check điêu kiện vì preload-cache2 đã check điều kiện rooiff
+    # validmap
     if [ $(echo ${1} | grep '\.xml$'|wc -l) != 0 ]; then
 		#thêm sed 's/<loc>/\n<loc>/g' để tương thích với wp sitemap vì wp sitemap nó nén, nên phải giải mã kiểu này mới tương thích
         XML_URL=$(curl ${CURL_OPTS} -sk ${1}| grep '<loc>' | grep '\.xml' | sed 's/<loc>/\n<loc>/g'| sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/'| sed '/ xmlns=/d')
