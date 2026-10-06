@@ -1,0 +1,136 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}BẢO MẬT ➜ CẬP NHẬT LUẬT TƯỜNG LỬA 8G ĐỒNG LOẠT${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+path_firewall_rules="/etc/wptt/bao-mat/firewall.txt"
+if [[ ! -f "$path_firewall_rules" ]]; then
+  echo -e "${C_RED}❌ Lỗi: Không tìm thấy file luật Tường lửa tại $path_firewall_rules!${C_RESET}"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+  exit 1
+fi
+
+# ==============================================================================
+# BƯỚC 1: XÁC NHẬN TRƯỚC KHI CHẠY
+# ==============================================================================
+if ! wptt_xac_nhan "XÁC NHẬN CẬP NHẬT TƯỜNG LỬA" \
+  "Hệ thống sẽ quét các website ĐANG BẬT Tường lửa 7G/8G." \
+  "Xóa sạch rule cũ và nạp lại bộ quy tắc mới nhất từ firewall.txt." \
+  "Đồng ý cập nhật đồng loạt" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+  exit 0
+fi
+
+echo ""
+tong_so_web=0
+web_cap_nhat=0
+
+# Đếm tổng số website để làm thanh tiến trình
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  domain="${filepath##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
+  if [[ "$domain" == ?*.?* ]]; then
+    ((tong_so_web++))
+  fi
+done
+
+if [[ $tong_so_web -eq 0 ]]; then
+  echo -e "${C_RED}❌ Không tìm thấy website nào trên hệ thống!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+  exit 1
+fi
+
+_runing "Bắt đầu quét và cập nhật Tường lửa cho toàn bộ hệ thống..."
+
+# ==============================================================================
+# BƯỚC 2: VÒNG LẶP XỬ LÝ (CHỈ CẬP NHẬT SITE ĐANG BẬT TƯỜNG LỬA)
+# ==============================================================================
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+  domain="${filepath##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
+
+  if [[ "$domain" == ?*.?* ]]; then
+    path_ht="/usr/local/lsws/$domain/html/.htaccess"
+    
+    # Chỉ xử lý nếu file .htaccess tồn tại VÀ đang có block 7G/8G cũ
+    if [[ -f "$path_ht" ]] && grep -qE '#begin-tuong-lua-bao-mat-[78]g' "$path_ht" 2>/dev/null; then
+      ((web_cap_nhat++))
+      echo -e "${C_CYAN}[ $web_cap_nhat ]${C_RESET} Đang nạp rule mới cho website: ${C_BOLD_WHITE}$domain${C_RESET}"
+
+      # 1. Dọn dẹp sạch sẽ block 7G/8G cũ
+      sed -i '/#begin-tuong-lua-bao-mat-[78]g/,/#end-tuong-lua-bao-mat-[78]g/d' "$path_ht"
+
+      # 2. Bơm nguyên khối Tường lửa mới từ firewall.txt lên đỉnh file .htaccess
+      TMP_FILE=$(mktemp)
+      cat "$path_firewall_rules" >"$TMP_FILE"
+      echo "" >>"$TMP_FILE"
+      cat "$path_ht" >>"$TMP_FILE"
+      
+      # Ghi đè lại (dùng cat để giữ nguyên User/Group ownership hiện tại của file)
+      cat "$TMP_FILE" >"$path_ht"
+      rm -f "$TMP_FILE"
+
+      # 3. Đồng bộ lại cấu hình biến vhost để chắc chắn ghi nhận Tường lửa đã bật
+      sed -i '/tuong_lua_7g/d' "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
+      echo 'tuong_lua_7g=1' >>"/etc/wptt/vhost/.$domain.conf"
+
+      # 4. Vá lỗi Bypass phpMyAdmin nếu đây là Website chính
+      if [[ "$Website_chinh" == "$domain" && -d "/usr/local/lsws/$domain/html/phpmyadmin" ]]; then
+        if ! grep -q 'phpmyadmin/index\\.php' "$path_ht" 2>/dev/null; then
+          sed -i '/RewriteCond %{QUERY_STRING} \^(%2d|-)/i \ \ \ \ RewriteCond %{REQUEST_URI} !^\/phpmyadmin\/index\\.php$ [NC]' "$path_ht"
+        fi
+      fi
+
+      # 5. Xử lý đồng bộ htaccess (Nếu đang dùng chế độ chuyển đổi)
+      unset vhost_chuyen_htaccess
+      . "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
+      if [[ -n "$vhost_chuyen_htaccess" ]]; then
+        /etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost "$domain" >/dev/null 2>&1
+      fi
+      
+      echo "Update rule Firewall 8G website $domain: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+    fi
+  fi
+done
+
+# ==============================================================================
+# BƯỚC 3: RELOAD VÀ BÁO CÁO
+# ==============================================================================
+_rundone "Cập nhật rule mới hoàn tất cho $web_cap_nhat website!"
+
+_runing "Đang nạp lại dịch vụ OpenLiteSpeed..."
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+_rundone "OpenLiteSpeed đã nhận diện cấu hình mới"
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}CẬP NHẬT LUẬT TƯỜNG LỬA THÀNH CÔNG${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tổng số quét     : ${C_YELLOW}$tong_so_web website${C_RESET}" 2
+left_text "Đã cập nhật mới  : ${C_GREEN}$web_cap_nhat website (Đang bật Tường lửa)${C_RESET}" 2
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ "${1:-}" == "98" ]]; then
+  echo -en "${C_CYAN}Nhấn [Enter] để quay lại Menu...${C_RESET}"
+  read -r
+  exec /etc/wptt/wptt-bao-mat-main 1
+fi

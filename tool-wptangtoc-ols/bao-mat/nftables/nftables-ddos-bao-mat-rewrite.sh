@@ -32,7 +32,7 @@ systemctl mask iptables
 systemctl stop fail2ban
 systemctl disable fail2ban
 systemctl mask fail2ban
-google=$(curl -s https://developers.google.com/static/search/apis/ipranges/googlebot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed '/^$/d')
+google=$(curl -s https://developers.google.com/static/crawling/ipranges/common-crawlers.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed '/^$/d')
 bing_ip=$(curl -s https://www.bing.com/toolbox/bingbot.json | jq '.prefixes| .[]|.ipv4Prefix' | sed '/null/d' | sed 's/"//g' | sed 's/ /\n/g' | sed 's/^/\n/g' | sed '/^$/d')
 
 if [[ ! -f /etc/systemd/system/ddos-blocker-xdp.service ]]; then
