@@ -39,9 +39,9 @@ fi
 dnf install golang -y
 
 if [[ ! -f /etc/systemd/system/layer7-ddos-blocker-nftables.service ]]; then
-  mkdir -p /usr/local/lsws/$NAME/bao-mat
-  cp -f /etc/wptt/bao-mat/nftables/anti-website-layer-7.go /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go
-  sed -i "s/wptangtoc.com/$NAME/g" /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go
+  mkdir -p /usr/local/lsws/"$NAME"/bao-mat
+  cp -f /etc/wptt/bao-mat/nftables/anti-website-layer-7.go /usr/local/lsws/"$NAME"/bao-mat/anti-website-layer-7.go
+  sed -i "s/wptangtoc.com/$NAME/g" /usr/local/lsws/"$NAME"/bao-mat/anti-website-layer-7.go
   ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)' || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com | grep -E -o '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 
   mkdir -p /etc/go_blocker/
@@ -52,10 +52,10 @@ if [[ ! -f /etc/systemd/system/layer7-ddos-blocker-nftables.service ]]; then
   echo $ip_all >/etc/go_blocker/whitelist.txt
   sed -i "s/\ /\\n/g" /etc/go_blocker/whitelist.txt
 
-  chmod +x /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7.go
-  cd /usr/local/lsws/$NAME/bao-mat && go build anti-website-layer-7.go && chmod +x anti-website-layer-7
+  chmod +x /usr/local/lsws/"$NAME"/bao-mat/anti-website-layer-7.go
+  cd /usr/local/lsws/"$NAME"/bao-mat && go build anti-website-layer-7.go && chmod +x anti-website-layer-7
   rm -f /usr/local/bin/anti-website-layer-7
-  mv /usr/local/lsws/$NAME/bao-mat/anti-website-layer-7 /usr/local/bin/
+  mv /usr/local/lsws/"$NAME"/bao-mat/anti-website-layer-7 /usr/local/bin/
   # rm -rf /usr/local/lsws/$NAME/bao-mat
   echo '
 [Unit]
@@ -85,7 +85,8 @@ fi
 
 cat <(crontab -l) | sed "/logs\/access.log/d" | crontab -
 cat <(crontab -l) <(echo "*/2 * * * * truncate -s 0 /usr/local/lsws/$NAME/logs/access.log") | crontab -
-if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
+
+if grep -q "AlmaLinux\|Rocky\|CentOS" /etc/*release 2>/dev/null; then
   systemctl restart crond
 else
   systemctl restart cron

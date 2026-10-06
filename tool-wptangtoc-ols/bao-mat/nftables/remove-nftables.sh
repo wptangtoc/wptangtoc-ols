@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC1091
 
 nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
 if [[ "$nftables_service" != "active" ]]; then
@@ -17,12 +18,16 @@ firewall-cmd --zone=public --add-service=http --add-service=https --permanent
 firewall-cmd --zone=public --add-port=443/udp --permanent
 port_ssh=$(grep -E '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n 1)
 port_ssh=${port_ssh:-22} # Trả về 22 nếu kết quả rỗng
-firewall-cmd --zone=public --add-port=${port_ssh}/tcp --permanent
+
+# Vá lỗi SC2086: Bọc ngoặc kép
+firewall-cmd --zone=public --add-port="${port_ssh}/tcp" --permanent
 
 path_webgui="/usr/local/lsws/conf/disablewebconsole"
-if [[ ! -f $path_webgui ]]; then
+# Vá lỗi SC2086
+if [[ ! -f "$path_webgui" ]]; then
   port_webgui_openlitespeed=$(cat /usr/local/lsws/admin/conf/admin_config.conf | grep "address" | grep -o '[0-9]\+$')
-  firewall-cmd --zone=public --add-port=${port_webgui_openlitespeed}/tcp --permanent
+  # Vá lỗi SC2086
+  firewall-cmd --zone=public --add-port="${port_webgui_openlitespeed}/tcp" --permanent
 fi
 
 #remote mariadb
@@ -32,9 +37,12 @@ else
   duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
 fi
 
-port_mariadb_remote=$(cat $duong_dan_cau_hinh_mariadb | grep 'port=' | grep -o '[0-9]\+$')
-if [[ $port_mariadb_remote ]]; then
-  firewall-cmd --zone=public --add-port=${port_mariadb_remote}/tcp --permanent
+# Vá lỗi SC2086: Bọc ngoặc kép cho biến đường dẫn
+port_mariadb_remote=$(cat "$duong_dan_cau_hinh_mariadb" | grep 'port=' | grep -o '[0-9]\+$')
+
+# Vá lỗi SC2086 & SC2236: Bọc ngoặc kép và dùng cờ -n để check chuỗi không rỗng
+if [[ -n "$port_mariadb_remote" ]]; then
+  firewall-cmd --zone=public --add-port="${port_mariadb_remote}/tcp" --permanent
 fi
 
 if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
@@ -43,7 +51,8 @@ else
   path_nftables_config="/etc/sysconfig/nftables.conf"
 fi
 
-rm -f $path_nftables_config
+# Vá lỗi SC2086
+rm -f "$path_nftables_config"
 
 sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
 sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
@@ -52,7 +61,6 @@ systemctl unmask fail2ban
 systemctl start fail2ban
 systemctl enable fail2ban
 systemctl restart fail2ban
-
 
 cat <(crontab -l) | sed "/bao-mat/d" | crontab -
 cat <(crontab -l) | sed "/truncate/d" | crontab -
@@ -70,7 +78,7 @@ fi
 
 if [[ -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service ]]; then
   systemctl stop layer7-lsws-litmit-ddos-blocker-nftables
-  systemctl disable layer7-ddos-blocker-nftables
+  systemctl disable layer7-lsws-litmit-ddos-blocker-nftables
   rm -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service
 fi
 
