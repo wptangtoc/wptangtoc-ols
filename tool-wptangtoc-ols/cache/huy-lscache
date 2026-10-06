@@ -1,53 +1,120 @@
 #!/bin/bash
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|Quan ly Cache => Huy kich hoat LScache 	                              |"
-echo "========================================================================="
-. /etc/wptt/tenmien
-echo ""
-echo ""
-echo "Lua chon website muon huy kich hoat lscache: "
-echo ""
-lua_chon_NAME
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+NAME=$1
+[[ "$NAME" == "98" ]] && NAME=""
+
+tinh_nang_ten="Hủy kích hoạt & Gỡ sạch LiteSpeed Cache"
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ CACHE ➜ $tinh_nang_ten${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# BƯỚC 1: LỰA CHỌN TÊN MIỀN
+# ==============================================================================
+if [[ -z "$NAME" ]]; then
+  # Tái sử dụng module menu lõi của WPTangToc
+  . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress 2>/dev/null
+  lua_chon_NAME "$tinh_nang_ten"
+fi
+
+# Chặn đứng nếu user muốn thoát
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-cache-main 1
+
+# Kiểm tra tồn tại Vhost
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" || "$NAME" = "0" ]]; then
-  clear
-  . /etc/wptt/wptt-wordpress-main
-  exit
-fi
-
-checkht="/usr/local/lsws/$NAME/html/.htaccess"
-grep=$(grep -c LiteSpeed "$checkht")
-if [[ "$grep" = "" || "$grep" = "0" ]]; then
-  echo "Ban chua kich hoat LScache tinh nay ban khong the su dung."
-  echo "Ban quay lai su dung plugin LiteSpeed cache wordpress hoac kich hoat lscache trong menu cua WPTangToc OLS."
-  exit
-fi
-
-pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/litespeed-cache"
-if [[ -d "$pathcheckplugin" ]]; then
-  echo "Ban da kich hoat lscache bang plugin LiteSpeed cache"
-  read -p "Ban muon huy xoa plugin LiteSpeed cache de tat lscache? (y/n): " check123
-  if [[ "$check123" = "y" ]]; then
-    wp plugin delete litespeed-cache --path="/usr/local/lsws/$NAME/html" --allow-root
-    echo "Hoan tat xoa plugin plugin LiteSpeed Cache va tat lscache"
-    /usr/local/lsws/bin/lswsctrl reload
-  fi
-  clear
-  exec /etc/wptt/wptt-cache-main 1
-  exit
-fi
-
-read -p "Ban muon huy kich hoat LSCache bang .htaccess? (y/n): " check
-if [[ "$check" = "y" ]]; then
-  sed -i '/IfModule LiteSpeed/,+6d' /usr/local/lsws/"$NAME"/html/.htaccess
-  /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-  echo "Hoan tat huy LScache"
-fi
-
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+if [[ ! -f "$pathcheck" ]]; then
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
+  sleep 2
   exec /etc/wptt/wptt-cache-main 1
 fi
+
+# Kiểm tra tồn tại WordPress
+path="/usr/local/lsws/$NAME/html"
+if [[ ! -f "$path/wp-load.php" ]]; then
+  echo -e "\n${C_RED}Website $NAME không sử dụng mã nguồn WordPress!${C_RESET}"
+  sleep 2
+  exec /etc/wptt/wptt-cache-main 1
+fi
+
+# ==============================================================================
+# BƯỚC 2: XÁC NHẬN HÀNH ĐỘNG
+# ==============================================================================
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn GỠ BỎ HOÀN TOÀN LiteSpeed Cache?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý Gỡ bỏ" "Hủy thao tác"; then
+  echo -e "\n${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+  sleep 1
+  exec /etc/wptt/wptt-cache-main 1
+fi
+
+echo ""
+_runing "Đang gỡ cài đặt và dọn dẹp LiteSpeed Cache cho $NAME..."
+
+# ==============================================================================
+# BƯỚC 3: XỬ LÝ DỌN DẸP SẠCH SẼ (CHUẨN SUEXEC)
+# ==============================================================================
+# Nạp biến môi trường của domain ($User_name_vhost) và ($phien_ban_php_domain_thuc_thi)
+. /etc/wptt/vhost/.$NAME.conf 2>/dev/null
+. /etc/wptt/php/php-cli-domain-config "$NAME" 2>/dev/null
+
+# Đóng gói lệnh WP-CLI chạy dưới quyền chủ sở hữu thư mục (Tương thích 100% suEXEC)
+WP_CLI="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
+
+# 1. Tắt và xóa plugin LiteSpeed Cache một cách chính thống qua WP-CLI
+# Việc này tự động dọn dẹp các rule .htaccess do plugin sinh ra (an toàn hơn sed)
+$WP_CLI plugin deactivate litespeed-cache --path="$path" >/dev/null 2>&1
+$WP_CLI plugin delete litespeed-cache --path="$path" >/dev/null 2>&1
+
+# 2. Xóa các tệp Drop-in Cache vật lý cứng đầu
+rm -f "$path/wp-content/object-cache.php" 2>/dev/null
+rm -f "$path/wp-content/advanced-cache.php" 2>/dev/null
+rm -rf "$path/wp-content/cache/"* 2>/dev/null
+
+# 3. Quét sạch tàn dư trong wp-config.php (Các tham số do script import tiêm vào)
+sed -i "/WP_CACHE/d" "$path/wp-config.php"
+sed -i "/LITESPEED_NO_PAGEOPTM/d" "$path/wp-config.php"
+sed -i "/LITESPEED_NO_LAZY/d" "$path/wp-config.php"
+sed -i "/LITESPEED_NO_OPTM/d" "$path/wp-config.php"
+sed -i "/WP_CACHE_KEY_SALT/d" "$path/wp-config.php"
+
+# 4. Flush Rewrite Rules (Reset lại .htaccess chuẩn của WordPress)
+$WP_CLI rewrite flush --path="$path" >/dev/null 2>&1
+
+# 5. Dọn dẹp RAM (Gọi module OPcache của hệ thống)
+if [[ -f "/etc/wptt/cache/lib-opcache-clear" ]]; then
+  . /etc/wptt/cache/lib-opcache-clear 2>/dev/null
+  wptt_xoa_opcache "$NAME" >/dev/null 2>&1
+fi
+
+echo "Hủy kích hoạt và xóa Litespeed Cache cho website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+
+
+if wptt_kha_dung_de_xoa_xac_thuc "$NAME"; then
+	if [[ -d /usr/local/lsws/$NAME/luucache ]];then
+		rm -rf /usr/local/lsws/$NAME/luucache
+	fi
+fi
+
+_rundone "Đã dọn dẹp sạch sẽ toàn bộ cấu hình Cache!"
+
+# Reload OLS nhẹ nhàng 1 lần duy nhất để giải phóng con trỏ file tĩnh nếu cần
+/usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+
+# ==============================================================================
+# KẾT THÚC
+# ==============================================================================
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}HOÀN TẤT HỦY CẤU HÌNH LITESPEED CACHE${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}"
+left_text "Trạng thái       : ${C_GREEN}Đã gỡ cài đặt và dọn dẹp hệ thống tập tin${C_RESET}"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
