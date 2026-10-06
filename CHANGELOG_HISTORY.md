@@ -1,3 +1,11 @@
+## [8.2.0.0]
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp công cụ quét mã độc WordPress (Chuyển sang YARA):** Thay thế engine ClamAV bằng YARA với bộ quy tắc chuyên sâu dành riêng cho mã nguồn WordPress, giúp tăng tốc độ quét, nâng cao độ chính xác khi phát hiện webshell/backdoor và tiết kiệm đáng kể tài nguyên RAM, CPU cho máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0]
 
 ### 🛠️ Tối ưu hệ thống
@@ -94,14 +102,6 @@
 
 ### 🛠️ Tối ưu hệ thống
 * **Tái cấu trúc bộ cài đặt tiêu chuẩn:** Tối ưu và chuẩn hóa toàn bộ kịch bản cài đặt theo kiến trúc mới, nâng cao tiêu chuẩn bảo mật, gia tăng độ ổn định và giúp quá trình thiết lập máy chủ diễn ra nhanh chóng, mượt mà hơn.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-# WPTangToc OLS v8.1.4
-
-### 🛠️ Tối ưu hệ thống
-* **Tái cấu trúc bộ cài đặt tiêu chuẩn:** Viết lại toàn bộ quy trình và kịch bản cài đặt theo kiến trúc mới, nâng cao tiêu chuẩn bảo mật, gia tăng độ ổn định và giúp quá trình thiết lập máy chủ diễn ra nhanh chóng, mượt mà hơn.
 
 
 ---
