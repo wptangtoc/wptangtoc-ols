@@ -264,10 +264,6 @@ EOF
         return 1
     }
 
-    echo "✓ Security isolation fixture initialized." >&3
-    echo "  Victim user   : $VICTIM_USER" >&3
-    echo "  Attacker user : $ATTACKER_USER" >&3
-    echo "  External user : $EXTERNAL_HACKER" >&3
 }
 
 # =================================================================

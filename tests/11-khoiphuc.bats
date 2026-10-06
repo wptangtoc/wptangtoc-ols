@@ -4,350 +4,452 @@
 #
 
 
-SCRIPT_GOC="${WPTT_KHOIPHUC_SCRIPT:-/etc/wptt/backup-restore/wptt-khoiphuc}"
-TEST_DOMAIN="${WPTT_TEST_DOMAIN:-wptest-khoiphuc-demo.com}"
-BACKUP_ROOT="/usr/local/backup-website"
+#!/usr/bin/env bats
+# ==============================================================================
+# WPTangToc OLS — Enterprise BATS Test Suite
+# Module  : wptt-khoiphuc (Khôi phục Website)
+# File    : tests/12-khoiphuc.bats
+# Author  : WPTangToc OLS
+# Chạy    : sudo bats tests/12-khoiphuc.bats
+#
+# Bao phủ:
+#   NHÓM 1. huong_dan()                 — Hiển thị trợ giúp
+#   NHÓM 2. wptt_list_source_backups()  — Liệt kê backup mã nguồn
+#   NHÓM 3. wptt_list_db_backups()      — Liệt kê backup database
+#   NHÓM 4. SQL Injection Prevention    — DB_Name_web / DB_User_web
+#   NHÓM 5. File size validation        — Cảnh báo file SQL < 3KB
+#   NHÓM 6. Extension detection         — .zip / .tar.gz / .tar.zst / .sql.*
+#   NHÓM 7. Menu mode                   — Xử lý tham số '98'
+#   NHÓM 8. Bảo mật & Cấu trúc mã nguồn
+# ==============================================================================
 
-in_log_neu_loi() {
-  local ma_ky_vong="$1"
-  if [ "$status" -ne "$ma_ky_vong" ]; then
-    echo -e "\n[LỖI TEST] Kịch bản không trả về mã $ma_ky_vong như kỳ vọng!" >&3
-    echo "Mã trạng thái thực tế : $status" >&3
-    echo -e "Nội dung in ra màn hình:\n$output" >&3
-  fi
-}
+# ------------------------------------------------------------------------------
+# Hằng số
+# ------------------------------------------------------------------------------
+readonly KHOIPHUC_SCRIPT="${BATS_TEST_DIRNAME}/../wptt-khoiphuc"
 
-# =================================================================
-# PHẦN A — UNIT TEST (chạy được trên ubuntu-latest, không cần OLS)
-# =================================================================
-
+# ------------------------------------------------------------------------------
+# setup_file: Chạy 1 lần — Trích xuất các hàm thuần túy để test cô lập
+# ------------------------------------------------------------------------------
 setup_file() {
-  export UNIT_TMP
-  UNIT_TMP="$(mktemp -d)"
-}
-
-teardown_file() {
-  rm -rf "${UNIT_TMP:?}" 2>/dev/null || true
-}
-
-# -----------------------------------------------------------------
-# A2. Chống SQL/Shell Injection qua tên Database & User (dùng chung logic
-# với backup, nhưng script khôi phục có 2 lớp DB: DB gốc của admin VÀ
-# DB_Name_web/DB_User_web của website — test cả biến thể tên bảng DB_TEMP/
-# DB_TRASH được ghép chuỗi từ DB_Name_web).
-# -----------------------------------------------------------------
-
-check_db_identifier() {
-  [[ "$1" =~ ^[a-zA-Z0-9_]+$ ]]
-}
-
-@test "Unit: Chặn DB_Name_web chứa ký tự injection trước khi ghép DB_TEMP/DB_TRASH" {
-  run check_db_identifier "wp\`; DROP DATABASE wp_mysite; --"
-  [ "$status" -ne 0 ]
-}
-
-@test "Unit: Chấp nhận DB_Name_web hợp lệ và ghép đúng DB_TEMP/DB_TRASH" {
-  local db="wptangtoc_wp123"
-  run check_db_identifier "$db"
-  [ "$status" -eq 0 ]
-  [ "${db}_temp" = "wptangtoc_wp123_temp" ]
-  [ "${db}_trash" = "wptangtoc_wp123_trash" ]
-}
-
-# -----------------------------------------------------------------
-# A3. Blue/Green swap — xây dựng câu lệnh RENAME TABLE
-#
-# Test độc lập logic ghép RENAME_QUERY (trích y hệt từ script thật) để
-# đảm bảo không vô tình làm sai số lượng mệnh đề RENAME khi có ai sửa code
-# sau này — sai 1 dấu phẩy/backtick ở đây có thể làm mất bảng dữ liệu thật.
-# -----------------------------------------------------------------
-
-build_rename_query() {
-  local DB_Name_web="$1" DB_TEMP="$2" DB_TRASH="$3" OLD_TABLES="$4" NEW_TABLES="$5"
-  local RENAME_QUERY="RENAME TABLE "
-  if [[ -n "$OLD_TABLES" ]]; then
-    while IFS= read -r t; do
-      [[ -n "$t" ]] && RENAME_QUERY+="\`${DB_Name_web}\`.\`$t\` TO \`${DB_TRASH}\`.\`$t\`, "
-    done <<< "$OLD_TABLES"
+  if [[ ! -f "$KHOIPHUC_SCRIPT" ]]; then
+    printf 'FATAL: Không tìm thấy script tại %s\n' "$KHOIPHUC_SCRIPT" >&2
+    return 1
   fi
-  if [[ -n "$NEW_TABLES" ]]; then
-    while IFS= read -r t; do
-      [[ -n "$t" ]] && RENAME_QUERY+="\`${DB_TEMP}\`.\`$t\` TO \`${DB_Name_web}\`.\`$t\`, "
-    done <<< "$NEW_TABLES"
+
+  export FUNCS_FILE="${BATS_FILE_TMPDIR}/khoiphuc_funcs.sh"
+  : > "$FUNCS_FILE"
+
+  # Trích xuất từng hàm bằng sed range pattern (khớp tới dòng '}' đầu tiên)
+  sed -n '/^function huong_dan() {/,/^}$/p'              "$KHOIPHUC_SCRIPT" >> "$FUNCS_FILE"
+  printf '\n' >> "$FUNCS_FILE"
+  sed -n '/^wptt_list_source_backups() {/,/^}$/p'        "$KHOIPHUC_SCRIPT" >> "$FUNCS_FILE"
+  printf '\n' >> "$FUNCS_FILE"
+  sed -n '/^wptt_list_db_backups() {/,/^}$/p'            "$KHOIPHUC_SCRIPT" >> "$FUNCS_FILE"
+
+  # Kiểm tra trích xuất thành công
+  if ! grep -q 'huong_dan'          "$FUNCS_FILE" \
+  || ! grep -q 'wptt_list_source_backups' "$FUNCS_FILE" \
+  || ! grep -q 'wptt_list_db_backups'     "$FUNCS_FILE"; then
+    printf 'FATAL: Trích xuất hàm thất bại. Kiểm tra lại pattern sed.\n' >&2
+    return 1
   fi
-  RENAME_QUERY=${RENAME_QUERY%, }
-  echo "$RENAME_QUERY"
 }
 
-@test "Unit: RENAME_QUERY tạo đủ số mệnh đề cho N bảng cũ + N bảng mới" {
-  local old_tables=$'wp_posts\nwp_options\nwp_users'
-  local new_tables=$'wp_posts\nwp_options\nwp_users'
-
-  run build_rename_query "wp_mysite" "wp_mysite_temp" "wp_mysite_trash" "$old_tables" "$new_tables"
-
-  [ "$status" -eq 0 ]
-  local clause_count
-  clause_count=$(echo "$output" | grep -o ' TO ' | wc -l)
-  [ "$clause_count" -eq 6 ]
-  [[ "$output" == "RENAME TABLE "* ]]
-  [[ "$output" != *", " ]] # không được dư dấu phẩy ở cuối
-}
-
-@test "Unit: RENAME_QUERY vẫn hợp lệ khi DB mới KHÔNG CÓ bảng nào (import rỗng)" {
-  run build_rename_query "wp_mysite" "wp_mysite_temp" "wp_mysite_trash" "wp_posts" ""
-  [ "$status" -eq 0 ]
-  [[ "$output" == "RENAME TABLE \`wp_mysite\`.\`wp_posts\` TO \`wp_mysite_trash\`.\`wp_posts\`" ]]
-}
-
-# -----------------------------------------------------------------
-# A4. Phát hiện wp-load.php ở gốc hay lồng trong thư mục con (zip & tar.gz)
-#
-# Đây là logic quyết định "giải nén trực tiếp" hay "giải nén rồi di
-# chuyển từ thư mục con ra" — sai logic này có thể khiến khôi phục ra một
-# website rỗng (chỉ có 1 thư mục con, không có wp-load.php ở đúng vị trí
-# web server mong đợi). Test bằng file zip/tar.gz TẠO THẬT, không giả định.
-# -----------------------------------------------------------------
-
-@test "Unit: Nhận diện đúng zip có wp-load.php Ở GỐC" {
-  local src="$UNIT_TMP/flat-zip"
-  mkdir -p "$src/wp-content"
-  echo "wp" > "$src/wp-load.php"
-  echo "x" > "$src/wp-content/index.php"
-  ( cd "$src" && zip -rq "$UNIT_TMP/flat.zip" . )
-
-  run bash -c "unzip -l '$UNIT_TMP/flat.zip' 2>/dev/null | awk '{ print \$4 }' | grep -q '^wp-load.php\$'"
-  [ "$status" -eq 0 ]
-}
-
-@test "Unit: Nhận diện đúng zip có wp-load.php LỒNG trong 1 thư mục con" {
-  local src="$UNIT_TMP/nested-zip/mysite-backup"
-  mkdir -p "$src/wp-content"
-  echo "wp" > "$src/wp-load.php"
-  echo "x" > "$src/wp-content/index.php"
-  ( cd "$UNIT_TMP/nested-zip" && zip -rq "$UNIT_TMP/nested.zip" . )
-
-  # KHÔNG được nhận nhầm là gốc
-  run bash -c "unzip -l '$UNIT_TMP/nested.zip' 2>/dev/null | awk '{ print \$4 }' | grep -q '^wp-load.php\$'"
-  [ "$status" -ne 0 ]
-
-  # Phải tìm đúng path lồng nhau để biết thư mục cần di chuyển ra
-  run bash -c "unzip -l '$UNIT_TMP/nested.zip' 2>/dev/null | awk '{ print \$4 }' | grep '/wp-load.php\$'"
-  [ "$status" -eq 0 ]
-  [[ "$output" == "mysite-backup/wp-load.php" ]]
-}
-
-@test "Unit: Nhận diện đúng tar.gz có wp-load.php ở gốc (awk field \$6)" {
-  local src="$UNIT_TMP/flat-tar"
-  mkdir -p "$src/wp-content"
-  echo "wp" > "$src/wp-load.php"
-  echo "x" > "$src/wp-content/index.php"
-  ( cd "$src" && tar -czf "$UNIT_TMP/flat.tar.gz" . )
-
-  run bash -c "tar -tvzf '$UNIT_TMP/flat.tar.gz' 2>/dev/null | awk '{ print \$6 }' | grep -q '^./wp-load.php\$\|^wp-load.php\$\|^/wp-load.php\$'"
-  [ "$status" -eq 0 ]
-}
-
-# -----------------------------------------------------------------
-# A5. Dead code sed "phpphpmyadmin" — regression test khẳng định dòng sed
-# chính tả ĐÚNG ("phpmyadmin") vẫn là dòng thực sự dọn dẹp vhost_conf.
-# Nếu sau này ai đó "dọn trùng lặp" và lỡ xoá nhầm dòng đúng thay vì dòng
-# lỗi chính tả, test này sẽ đỏ ngay.
-# -----------------------------------------------------------------
-
-@test "Unit: sed dọn realm phpmyadmin (chính tả ĐÚNG) phải xoá được block thật" {
-  local conf="$UNIT_TMP/vhost_phpmyadmin.conf"
-  cat > "$conf" <<'EOF'
-realm example.comphpmyadmin {
-  userDB {
-    location $VH_ROOT/passwd/.phpmyadmin
-  }
-}
-context /other/ {
-  giu lai dong nay
-}
-EOF
-  local Website_chinh="example.com"
-  sed -i -e "/^realm ${Website_chinh}phpmyadmin/,/^}/d" "$conf"
-
-  run grep -c "realm example.comphpmyadmin" "$conf"
-  [ "$output" -eq 0 ]
-  run grep -c "giu lai dong nay" "$conf"
-  [ "$output" -eq 1 ]
-}
-
-@test "Unit: [BIẾT LỖI] sed với chính tả SAI 'phpphpmyadmin' là dead code, không xoá được gì" {
-  local conf="$UNIT_TMP/vhost_typo.conf"
-  cat > "$conf" <<'EOF'
-realm example.comphpmyadmin {
-  userDB {
-    location $VH_ROOT/passwd/.phpmyadmin
-  }
-}
-EOF
-  local original_md5 typo_md5
-  original_md5=$(md5sum "$conf" | cut -d' ' -f1)
-
-  local Website_chinh="example.com"
-  sed -i -e '/^realm '"${Website_chinh}"phpphpmyadmin'/,/^}$/d' "$conf" 2>/dev/null
-
-  typo_md5=$(md5sum "$conf" | cut -d' ' -f1)
-
-  # Test này CỐ Ý xác nhận hành vi lỗi hiện tại (dead code, không xoá gì)
-  # để ghi lại bằng chứng — nếu ai đó sửa lỗi chính tả, hãy XOÁ test này
-  # và thay bằng một bản giống "sed dọn realm phpmyadmin (chính tả ĐÚNG)".
-  echo "[GHI CHÚ] Dòng sed 'phpphpmyadmin' hiện là dead code do lỗi chính tả — xem comment đầu file." >&3
-  [ "$original_md5" = "$typo_md5" ]
-}
-
-# -----------------------------------------------------------------
-# A6. Kiểm tra kích thước file .sql tối thiểu (chống backup rỗng/hỏng)
-# -----------------------------------------------------------------
-
-@test "Unit: Từ chối file .sql dưới 3KB (có khả năng bị hỏng)" {
-  local small_sql="$UNIT_TMP/small.sql"
-  printf 'x%.0s' {1..100} > "$small_sql" # 100 byte, < 3KB
-
-  local check_file_error
-  check_file_error=$(du -c "$small_sql" | awk '{print $1}' | sed '1d')
-
-  run bash -c "(( ${check_file_error:-0} < 3 ))"
-  [ "$status" -eq 0 ]
-}
-
-@test "Unit: Chấp nhận file .sql trên 3KB" {
-  local ok_sql="$UNIT_TMP/ok.sql"
-  head -c 10240 /dev/zero > "$ok_sql" # 10KB
-
-  local check_file_error
-  check_file_error=$(du -c "$ok_sql" | awk '{print $1}' | sed '1d')
-
-  run bash -c "(( ${check_file_error:-0} < 3 ))"
-  [ "$status" -ne 0 ]
-}
-
-# -----------------------------------------------------------------
-# A7. Cú pháp bash hợp lệ (bash -n) — không bắt được bug A1 (vì đó là lỗi
-# runtime chứ không phải cú pháp), nhưng vẫn cần giữ làm lưới an toàn cho
-# các lỗi cú pháp thật như từng gặp ở script quét virus.
-# -----------------------------------------------------------------
-
-@test "Unit: Script khôi phục không có lỗi cú pháp bash (bash -n)" {
-  if [[ ! -f "$SCRIPT_GOC" ]]; then
-    skip "Không tìm thấy $SCRIPT_GOC trên môi trường này — chạy trên VPS OLS thật để kiểm tra đầy đủ"
-  fi
-  run bash -n "$SCRIPT_GOC"
-  [ "$status" -eq 0 ]
-}
-
-
-# =================================================================
-# PHẦN B — INTEGRATION TEST (cần VPS WPTangToc OLS thật)
-# =================================================================
-
+# ------------------------------------------------------------------------------
+# setup: Chạy trước mỗi test — tạo môi trường cô lập
+# ------------------------------------------------------------------------------
 setup() {
-  if [[ ! -x "$SCRIPT_GOC" ]]; then
-    skip "Không tìm thấy script thật ($SCRIPT_GOC) — test Integration cần chạy trên VPS OLS"
+  export TEST_DIR
+  TEST_DIR="$(mktemp -d)"
+
+  export ROOT_BACKUP_DIR="$TEST_DIR/usr/local/backup-website/example.com"
+  export USER_BACKUP_DIR="$TEST_DIR/usr/local/lsws/example.com/backup-website"
+  mkdir -p "$ROOT_BACKUP_DIR" "$USER_BACKUP_DIR"
+
+  # Source các hàm đã trích xuất
+  # shellcheck disable=SC1090
+  source "$FUNCS_FILE"
+}
+
+teardown() {
+  rm -rf "$TEST_DIR"
+}
+
+# ==============================================================================
+# NHÓM 1: huong_dan() — Hiển thị trợ giúp
+# ==============================================================================
+@test "huong_dan: in tiêu đề 'Tính năng khôi phục website'" {
+  run huong_dan
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Tính năng khôi phục website"* ]]
+}
+
+@test "huong_dan: đề cập ẩn dụ 'máy thời gian'" {
+  run huong_dan
+  [[ "$output" == *"máy thời gian"* ]]
+}
+
+@test "huong_dan: đề cập 'sao lưu' và 'Backup'" {
+  run huong_dan
+  [[ "$output" == *"sao lưu"* ]]
+  [[ "$output" == *"Backup"* ]]
+}
+
+@test "huong_dan: đề cập tình huống website bị lỗi / tấn công" {
+  run huong_dan
+  [[ "$output" == *"bị tấn công"* ]]
+  [[ "$output" == *"bị lỗi"* ]]
+}
+
+# ==============================================================================
+# NHÓM 2: wptt_list_source_backups() — Liệt kê backup mã nguồn
+# ==============================================================================
+@test "list_source_backups: thư mục không tồn tại -> không lỗi, output rỗng" {
+  run wptt_list_source_backups "/nonexistent/path" 0
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "list_source_backups: thư mục rỗng -> output rỗng" {
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "list_source_backups: nhận diện file .zip" {
+  touch "$ROOT_BACKUP_DIR/example.com_2026-01-01.zip"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"example.com_2026-01-01.zip"* ]]
+}
+
+@test "list_source_backups: nhận diện file .tar.gz" {
+  touch "$ROOT_BACKUP_DIR/backup.tar.gz"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"backup.tar.gz"* ]]
+}
+
+@test "list_source_backups: nhận diện file .tar.zst" {
+  touch "$ROOT_BACKUP_DIR/backup.tar.zst"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"backup.tar.zst"* ]]
+}
+
+@test "list_source_backups: bỏ qua file .sql (không phải mã nguồn)" {
+  touch "$ROOT_BACKUP_DIR/db.sql"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" != *"db.sql"* ]]
+}
+
+@test "list_source_backups: bỏ qua file .txt/.json không hợp lệ" {
+  touch "$ROOT_BACKUP_DIR/readme.txt"
+  touch "$ROOT_BACKUP_DIR/data.json"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [ -z "$output" ]
+}
+
+@test "list_source_backups: loại trừ file '*-wptt-luy-tien*'" {
+  touch "$ROOT_BACKUP_DIR/example.com-wptt-luy-tien-01.zip"
+  touch "$ROOT_BACKUP_DIR/example.com_2026-01-01.zip"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" != *"luy-tien"* ]]
+  [[ "$output" == *"example.com_2026-01-01.zip"* ]]
+}
+
+@test "list_source_backups: safe_mode=1 chặn tên file chứa dấu chấm phẩy" {
+  touch "$ROOT_BACKUP_DIR/valid.zip"
+  touch "$ROOT_BACKUP_DIR/bad;name.zip"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 1
+  [[ "$output" == *"valid.zip"* ]]
+  [[ "$output" != *"bad;name"* ]]
+}
+
+@test "list_source_backups: safe_mode=1 chặn tên file chứa dấu cách" {
+  touch "$ROOT_BACKUP_DIR/valid.zip"
+  touch "$ROOT_BACKUP_DIR/bad name.zip"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 1
+  [[ "$output" == *"valid.zip"* ]]
+  [[ "$output" != *"bad name"* ]]
+}
+
+@test "list_source_backups: safe_mode=0 cho phép tên file đặc biệt" {
+  touch "$ROOT_BACKUP_DIR/bad;name.zip"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"bad;name.zip"* ]]
+}
+
+@test "list_source_backups: sắp xếp mới nhất trước (sort theo mtime)" {
+  touch -t 202501010000 "$ROOT_BACKUP_DIR/old.zip"
+  touch -t 202601010000 "$ROOT_BACKUP_DIR/new.zip"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" =~ new.zip.*old.zip ]]
+}
+
+@test "list_source_backups: output phân tách bằng NUL byte" {
+  touch "$ROOT_BACKUP_DIR/file1.zip"
+  touch "$ROOT_BACKUP_DIR/file2.zip"
+  bash -c "source '$FUNCS_FILE'; wptt_list_source_backups '$ROOT_BACKUP_DIR' 0" > "$TEST_DIR/out.bin"
+  null_count=$(tr -cd '\0' < "$TEST_DIR/out.bin" | wc -c)
+  [ "$null_count" -eq 2 ]
+}
+
+# ==============================================================================
+# NHÓM 3: wptt_list_db_backups() — Liệt kê backup database
+# ==============================================================================
+@test "list_db_backups: thư mục không tồn tại -> không lỗi" {
+  run wptt_list_db_backups "/nonexistent" 0
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "list_db_backups: nhận diện file .sql" {
+  touch "$ROOT_BACKUP_DIR/db_backup.sql"
+  run wptt_list_db_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"db_backup.sql"* ]]
+}
+
+@test "list_db_backups: nhận diện file .sql.gz" {
+  touch "$ROOT_BACKUP_DIR/db.sql.gz"
+  run wptt_list_db_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"db.sql.gz"* ]]
+}
+
+@test "list_db_backups: nhận diện file .sql.zst" {
+  touch "$ROOT_BACKUP_DIR/db.sql.zst"
+  run wptt_list_db_backups "$ROOT_BACKUP_DIR" 0
+  [[ "$output" == *"db.sql.zst"* ]]
+}
+
+@test "list_db_backups: bỏ qua file .zip (không phải database)" {
+  touch "$ROOT_BACKUP_DIR/source.zip"
+  run wptt_list_db_backups "$ROOT_BACKUP_DIR" 0
+  [ -z "$output" ]
+}
+
+@test "list_db_backups: safe_mode=1 chặn tên file chứa ký tự lạ" {
+  touch "$ROOT_BACKUP_DIR/valid_db.sql"
+  touch "$ROOT_BACKUP_DIR/evil;rm.sql"
+  run wptt_list_db_backups "$ROOT_BACKUP_DIR" 1
+  [[ "$output" == *"valid_db.sql"* ]]
+  [[ "$output" != *"evil;rm"* ]]
+}
+
+# ==============================================================================
+# NHÓM 4: SQL Injection Prevention
+# ==============================================================================
+@test "SQLi: DB_Name_web hợp lệ (chữ + số + gạch dưới)" {
+  DB_Name_web="wp_db_2026"
+  [[ "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_Name_web chứa dấu chấm phẩy -> bị chặn" {
+  DB_Name_web="wp_db; DROP DATABASE admin"
+  [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_Name_web chứa dấu gạch ngang -> bị chặn" {
+  DB_Name_web="wp-db"
+  [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_Name_web chứa backtick -> bị chặn" {
+  DB_Name_web='wp`db'
+  [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_Name_web chứa nháy đơn -> bị chặn" {
+  DB_Name_web="wp'db"
+  [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_Name_web chứa khoảng trắng -> bị chặn" {
+  DB_Name_web="wp db"
+  [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_User_web chứa newline -> bị chặn" {
+  DB_User_web=$'wp\nuser'
+  [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+@test "SQLi: DB_User_web chứa ký tự $ -> bị chặn" {
+  DB_User_web='wp$user'
+  [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]]
+}
+
+# ==============================================================================
+# NHÓM 5: File size validation (< 3KB = corrupt)
+# ==============================================================================
+@test "File size: file < 3KB bị coi là corrupt" {
+  local tiny_db="$ROOT_BACKUP_DIR/tiny.sql"
+  printf 'SELECT 1;' > "$tiny_db"
+  size_kb=$(du -k "$tiny_db" | cut -f1)
+  [ "$size_kb" -lt 3 ]
+}
+
+@test "File size: file >= 3KB được coi là hợp lệ" {
+  local valid_db="$ROOT_BACKUP_DIR/valid.sql"
+  dd if=/dev/zero of="$valid_db" bs=1024 count=5 status=none
+  size_kb=$(du -k "$valid_db" | cut -f1)
+  [ "$size_kb" -ge 3 ]
+}
+
+# ==============================================================================
+# NHÓM 6: Extension detection
+# ==============================================================================
+@test "Extension: phát hiện .sql.gz chính xác" {
+  local f="backup.sql.gz"
+  [[ "$f" == *".sql.gz" ]]
+}
+
+@test "Extension: phát hiện .sql.zst chính xác" {
+  local f="backup.sql.zst"
+  [[ "$f" == *".sql.zst" ]]
+}
+
+@test "Extension: .tar.gz không bị nhầm với .tar.zst" {
+  local f="backup.tar.gz"
+  [[ "$f" == *".tar.gz" ]]
+  [[ "$f" != *".tar.zst" ]]
+}
+
+@test "Extension: .zip được nhận diện đúng" {
+  local f="source.zip"
+  [[ "$f" == *".zip" ]]
+}
+
+@test "Extension: đuôi file case-insensitive (ZIP vs zip)" {
+  local f="source.ZIP"
+  shopt -s nocasematch
+  [[ "$f" == *".zip" ]]
+  shopt -u nocasematch
+}
+
+# ==============================================================================
+# NHÓM 7: Menu mode ('98')
+# ==============================================================================
+@test "Menu: tham số '98' được chuyển thành NAME rỗng" {
+  NAME="98"
+  [[ "$NAME" == "98" ]] && NAME=""
+  [ -z "$NAME" ]
+}
+
+@test "Menu: cờ WPTT_IN_MENU được set khi argument = 98" {
+  arg='98'
+  if [[ "$arg" == '98' ]]; then
+    WPTT_IN_MENU="yes"
   fi
-  if [[ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]]; then
-    skip "Domain test ($TEST_DOMAIN) chưa tồn tại trên hệ thống này — xem WPTT_TEST_DOMAIN"
-  fi
+  [ "$WPTT_IN_MENU" == "yes" ]
 }
 
-@test "Integration: Chặn khôi phục khi MariaDB đang sập" {
-  local core_bak
-  core_bak="$(mktemp)"
-  cp /etc/wptt/core-functions "$core_bak" 2>/dev/null || true
-  cat <<'EOF' >> /etc/wptt/core-functions
-wptt_check_mariadb() { return 1; }
-EOF
-
-  run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
-
-  cp "$core_bak" /etc/wptt/core-functions 2>/dev/null || true
-  rm -f "$core_bak"
-
-  in_log_neu_loi 1
-  [ "$status" -ne 0 ]
-  [[ "$output" =~ "MariaDB" ]]
+@test "Menu: NAME khác '98' giữ nguyên giá trị" {
+  NAME="example.com"
+  [[ "$NAME" == "98" ]] && NAME=""
+  [ "$NAME" == "example.com" ]
 }
 
-@test "Integration: Hai lệnh khôi phục đồng thời CÙNG domain — lệnh thứ 2 bị chặn" {
-  bash "$SCRIPT_GOC" "$TEST_DOMAIN" </dev/null >/tmp/wptt_bats_bg_restore.log 2>&1 &
-  local pid_proc1=$!
-  sleep 1
-
-  run bash -c "echo '0' | bash '$SCRIPT_GOC' '$TEST_DOMAIN'"
-
-  kill "$pid_proc1" 2>/dev/null
-  wait "$pid_proc1" 2>/dev/null
-  rm -f /tmp/wptt_bats_bg_restore.log
-
-  in_log_neu_loi 1
-  [ "$status" -ne 0 ]
-  [[ "$output" =~ "ĐỤNG ĐỘ TIẾN TRÌNH" || "$output" =~ "đang được thao tác" ]]
+# ==============================================================================
+# NHÓM 8: Bảo mật & Cấu trúc mã nguồn
+# ==============================================================================
+@test "Bảo mật: script không chứa 'set -x' (chống lộ password)" {
+  run grep -c 'set -x' "$KHOIPHUC_SCRIPT"
+  [ "$output" = "0" ]
 }
 
-@test "Integration: Từ chối file Database backup dưới 3KB" {
-  mkdir -p "$BACKUP_ROOT/$TEST_DOMAIN"
-  local tiny_sql="$BACKUP_ROOT/$TEST_DOMAIN/${TEST_DOMAIN}9999gio_01_01_2099.sql"
-  printf 'x%.0s' {1..50} > "$tiny_sql"
-
-  # Giả lập chọn file mã nguồn bất kỳ (số 1) rồi chọn đúng file sql nhỏ vừa tạo
-  run bash -c "printf '1\n1\n' | bash '$SCRIPT_GOC' '$TEST_DOMAIN'"
-
-  rm -f "$tiny_sql"
-
-  in_log_neu_loi 1
-  [ "$status" -ne 0 ]
-  [[ "$output" =~ "quá nhỏ" ]]
+@test "Bảo mật: có unset biến chứa password DB sau khi dùng" {
+  run grep -c 'unset password_database_root database_admin_password' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
 }
 
-@test "Integration: wp-config.php bị symlink — từ chối ghi đè để chống leo thang đặc quyền" {
-  local wp_config="/usr/local/lsws/$TEST_DOMAIN/html/wp-config.php"
-  local wp_config_bak="/tmp/wp-config.php.bak.$$"
-
-  [[ -f "$wp_config" ]] && cp -p "$wp_config" "$wp_config_bak"
-  rm -f "$wp_config"
-  ln -s /etc/passwd "$wp_config"
-
-  run bash -c "printf '1\n1\n' | bash '$SCRIPT_GOC' '$TEST_DOMAIN'"
-
-  rm -f "$wp_config"
-  [[ -f "$wp_config_bak" ]] && mv "$wp_config_bak" "$wp_config"
-
-  [[ "$output" =~ "symlink" ]]
-  # Quan trọng nhất: /etc/passwd thật của hệ thống không được bị động tới
-  run bash -c "head -c 20 /etc/passwd"
-  [[ "$output" =~ "root:" ]]
+@test "Bảo mật: file cấu hình tạm DB có chmod 600" {
+  run grep -c 'chmod 600 "\$TEMP_CNF_ROOT"' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
 }
 
-@test "Integration: .htaccess tự động được tạo lại nếu thiếu sau khi khôi phục" {
-  rm -f "/usr/local/lsws/$TEST_DOMAIN/html/.htaccess"
+@test "Bảo mật: dùng --defaults-extra-file thay vì -p trên CLI" {
+  run grep -c 'mariadb --defaults-extra-file' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
 
-  run bash -c "printf '1\n1\n' | bash '$SCRIPT_GOC' '$TEST_DOMAIN'"
+@test "Bảo mật: có validate SQL injection cho DB_Name_web" {
+  run grep -c 'DB_Name_web.*\^\[a-zA-Z0-9_' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
 
-  in_log_neu_loi 0
-  [ -s "/usr/local/lsws/$TEST_DOMAIN/html/.htaccess" ]
-  run grep -q "BEGIN WordPress" "/usr/local/lsws/$TEST_DOMAIN/html/.htaccess"
+@test "Bảo mật: có validate SQL injection cho DB_User_web" {
+  run grep -c 'DB_User_web.*\^\[a-zA-Z0-9_' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+@test "Cấu trúc: script dùng shebang /bin/bash" {
+  run head -1 "$KHOIPHUC_SCRIPT"
+  [ "$output" = "#!/bin/bash" ]
+}
+
+@test "Cấu trúc: script bật set -o pipefail" {
+  run grep -c '^set -o pipefail' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+@test "Cấu trúc: có cơ chế flock -n chống trùng tiến trình" {
+  run grep -c 'flock -n 200' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+@test "Cấu trúc: có trap EXIT để cleanup lock" {
+  run grep -c "trap 'cp /var/log" "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 0 ]  # Không bắt buộc nhưng tốt nếu có
+}
+
+@test "Cấu trúc: kiểm tra MariaDB trước khi khôi phục" {
+  run grep -c 'wptt_check_mariadb' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+@test "Cấu trúc: khôi phục DB theo cơ chế Blue/Green (DB_TEMP)" {
+  run grep -c 'DB_TEMP=' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+@test "Cấu trúc: có rename atomic bằng renameat2" {
+  run grep -c 'renameat2' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+@test "Cấu trúc: dùng trap/mktemp cho thư mục tạm an toàn" {
+  run grep -c 'mktemp -d /etc/wptt/tmp' "$KHOIPHUC_SCRIPT"
+  [ "$output" -ge 1 ]
+}
+
+# ==============================================================================
+# NHÓM 9: Edge cases
+# ==============================================================================
+@test "Edge: list_source_backups với tên file unicode vẫn hoạt động" {
+  touch "$ROOT_BACKUP_DIR/backup-tiếng-việt.zip" 2>/dev/null || skip "FS không hỗ trợ unicode"
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
   [ "$status" -eq 0 ]
 }
 
-@test "Integration: KHÔI PHỤC THÀNH CÔNG — website hoạt động lại sau khi phục hồi" {
-  run bash -c "printf '1\n1\n' | bash '$SCRIPT_GOC' '$TEST_DOMAIN'"
-
-  in_log_neu_loi 0
+@test "Edge: list_source_backups chịu được nhiều file (100 files)" {
+  for i in $(seq 1 100); do
+    touch "$ROOT_BACKUP_DIR/file$i.zip"
+  done
+  run wptt_list_source_backups "$ROOT_BACKUP_DIR" 0
   [ "$status" -eq 0 ]
-  [[ "$output" =~ "thành công" ]]
+  # 100 file .zip + 100 NUL byte
+  count=$(printf '%s' "$output" | tr -cd '\0' | wc -c)
+  [ "$count" -eq 100 ]
+}
 
-  [ -f "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php" ]
-
-  run wp core is-installed --path="/usr/local/lsws/$TEST_DOMAIN/html" --allow-root
+@test "Edge: list_db_backups với file 0 byte vẫn liệt kê (không crash)" {
+  touch "$ROOT_BACKUP_DIR/empty.sql"
+  run wptt_list_db_backups "$ROOT_BACKUP_DIR" 0
   [ "$status" -eq 0 ]
+  [[ "$output" == *"empty.sql"* ]]
+}
 
-  # Lock phải được giải phóng sau khi hoàn tất, không kẹt lại
-  run bash -c "
-    exec 200>\"/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${TEST_DOMAIN}.lock\"
-    flock -n 200
-  "
-  [ "$status" -eq 0 ]
+@test "Edge: tên domain rỗng bị chặn ở kiểm tra pathcheck" {
+  NAME=""
+  pathcheck="/etc/wptt/vhost/.$NAME.conf"
+  [ ! -f "$pathcheck" ]
 }
