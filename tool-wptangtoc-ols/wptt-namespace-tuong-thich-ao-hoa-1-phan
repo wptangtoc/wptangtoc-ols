@@ -1,0 +1,31 @@
+    conf_file="/usr/local/lsws/conf/httpd_config.conf"
+    
+    # Bỏ qua nếu chưa cài đặt xong OpenLiteSpeed
+    [[ ! -f "$conf_file" ]] && return 0
+    
+    virt_type=$(systemd-detect-virt 2>/dev/null || echo "unknown")
+    # 2. Chỉ can thiệp nếu là LXC, LXD hoặc OpenVZ (kiểm tra thêm file user_beancounters đặc trưng của OpenVZ)
+    if [[ "$virt_type" == "lxc" || "$virt_type" == "lxd" || "$virt_type" == "openvz" || -f /proc/user_beancounters ]]; then
+        
+        # Kiểm tra xem cấu hình đã có namespace 0 chưa để tránh ghi đè nhiều lần
+        if ! grep -q "namespace[[:space:]]*0" "$conf_file"; then
+            
+            # Kịch bản A: Nếu chưa hề có khối security {}, tạo mới ở cuối file
+            if ! grep -q "^security[[:space:]]*{" "$conf_file"; then
+                cat <<EOF >> "$conf_file"
+
+security {
+  namespace               0
+}
+EOF
+            else
+                # Kịch bản B: Đã có khối security nhưng chưa có biến namespace -> chèn ngay dưới dòng security {
+                if ! grep -q "namespace" "$conf_file"; then
+                    sed -i '/^security[[:space:]]*{/a \ \ namespace               0' "$conf_file"
+                else
+                    # Kịch bản C: Đã có biến namespace nhưng đang bật (ví dụ: namespace 1) -> Sửa thành 0
+                    sed -i 's/namespace[[:space:]]*[0-9]/namespace               0/g' "$conf_file"
+                fi
+            fi
+        fi
+    fi

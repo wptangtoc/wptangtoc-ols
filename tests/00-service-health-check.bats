@@ -38,7 +38,7 @@
   [ "$output" -gt 0 ]
 }
 
-@test "✅ Website github.wptangtoc.com (CI Test) đã nhận diện đúng nội dung Document" {
+@test "✅ Website github.wptangtoc.com (CI Test) đã nhận diện đúng nội dung Document HTML" {
   # 1. Tạo file tĩnh độc lập để né xử lý PHP/MySQL nặng nề trên CI
   run bash -c "echo 'GiaTuanDz' > /usr/local/lsws/github.wptangtoc.com/html/bats-test.html"
   [ "$status" -eq 0 ]
@@ -58,6 +58,30 @@
   [ "$status" -eq 0 ]
   # Nếu output đúng bằng chữ GiaTuanDz chứng tỏ domain đã được thêm hoàn hảo
   [[ "$output" == "GiaTuanDz" ]]
+}
+
+
+@test "✅ Website github.wptangtoc.com (CI Test) đã thực thi chính xác file PHP" {
+  # 1. Tạo file PHP độc lập sử dụng phép nối chuỗi để ép PHP phải thực thi (Compile)
+  run bash -c "echo '<?php echo \"GiaTuan_\" . \"PHP_Active\"; ?>' > /usr/local/lsws/github.wptangtoc.com/html/bats-test.php"
+  [ "$status" -eq 0 ]
+
+  # 2. Curl vào cổng 80 qua localhost để xác minh OLS đẩy qua lsphp xử lý và trả về đúng nội dung
+  run bash -c "curl -m 5 -sS -H 'Host: github.wptangtoc.com' http://127.0.0.1/bats-test.php"
+  
+  # 3. CHỐT CHẶN DỌN DẸP: Xóa luôn file ngay khi curl xong
+  rm -f /usr/local/lsws/github.wptangtoc.com/html/bats-test.php
+  
+  if [ "$status" -ne 0 ]; then
+      echo -e "\n=== LỖI CURL ===" >&3
+      echo "Mã thoát: $status | Output: $output" >&3
+  fi
+
+  # 4. Chấm điểm đúng/sai
+  [ "$status" -eq 0 ]
+  
+  # Nếu output chứa đúng chuỗi đã được PHP xử lý nối lại, chứng tỏ lsphp hoạt động hoàn hảo
+  [[ "$output" == "GiaTuan_PHP_Active" ]]
 }
 
 @test "✅ Website github.wptangtoc.com (CI Test) thực thi mã PHP CLI" {
