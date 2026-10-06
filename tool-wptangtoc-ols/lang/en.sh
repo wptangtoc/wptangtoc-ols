@@ -252,8 +252,13 @@ thay_doi="Change"
 #quản lý swap
 them="Add"
 xoa="Delete"
-dung_luong_swap_hien_tai="Dung lượng swap hiện tại"
-dung_luong_swap_dang_dung="Dung lượng swap đang dùng"
-dung_luong_swap_con_thua="Dung lượng swap đang còn thừa"
+dung_luong_swap_hien_tai="Current swap capacity"
+dung_luong_swap_dang_dung="Swap capacity in use"
+dung_luong_swap_con_thua="Swap capacity is left over"
 
+#quản lý chuyển website
+chuyen_website_ben_ngoai_ve_wptangtoc="Transfer external website to WPTangToc OLS"
+chuyen_tat_ca_website_wptangtoc_ve_wptangtoc_ols="Transfer all WPTangToc ols websites to WPTangToc ols"
+chuyen_tat_ca_website_wptangtoc_ols_ve_wptangtoc_bang_rsync="Transfer all WPTangToc OLS websites to WPTangToc OLS Using Rsync"
+chuyen_1_website_wptangtoc_ols_ve_wptangtoc_ols_bang_rsync="Transfer a WPTangToc OLS website to WPTangToc OLS Using Rsync"
 
