@@ -245,3 +245,8 @@ quan_ly="Manager"
 che_do_phong_thu_toi_dang_bi_ddos="defense mode I'm getting DDOS"
 tim_kiem="search"
 
+#quản lý PhpMyAdmin menu main
+xem_thong_tin_tai_khoan_bao_mat="View secure account information"
+thay_doi="Change"
+
+
