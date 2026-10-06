@@ -75,8 +75,6 @@ if [[ ! -f "$wp_config" ]]; then
   exit 0
 fi
 
-#chạy lệnh [[ -L "/usr/local/lsws/$NAME/html/wp-config.php" ]], Bash sẽ chỉ kiểm tra chính cái điểm cuối cùng (tức là file wp-config.php). Nó không bận tâm việc các thư mục cha (như $NAME hay html) có phải là symlink hay không.
-
 # Chống tấn công Symlink (Ghi đè file hệ thống /etc/shadow)
 if [[ -L "$wp_config" ]]; then
   echo -e "\n${C_RED}❌ CẢNH BÁO BẢO MẬT: Phát hiện Symlink tại wp-config.php! Hủy bỏ để ngăn chặn tấn công leo thang đặc quyền.${C_RESET}"
