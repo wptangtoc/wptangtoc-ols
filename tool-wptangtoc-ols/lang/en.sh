@@ -57,7 +57,7 @@ gia_tuan="Gia Tuan"
 
 #quản lý domain menu main
 them_domain="Add domain && subdomain"
-xoa_domain="delete domain"
+xoa_domain="Delete domain"
 danh_sach_domain="Domain list"
 kiem_tra_hoat_dong="Check website work"
 phan_quyen_website="Chown & chmod Domain"
@@ -71,6 +71,20 @@ mo_khoa_domain="Lock/Unlock Domain"
 thay_doi_username="Change username"
 bat_tat_dang_nhap_username_rieng_domain="On/Off login username domain"
 khoi_tao_subfolder_website="Initialization subfolder website"
+
+#wordpress main ben trong
+vi_du="example"
+nhap="Type"
+hoac="or"
+ban_muon_them="you want more"
+ban_chua_nhap_ten_domain="You have not entered a domain name"
+domain_nhap_khong_dung_dinh_dang="Domain entered in incorrect format"
+ten_mien_da_ton_tai_he_thong_nay="domain already exists on this system"
+them="add"
+vao_he_thong="Into the system"
+cai_dat_thanh_cong="Installed successfully"
+thanh_cong="success"
+
 
 #quản lý ssl menu main
 cai_dat_ssl_letencrypt="Install Free certificate SSL Let's Encrypt"
@@ -292,10 +306,3 @@ tai_tao_lai="Regenerate"
 kham_suc_khoe="Site Health"
 binh_luan="comment"
 nhap_du_lieu="Import data"
-
-
-
-
-
-
-
