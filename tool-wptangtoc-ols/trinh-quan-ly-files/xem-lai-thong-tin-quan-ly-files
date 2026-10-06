@@ -4,83 +4,186 @@ function huong_dan() {
   Tính năng Xem lại tài khoản đăng nhập File Manager hệ thống của bạn đã thiết lập
 }
 
-function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+NAME=$1
+[[ "$NAME" == "98" ]] && NAME=""
+
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ FILE MANAGER ➜ Xem thông tin tài khoản${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+if [[ -z "$NAME" ]]; then
+  function lua_chon_NAME() {
+    unset NAME selects
     selects=()
-    for entry in $(ls -A /etc/wptt/vhost | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [[ -d /usr/local/lsws/"$NAME"/html/quan-ly-files ]]; then
-        selects+=("$NAME")
+    local box_inner_width=${box_inner_width:-71}
+
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        # CHỈ HIỂN THỊ DOMAIN ĐÃ CÓ FILE MANAGER
+        if [[ -d "/usr/local/lsws/$domain/html/quan-ly-files" ]]; then
+          selects+=("$domain")
+        fi
       fi
     done
 
-    if [[ $selects = '' ]]; then
-      echo "Tất cả domain trên hệ thống chưa có domain nào được kích hoạt sử dụng File Manager"
+    if [[ ${#selects[@]} -eq 0 ]]; then
+      echo -e "${C_YELLOW}⚠️ Hệ thống chưa có website nào được kích hoạt File Manager!${C_RESET}"
+      sleep 3
       exec /etc/wptt/wptt-quan-ly-files-main 1
     fi
 
-    PS3="
--//- Nhập lựa chọn website của bạnn [0=Thoát]: "
-    select select in ${selects[@]}; do
-      NAME=$select
-      index=$REPLY
-      break
+    mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+    # RENDER KHUNG MENU BO CONG
+    echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    local title_text="Nhập lựa chọn website bạn muốn xem tài khoản File Manager:"
+    local len=$(echo -n "$title_text" | awk '{print length($0)}')
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+    local i=1
+    for domain in "${selects[@]}"; do
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+      local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+      ((i++))
     done
-  else
-    clear
-    echo "Tất cả domain trên hệ thống chưa có domain nào được kích hoạt sử dụng File Manager"
-    exit
-  fi
-}
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-echo ""
-echo ""
-echo "Lựa chọn website bạn xem lại tài khoản của trình quản lý files:"
-echo ""
-lua_chon_NAME
+    local fzf_installed=false
+    if command -v fzf &>/dev/null; then
+      fzf_installed=true
+      PROMPT_TEXT="Nhập lựa chọn website (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    else
+      PROMPT_TEXT="Nhập lựa chọn website (1-${#selects[@]}) [0=Thoát]: "
+    fi
 
-. /etc/wptt/vhost/.$NAME.conf
+    while true; do
+      echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+      if ! read -r REPLY; then exit 1; fi
+      REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
-if [[ ! -d /usr/local/lsws/"$NAME"/html/quan-ly-files ]]; then
-  . /etc/wptt/echo-color
-  echoDo "Bạn chưa kích hoạt quản lý files"
-  exec /etc/wptt/wptt-quan-ly-files-main 1
+      case "$REPLY" in
+      0)
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        NAME="0"
+        return 0
+        ;;
+      00)
+        if $fzf_installed; then
+          local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website xem tài khoản >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+          selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+          if [[ -n "$selected_name" ]]; then
+            NAME="$selected_name"
+            return 0
+          else
+            echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+          fi
+        else
+          echo -e "${C_RED}Lỗi: FZF chưa được cài đặt.${C_RESET}"
+        fi
+        ;;
+      *)
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+          local action_index=$((REPLY - 1))
+          NAME="${selects[$action_index]}"
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+        fi
+        ;;
+      esac
+    done
+  }
+
+  lua_chon_NAME
 fi
 
-check_tai_khoan=$(cat /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json)
-#tuong thich nguoc voi phien ban cu
-if [[ -f /usr/local/lsws/"$NAME"/html/quan-ly-files/.user-giatuan.json ]]; then
-  check_tai_khoan=$(cat /usr/local/lsws/$NAME/html/quan-ly-files/.user-giatuan.json)
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
+  return 2>/dev/null || exit
+fi
+
+. /etc/wptt/vhost/.$NAME.conf 2>/dev/null
+
+if [[ ! -d "/usr/local/lsws/$NAME/html/quan-ly-files" ]]; then
+  echo -e "\n${C_RED}❌ Bạn chưa kích hoạt trình quản lý files cho website này!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
+  return 2>/dev/null || exit
+fi
+
+check_tai_khoan=$(cat /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json 2>/dev/null)
+if [[ -f "/usr/local/lsws/$NAME/html/quan-ly-files/.user-giatuan.json" ]]; then
+  check_tai_khoan=$(cat "/usr/local/lsws/$NAME/html/quan-ly-files/.user-giatuan.json" 2>/dev/null)
 fi
 
 if [[ "$check_tai_khoan" != "$id_quan_ly_files" ]]; then
-  . /etc/wptt/echo-color
-  echoDo "Quá trình kiểm tra tài khoản xác thực không đúng"
-  echo "Vui lòng xóa đi cài lại file manager lại từ đầu"
-  exec /etc/wptt/wptt-quan-ly-files-main 1
+  echo -e "\n${C_RED}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_YELLOW}❌ KIỂM TRA TÀI KHOẢN THẤT BẠI${C_RESET}"
+  echo -e "${C_RED}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  echo -e "${C_RED}│${C_RESET} Dữ liệu tài khoản của $NAME không đồng bộ hoặc đã bị hỏng.         ${C_RED}│${C_RESET}"
+  echo -e "${C_RED}│${C_RESET} 👉 Giải pháp: Hãy hủy kích hoạt File Manager và cài đặt lại từ đầu.   ${C_RED}│${C_RESET}"
+  echo -e "${C_RED}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
+  return 2>/dev/null || exit
 fi
 
-echo "========================================================================="
-echo "|Tài khoản quản lý files(File Manager) của website $NAME               |"
-echo "========================================================================="
-
-if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
-  echo "========================================================================="
-  echo 'Đường dẫn truy cập:' "http://$NAME/quan-ly-files"
-  echo "========================================================================="
+unset ssl_xac_thuc_kha_dung
+. /etc/wptt/ssl/check-ssl-cert-con-kha-dung $NAME
+if [[ $ssl_xac_thuc_kha_dung = 'true' ]]; then
+  url_truy_cap="https://$NAME/quan-ly-files"
 else
-  echo "========================================================================="
-  echo 'Đường dẫn truy cập:' "https://$NAME/quan-ly-files"
-  echo "========================================================================="
+  url_truy_cap="http://$NAME/quan-ly-files"
 fi
 
-printf '%36.40s:%40.40s\n' 'User tài khoản cấp 2' "$id_dang_nhap_quan_ly_file_cap_2"
-printf '%36.40s:%40.40s\n' 'PassWord Tài khoản cấp 2' "$password_dang_nhap_quan_ly_file_cap_2"
-printf '%37.40s:%40.40s\n' 'User tài khoản Quản lý file' "$id_quan_ly_files"
-printf '%36.40s:%40.40s\n' 'PassWord tài khoản Quản lý file' "$password_quan_ly_file"
+box_inner_width=${box_inner_width:-71}
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE} THÔNG TIN TRUY CẬP FILE MANAGER: $NAME${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-quan-ly-files-main 1
-fi
+function in_dong() {
+  local raw_text="$1"
+  local colored_text="$2"
+  local pad=$((box_inner_width - ${#raw_text}))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_GREEN}│${C_RESET}${colored_text}$(printf '%*s' "$pad" "")${C_GREEN}│${C_RESET}"
+}
+
+in_dong "  Đường dẫn truy cập : $url_truy_cap" "  ${C_BOLD_WHITE}Đường dẫn truy cập :${C_RESET} ${C_CYAN}$url_truy_cap${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+in_dong "  LỚP 1: XÁC THỰC MÁY CHỦ (HTTP Basic Auth)" "  ${C_BOLD_WHITE}LỚP 1: XÁC THỰC MÁY CHỦ (HTTP Basic Auth)${C_RESET}"
+in_dong "  User đăng nhập     : $id_dang_nhap_quan_ly_file_cap_2" "  User đăng nhập     : ${C_YELLOW}$id_dang_nhap_quan_ly_file_cap_2${C_RESET}"
+in_dong "  Password           : $password_dang_nhap_quan_ly_file_cap_2" "  Password           : ${C_YELLOW}$password_dang_nhap_quan_ly_file_cap_2${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+in_dong "  LỚP 2: ĐĂNG NHẬP ỨNG DỤNG FILE MANAGER" "  ${C_BOLD_WHITE}LỚP 2: ĐĂNG NHẬP ỨNG DỤNG FILE MANAGER${C_RESET}"
+in_dong "  User File Manager  : $id_quan_ly_files" "  User File Manager  : ${C_YELLOW}$id_quan_ly_files${C_RESET}"
+in_dong "  Password           : $password_quan_ly_file" "  Password           : ${C_YELLOW}$password_quan_ly_file${C_RESET}"
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+read -r
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1

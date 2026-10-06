@@ -14,115 +14,164 @@ function huong_dan() {
   Sau khi kích hoạt bạn có thể thực hiện các thao tác quản lý tệp tin cho website của mình một cách thuận tiện.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 NAME=$1
-if [[ $NAME = "98" ]]; then
-  NAME=""
-fi
+[[ "$NAME" == "98" ]] && NAME=""
 
-echo ""
-echo ""
-echo ""
-echo "========================================================================="
-echo "|$quan_ly_file_manager => $bat File Manager                 |"
-echo "========================================================================="
-. /etc/wptt/echo-color
-if [[ $NAME = "" ]]; then
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ FILE MANAGER ➜ $bat File Manager${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+# ==============================================================================
+# HÀM MENU LỌC THÔNG MINH (UX BO CONG CĂN LỀ CHUẨN XÁC)
+# ==============================================================================
+if [[ -z "$NAME" ]]; then
   function lua_chon_NAME() {
-    NAME=""
-    if [ "$(ls -At /etc/wptt/vhost)" ]; then
-      selects=()
-      for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-        NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-        if [ "$NAME" != "${NAME/./}" ] && [ "$NAME" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-          if [[ ! -d /usr/local/lsws/"$NAME"/html/quan-ly-files ]]; then
-            selects+=("$NAME")
-          fi
+    unset NAME selects
+    selects=()
+    local box_inner_width=${box_inner_width:-71}
+
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        # CHỈ HIỂN THỊ DOMAIN CHƯA CÓ FILE MANAGER
+        if [[ ! -d "/usr/local/lsws/$domain/html/quan-ly-files" ]]; then
+          selects+=("$domain")
         fi
-      done
-
-      if [[ $selects = '' ]]; then
-        echo "Tất cả domain trên hệ thống đã được kích hoạt trình quản lý files"
-        exec /etc/wptt/wptt-quan-ly-files-main 1
       fi
+    done
 
-      PS3="
--//- $nhap_lua_chon_website_cua_ban [0=$exit_thoat]: "
-      select select in ${selects[@]}; do
-        NAME=$select
-        index=$REPLY
-        break
-      done
-    else
-      clear
-      echoDo "Tất cả domain trên hệ thống đều đã được kích hoạt sử dụng File Manager"
+    if [[ ${#selects[@]} -eq 0 ]]; then
+      echo -e "${C_YELLOW}⚠️ Tất cả website trên hệ thống đều đã được kích hoạt File Manager!${C_RESET}"
+      sleep 3
       exec /etc/wptt/wptt-quan-ly-files-main 1
-      exit
     fi
+
+    mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+    # RENDER KHUNG MENU BO CONG
+    echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    local title_text="Nhập lựa chọn website của bạn muốn kích hoạt File Manager:"
+    local len=$(echo -n "$title_text" | awk '{print length($0)}')
+    local pad_r=$((box_inner_width - len - 2))
+    [[ $pad_r -lt 0 ]] && pad_r=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+    local line_len=$((len + 3))
+    local pad_line_r=$((box_inner_width - line_len))
+    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+    local i=1
+    for domain in "${selects[@]}"; do
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+      local clean_text=$(printf "  %3d) %s" "$i" "$domain")
+      local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+      local pad=$((box_inner_width - item_len))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+      ((i++))
+    done
+    echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+    # PROMPT INPUT
+    local fzf_installed=false
+    if command -v fzf &>/dev/null; then
+      fzf_installed=true
+      PROMPT_TEXT="Nhập lựa chọn website (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    else
+      PROMPT_TEXT="Nhập lựa chọn website (1-${#selects[@]}) [0=Thoát]: "
+    fi
+
+    while true; do
+      echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+      if ! read -r REPLY; then exit 1; fi
+      REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+      case "$REPLY" in
+      0)
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        NAME="0"
+        return 0
+        ;;
+      00)
+        if $fzf_installed; then
+          local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website kích hoạt >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+          selected_name=$(echo "$selected_name" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
+          if [[ -n "$selected_name" ]]; then
+            NAME="$selected_name"
+            return 0
+          else
+            echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+          fi
+        else
+          echo -e "${C_RED}Lỗi: FZF chưa được cài đặt.${C_RESET}"
+        fi
+        ;;
+      *)
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+          local action_index=$((REPLY - 1))
+          NAME="${selects[$action_index]}"
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+        fi
+        ;;
+      esac
+    done
   }
 
-  echo ""
-  echo ""
-  echo "Lựa chọn website muốn kích hoạt trình quản lý files: "
-  echo ""
   lua_chon_NAME
 fi
 
-. /etc/wptt/echo-color
-
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-quan-ly-files-main 1
-  fi
+# --- CHỐT CHẶN THOÁT HIỂM ---
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-quan-ly-files-main 1
-  fi
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
-if [[ -d /usr/local/lsws/$NAME/html/quan-ly-files ]]; then
-  echoDo "Bạn đã kích hoạt trình quản lý files rồi"
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-quan-ly-files-main 1
-  fi
+if [[ -d "/usr/local/lsws/$NAME/html/quan-ly-files" ]]; then
+  echo -e "\n${C_YELLOW}⚠️ Bạn đã kích hoạt trình quản lý files cho website này rồi!${C_RESET}"
+  sleep 2
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
-_runing "Cài Đặt FileManager cho website $NAME"
-password_quan_ly_file=$(
-  head /dev/urandom | tr -dc A-Za-z0-9 | head -c 36
-  echo ''
-)
+# ==============================================================================
+# BẮT ĐẦU CÀI ĐẶT
+# ==============================================================================
+echo ""
+_runing "Đang tải và cài đặt FileManager cho website $NAME..."
+
+password_quan_ly_file=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
+user_quan_ly_file=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
 
 cd /usr/local/lsws/$NAME/html || exit 1
-wget -q https://wptangtoc.com/share/quan-ly-files.zip
-if [[ ! -f quan-ly-files.zip ]]; then #dự phòng nếu ssl bị lỗi
-  wget -q https://wptangtoc.com/share/quan-ly-files.zip --no-check-certificate
-fi
-
-if [[ ! -f quan-ly-files.zip ]]; then #dự phòng link github
-  wget -q https://github.com/wptangtoc/wptangtoc-ols/raw/refs/heads/main/quan-ly-files.zip
-fi
+wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/quan-ly-files.zip
+[[ ! -f quan-ly-files.zip ]] && wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/quan-ly-files.zip --no-check-certificate
+[[ ! -f quan-ly-files.zip ]] && wget -q --timeout=15 --tries=3 https://github.com/wptangtoc/wptangtoc-ols/raw/refs/heads/main/quan-ly-files.zip
 
 if [[ ! -f quan-ly-files.zip ]]; then
-  _runloi "Cài Đặt FileManager cho website $NAME"
-  echo "Download thất bại vui lòng thử lại sau"
+  _runloi "Tải FileManager thất bại! Vui lòng thử lại sau."
   exec /etc/wptt/wptt-quan-ly-files-main 1
 fi
 
@@ -134,55 +183,34 @@ sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
 sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
 sed -i '/password_quan_ly_file/d' /etc/wptt/vhost/.$NAME.conf
 
-user_quan_ly_file=$(
-  head /dev/urandom | tr -dc A-Za-z0-9 | head -c 24
-  echo ''
-)
-
 mkdir -p /usr/local/lsws/"$NAME"/passwd
 cd /usr/local/lsws/$NAME/html/quan-ly-files || exit
-php ma-hoa-wptangtoc.php $user_quan_ly_file $password_quan_ly_file
+php ma-hoa-wptangtoc.php "$user_quan_ly_file" "$password_quan_ly_file"
 rm -f ma-hoa-wptangtoc.php
 
-# chown -R nobody:nobody /usr/local/lsws/$NAME/html/quan-ly-files
+echo "id_quan_ly_files=$user_quan_ly_file" >>/etc/wptt/vhost/.$NAME.conf
+echo "password_quan_ly_file=$password_quan_ly_file" >>/etc/wptt/vhost/.$NAME.conf
 
-if [[ $NAME ]]; then
-  echo "id_quan_ly_files=$user_quan_ly_file
-password_quan_ly_file=$password_quan_ly_file" >>/etc/wptt/vhost/.$NAME.conf
-fi
+PHP_Command="admin_php"
+Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
+id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
+Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/$PHP_Command -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
 
-Post_Install_Regenerate_Webadmin_Console_Passwd() {
-  if [[ "$Server_Edition" = "OLS" ]]; then
-    PHP_Command="admin_php"
-  else
-    PHP_Command="admin_php5"
-  fi
+echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/"$NAME"/passwd/.files
 
-  Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
-
-  id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
-
-  Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}")
-  echo "" >/usr/local/lsws/"$NAME"/passwd/.files
-  echo "$id_ols_admin:$Encrypt_string" >/usr/local/lsws/"$NAME"/passwd/.files
-}
-Post_Install_Regenerate_Webadmin_Console_Passwd
-
-#xóa bảo mật 2 lớp
 sed -i -e '/^realm '${NAME}files'/,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
 sed -i -e '/^context \/quan-ly-files\//,/^}$/d' /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
 
-#add bảo mật 2 lớp
-
-echo 'realm '${NAME}files' {
+cat <<EOF >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+realm ${NAME}files {
   userDB  {
-    location              /usr/local/lsws/'$NAME'/passwd/.files
+    location              /usr/local/lsws/${NAME}/passwd/.files
   }
 }
 context /quan-ly-files/ {
   location                quan-ly-files/
   allowBrowse             1
-  realm                   '${NAME}files'
+  realm                   ${NAME}files
 
   accessControl  {
     allow                 ALL
@@ -191,7 +219,7 @@ context /quan-ly-files/ {
   rewrite  {
 
   }
-  addDefaultCharset	  off
+  addDefaultCharset       off
 
   phpIniOverride  {
 php_value upload_max_filesize 30G
@@ -202,14 +230,12 @@ php_value max_input_time 10000
 php_admin_value open_basedir ""
 php_admin_value disable_functions ""
   }
-}' >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+}
+EOF
 
-if [[ -f /etc/wptt/vhost/.$NAME.conf ]]; then
-  echo "id_dang_nhap_quan_ly_file_cap_2=$id_ols_admin
-password_dang_nhap_quan_ly_file_cap_2=$Webadmin_Pass" >>/etc/wptt/vhost/.$NAME.conf
-fi
+echo "id_dang_nhap_quan_ly_file_cap_2=$id_ols_admin" >>/etc/wptt/vhost/.$NAME.conf
+echo "password_dang_nhap_quan_ly_file_cap_2=$Webadmin_Pass" >>/etc/wptt/vhost/.$NAME.conf
 
-#tuong thich ubuntu tuong thich nhom litespeed
 if $(cat /etc/*release | grep -q "Ubuntu"); then
   tuong_thich_nhom_litespeed="nogroup"
 else
@@ -221,11 +247,6 @@ chmod 400 /usr/local/lsws/"$NAME"/passwd/.files
 
 . /etc/wptt/vhost/.$NAME.conf
 
-phien_ban_php_domain_check=${phien_ban_php_domain//[-._]/}
-if [[ $phien_ban_php_domain_check = '' ]]; then
-  phien_ban_php_domain_check='83'
-fi
-
 chown -R "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/html/quan-ly-files
 chmod 400 /usr/local/lsws/"$NAME"/passwd/.password-giatuan.json
 chmod 400 /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json
@@ -233,45 +254,63 @@ chown "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/passwd/.pass
 chown "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/passwd/.user-giatuan.json
 
 /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+_rundone "Kích hoạt FileManager thành công cho website $NAME"
 
-_rundone "Cài Đặt FileManager cho website $NAME"
-echo "================================================"
+# ==============================================================================
+# BẢNG TÓM TẮT THÔNG TIN TRUY CẬP
+# ==============================================================================
 
-echo "========================================================================="
-echo "|Tài khoản quản lý files(File Manager) của website $NAME               |"
-echo "========================================================================="
-
-if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
-  echo "========================================================================="
-  echo 'Đường dẫn truy cập:' "http://$NAME/quan-ly-files"
-  echo "========================================================================="
+unset ssl_xac_thuc_kha_dung
+. /etc/wptt/ssl/check-ssl-cert-con-kha-dung $NAME
+if [[ $ssl_xac_thuc_kha_dung = 'true' ]]; then
+  url_truy_cap="https://$NAME/quan-ly-files"
 else
-  echo "========================================================================="
-  echo 'Đường dẫn truy cập:' "https://$NAME/quan-ly-files"
-  echo "========================================================================="
+  url_truy_cap="http://$NAME/quan-ly-files"
 fi
 
-printf '%36.40s:%40.40s\n' 'User tài khoản truy cập vào trình filemanager' "$id_ols_admin"
-printf '%36.40s:%40.40s\n' 'PassWord Tài khoản truy cập vào trình filemanager' "$Webadmin_Pass"
-printf '%37.40s:%40.40s\n' 'User đăng nhập tài khoản Quản lý file' "$user_quan_ly_file"
-printf '%36.40s:%40.40s\n' 'PassWord đăng nhập tài khoản Quản lý file' "$password_quan_ly_file"
+# if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
+#   url_truy_cap="http://$NAME/quan-ly-files"
+# else
+#   url_truy_cap="https://$NAME/quan-ly-files"
+# fi
 
-echo "Ghi chú: mọi tài khoản sẽ được lưu trữ lại trong WPTangToc OLS"
-echo "Bạn có thể vào menu WPTangToc OLS để xem lại tài khoản"
-echo "============================================================================="
-echo "Khuyến nghị: khi sử dụng xong FileManager thì vui lòng xóa FileManager để nâng cao bảo mật webserver"
-echo "khi nào cần thì hãy quay trở lại kích hoạt lại FileManager"
-echo "============================================================================="
+box_inner_width=${box_inner_width:-71}
+
+echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}TÀI KHOẢN TRUY CẬP FILE MANAGER: $NAME${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+function in_dong() {
+  local raw_text="$1"
+  local colored_text="$2"
+  local pad=$((box_inner_width - ${#raw_text}))
+  [[ $pad -lt 0 ]] && pad=0
+  echo -e "${C_GREEN}│${C_RESET}${colored_text}$(printf '%*s' "$pad" "")${C_GREEN}│${C_RESET}"
+}
+
+in_dong "  Đường dẫn truy cập : $url_truy_cap" "  ${C_BOLD_WHITE}Đường dẫn truy cập :${C_RESET} ${C_CYAN}$url_truy_cap${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+in_dong "  LỚP 1: XÁC THỰC MÁY CHỦ (HTTP Basic Auth)" "  ${C_BOLD_WHITE}LỚP 1: XÁC THỰC MÁY CHỦ (HTTP Basic Auth)${C_RESET}"
+in_dong "  User đăng nhập     : $id_ols_admin" "  User đăng nhập     : ${C_YELLOW}$id_ols_admin${C_RESET}"
+in_dong "  Password           : $Webadmin_Pass" "  Password           : ${C_YELLOW}$Webadmin_Pass${C_RESET}"
+echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+in_dong "  LỚP 2: ĐĂNG NHẬP ỨNG DỤNG FILE MANAGER" "  ${C_BOLD_WHITE}LỚP 2: ĐĂNG NHẬP ỨNG DỤNG FILE MANAGER${C_RESET}"
+in_dong "  User File Manager  : $user_quan_ly_file" "  User File Manager  : ${C_YELLOW}$user_quan_ly_file${C_RESET}"
+in_dong "  Password           : $password_quan_ly_file" "  Password           : ${C_YELLOW}$password_quan_ly_file${C_RESET}"
+echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+echo -e "${C_CYAN}💡 Ghi chú:${C_RESET} Bạn có thể xem lại tài khoản tại menu: WPTangToc OLS => Quản lý File"
+echo -e "${C_YELLOW}⚠️ Khuyến nghị:${C_RESET} Khi sử dụng xong, vui lòng TẮT (Xóa) FileManager để bảo mật tối đa."
 
 if [[ -d /usr/local/lsws/modsec/owasp ]]; then
-  echo "Ghi chú: nếu bạn đang sử dụng tính năng bảo mật modsecurity thì khi sửa file wp-config.php thì sẽ bị lỗi 403"
-  echo "Nếu bạn muốn mọi thứ hoạt động full hết hãy tắt modsecurity khi sử dụng FileManager"
-  echo "Khi sử dụng xong thì có thể quay lại bật modsecurity"
+  echo -e "\n${C_RED}🚨 LƯU Ý MODSECURITY:${C_RESET}"
+  echo -e "Hệ thống phát hiện bạn đang bật tường lửa ModSecurity."
+  echo -e "Nếu gặp lỗi ${C_RED}403 Forbidden${C_RESET} khi lưu file (VD: wp-config.php), hãy TẠM TẮT ModSecurity,"
+  echo -e "chỉnh sửa xong file rồi bật lại ModSecurity nhé."
 fi
 
 echo "Kích hoạt filemanager website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-quan-ly-files-main 1
-fi
+echo -en "\n${C_GREEN}👉 Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+read -r
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
