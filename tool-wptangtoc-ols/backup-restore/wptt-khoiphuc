@@ -78,7 +78,10 @@ pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   echo -e "\n${C_RED}❌ $ten_mien_nay_khong_ton_tai_tren_he_thong${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-backup-restore-main 1
+	if [[ "${1:-}" == "98" ]];then
+		exec /etc/wptt/wptt-backup-restore-main 1
+	fi
+	return 1 2>/dev/null || exit 1
 fi
 
 . /etc/wptt/vhost/."$NAME".conf
@@ -88,13 +91,24 @@ fi
 # ==============================================================================
 cd
 
-if [[ ! "$(ls -A /usr/local/backup-website/"$NAME"/ 2>/dev/null)" && ! "$(ls -A /usr/local/lsws/"$NAME"/backup-website 2>/dev/null)" ]]; then
-  echo -e "\n${C_YELLOW}⚠️ $khong_co_file_backup_nao_ton_tai${C_RESET}"
-  echo "Vui lòng upload file backup của bạn vào: /usr/local/backup-website/$NAME/"
-  [[ -f ~/.config/rclone/rclone.conf ]] && echo "Mẹo: Bạn có thể dùng tính năng Download từ lưu trữ đám mây."
-  sleep 3
-  exec /etc/wptt/wptt-backup-restore-main 1
+# find có thể ra lệnh: "Chỉ cần nhìn thấy 1 file/thư mục con bất kỳ là dừng ngay lập tức". Điều này giúp tiết kiệm tối đa tài nguyên. chứ dùng for hay ls thì nó quét hết nếu tình huống là 1000 file chả hạn thì tốn thời gian lắm, dùng phương án này là tối ưu nhất
+check_empty=$(find "/usr/local/backup-website/$NAME" "/usr/local/lsws/$NAME/backup-website" \
+	-mindepth 1 -maxdepth 1 -type f \
+	\( -name '*.sql' -o -name '*.sql.gz' -o -name '*.sql.zst' -o -name '*.tar.zst' -o -name '*.tar.gz' -o -name '*.zip' \) \
+	-print -quit 2>/dev/null)
+
+# Nếu không tìm thấy bất kỳ file nào khớp với các đuôi trên
+if [[ -z "$check_empty" ]]; then
+	printf "\n${C_YELLOW}⚠️ %s${C_RESET}\nVui lòng upload file backup vào: /usr/local/backup-website/%s/\n" "$khong_co_file_backup_nao_ton_tai" "$NAME"
+	[[ -f ~/.config/rclone/rclone.conf ]] && printf "Mẹo: Bạn có thể dùng tính năng Download từ lưu trữ đám mây.\n"
+
+	sleep 3
+	if [[ "${1:-}" == "98" ]];then
+		exec /etc/wptt/wptt-backup-restore-main 1
+	fi
+	return 1 2>/dev/null || exit 1
 fi
+
 
 mapfile -d '' -t selects_root < <(wptt_list_source_backups "/usr/local/backup-website/$NAME" 0)
 mapfile -d '' -t selects_user < <(wptt_list_source_backups "/usr/local/lsws/$NAME/backup-website" 1)
@@ -116,7 +130,10 @@ selects=( "${selects_root[@]}" "${selects_user[@]}" )
 if [[ ${#selects[@]} -eq 0 ]]; then
   echo -e "${C_RED}Không có file backup mã nguồn nào hợp lệ (.zip, .tar.gz, .tar.zst)!${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-backup-restore-main 1
+	if [[ "${1:-}" == "98" ]];then
+		exec /etc/wptt/wptt-backup-restore-main 1
+	fi
+	return 1 >/dev/null || exit 1
 fi
 
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -183,11 +200,31 @@ fi
 # ==============================================================================
 # 2. CHỌN BẢN SAO LƯU CƠ SỞ DỮ LIỆU (DATABASE)
 # ==============================================================================
-if [[ ! $(ls -A /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') && ! $(ls -A /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') ]]; then
-  echo -e "\n${C_RED}❌ Không có file backup Database (.sql) nào tồn tại.${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-backup-restore-main 1
+#begin bắt đầu kiểm tra xem máy chủ có database để khôi phục không
+
+# Dùng find quét 2 thư mục, chỉ tìm file (-type f) có đuôi sql, sql.gz, sql.zst
+# Tìm thấy 1 file là dừng ngay lập tức (-quit) để tối ưu hiệu suất
+check_db_exist=$(find "/usr/local/backup-website/$NAME" "/usr/local/lsws/$NAME/backup-website" \
+    -mindepth 1 -maxdepth 1 -type f \
+    \( -name '*.sql' -o -name '*.sql.gz' -o -name '*.sql.zst' \) \
+    -print -quit 2>/dev/null)
+
+# Nếu biến rỗng (không tìm thấy file nào khớp)
+if [[ -z "$check_db_exist" ]]; then
+    # Khuyến nghị dùng printf thay cho echo -e để đảm bảo tính ổn định trên mọi hệ điều hành
+		echo -e "${C_RED}Không có file backup Database (.sql/.sql.gz/.sql.zst) nào tồn tại.${C_RESET}\n"
+    
+    sleep 3
+    
+    if [[ "${1:-}" == "98" ]]; then
+        exec /etc/wptt/wptt-backup-restore-main 1
+    fi
+    
+    # Chuẩn Enterprise bẫy lỗi Return: Dùng 2>/dev/null chặn lỗi stderr thay vì >/dev/null
+    return 1 2>/dev/null || exit 1
 fi
+#end bắt đầu kiểm tra xem máy chủ có database để khôi phục không
+
 
 mapfile -d '' -t selects_db_root < <(wptt_list_db_backups "/usr/local/backup-website/$NAME" 0)
 mapfile -d '' -t selects_db_user < <(wptt_list_db_backups "/usr/local/lsws/$NAME/backup-website" 1)
@@ -503,8 +540,10 @@ if [[ -z "$NAME" || "$NAME" == "." ]]; then
   flock -u 200
   exec 200>&-
   rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME:?}.lock" 2>/dev/null
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
-  return 2>/dev/null || exit
+	if [[ "${1:-}" == "98" ]];then
+		exec /etc/wptt/wptt-backup-restore-main 1
+	fi
+	return 1 >/dev/null || exit 1
 fi
 
 # 1. Đo lường dung lượng ổ cứng thực tế (KB)
@@ -954,4 +993,7 @@ rm -f "/etc/wptt/tmp/lock_chmod_watcher_${NAME}.active" 2>/dev/null
 systemctl restart wptt-htaccess >/dev/null 2>&1
 systemctl restart wptt-phanquyen >/dev/null 2>&1
 
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+if [[ "${1:-}" == "98" ]];then
+	exec /etc/wptt/wptt-backup-restore-main 1
+fi
+
