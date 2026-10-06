@@ -1,3 +1,14 @@
+## WPTangToc OLS v8.2.1.4
+
+### 🚀 Tính năng mới
+- **Hỗ trợ kiến trúc ARM trên Rocky Linux 10:** Bổ sung khả năng tương thích toàn diện cho nền tảng vi xử lý ARM (aarch64) chạy hệ điều hành Rocky Linux 10, mang lại sự linh hoạt tối đa cho quản trị viên khi triển khai máy chủ thế hệ mới với hiệu năng cao và chi phí vận hành tối ưu.
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp và tinh gọn tường lửa ModSecurity (WAF):** Cập nhật bộ quy tắc bảo mật ứng dụng web mới nhất, đồng thời tối ưu hóa cơ chế nạp luật bằng cách loại bỏ các quy tắc không cần thiết ngoài môi trường Linux/PHP. Giúp gia tăng sức mạnh phòng thủ trước các cuộc tấn công web phổ biến (SQL Injection, XSS...) mà vẫn đảm bảo website tải nhanh, tiết kiệm tài nguyên CPU và RAM.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.3
 
 ### 🛠️ Tối ưu hệ thống
