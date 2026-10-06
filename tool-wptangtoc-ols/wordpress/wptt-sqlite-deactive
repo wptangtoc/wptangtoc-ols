@@ -1,0 +1,162 @@
+#!/bin/bash
+# Tính năng: Auto-Revert 100% SQLite về lại MariaDB (Bảo toàn dữ liệu mới nhất)
+
+. /etc/wptt/echo-color
+
+. /etc/wptt/.wptt.conf
+if [[ $ngon_ngu = '' ]]; then
+  ngon_ngu='vi'
+fi
+. /etc/wptt/lang/$ngon_ngu.sh
+
+NAME=$1
+if [[ $NAME = "98" ]]; then
+  NAME=""
+fi
+
+if [[ $NAME = "" ]]; then
+  . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
+  echo ""
+  echo ""
+  echo "$nhap_lua_chon_website_cua_ban deactivate sqlite (Revert to MariaDB): "
+  echo ""
+  lua_chon_NAME
+fi
+
+if [[ $NAME = 'Tất cả website' ]]; then
+  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
+    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
+      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+      path="/usr/local/lsws/$domain/html/wp-config.php"
+      path_html="/usr/local/lsws/$domain/html"
+      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
+        if [[ -f "$path" ]]; then
+          if [[ -f "$path_html/wp-content/db.php" ]]; then
+            _runing "deactivate sqlite website $domain"
+            (/etc/wptt/wordpress/wptt-sqlite-deactive $domain >/dev/null 2>&1)
+            _rundone "deactivate sqlite website $domain"
+          fi
+        fi
+      fi
+    done
+  fi
+
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  exit
+fi
+
+if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  return 2>/dev/null || exit
+fi
+
+DOMAIN=$NAME
+if [ -z "$DOMAIN" ]; then
+  echo "❌ Lỗi: Vui lòng nhập tên miền!"
+  return 2>/dev/null || exit 1
+fi
+
+PATH_HTML="/usr/local/lsws/$DOMAIN/html"
+
+if [ ! -d "$PATH_HTML" ]; then
+  echo "❌ Lỗi: Không tìm thấy thư mục web tại $PATH_HTML"
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  return 2>/dev/null || exit
+fi
+
+if [[ ! -f "$PATH_HTML/wp-content/db.php" ]]; then
+  echo "⚠️ Website $DOMAIN hiện không chạy SQLite (không tìm thấy db.php). Không cần phục hồi!"
+  check_menu_wptangtoc_active=$1
+  if [[ $check_menu_wptangtoc_active = "98" ]]; then
+    exec /etc/wptt/wptt-wordpress-main 1
+  fi
+  return 2>/dev/null || exit
+fi
+
+echo "==========================================================="
+echo "🔄 KHỞI ĐỘNG CỖ MÁY PHỤC HỒI TỪ SQLITE VỀ MARIADB CHO $DOMAIN"
+echo "==========================================================="
+
+cd "$PATH_HTML" || exit 1
+
+# Khởi động lại LSPHP để xóa sạch cache tiến trình cũ
+killall -9 lsphp >/dev/null 2>&1
+
+# 1. NẠP GÓI WP-CLI-SQLITE-COMMAND (Đề phòng trường hợp lỗi chưa có)
+echo "[1/6] Đảm bảo đã nạp gói wp-cli-sqlite-command..."
+wp package install automattic/wp-cli-sqlite-command --allow-root >/dev/null 2>&1
+
+# 2. XUẤT DATA TỪ SQLITE VÀ CONVERT SANG MARIA-DB
+# SỬ DỤNG wp sqlite export THAY VÌ wp db export
+echo "[2/6] Đang trích xuất dữ liệu từ SQLite hiện tại và convert chuẩn MariaDB..."
+FILE_SQL="chuyendoi_sqlite_to_mariadb.sql"
+wp sqlite export "$FILE_SQL" --enable-ast-driver --allow-root --quiet
+
+if [ $? -ne 0 ]; then
+  echo "❌ Lỗi: Không thể export Database từ SQLite. Vui lòng kiểm tra lại."
+  exit 1
+fi
+BACKUP_FILE="/root/backup_${DOMAIN}_sqlite_$(date +%s).sql"
+cp "$FILE_SQL" "$BACKUP_FILE"
+
+# 3. GẠT CẦU DAO: TẮT CHẾ ĐỘ SQLITE
+echo "[3/6] Đang ngắt cầu dao SQLite (Vô hiệu hóa db.php)..."
+mv "$PATH_HTML/wp-content/db.php" "$PATH_HTML/wp-content/db.php.bak"
+
+# Dọn dẹp lại RAM và tiến trình PHP để WP nhận diện kết nối MariaDB qua wp-config.php
+killall -9 lsphp >/dev/null 2>&1
+
+# 4. DỌN SẠCH MARIADB CŨ VÀ BƠM DỮ LIỆU TỪ SQLITE VÀO
+echo "[4/6] Đang làm sạch MariaDB cũ và ép nạp (Import) dữ liệu mới nhất..."
+wp db reset --yes --allow-root >/dev/null 2>&1
+wp db import "$FILE_SQL" --allow-root
+
+# BẪY LỖI AN TOÀN TUYỆT ĐỐI
+if [ $? -eq 0 ]; then
+  # 5. TẮT VÀ GỠ BỎ PLUGIN LÕI SQLITE
+  echo "[5/6] Vô hiệu hóa và dọn dẹp Plugin SQLite..."
+  wp plugin deactivate sqlite-database-integration --allow-root >/dev/null 2>&1
+  wp plugin uninstall sqlite-database-integration --allow-root >/dev/null 2>&1
+
+  # Cấp quyền lại cho chắc chắn
+  (/etc/wptt/wptt-phanquyen $NAME)
+
+  # 6. DỌN DẸP CHIẾN TRƯỜNG
+  echo "[6/6] Dọn dẹp chiến trường..."
+  rm -f "$FILE_SQL"
+  rm -f "$BACKUP_FILE" # Xóa bỏ file dự phòng trong /root/ vì đã Migrate thành công
+  rm -f "$PATH_HTML/wp-content/db.php.bak"
+  rm -rf "$PATH_HTML/wp-content/database" # Xóa thư mục sqlite nếu muốn
+
+  if $(cat /etc/*release | grep -q "Ubuntu"); then
+    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+  else
+    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+  fi
+
+  echo '100' >/etc/wptt/.ram_hien_tai #để ép thực thi wptt-auto-tune
+  /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
+
+  echo ""
+  echo "==========================================================="
+  echo "🎉 HOÀN TẤT THẦN TỐC 100% PHỤC HỒI VỀ MARIADB!"
+  echo "Dữ liệu mới nhất đã được migrate thành công!"
+  echo "==========================================================="
+else
+  # CẤP CỨU NẾU LỖI IMPORT MARIADB
+  echo ""
+  echo "❌ CÓ LỖI XẢY RA TRONG QUÁ TRÌNH NẠP DATA VÀO MARIADB!"
+  echo "Đang tự động khôi phục (Rollback) lại trạng thái SQLite..."
+  mv "$PATH_HTML/wp-content/db.php.bak" "$PATH_HTML/wp-content/db.php"
+  killall -9 lsphp >/dev/null 2>&1
+  echo "✅ Đã Rollback an toàn! Web vẫn đang chạy bằng SQLite. Hãy kiểm tra lại cấu trúc file sql sinh ra."
+fi
