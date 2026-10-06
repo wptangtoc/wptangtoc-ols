@@ -1,3 +1,7 @@
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.2.0.11]
 
 ### 🛠️ Tối ưu hệ thống
@@ -91,14 +95,6 @@
 
 ### 🛠️ Tối ưu hệ thống
 - **Nâng cao độ ổn định khi tải lên qua Rclone:** Bổ sung cơ chế tự động thử lại (retry) thông minh và kiểm soát lỗi chặt chẽ hơn trong quá trình tải dữ liệu lên dịch vụ đám mây, đảm bảo các tác vụ sao lưu hoạt động liền mạch, không bị gián đoạn ngay cả khi đường truyền mạng chập chờn.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## [8.2.0.3]
-
-### 🛠️ Tối ưu hệ thống
-- **Cải tiến tiến trình tải xuống qua Rclone:** Tối ưu hóa tốc độ và độ ổn định khi tải dữ liệu từ các nền tảng lưu trữ đám mây, giúp các tác vụ sao lưu, khôi phục và đồng bộ website diễn ra mượt mà, nhanh chóng hơn.
 
 
 ---
