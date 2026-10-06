@@ -1,0 +1,62 @@
+#!/bin/bash
+check_trim_support() {
+    local root_dev dev_name max_bytes
+
+    root_dev=$(findmnt -n -o SOURCE / 2>/dev/null) || return 1
+    [[ -n "$root_dev" ]] || return 1
+
+    # Lấy physical/block device tương ứng nếu có
+    root_dev=$(readlink -f "$root_dev" 2>/dev/null || printf '%s' "$root_dev")
+    dev_name=$(basename "$root_dev")
+
+    # [CẢI TIẾN TỪ SẾP] Truy ngược qua device thật nếu là LVM / Device-Mapper (dm-X)
+    if [[ "$dev_name" == dm-* || -e "/sys/block/$dev_name/dm" ]]; then
+        local slave
+        slave=$(ls "/sys/block/$dev_name/slaves" 2>/dev/null | head -n1)
+        [[ -n "$slave" ]] && dev_name="$slave"
+    fi
+
+    # NVMe: nvme0n1p1 -> nvme0n1
+    if [[ "$dev_name" =~ ^nvme[0-9]+n[0-9]+p[0-9]+$ ]]; then
+        dev_name="${dev_name%p[0-9]*}"
+    # SATA/SCSI/virtio: sda1 -> sda, vda1 -> vda, xvda1 -> xvda
+    elif [[ "$dev_name" =~ ^(sd[a-z]+|vd[a-z]+|xvd[a-z]+)[0-9]+$ ]]; then
+        dev_name="${dev_name%%[0-9]*}"
+    fi
+
+    [[ -r "/sys/block/$dev_name/queue/discard_max_bytes" ]] || return 1
+
+    max_bytes=$(<"/sys/block/$dev_name/queue/discard_max_bytes")
+
+    [[ "$max_bytes" =~ ^[0-9]+$ && "$max_bytes" -gt 0 ]]
+}
+
+# ==============================================================================
+# TIẾN TRÌNH ÁP DỤNG TRONG WPTANGTOC OLS
+# ==============================================================================
+# lựa chọn 4 giờ đến 4 giờ 30 là tối ưu nhất, thường 0 đến đến 3 giờ anh em hãy backup và 3 giờ đến 4 giờ hay xóa backup tự động local
+if check_trim_support; then
+    if systemctl list-unit-files --type=timer 2>/dev/null |
+        grep -q '^fstrim\.timer'; then
+
+        mkdir -p /etc/systemd/system/fstrim.timer.d
+        mkdir -p /etc/systemd/system/fstrim.service.d
+
+        cat > /etc/systemd/system/fstrim.timer.d/override.conf <<'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=Tue *-*-* 04:00:00
+RandomizedDelaySec=30m
+Persistent=true
+EOF
+
+        cat > /etc/systemd/system/fstrim.service.d/override.conf <<'EOF'
+[Service]
+Nice=19
+IOSchedulingClass=idle
+EOF
+
+        systemctl daemon-reload
+        systemctl enable --now fstrim.timer >/dev/null 2>&1 || true
+    fi
+fi
