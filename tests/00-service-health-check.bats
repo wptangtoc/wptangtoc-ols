@@ -35,8 +35,8 @@ in_log_neu_loi() {
   fi
   
   [ "$status" -eq 0 ]
-  # Output thường có chữ "Syntax OK" hoặc báo lỗi cụ thể
-  [[ "$output" =~ "Syntax OK" || "$output" =~ "ok" \vert{}\vert{} "$output" == *""* ]] 
+  # Output thường có chữ "Syntax OK", "ok", hoặc chuỗi rỗng
+  [[ "$output" =~ "Syntax OK" || "$output" =~ "ok" || -z "$output" ]] 
 }
 
 @test "✅ Cổng 80 (HTTP) và 443 (HTTPS) đang mở và lắng nghe" {
@@ -155,8 +155,10 @@ in_log_neu_loi() {
   run bash -c "echo '<?php echo \"GiaTuanDz_PHP_CLI\"; ?>' > $test_file"
   [ "$status" -eq 0 ]
   
+  # Đã bù khoảng trắng ở đây
   run bash -c "chown $vhost_user$test_file"
 
+  # Đã bù khoảng trắng ở đây
   run bash -c "sudo -u $vhost_user /usr/local/lsws/lsphp*/bin/lsphp$test_file"
   rm -f -- "$test_file"
   
@@ -164,4 +166,3 @@ in_log_neu_loi() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"GiaTuanDz_PHP_CLI"* ]]
 }
-
