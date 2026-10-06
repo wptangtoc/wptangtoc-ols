@@ -48,6 +48,23 @@ else
 fi
 
 . /etc/wptt/core-functions
+
+# Dùng find -print0 + đọc bằng mapfile -d '' thay vì "for entry in $(ls ...)"
+# Giúp tương thích với tên file backup có chứa khoảng trắng, tránh word-splitting.
+wptt_list_db_backups() {
+  local dir="$1" safe_mode="$2" fname
+  [[ -d "$dir" ]] || return 0
+  while IFS=$'\t' read -r -d '' _ fname; do
+    if [[ "$safe_mode" == "1" ]]; then
+      # Giữ nguyên bộ lọc an toàn gốc cho thư mục User (chống ANSI Escape Injection / Log Forging)
+      [[ "$fname" =~ ^[a-zA-Z0-9._-]+$ ]] || continue
+    fi
+    printf '%s\0' "$fname"
+  done < <(find "$dir" -maxdepth 1 -type f \
+             \( -iname '*.sql' -o -iname '*.sql.gz' -o -iname '*.sql.zst' \) \
+             -printf '%T@\t%f\0' 2>/dev/null | sort -z -t $'\t' -k1,1 -rn)
+}
+
 if [[ "$1" == '98' ]]; then
   WPTT_IN_MENU="yes"
   WPTT_MENU_BACK="/etc/wptt/wptt-db-main 1"
@@ -75,24 +92,19 @@ if [[ ! -f "$pathcheck" ]]; then
   thoat_ve_menu
 fi
 
-if [[ ! $(ls -A /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') && ! $(ls -A /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') ]]; then
+# LIỆT KÊ BẢN SAO LƯU DATABASE (SỬ DỤNG find, AN TOÀN VỚI TÊN FILE CÓ DẤU CÁCH)
+mapfile -d '' -t selects_db_root < <(wptt_list_db_backups "/usr/local/backup-website/$NAME" 0)
+mapfile -d '' -t selects_db_user < <(wptt_list_db_backups "/usr/local/lsws/$NAME/backup-website" 1)
+
+if [[ ${#selects_db_root[@]} -eq 0 && ${#selects_db_user[@]} -eq 0 ]]; then
   echo -e "\n${C_YELLOW}⚠️ Không có file backup database (.sql, .sql.gz, .sql.zst) nào tồn tại.${C_RESET}"
   echo "Vui lòng upload file backup database của bạn vào: /usr/local/backup-website/$NAME/"
   sleep 4
   thoat_ve_menu
 fi
 
-b=1
-for entry in $(ls -At /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do
-  b=$((b + 1))
-done
-
-bb=1
-if [[ $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') ]]; then
-  for entry in $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do
-    bb=$((bb + 1))
-  done
-fi
+b=$(( ${#selects_db_root[@]} + 1 ))
+bb=$(( ${#selects_db_user[@]} + 1 ))
 
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}THỐNG KÊ BẢN SAO LƯU DATABASE (CƠ SỞ DỮ LIỆU)${C_RESET}"
@@ -103,16 +115,7 @@ echo -e "${C_CYAN}├───────────────────�
 left_text "${C_GREEN}Tổng cộng có: $((bb + b - 2)) file sao lưu Database${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-selects=()
-for entry in $(ls -At /usr/local/backup-website/"$NAME" 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do
-  selects+=("$entry")
-done
-
-if [[ $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$') ]]; then
-  for entry in $(ls -At /usr/local/lsws/"$NAME"/backup-website 2>/dev/null | grep '.sql$\|.sql.gz$\|.sql.zst$'); do
-    selects+=("$entry")
-  done
-fi
+selects=( "${selects_db_root[@]}" "${selects_db_user[@]}" )
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   echo -e "\n${C_RED}❌ Không có file backup Database nào hợp lệ!${C_RESET}"
@@ -462,3 +465,4 @@ exec 200>&-
 rm -f "/etc/wptt/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME:?}.lock" 2>/dev/null
 
 thoat_ve_menu
+
