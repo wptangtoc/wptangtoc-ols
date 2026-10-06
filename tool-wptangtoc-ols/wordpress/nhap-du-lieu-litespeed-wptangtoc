@@ -78,13 +78,20 @@ fi
 		if [[ "$domain" == ?*.?* ]]; then
 			path="/usr/local/lsws/$domain/html/wp-config.php"
 			if [[ -f "$path" ]]; then
+
+
 				_runing "[ $tien_do / $tong_so_web ] cấu hình LSCache WP cho: $domain"
-
-				(/etc/wptt/wordpress/nhap-du-lieu-litespeed-wptangtoc "$domain" >/dev/null 2>&1)
-
-				_rundone "[ $tien_do / $tong_so_web ] cấu hình LSCache WP cho: $domain"
-
-				((tien_do++)) # Tăng tiến độ sau mỗi lần chạy xong
+				wptt_logs "START" "Thao tác hàng loạt: LSCACHE WP cho $domain"
+				( /etc/wptt/wordpress/nhap-du-lieu-litespeed-wptangtoc "$domain" >/dev/null 2>&1 )
+				exit_status=$?
+				if [ "$exit_status" -eq 0 ]; then
+					_rundone "[ $tien_do / $tong_so_web ] cấu hình LSCache WP cho: $domain"
+					wptt_logs "INFO" "Thao tác hàng loạt: Đã LSCACHE WP thành công cho $domain"
+				else
+					_runloi "[ $tien_do / $tong_so_web ] cấu hình LSCache WP cho: $domain"
+					wptt_logs "ERROR" "Thao tác hàng loạt: Lỗi khi LSCACHE WP cho $domain (Mã lỗi: $exit_status)"
+				fi
+				((tien_do++))
 			fi
 		fi
 	done
@@ -112,8 +119,7 @@ if [[ ! -f "$pathcheck" ]]; then
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-wordpress-main 1
   fi
-  return 2>/dev/null
-  exit
+  return 1 2>/dev/null || exit 1
 fi
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
@@ -126,8 +132,7 @@ if [[ ! -f "$pathcheckwp" ]]; then
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-wordpress-main 1
   fi
-  return 2>/dev/null
-  exit
+  return 1 2>/dev/null || exit 1
 fi
 
 wptt_logs "INFO" "Import Litespeed By WPTANGTOC file cho website $NAME"
@@ -175,28 +180,74 @@ for plugintt in ${pluginsspeed[@]}; do
     if [[ $check_menu_wptangtoc_active = "98" ]]; then
       exec /etc/wptt/wptt-wordpress-main 1
     fi
-    return 2>/dev/null
-    exit
+  return 1 2>/dev/null || exit 1
   fi
 done
 
 . /etc/wptt/vhost/."$NAME".conf
 
-. /etc/wptt/php/php-cli-domain-config "$NAME"
+#Bắt buộc file thư viện phải chạy thành công (trả về exit code 0)
+if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
+  wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
+  _runloi "Không xác định được phiên bản PHP"
+  return 1 2>/dev/null || exit 1
+fi
+
+#DOUBLE CHECK SAU KHI NẠP THƯ VIỆN
+if [[ -z "${phien_ban_php_domain_thuc_thi:-}" ]]; then
+  wptt_logs "ERROR" "Biến phien_ban_php_domain_thuc_thi trả về rỗng sau khi nạp thư viện."
+  return 1 2>/dev/null || exit 1
+fi
 
 pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/litespeed-cache"
+# Đóng gói lệnh WP-CLI thành một biến để tái sử dụng nhiều lần cho code sạch sẽ
+wp_cli=( /sbin/runuser -u $User_name_vhost -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp --path=$path )
+
+# ====================================================================
+# TRƯỜNG HỢP 1: CHƯA CÓ PLUGIN TRÊN Ổ CỨNG (Cần Tải + Kích hoạt)
+# ====================================================================
 if [[ ! -d "$pathcheckplugin" ]]; then
-  _runing "Cài đặt plugin LiteSpeed Cache"
+  _runing "Cài đặt & kích hoạt LiteSpeed Cache"
 
-  /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp plugin install litespeed-cache --allow-root --path="$path" >/dev/null 2>&1
+  # Thêm cờ --activate để tải xong là bật luôn
+  if "${wp_cli[@]}" plugin install litespeed-cache --activate >/dev/null 2>&1; then
+    
+    if [[ -d "$pathcheckplugin" ]]; then
+      _rundone "Cài đặt & kích hoạt LiteSpeed Cache"
+    else
+      _runloi "Cài đặt & kích hoạt LiteSpeed Cache"
+      wptt_logs "ERROR" "Lỗi ảo: WP-CLI báo thành công nhưng không có thư mục tại $NAME"
+    fi
 
-  # . /etc/wptt/vhost/."$NAME".conf && chown -hR "$User_name_vhost":"$User_name_vhost" $pathcheckplugin
-  if [[ -d $pathcheckplugin ]]; then
-    _rundone "Cài đặt plugin LiteSpeed Cache"
   else
-    _runloi "Cài đặt plugin LiteSpeed Cache"
+    _runloi "Cài đặt & kích hoạt LiteSpeed Cache"
+    wptt_logs "ERROR" "Lệnh tải LiteSpeed Cache thất bại cho website $NAME"
+    [[ -d "$pathcheckplugin" ]] && rm -rf "$pathcheckplugin" # Dọn rác nếu có
+  fi
+
+# ====================================================================
+# TRƯỜNG HỢP 2: PLUGIN ĐÃ NẰM TRÊN Ổ CỨNG (Cần kiểm tra trạng thái Bật/Tắt)
+# ====================================================================
+else
+  # Lệnh wp plugin is-active trả về 0 nếu đang bật, trả về 1 nếu đang tắt
+  if ! "${wp_cli[@]}" plugin is-active litespeed-cache >/dev/null 2>&1; then
+    _runing "Bật lại plugin LiteSpeed Cache (đang bị tắt)"
+    
+    # Ép kích hoạt lại plugin
+    if "${wp_cli[@]}" plugin activate litespeed-cache >/dev/null 2>&1; then
+      _rundone "Bật lại plugin LiteSpeed Cache (đang bị tắt)"
+      wptt_logs "INFO" "Đã kích hoạt thành công LiteSpeed Cache cho $NAME (trước đó bị tắt)"
+    else
+      _runloi "Bật lại plugin LiteSpeed Cache (đang bị tắt)"
+      wptt_logs "ERROR" "Không thể kích hoạt LiteSpeed Cache cho $NAME. Mã nguồn plugin có thể bị hỏng!"
+    fi
+    
+  else
+    # Mọi thứ hoàn hảo: Đã có thư mục + Đang Active
+    wptt_logs "INFO" "Plugin LiteSpeed Cache đã cài và ĐANG BẬT trên $NAME. Bỏ qua."
   fi
 fi
+
 
 _runing "Cấu hình tối ưu theo cách khuyến nghị của Gia Tuấn"
 
@@ -207,7 +258,7 @@ if [[ -d "$pathcheckplugin" ]]; then
   [[ -L /usr/local/lsws/"${NAME:?}"/html/wp-config.php ]] || "${WP_EXEC[@]}" config delete WP_CACHE --path="/usr/local/lsws/${NAME:?}/html" --quiet
 
   rm -rf /usr/local/lsws/"${NAME:?}"/html/wp-content/cache
-  [[ -L /usr/local/lsws/"${NAME:?}"/html/wp-content/object-cache.php ]] || rm -f /usr/local/lsws/"${NAME:?}"/html/wp-content/object-cache.php
+  [[ -f /usr/local/lsws/"${NAME:?}"/html/wp-content/object-cache.php ]] && rm -f /usr/local/lsws/"${NAME:?}"/html/wp-content/object-cache.php
 
   cd "$path" && wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/$data_wptangtoc
 
