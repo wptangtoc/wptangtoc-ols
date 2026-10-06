@@ -28,54 +28,84 @@ function huong_dan() {
   Ghi chú: khi bật có thể bị lỗi một số tính năng bạn vui lòng kiểm tra kỹ trước khi triển khai.
 }
 
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
+
+export box_inner_width=78
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}${bao_mat} ➜ Bật / Tắt chặn Hàm nguy hiểm PHP${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
+# ==============================================================================
+# HÀM CHỌN WEBSITE CÓ HIỂN THỊ TRẠNG THÁI
+# ==============================================================================
 function lua_chon_NAME() {
-  unset NAME selects
-  selects=()
-  local box_inner_width=${box_inner_width:-71}
+  unset NAME
+  local selects=()
+  local i=1
 
   if [ "$(ls -At /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for filepath in /etc/wptt/vhost/.*.conf; do
       [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-      local dom="${filepath##*/}"
-      dom="${dom%.conf}"
-      dom="${dom#.}"
 
-      if [[ "$dom" == ?*.?* ]]; then
-        local vhost_path="/usr/local/lsws/conf/vhosts/$dom/$dom.conf"
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        local vhost_path="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
         if [[ -f "$vhost_path" ]]; then
+          local status_text=""
+          local status_color=""
+
+          # Kiểm tra xem disable_functions có đang bật không
           if grep -q 'disable_functions' "$vhost_path" 2>/dev/null; then
-            selects+=("$dom|1") # 1 = Đang Bật
+            status_text="[Đang BẬT - An toàn]"
+            status_color=$C_GREEN
           else
-            selects+=("$dom|0") # 0 = Đang Tắt
+            status_text="[Đang TẮT - Nguy hiểm]"
+            status_color=$C_RED
           fi
+
+          selects+=("$domain|$status_text|$status_color")
         fi
       fi
     done
   fi
 
   if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "${C_YELLOW}Hệ thống chưa có website nào được khởi tạo để cấu hình!${C_RESET}"
+    echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy website nào trên hệ thống!${C_RESET}"
     sleep 3
     exec /etc/wptt/wptt-bao-mat-main 1
   fi
 
-  # Render Menu Bo Cong
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  local num_domains=${#selects[@]}
+  
+  # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   local title_text="Trạng thái hiện tại & Chọn Website muốn thao tác:"
-  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
   local pad_r=$((box_inner_width - len - 2))
   [[ $pad_r -lt 0 ]] && pad_r=0
+
   echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
 
   local line_len=$((len + 3))
@@ -84,150 +114,283 @@ function lua_chon_NAME() {
   local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
   echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
 
-  local i=1
-  for item in "${selects[@]}"; do
-    local dom=$(echo "$item" | cut -d'|' -f1)
-    local stt=$(echo "$item" | cut -d'|' -f2)
-
-    local color_stt="${C_GREEN}[Đang BẬT]"
-    local clean_stt="[Đang BẬT]"
-    if [[ "$stt" == "0" ]]; then
-      color_stt="${C_YELLOW}[Đang TẮT (Chưa bảo vệ)]"
-      clean_stt="[Đang TẮT (Chưa bảo vệ)]"
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt chặn Hàm nguy hiểm cho toàn bộ hệ thống" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt chặn Hàm nguy hiểm cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     fi
-
-    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} %s" "$i" "$dom" "${color_stt}${C_RESET}")
-    local clean_text=$(printf "  %3d) %-30s %s" "$i" "$dom" "$clean_stt")
-    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-    local pad=$((box_inner_width - item_len))
-    [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
   local fzf_installed=false
-  if command -v fzf &>/dev/null; then
-    fzf_installed=true
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
-  else
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
-  fi
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
 
   while true; do
-    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
     if ! read -r REPLY; then exit 1; fi
     REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
     case "$REPLY" in
-    0)
-      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-      NAME="0"
-      return 0
-      ;;
+    0) exec /etc/wptt/wptt-bao-mat-main 1 ;;
     00)
       if $fzf_installed; then
-        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
-        local extracted_data=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-        if [[ -n "$extracted_data" ]]; then
-          NAME=$(echo "$extracted_data" | cut -d'|' -f1)
-          DOMAIN_CURRENT_STT=$(echo "$extracted_data" | cut -d'|' -f2)
-          return 0
-        else
-          echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
-        fi
-      else
-        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
       fi
       ;;
     *)
       if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-        local action_index=$((REPLY - 1))
-        local extracted_data="${selects[$action_index]}"
-        NAME=$(echo "$extracted_data" | cut -d'|' -f1)
-        DOMAIN_CURRENT_STT=$(echo "$extracted_data" | cut -d'|' -f2)
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%|*|*}"
+        fi
         return 0
-      else
-        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
       fi
       ;;
     esac
   done
 }
 
-lua_chon_NAME
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-  return 2>/dev/null || exit
-}
-
-vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
-if [[ ! -f "$vhost_conf" ]]; then
-  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-  return 2>/dev/null || exit
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+  # Hỗ trợ truyền đối số cho 1 domain cụ thể
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
+else
+  lua_chon_NAME
 fi
+
+# ==============================================================================
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
+# ==============================================================================
+DOMAIN_LIST=()
+wp_action=""
+action_text=""
 
 echo ""
-FUNCS_LIST="exec,system,passthru,shell_exec,dl,show_source,posix_kill,posix_mkfifo,posix_getpwuid,posix_setpgid,posix_setsid,posix_setuid,posix_setgid,posix_seteuid,posix_setegid,posix_uname"
-has_root_php_override=$(grep -c '^phpIniOverride' "$vhost_conf")
-
-action_msg=""
-
-# ĐANG BẬT (1) -> HỎI TẮT
-if [[ "$DOMAIN_CURRENT_STT" == "1" ]]; then
-  if wptt_xac_nhan "Tính năng chặn Hàm nguy hiểm PHP đang BẬT. Bạn có muốn TẮT đi không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "Lưu ý: Việc tắt sẽ làm giảm mức độ bảo mật của website này." "Đồng ý TẮT" "Hủy bỏ"; then
-    echo ""
-    _runing "Tắt giới hạn Hàm PHP cho $NAME..."
-    echo "Tắt chặn hàm nguy hiểm PHP website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-    # Xóa dòng disable_functions
-    sed -i '/disable_functions/d' "$vhost_conf"
-    # Xóa khối phpIniOverride nếu rỗng
-    sed -i '/^phpIniOverride[[:space:]]*{/{:a; /}/!{N; ba;}; /^phpIniOverride[[:space:]]*{[[:space:]\n]*}$/d}' "$vhost_conf"
-
-    action_msg="Đã TẮT chặn hàm PHP nguy hiểm (Không khuyến nghị)."
-    action_color="${C_YELLOW}"
-    _rundone "Tắt giới hạn Hàm PHP cho $NAME..."
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+  
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+    wp_action="bat"
+    action_text="BẬT chặn Hàm PHP"
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+    wp_action="tat"
+    action_text="TẮT chặn Hàm PHP"
   else
-    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
-    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-    exit 0
-  fi
-# ĐANG TẮT (0) -> HỎI BẬT
-else
-  if wptt_xac_nhan "Tính năng chặn Hàm nguy hiểm PHP đang TẮT. Bạn có muốn BẬT lên không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "Lưu ý: Việc này giúp bảo vệ Server, nhưng một số Plugin Backup có thể bị lỗi." "Đồng ý BẬT" "Hủy bỏ"; then
-    echo ""
-    _runing "Bật cấu hình chặn Hàm PHP (disable_functions) cho $NAME..."
-    echo "Bật chặn hàm nguy hiểm PHP website $NAME: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
-
-    if [[ $has_root_php_override -gt 0 ]]; then
-      # Tiêm vào khối phpIniOverride sát lề trái
-      sed -i "/^phpIniOverride/a \  php_admin_value disable_functions \"$FUNCS_LIST\"" "$vhost_conf"
+    # NẾU CHỌN TỪ MENU UI (SỐ TÙY CHỌN CUỐI CÙNG) -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH CHẶN HÀM PHP${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình bảo mật PHP cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    str_opt1="  1) BẬT chặn Hàm (Bảo vệ an toàn đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT chặn Hàm${C_RESET} (Bảo vệ an toàn đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+    
+    str_opt2="  2) TẮT chặn Hàm (Gỡ bỏ bảo vệ đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT chặn Hàm${C_RESET} (Gỡ bỏ bảo vệ đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+    
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+    
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      wp_action="bat"
+      action_text="BẬT chặn Hàm PHP"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      wp_action="tat"
+      action_text="TẮT chặn Hàm PHP"
     else
-      # Nếu CHƯA TỒN TẠI, tự động xây một khối ĐỘC LẬP MỚI ở cuối file
-      echo -e "\nphpIniOverride  {\n  php_admin_value disable_functions \"$FUNCS_LIST\"\n}" >>"$vhost_conf"
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
     fi
+  fi
 
-    action_msg="Đã BẬT cấu hình chặn Hàm PHP nguy hiểm."
-    action_color="${C_GREEN}"
-    _rundone "Bật cấu hình chặn Hàm PHP (disable_functions) cho $NAME..."
+  # Quét toàn bộ danh sách domain để thực thi
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/conf/vhosts/$domain/$domain.conf" ]]; then
+      DOMAIN_LIST+=("$domain")
+    fi
+  done
+
+  if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Không có website hợp lệ nào để thao tác!${C_RESET}" && sleep 2 && exit 1
+  fi
+
+else
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
+  vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+
+  [[ ! -f "$vhost_conf" ]] && echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-bao-mat-main 1
+
+  DOMAIN_LIST=("$NAME")
+
+  # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+  if [[ $CLI_MODE -eq 1 ]]; then
+    wp_action="$CLI_ACTION"
+    if [[ "$wp_action" == "bat" ]]; then
+      action_text="BẬT chặn Hàm PHP"
+    else
+      action_text="TẮT chặn Hàm PHP"
+    fi
   else
-    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
-    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-    exit 0
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN BẢO MẬT HÀM PHP${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if grep -q 'disable_functions' "$vhost_conf" 2>/dev/null; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT chặn các hàm nguy hiểm." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) TẮT chặn hàm (Gỡ bỏ bảo vệ - Không khuyến nghị)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT chặn hàm${C_RESET} (Gỡ bỏ bảo vệ - Không khuyến nghị)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Giữ nguyên khóa bảo vệ)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên khóa bảo vệ)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="tat"
+        action_text="TẮT chặn Hàm PHP"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-bao-mat-main 1
+      fi
+    else
+      left_text "  Website ${NAME} hiện ĐANG TẮT (Kém an toàn)." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      
+      str_opt1="  1) BẬT chặn hàm (Kích hoạt bảo vệ giới hạn an toàn)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT chặn hàm${C_RESET} (Kích hoạt bảo vệ giới hạn an toàn)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+      
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+      
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+      
+      if [[ "$single_choice" == "1" ]]; then
+        wp_action="bat"
+        action_text="BẬT chặn Hàm PHP"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+        exec /etc/wptt/wptt-bao-mat-main 1
+      fi
+    fi
   fi
 fi
 
+# ==============================================================================
+# THỰC THI SỬA FILE CẤU HÌNH VHOST
+# ==============================================================================
+echo ""
+FUNCS_LIST="exec,system,passthru,shell_exec,dl,show_source,posix_kill,posix_mkfifo,posix_getpwuid,posix_setpgid,posix_setsid,posix_setuid,posix_setgid,posix_seteuid,posix_setegid,posix_uname"
+
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  vhost_conf="/usr/local/lsws/conf/vhosts/$DOMAIN/$DOMAIN.conf"
+  [[ ! -f "$vhost_conf" ]] && continue
+  
+  _runing "$action_text cho $DOMAIN..."
+  has_root_php_override=$(grep -c '^phpIniOverride' "$vhost_conf")
+
+  if [[ "$wp_action" == "bat" ]]; then
+    if ! grep -q 'disable_functions' "$vhost_conf" 2>/dev/null; then
+      if [[ $has_root_php_override -gt 0 ]]; then
+        # Tiêm vào khối phpIniOverride hiện có
+        sed -i "/^phpIniOverride/a \  php_admin_value disable_functions \"$FUNCS_LIST\"" "$vhost_conf"
+      else
+        # Nếu chưa có, tự tạo khối mới
+        echo -e "\nphpIniOverride  {\n  php_admin_value disable_functions \"$FUNCS_LIST\"\n}" >>"$vhost_conf"
+      fi
+    fi
+  else
+    if grep -q 'disable_functions' "$vhost_conf" 2>/dev/null; then
+      # Xóa dòng disable_functions
+      sed -i '/disable_functions/d' "$vhost_conf"
+      # Xóa khối phpIniOverride nếu rỗng
+      sed -i '/^phpIniOverride[[:space:]]*{/{:a; /}/!{N; ba;}; /^phpIniOverride[[:space:]]*{[[:space:]\n]*}$/d}' "$vhost_conf"
+    fi
+  fi
+
+  echo "$action_text website $DOMAIN: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+  _rundone "$action_text cho $DOMAIN"
+done
+
+# ==============================================================================
+# RELOAD LITESPEED ĐỂ ÁP DỤNG CẤU HÌNH
+# ==============================================================================
 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
 
-echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI CẤU HÌNH BẢO MẬT${C_RESET}"
-echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
-left_text "Trạng thái mới   : ${action_color}${action_msg}${C_RESET}" 2
-echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
-[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+if [[ ${1:-} == "98" ]]; then
+  exec /etc/wptt/wptt-bao-mat-main 1
+fi

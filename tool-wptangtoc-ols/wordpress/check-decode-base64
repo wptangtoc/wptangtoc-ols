@@ -1,46 +1,246 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
   Kiểm tra mã nguồn có bị dính mã độc mã hoá base64 không?
+  
+  để tìm kiếm các đoạn mã độc PHP bị mã hóa phổ biến nhất:
+  * eval[base64_decode[...]]
+  * eval[gzinflate[...]]
+  * assert[base64_decode[...]]
+  
+  Tốc độ quét siêu tốc, không cần load database, cực kỳ an toàn.
 }
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
-tinh_nang_ten="Kiểm tra mã nguồn mã hoá Decode base64"
+export box_inner_width=78
 
-. /etc/wptt/echo-color
+clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_wordpress ➜ $tinh_nang_ten${C_RESET}"
+center_text "${C_YELLOW}$quan_ly_wordpress ➜ Kiểm tra mã độc mã hoá (Decode Base64)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-. /etc/wptt/tenmien-only-website-by-wordpress
-lua_chon_NAME "$tinh_nang_ten"
+# ==============================================================================
+# HÀM CHỌN WEBSITE ĐỂ QUÉT
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME
+  local selects=()
+  local i=1
 
-. /etc/wptt/echo-color
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-wordpress-main 1
-fi
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-if [[ ! -d /root/.wp-cli/packages/vendor/wp-cli/doctor-command ]]; then
-  wp package install git@github.com:wp-cli/doctor-command.git --allow-root
-fi
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
 
-path="/usr/local/lsws/$NAME/html"
+      if [[ "$domain" == ?*.?* ]]; then
+        local path_html="/usr/local/lsws/$domain/html"
+        if [[ -f "$path_html/wp-load.php" ]]; then
+          selects+=("$domain")
+        fi
+      fi
+    done
+  fi
 
-echo "Đang kiểm tra mã nguồn website $NAME ..."
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: $khong_co_domain_nao_ton_tai_tren_he_thong${C_RESET}"
+    exit
+  fi
 
-giatuancheck=$(wp doctor check file-eval --allow-root --path="$path" | grep -c "success")
-if [[ "$giatuancheck" = "1" ]]; then
-  echo "Ma nguon website $NAME cua ban khong co ma hoa decode base64"
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  local num_domains=${#selects[@]}
+  
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Quét mã độc toàn bộ hệ thống)")
+  fi
+
+  # ============================================================================
+  # RENDER BOX CHỌN DOMAIN (UX CHUẨN 78PX)
+  # ============================================================================
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website cần quét}:"
+  local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Quét mã độc toàn bộ hệ thống)" ]]; then
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Quét mã độc toàn bộ hệ thống (Có thể tốn thời gian)" "$i")
+      local item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Quét mã độc toàn bộ hệ thống (Có thể tốn thời gian)" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      local clean_row=$(printf "  %3d) %-34s [Sẵn sàng quét]" "$i" "$val")
+      local item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${C_GREEN}[Sẵn sàng quét]${C_RESET}" "$i" "$val")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    fi
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+  
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-wordpress-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Quét mã độc toàn bộ hệ thống)" ]]; then
+            fzf_list+=("$val")
+          fi
+        done
+        local sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        NAME="$val"
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
+}
+
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE)
+# ==============================================================================
+if [[ "${1:-}" == "all" ]]; then
+  NAME="TẤT CẢ WEBSITE (Quét mã độc toàn bộ hệ thống)"
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
 else
-  echo "Da co van de khong on voi ma nguon website $NAME cua ban"
+  lua_chon_NAME
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
+# ==============================================================================
+# LẤY DANH SÁCH DOMAIN ĐỂ QUÉT
+# ==============================================================================
+DOMAIN_LIST=()
+echo ""
+
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Quét mã độc toàn bộ hệ thống)" || "$NAME" == "TẤT" || "$NAME" == "all" ]]; then
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
+      DOMAIN_LIST+=("$domain")
+    fi
+  done
+  
+  if [[ ${#DOMAIN_LIST[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Không có website WordPress nào trên hệ thống!${C_RESET}" && sleep 2 && exit 1
+  fi
+else
+  path_html="/usr/local/lsws/$NAME/html"
+  [[ ! -d "$path_html" ]] && echo -e "\n${C_RED}❌ Không tìm thấy thư mục chứa mã nguồn của $NAME${C_RESET}" && sleep 2 && exec /etc/wptt/wptt-wordpress-main 1
+  DOMAIN_LIST=("$NAME")
+fi
+
+# ==============================================================================
+# THỰC THI QUÉT BẰNG NATIVE GREP (SIÊU TỐC ĐỘ)
+# ==============================================================================
+# Các mẫu mã độc mã hóa phổ biến: eval(base64_decode, eval(gzinflate, assert(base64_decode...
+REGEX_PATTERN='eval[[:space:]]*\([[:space:]]*base64_decode|eval[[:space:]]*\([[:space:]]*gzinflate|assert[[:space:]]*\([[:space:]]*base64_decode|base64_decode[[:space:]]*\([[:space:]]*\$_POST'
+
+for DOMAIN in "${DOMAIN_LIST[@]}"; do
+  path_html="/usr/local/lsws/$DOMAIN/html"
+  
+  _runing "Đang quét mã độc Base64/Gzinflate cho $DOMAIN..."
+  
+  # Quét file .php bằng grep (bỏ qua các thư mục cache để tăng tốc)
+  suspicious_files=$(grep -rlE "$REGEX_PATTERN" "$path_html" \
+    --exclude-dir="cache" \
+    --exclude-dir="lscache" \
+    --exclude-dir="wflogs" \
+    --include="*.php" 2>/dev/null)
+
+  _rundone "Hoàn tất quét cho $DOMAIN"
+  
+  if [[ -z "$suspicious_files" ]]; then
+    # NẾU AN TOÀN (SẠCH)
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_GREEN}AN TOÀN: KHÔNG PHÁT HIỆN MÃ ĐỘC${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Mã nguồn website ${C_BOLD_WHITE}$DOMAIN${C_RESET} hoàn toàn sạch sẽ." 2
+    left_text "  Không tìm thấy các hàm mã hóa Decode Base64 độc hại." 2
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  else
+    # NẾU PHÁT HIỆN NGHI VẤN
+    echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}CẢNH BÁO: PHÁT HIỆN MÃ NGHI NGỜ (BASE64/GZINFLATE)${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Đã tìm thấy các tệp chứa hàm giải mã nguy hiểm trên ${C_BOLD_WHITE}$DOMAIN${C_RESET}" 2
+    left_text "  Vui lòng kiểm tra thủ công các tệp tin dưới đây:" 2
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    
+    # In danh sách file bị dính (Cắt chuỗi nếu quá dài để không vỡ khung)
+    for file in $suspicious_files; do
+      # Xóa phần đường dẫn gốc để nhìn cho gọn
+      short_file="${file#$path_html/}"
+      local clean_row=$(printf "  • %s" "$short_file")
+      local len=${#clean_row}
+      
+      if [[ $len -gt 74 ]]; then
+        short_file="...${short_file: -$((70))}"
+        clean_row=$(printf "  • %s" "$short_file")
+      fi
+      
+      local item_row=$(printf "  ${C_RED}•${C_RESET} ${C_YELLOW}%s${C_RESET}" "$short_file")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      
+      echo -e "${C_RED}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_RED}│${C_RESET}"
+    done
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  fi
+done
+
+if [[ ${1:-} == "98" ]]; then
   exec /etc/wptt/wptt-wordpress-main 1
 fi
