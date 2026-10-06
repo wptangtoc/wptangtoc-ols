@@ -31,7 +31,7 @@ quan_ly_tai_nguyen="Quản lý tài nguyên server"
 gia_lap_website="Gỉa lập website"
 tai_tro_du_an="Tài trợ dự án"
 nhom_facebook_thao_luan="Nhóm Group thảo luận"
-quan_ly_ngon_ngu="Chuyển đổi ngôn ngữ"
+quan_ly_ngon_ngu="Chuyển đổi ngôn ngữ (Change language)"
 wptangtoc_ols_menu_chinh="WPTangToc OLS MENU chính"
 tinh_trang_may_chu="Tình trạng máy chủ"
 may_chu_dang_gap_van_de="Máy chủ đang có vấn đề, cần phải khắc phục"
@@ -72,10 +72,10 @@ thay_doi_username="Thay đổi username"
 bat_tat_dang_nhap_username_rieng_domain="Bật/Tắt đăng nhập username riêng domain"
 khoi_tao_subfolder_website="Khởi tạo subfolder website"
 
-#wordpress main ben trong
+#Domain main ben trong
 vi_du="ví dụ"
 nhap="Nhập"
-hoac="or"
+hoac="hoặc"
 ban_muon_them="bạn muốn thêm"
 ban_chua_nhap_ten_domain="Bạn chưa nhập tên domain"
 domain_nhap_khong_dung_dinh_dang="Domain tên miền nhập không đúng định dạng"
@@ -85,6 +85,15 @@ vao_he_thong="vào hệ thống"
 cai_dat_thanh_cong="Cài đặt thành công"
 duong_dan_thu_muc="đường dẫn thư mục"
 moi_thong_tin_tai_khoan_da_duoc_luu_tru="Mọi thông tin tài khoản được lưu trữ"
+lua_chon_website_ban_muon="Lựa chọn website bạn muốn"
+ten_mien_nay_khong_ton_tai_tren_he_thong="Tên miền không tồn tại trên hệ thống này"
+dong_y="Đồng ý"
+khong_dong_y="Không đồng ý"
+xac_nhan="Xác nhận"
+khong_co_domain_nao_ton_tai_tren_he_thong="Không có domain nào tồn tại trên hệ thống của bạn"
+may_chu="Máy chủ"
+tren_he_thong="On System"
+
 
 
 #quản lý ssl menu main
