@@ -1,4 +1,5 @@
 #!/bin/bash
+umask 077 #nâng cao bảo mật cho file backup trừ quyền: chủ sở hữu trừ 0, quyền nhóm trừ 7 và quyền ngoài trừ 7 khi file mới tạo
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
