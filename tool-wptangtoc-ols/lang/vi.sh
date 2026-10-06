@@ -160,3 +160,6 @@ doi_port_webguiadmin="Đổi cổng port"
 thay_doi_id_va_password="Thay đổi ID va Password"
 xem_lai_thong_tin_tai_khoan_webguiadmin="Xem lại thông tin tài khoản"
 
+#cau hinh webserver main menu
+chinh_sua="Cấu hình"
+thay_doi_cong_cu_cau_hinh="Thay đổi công cụ cấu hình"
