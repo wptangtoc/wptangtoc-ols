@@ -2,7 +2,7 @@
 
 . /etc/wptt/bao-mat/nftables/install-nftables.sh
 cat <(crontab -l) | sed "/bao-mat/d" | crontab -
-cat <(crontab -l) | sed "/access.log/d" | crontab -
+cat <(crontab -l) | sed "/truncate/d" | crontab -
 rm -rf /usr/local/lsws/*/bao-mat
 systemctl restart nftables
 systemctl unmask fail2ban
