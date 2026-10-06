@@ -35,7 +35,7 @@ if [[ -z "$NAME" ]]; then
   function lua_chon_NAME() {
     unset NAME selects
     selects=()
-    local box_inner_width=${box_inner_width:-71}
+    local box_inner_width=${box_inner_width:-78}
 
     for filepath in /etc/wptt/vhost/.*.conf; do
       [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -52,7 +52,7 @@ if [[ -z "$NAME" ]]; then
     done
 
     if [[ ${#selects[@]} -eq 0 ]]; then
-      echo -e "${C_YELLOW}⚠️ Tất cả website trên hệ thống đều đã được kích hoạt File Manager!${C_RESET}"
+      echo -e "${C_YELLOW}Tất cả website trên hệ thống đều đã được kích hoạt File Manager!${C_RESET}"
       sleep 3
       exec /etc/wptt/wptt-quan-ly-files-main 1
     fi
@@ -95,7 +95,7 @@ if [[ -z "$NAME" ]]; then
     fi
 
     while true; do
-      echo -en "${C_CYAN}👉 ${PROMPT_TEXT}${C_RESET}"
+      echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
       if ! read -r REPLY; then exit 1; fi
       REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
 
@@ -150,34 +150,71 @@ if [[ ! -f "$pathcheck" ]]; then
 fi
 
 if [[ -d "/usr/local/lsws/$NAME/html/quan-ly-files" ]]; then
-  echo -e "\n${C_YELLOW}⚠️ Bạn đã kích hoạt trình quản lý files cho website này rồi!${C_RESET}"
+  echo -e "\n${C_YELLOW}Bạn đã kích hoạt trình quản lý files cho website này rồi!${C_RESET}"
   sleep 2
   [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-quan-ly-files-main 1
   return 2>/dev/null || exit
 fi
 
 # ==============================================================================
-# BẮT ĐẦU CÀI ĐẶT
+# BẮT ĐẦU CÀI ĐẶT & DOWNLOAD (TÍCH HỢP UX PV TÀNG HÌNH)
 # ==============================================================================
 echo ""
-_runing "Đang tải và cài đặt FileManager cho website $NAME..."
-
+_runing "Tải FileManager cho website $NAME..."
 password_quan_ly_file=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
 user_quan_ly_file=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
 
 cd /usr/local/lsws/$NAME/html || exit 1
-wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/quan-ly-files.zip
-[[ ! -f quan-ly-files.zip ]] && wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/quan-ly-files.zip --no-check-certificate
-[[ ! -f quan-ly-files.zip ]] && wget -q --timeout=15 --tries=3 https://github.com/wptangtoc/wptangtoc-ols/raw/refs/heads/main/quan-ly-files.zip
 
-if [[ ! -f quan-ly-files.zip ]]; then
+echo "" # Tạo một dòng trống cho thanh tiến trình PV chạy mượt
+
+fm_zip="quan-ly-files.zip"
+function wptt_download_filemanager_ux() {
+  local url="$1"
+  local dest_file="$2"
+  local extra_args="$3" # Nhận các cờ mở rộng như --no-check-certificate
+  
+  # Lấy kích thước file từ Header để mớm cho PV tính %
+  local fsize=$(curl -sI --max-time 5 $extra_args "$url" 2>/dev/null | grep -i -E "Content-Length" | awk '{print $2}' | tr -d '\r')
+  
+  if command -v pv &>/dev/null && [[ -n "$fsize" && "$fsize" -gt 0 ]]; then
+    # Dùng wget lấy luồng đổ vào pv vẽ biểu đồ, rồi xuất ra file zip
+    wget -qO- --timeout=15 --tries=3 $extra_args "$url" | pv -s "$fsize" -N "Tải FileManager" -p -t -e -r -b -w 90 > "$dest_file"
+    # Tàng hình: lùi lên 1 dòng, xóa sạch tiến trình
+    echo -en "\033[1A\033[2K\r"
+  else
+    # Phương án dự phòng nếu không có PV
+    wget -q --show-progress --timeout=15 --tries=3 $extra_args -O "$dest_file" "$url"
+    echo -en "\033[1A\033[2K\r"
+  fi
+}
+
+rm -f "$fm_zip"
+# 1. Thử tải nguồn chính
+wptt_download_filemanager_ux "https://wptangtoc.com/share/quan-ly-files.zip" "$fm_zip" ""
+
+# 2. Dự phòng: Tải bỏ qua chứng chỉ SSL
+if [[ ! -s "$fm_zip" ]]; then
+  rm -f "$fm_zip"
+  wptt_download_filemanager_ux "https://wptangtoc.com/share/quan-ly-files.zip" "$fm_zip" "--no-check-certificate"
+fi
+
+# 3. Dự phòng: Tải từ Github
+if [[ ! -s "$fm_zip" ]]; then
+  rm -f "$fm_zip"
+  wptt_download_filemanager_ux "https://github.com/wptangtoc/wptangtoc-ols/raw/refs/heads/main/quan-ly-files.zip" "$fm_zip" ""
+fi
+
+if [[ ! -s "$fm_zip" ]]; then
   _runloi "Tải FileManager thất bại! Vui lòng thử lại sau."
   exec /etc/wptt/wptt-quan-ly-files-main 1
 fi
 
-unzip -oq quan-ly-files.zip
-rm -f quan-ly-files.zip
-
+unzip -oq "$fm_zip"
+rm -f "$fm_zip"
+echo -en "\033[1A\033[2K\r"
+_rundone "Tải FileManager cho website $NAME..."
+_runing "Cài đặt FileManager cho website $NAME..."
 sed -i '/password_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
 sed -i '/id_dang_nhap_quan_ly_file_cap_2/d' /etc/wptt/vhost/.$NAME.conf
 sed -i '/id_quan_ly_files/d' /etc/wptt/vhost/.$NAME.conf
@@ -257,7 +294,7 @@ chown "$User_name_vhost":"$User_name_vhost" /usr/local/lsws/"$NAME"/passwd/.user
 _rundone "Kích hoạt FileManager thành công cho website $NAME"
 
 # ==============================================================================
-# BẢNG TÓM TẮT THÔNG TIN TRUY CẬP
+# BẢNG TÓM TẮT THÔNG TIN TRUY CẬP (KHUNG 78PX BO GÓC)
 # ==============================================================================
 
 unset ssl_xac_thuc_kha_dung
@@ -268,22 +305,18 @@ else
   url_truy_cap="http://$NAME/quan-ly-files"
 fi
 
-# if [[ ! -f "/etc/letsencrypt/live/$NAME/cert.pem" && ! -d /usr/local/lsws/$NAME/ssl ]]; then
-#   url_truy_cap="http://$NAME/quan-ly-files"
-# else
-#   url_truy_cap="https://$NAME/quan-ly-files"
-# fi
-
-box_inner_width=${box_inner_width:-71}
+box_inner_width=${box_inner_width:-78}
 
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}TÀI KHOẢN TRUY CẬP FILE MANAGER: $NAME${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
+# Hàm in_dong nâng cấp dùng awk đếm ký tự chuẩn để không bị lệch viền
 function in_dong() {
   local raw_text="$1"
   local colored_text="$2"
-  local pad=$((box_inner_width - ${#raw_text}))
+  local len=$(echo -n "$raw_text" | awk '{print length($0)}')
+  local pad=$((box_inner_width - len))
   [[ $pad -lt 0 ]] && pad=0
   echo -e "${C_GREEN}│${C_RESET}${colored_text}$(printf '%*s' "$pad" "")${C_GREEN}│${C_RESET}"
 }
