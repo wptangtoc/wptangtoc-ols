@@ -472,11 +472,11 @@ function main(){
             if [ "${CRAWLQS}" = 'ON' ]; then
                 URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | sed 's/<loc>/\n<loc>/g'| \
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' | \
-                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u)
+                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u|  sed '/ xmlns=/d')
             else
                 URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} | sed -e 's/\/url/\n/g'| grep '<loc>' | sed 's/<loc>/\n<loc>/g'|\
                     sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' | \
-                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u)
+                    grep -iPo '^((?!png|jpg|webp).)*$' | sort -u |  sed '/ xmlns=/d')
             fi
             URLCOUNT=$(echo "${URLLIST}" | grep -c '[^[:space:]]')
             maincrawl
