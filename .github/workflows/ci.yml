@@ -7,7 +7,7 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
   schedule:
-    - cron: "17 20 * * *" #giờ utc múi bằng 0 theo giờ việt nam là muốn chạy 17 phút 3 giờ sáng mới chạy
+    - cron: "17 18 * * *" #giờ 17 phút 4 giờ sáng mới chạy theo giờ Việt Nam, chạy giờ này là đẹp sáng sớm check list lại
 
 concurrency:
   group: wptangtoc-ols-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -458,7 +458,10 @@ jobs:
           - release: '9'
             arch: aarch64
             runner: ubuntu-24.04-arm
-    timeout-minutes: 120
+          - release: '10'
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+    timeout-minutes: 160
     steps:
       - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
@@ -680,106 +683,4 @@ jobs:
           retention-days: 7
 
 
-# ============================================================
-# JOB 6: INSTALLATION TESTS (ALMALINUX 10 ARM) - CHỈ CHẠY HẸN GIỜ (NIGHTLY)
-# ============================================================
-  install-tests-almalinux-10-arm:
-    name: Test Install AlmaLinux 10 (aarch64)
-    runs-on: ubuntu-24.04-arm
-    # Kích hoạt chế độ chạy ban đêm theo cấu hình cron hoặc bấm bằng tay
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    timeout-minutes: 120
-    steps:
-      - name: 📥 Tải mã nguồn
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
-        with:
-          persist-credentials: false
-
-      - name: 🚀 Khởi chạy Máy ảo AlmaLinux 10 ARM & Test
-        uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
-        with:
-          release: '10'
-          arch: 'aarch64'
-          usesh: true
-          run: |
-            export TERM=xterm
-            export CI=true
-            
-            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma10-aarch64.log" 2>/dev/null || true' EXIT
-            
-            dnf install -y epel-release sudo curl
-            dnf install -y bats
-            curl -sO https://wptangtoc.com/share/wptangtoc-ols
-            
-            systemctl mask reboot.target halt.target poweroff.target shutdown.target
-            
-            for cmd in reboot shutdown halt poweroff; do
-              rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-              echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-              chmod +x /usr/sbin/$cmd
-              ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-              ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
-              chattr +i /usr/sbin/$cmd 2>/dev/null || true
-              chattr +i /sbin/$cmd 2>/dev/null || true
-            done
-
-            mv /usr/bin/dnf /usr/bin/dnf_real
-            cat << 'EOF' > /usr/bin/dnf
-            #!/bin/bash
-            if [[ "$1" == "update" || "$1" == "upgrade" ]]; then exit 0; fi
-            exec /usr/bin/dnf_real "$@"
-            EOF
-            chmod +x /usr/bin/dnf
-            
-            bash wptangtoc-ols --auto
-         
-            cd $GITHUB_WORKSPACE
-            chmod -R 755 /etc/wptt/
-            
-            mkdir -p /etc/wptt/tmp
-            curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
-
-            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
-            
-            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-            for file in /etc/wptt/wptt-*main; do
-              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-            done
-            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
-
-            if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
-              set -o pipefail
-              bats tests/ | tee "$GITHUB_WORKSPACE/bats-test-alma10-aarch64.log"
-            fi
-
-      - name: 🔐 Redact thông tin nhạy cảm trong log
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for LOG in ./wptangtoc-install-alma10-aarch64.log ./bats-test-alma10-aarch64.log; do
-            [[ -f "$LOG" ]] || continue
-            sudo sed -i -E \
-              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
-              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
-              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
-              "$LOG" 2>/dev/null || true
-          done
-
-      - name: 🖨️ In Log nếu thất bại
-        if: ${{ failure() }}
-        run: cat wptangtoc-install-alma10-aarch64.log || echo "Không có log"
-
-      - name: 📤 Upload Artifacts (Logs AlmaLinux 10 ARM)
-        if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        with:
-          name: logs-almalinux-10-aarch64
-          path: |
-            wptangtoc-install-alma10-aarch64.log
-            bats-test-alma10-aarch64.log
-          if-no-files-found: ignore
-          retention-days: 7
 
