@@ -87,14 +87,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.0.9
-
-### 🚀 Tính năng mới
-- **Bổ sung cơ chế bảo mật cô lập (Security Isolation):** Tích hợp hệ thống kiểm thử chuyên sâu nhằm đảm bảo tính phân tách tuyệt đối giữa các website trên máy chủ, ngăn chặn triệt để các hành vi tấn công chéo và truy cập trái phép giữa các tài khoản.
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cấp toàn diện hệ thống kiểm thử tự động (BATS):** Hoàn thiện các kịch bản kiểm thử cho tính năng di dời website qua Rsync và các module cốt lõi, gia tăng độ ổn định, tin cậy cho mọi thao tác quản trị và vận hành máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
