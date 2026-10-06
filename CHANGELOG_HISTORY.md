@@ -90,11 +90,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## [8.2.0.0]
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cấp công cụ quét mã độc WordPress (Chuyển sang YARA):** Thay thế engine ClamAV bằng YARA với bộ quy tắc chuyên sâu dành riêng cho mã nguồn WordPress, giúp tăng tốc độ quét, nâng cao độ chính xác khi phát hiện webshell/backdoor và tiết kiệm đáng kể tài nguyên RAM, CPU cho máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
