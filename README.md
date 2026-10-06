@@ -65,9 +65,16 @@ Bạn paste đoạn mã này vào terminal của bạn rồi phần mềm sẽ t
 
 <pre>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols</pre>
 
-hoặc
+Lệnh dự phòng (từ GitHub):
 
 <pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
+
+<h2>Chế độ cài đặt Tự Động (Unattended / Zero-Touch)</h2>
+Dành cho việc triển khai hàng loạt (Cloud-init, Hãng VPS đóng template) hoặc cài đặt cực nhanh bỏ qua mọi thao tác tương tác. Bằng cách nối thêm các cờ (flags), hệ thống sẽ tự động cấu hình:
+
+--auto : Bật chế độ không chạm (Unattended), hệ thống sẽ áp dụng cấu hình tối ưu mặc định mà không hỏi gì thêm tự động lựa chọn mặc định tốt nhất.
+<pre>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols --auto</pre>
+
 
 
 Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cung cấp VPS nào đó mà bạn cảm thấy uy tín bạn có thể thuê ở đó. Để có thể sử dụng công cụ này.
