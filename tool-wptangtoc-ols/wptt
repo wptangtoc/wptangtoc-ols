@@ -6,6 +6,7 @@
 
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 function help() {
     clear
@@ -593,22 +594,35 @@ function wp-redis() {
         local wp_cfg="/usr/local/lsws/$name_web/html/wp-config.php"
         [[ ! -f "$wp_cfg" ]] && { echo "Không xác định được đây là website WordPress"; exit 1; }
 
-        _runing "Kích hoạt redis cho website $name_web"
+        _runing "Kích hoạt Pantheon wp-redis cho website $name_web"
         . /etc/wptt/vhost/."$name_web".conf 2>/dev/null
         . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null
 
-        local run_wp="/sbin/runuser -u $User_name_vhost -- /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp --allow-root --path=/usr/local/lsws/$name_web/html"
+        # Tối ưu khai báo WP-CLI an toàn
+        local run_wp=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp --allow-root --path="/usr/local/lsws/$name_web/html" )
 
-        if $run_wp plugin list --fields=name --status=active 2>/dev/null | grep -q 'wp-redis'; then
+        if "${run_wp[@]}" plugin list --fields=name --status=active 2>/dev/null | grep -q 'wp-redis'; then
             _runloi "Đã cài đặt wp redis trước đó rồi"
-            echoDo "website không cài đặt wp redis trước đó rồi"
+            echoDo "website đã cài đặt wp redis trước đó rồi"
             exit 1
         fi
 
-        sed -i '/redis_server =/d' "$wp_cfg"
-        sed -i "2 i \$redis_server = array('host'=> '/var/run/${ACTIVE_CACHE}/${ACTIVE_CACHE}.sock','port'=>null,'database'=> 0);" "$wp_cfg"
+        # Dọn dẹp dòng cấu hình redis cũ (nếu có)
+        sed -i '/$redis_server = array/d' "$wp_cfg"
 
-        $run_wp config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1
+        # Giải mã mật khẩu ACL
+        local raw_redis_pass=""
+        [[ -n "$redis_acl_pass" ]] && raw_redis_pass=$(wptt_giai_ma "$redis_acl_pass")
+
+        # CẤU HÌNH WP-REDIS ACL BẰNG REGEX (Chống lỗi sed extra characters)
+        # Cách này sẽ tìm dòng <?php đầu tiên và nhét cấu hình ngay phía dưới nó
+        if [[ -n "$redis_acl_user" && -n "$raw_redis_pass" ]]; then
+            sed -i "s|^<?php|<?php\n\$redis_server = array('host'=> '/var/run/${ACTIVE_CACHE}/${ACTIVE_CACHE}.sock','port'=>null,'database'=> 0, 'auth' => array('$redis_acl_user', '$raw_redis_pass'));|" "$wp_cfg"
+        else
+            sed -i "s|^<?php|<?php\n\$redis_server = array('host'=> '/var/run/${ACTIVE_CACHE}/${ACTIVE_CACHE}.sock','port'=>null,'database'=> 0);|" "$wp_cfg"
+        fi
+
+        "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1
 
         for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "$wp_cfg" | head -n -1 | cut -d: -f1 | tac); do
             sed -i "${line_num}d" "$wp_cfg"
@@ -616,16 +630,19 @@ function wp-redis() {
 
         if ! grep -q "WP_CACHE_KEY_SALT" "$wp_cfg"; then
             sed -i "/define( 'WP_CACHE_KEY_SALT'/d" "$wp_cfg"
-            sed -i "/^define( 'NONCE_SALT'/a define( 'WP_CACHE_KEY_SALT', '$name_web' );" "$wp_cfg"
-            $run_wp config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1
+            
+            # CHÈN SALT BẰNG REGEX (Thay thế lệnh Append (a) cũ gây lỗi)
+            sed -i "s|^define( 'NONCE_SALT'.*|&\ndefine( 'WP_CACHE_KEY_SALT', '$name_web' );|" "$wp_cfg"
+            
+            "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1
             for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "$wp_cfg" | head -n -1 | cut -d: -f1 | tac); do
                 sed -i "${line_num}d" "$wp_cfg"
             done
         fi
 
-        $run_wp plugin install wp-redis --activate >/dev/null 2>&1
-        $run_wp redis enable >/dev/null 2>&1
-        _rundone "Kích hoạt redis cho website $name_web"
+        "${run_wp[@]}" plugin install wp-redis --activate >/dev/null 2>&1
+        "${run_wp[@]}" redis enable >/dev/null 2>&1
+        _rundone "Kích hoạt Pantheon wp-redis cho website $name_web"
     else
         echo "Chưa cài đặt redis trên hệ thống, vui lòng cài đặt redis"
     fi
