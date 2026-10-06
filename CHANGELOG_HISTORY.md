@@ -1,5 +1,20 @@
 ## WPTangToc OLS v8.2.1.5
 
+### 🐛 Sửa lỗi
+- **Khắc phục lỗi chuyển hướng 301:** Xử lý triệt để lỗi liên quan đến quy tắc chuyển hướng 301, đảm bảo các cấu hình điều hướng URL hoạt động chính xác và ổn định.
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cao tương thích ảo hóa và namespace OpenLiteSpeed:** Tối ưu hóa cơ chế vận hành trên các môi trường ảo hóa giá rẻ và namespace OLS, giúp máy chủ duy trì sự ổn định và hiệu suất cao.
+- **Cải tiến quy trình cập nhật và Bootstrapper:** Nâng cấp độ tin cậy của cơ chế nâng cấp phần mềm và trình khởi động hệ thống, đảm bảo tiến trình cập nhật diễn ra an toàn và mượt mà.
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+## WPTangToc OLS v8.2.1.5
+
 ### 🛠️ Tối ưu hệ thống
 - **Nâng cao độ tin cậy khi chuyển đổi nhánh cập nhật:** Hoàn thiện quy chuẩn kiểm thử tự động cho cơ chế chuyển đổi qua lại giữa các nhánh phiên bản (chính thức, thử nghiệm), đảm bảo tiến trình nâng cấp và chuyển nhánh luôn diễn ra an toàn, mượt mà và duy trì tính toàn vẹn dữ liệu máy chủ.
 
