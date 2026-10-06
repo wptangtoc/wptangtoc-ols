@@ -179,3 +179,28 @@ cai_dat_zip_php_extension="Install ZIP PHP extension"
 cau_hinh_max_excution_time="Setting max execution time"
 cau_hinh_memory_litmit="Setting memory_limit"
 
+#quan ly logs menu main
+xem_error_log_server="View error log server"
+bat_tat_access_log_server="On/OFF access log server"
+xem_access_log_server="View access log server"
+bat_ghi_error_access_log_domain="On take note error/access log domain"
+tat_ghi_error_access_log_domain="Off take note error/access log domain"
+xem_access_log_domain="View access log domain"
+xem_access_log_domain_co_truy_van="View access log domain have query"
+xem_error_log_domain="View error log domain"
+real_time_statistics_monitor_all_domain="Real-Time Statistics Monitoring ALL domain"
+real_time_statistics_monitor_domain="Real-Time Statistics Monitoring domain"
+xoa_logs="Delete clear log"
+xem_system_monitoring_he_thong="View system monitoring"
+kich_hoat_ghi_logs_database="On take note logs database"
+huy_kich_hoat_ghi_logs_database="Off take note ghi logs database"
+xem_logs_database="View log database"
+xem_log_database_truy_van_cham="View log database have query"
+xem_kiem_tra_toc_do_su_ly_php_he_thong="See system PHP processing speed test"
+
+#quan_ly_ma_nguon
+truy_cap_nhanh_vao_ma_nguon_website="Quick access to website source code"
+kiem_tra_dung_luong_ma_nguon="Check website source code capacity"
+xoa_ma_nguon_website="Delete website source code"
+xem_tong_quan_ma_nguon="See source code overview"
+
