@@ -41,18 +41,17 @@ if [[ $NAME = "" ]]; then
 fi
 
 if [[ $NAME = 'Tất cả website' ]]; then
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
+  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
       domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
       unset path path_html
       path="/usr/local/lsws/$domain/html/wp-load.php"
       path_html="/usr/local/lsws/$domain/html"
-      i=1
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
+      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
         if [[ -f "$path" ]]; then
-          _runing "$cap_nhat themes website $domain"
+          _runing "Đang cập nhật TẤT CẢ themes cho website $domain..."
           (/etc/wptt/wordpress/update-theme $domain >/dev/null 2>&1)
-          _rundone "$cap_nhat themes website $domain"
+          _rundone "Cập nhật TẤT CẢ themes cho website $domain"
         fi
       fi
     done
@@ -81,27 +80,88 @@ fi
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
-  echo "He thong xac nhan ban chua kich hoat su dung WordPress"
+  echo "Hệ thống xác nhận bạn chưa kích hoạt sử dụng WordPress"
   sleep 3
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
   exit
 fi
 
 path="/usr/local/lsws/$NAME/html"
-echo "Thông tin cập nhật plugin website $NAME"
 . /etc/wptt/php/php-cli-domain-config $NAME
-
 . /etc/wptt/vhost/.$NAME.conf
 
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp theme list --fields=name,version,update_version --allow-root --path=$path 2>/dev/null
+# Khai báo biến WP_EXEC chuẩn xác
+WP_EXEC="sudo -u $User_name_vhost /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
 
-_runing "$cap_nhat Themes website $domain"
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp theme update --all --path="$path" --allow-root >/dev/null 2>&1
-sudo -u "$User_name_vhost" /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp language theme update --all --path="$path" --allow-root >/dev/null 2>&1
-. /etc/wptt/cache/wptt-xoacache $NAME >/dev/null 2>&1
-_rundone "$cap_nhat Themes website $domain"
+echo "Đang kiểm tra các bản cập nhật theme cho website $NAME..."
+# Lấy danh sách theme CÓ bản cập nhật
+themes_need_update=$($WP_EXEC theme list --update=available --field=name --allow-root --path="$path" 2>/dev/null)
 
-check_menu_wptangtoc_active=$1
+if [[ -z "$themes_need_update" ]]; then
+  echo ""
+  echoDone "Website $NAME đã sử dụng các phiên bản theme mới nhất."
+  echo ""
+else
+  echo ""
+  echo "========================================================================="
+  echo " Danh sách theme CẦN CẬP NHẬT của website $NAME:"
+  echo "-------------------------------------------------------------------------"
+  $WP_EXEC theme list --update=available --fields=name,version,update_version --allow-root --path="$path" 2>/dev/null
+  echo "========================================================================="
+  echo ""
+
+  # Chuyển danh sách theme sang mảng
+  selects=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && selects+=("$line")
+  done <<<"$themes_need_update"
+
+  # Khởi tạo menu
+  options=("Cập nhật TẤT CẢ các theme trên")
+  for t in "${selects[@]}"; do
+    options+=("Chỉ cập nhật theme: $t")
+  done
+
+  PS3="
+$(tput setab 0)-//- Chọn thao tác cập nhật (1-$((${#options[@]}))) [0=Thoát]:$(tput sgr0) "
+
+  theme_target=""
+  select opt in "${options[@]}"; do
+    if [[ "$REPLY" == "0" ]]; then
+      exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+    elif [[ "$REPLY" == "1" ]]; then
+      theme_target="all"
+      break
+    elif [[ "$REPLY" -gt 1 && "$REPLY" -le ${#options[@]} ]]; then
+      idx=$((REPLY - 2))
+      theme_target="${selects[$idx]}"
+      break
+    else
+      echoDo "Lựa chọn không hợp lệ."
+    fi
+  done
+
+  echo ""
+  # Thực thi cập nhật
+  if [[ "$theme_target" == "all" ]]; then
+    _runing "Đang cập nhật TẤT CẢ themes cho website $NAME"
+    $WP_EXEC theme update --all --path="$path" --allow-root >/dev/null 2>&1
+    $WP_EXEC language theme update --all --path="$path" --allow-root >/dev/null 2>&1
+    _rundone "Cập nhật TẤT CẢ themes cho website $NAME"
+  else
+    _runing "Đang cập nhật theme: $theme_target"
+    $WP_EXEC theme update "$theme_target" --path="$path" --allow-root >/dev/null 2>&1
+    $WP_EXEC language theme update "$theme_target" --path="$path" --allow-root >/dev/null 2>&1
+    _rundone "Cập nhật theme: $theme_target"
+  fi
+
+  # Xóa cache sau khi thay đổi giao diện
+  _runing "Đang xóa cache website $NAME"
+  . /etc/wptt/cache/wptt-xoacache $NAME >/dev/null 2>&1
+  _rundone "Đã xóa cache website $NAME"
+fi
+
+check_menu_wptangtoc_active=${1:-}
 if [[ $check_menu_wptangtoc_active = "98" ]]; then
   exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
 fi
