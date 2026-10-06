@@ -8,22 +8,24 @@ THRESHOLD=7
 DOMAINS=()
 
 for filepath in /etc/wptt/vhost/.*.conf; do
-	[[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
-	domain="${filepath##*/}"
-	domain="${domain%.conf}"
-	domain="${domain#.}"
+  domain="${filepath##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
 
-	if [[ "$domain" == ?*.?* ]]; then
-		DOMAINS+=("$domain")
-	fi
+  if [[ "$domain" == ?*.?* ]]; then
+    DOMAINS+=("$domain")
+  fi
 done
 
 . /etc/wptt/.wptt.conf 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 
-telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null); telegram_api="${telegram_tmp_api:-$telegram_api}"
-telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null); telegram_id="${telegram_tmp_id:-$telegram_id}"
+telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null)
+telegram_api="${telegram_tmp_api:-$telegram_api}"
+telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null)
+telegram_id="${telegram_tmp_id:-$telegram_id}"
 
 # Telegram Bot API Token (LẤY TỪ BOTFATHER)
 BOT_TOKEN="$telegram_api"
@@ -37,7 +39,7 @@ CHAT_ID="$telegram_id"
 send_telegram_message() {
   local message="$1"
   local url_tele_goc="https://api.telegram.org/bot${BOT_TOKEN}/sendMessage"
-  
+
   # LẦN 1: Thử gửi bằng API gốc
   local response
   response=$(curl -s -m 5 -X POST "$url_tele_goc" \
@@ -45,19 +47,19 @@ send_telegram_message() {
     -d text="$message" \
     -d disable_web_page_preview="true" \
     -d parse_mode="markdown")
-  
+
   # SIÊU KIỂM TRA TẦNG API: Nếu Telegram không trả về chữ "ok":true
   if [[ "$response" != *"\"ok\":true"* ]]; then
-    
+
     # === BẬT CHẾ ĐỘ DỰ PHÒNG: CHUYỂN QUA PROXY ===
     local API_PROXY
     API_PROXY=$(curl -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
-    
+
     local url_tele_proxy
     if [[ "$API_PROXY" == *"workers.dev"* ]]; then
       url_tele_proxy="https://$API_PROXY/bot${BOT_TOKEN}/sendMessage"
     fi
-    
+
     # LẦN 2: Bắn lại qua Proxy
     curl -s -m 10 -X POST "$url_tele_proxy" \
       -d chat_id="$CHAT_ID" \
@@ -70,10 +72,11 @@ send_telegram_message() {
 # Hàm kiểm tra chứng chỉ
 check_certificate() {
   local domain="$1"
-  
+
   # Vá lỗi SC2155: Khai báo biến riêng, gán giá trị riêng
   local expiry_date
-  expiry_date=$(echo | openssl s_client -servername "$domain" -connect "$domain":443 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2-)
+  #timeout 10 thêm cho chắc tránh bị kẹt tiến trình vĩnh viễn
+  expiry_date=$(echo | timeout 10 openssl s_client -servername "$domain" -connect "$domain":443 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2-)
 
   # Kiểm tra xem openssl có trả về ngày hợp lệ không
   if [[ -z "$expiry_date" ]]; then
