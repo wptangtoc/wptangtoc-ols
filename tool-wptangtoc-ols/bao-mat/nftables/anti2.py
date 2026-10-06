@@ -5,7 +5,7 @@ import subprocess
 
 class LogEntryParser:  # Renamed class
     IP_INDEX = 4
-    STATUS_CODE_INDEX = 11
+    STATUS_CODE_INDEX = 12
 
     def __init__(self):
         pass
@@ -63,7 +63,7 @@ def process_access_logs(log_file_path): #Renamed function
         if client_ip == '103.106.105.75':
             continue
 
-        if status_code == 'DetectByRewriteRule,':
+        if status_code == 'close':
             cidr_range = ip_to_cidr_range(client_ip)
             if cidr_range not in blocked_ip_ranges:
                 if block_ip_address(client_ip):
