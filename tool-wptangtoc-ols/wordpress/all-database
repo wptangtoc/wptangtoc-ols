@@ -15,16 +15,53 @@ function huong_dan() {
 }
 
 . /etc/wptt/.wptt.conf
-MYSQL_CONN="-u $database_admin_username -p${database_admin_password}"
-TBLLIST=""
-COMMA=""
-SQL="SELECT CONCAT(table_schema,'.',table_name) FROM information_schema.tables WHERE"
-SQL="${SQL} table_schema NOT IN ('information_schema','mysql','performance_schema')"
-for DBTB in $(mysql ${MYSQL_CONN} -ANe"${SQL}"); do
-  echo Toi uu hoa TABLE "${DBTB};"
-  SQL="OPTIMIZE TABLE ${DBTB};"
-  mysql ${MYSQL_CONN} -ANe"${SQL}"
-done
+echo "Đang tiến hành tối ưu hóa toàn bộ Database..."
+
+# 1. Xác định lệnh chuẩn (Tránh lỗi Deprecated)
+# Nếu hệ thống có lệnh 'mariadb-check' (phiên bản mới) thì dùng, không thì dùng 'mysqlcheck' (cũ)
+if command -v mariadb-check &>/dev/null; then
+  DB_CHECK_CMD="mariadb-check"
+else
+  DB_CHECK_CMD="mysqlcheck"
+fi
+
+# 2. Tạo file cấu hình tạm (Bảo mật)
+# LƯU Ý: Đã xóa 'max_allowed_packet' vì mysqlcheck không hỗ trợ tham số này
+TEMP_CNF_ROOT=$(mktemp)
+chmod 600 "$TEMP_CNF_ROOT" # Chỉ root đọc được
+
+cat >"$TEMP_CNF_ROOT" <<EOF
+[client]
+user=${database_admin_username}
+password=${database_admin_password}
+host=localhost
+EOF
+
+# Đảm bảo xóa file tạm khi xong hoặc bị lỗi
+trap "rm -f $TEMP_CNF_ROOT" EXIT
+
+# 3. Thực thi tối ưu hóa
+# --optimize: Tương đương lệnh OPTIMIZE TABLE (dọn dẹp phân mảnh)
+# --auto-repair: Nếu phát hiện bảng lỗi thì tự sửa luôn
+# --all-databases: Quét tất cả database
+# --skip-database: Bỏ qua các DB hệ thống để tránh lỗi permission hoặc lock không cần thiết
+
+$DB_CHECK_CMD --defaults-extra-file="$TEMP_CNF_ROOT" --optimize --auto-repair --all-databases \
+  --skip-database="information_schema" \
+  --skip-database="performance_schema" \
+  --skip-database="mysql"
+
+# Kiểm tra kết quả
+if [[ $? -eq 0 ]]; then
+  echo "---------------------------------------------------"
+  echo "✅ Tối ưu hóa hoàn tất thành công."
+else
+  echo "---------------------------------------------------"
+  echo "⚠️ Có một số cảnh báo trong quá trình tối ưu (Có thể bỏ qua nếu là lỗi 'Table does not support optimize')."
+fi
+
+# Xóa file Auth (Trap đã lo, nhưng xóa explicit cho sạch code)
+rm -f "$TEMP_CNF_ROOT"
 . /etc/wptt/echo-color
 
 echo "Tối ưu hoá ALL database : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
