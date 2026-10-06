@@ -198,7 +198,8 @@ mo_khoa_ip="Mở khoá ip"
 danh_sach_ip_da_bi_khoa="Danh sách IP đã bị khóa"
 ip_ban_muon_khoa="IP bạn muốn khóa"
 ip_ban_muon_mo_khoa="IP bạn muốn mở khóa"
-ban_nhap_khong_dung_dinh_dang_ipv4="Bạn nhập không đúng định dạng IPv4"
+ban_nhap_khong_dung_dinh_dang_ipv4="bạn nhập không đúng định dạng ipv4"
+ban_nhap_khong_dung_dinh_dang_ipv4="bạn nhập không đúng định dạng ipv6"
 
 #quản lý ssh/sftp menu main
 thay_doi_password_ssh="Thay đổi password"
