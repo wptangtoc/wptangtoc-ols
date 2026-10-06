@@ -1,6 +1,18 @@
 #!/bin/bash
 
 NAME=$1
+if [[ $1 ]];then
+	if [[ ! -f /etc/wptt/vhost/.$NAME.conf ]];then
+		NAME=''
+	fi
+fi
+
+if [[ $NAME = '' ]];then
+pwd=$(pwd)
+NAME=$(echo $pwd | cut -f1-6 -d '/')
+fi
+
+
 if [[ -f /usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadAllPHP.php ]];then
 	. /etc/wptt/vhost/.$NAME.conf
 	if [[ $phien_ban_php_domain = '' ]];then
