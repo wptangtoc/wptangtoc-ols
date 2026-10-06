@@ -1,3 +1,14 @@
+## [8.2.0.11]
+
+### 🛠️ Tối ưu hệ thống
+- **Tăng cường cơ chế bảo mật cô lập:** Chuẩn hóa và kiểm soát nghiêm ngặt tính độc lập giữa các website, hạn chế tối đa rủi ro lây nhiễm chéo trên cùng máy chủ.
+- **Nâng cao độ tin cậy sao lưu:** Tối ưu quy trình sao lưu dữ liệu website, đảm bảo tính toàn vẹn và độ chính xác trong quá trình backup.
+- **Tối ưu tự động hóa SSL:** Tăng cường độ ổn định cho quy trình cấp phát và gia hạn chứng chỉ bảo mật SSL Let's Encrypt (Certbot).
+- **Mở rộng tương thích kiến trúc ARM:** Nâng cao độ tương thích và tối ưu vận hành ổn định trên các nền tảng máy chủ ARM chạy AlmaLinux 9 và Ubuntu.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.0.10
 
 ### 🚀 Tính năng mới
