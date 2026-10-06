@@ -337,12 +337,18 @@ jobs:
 # ============================================================
   install-tests-almalinux-x86:
     name: Test Install AlmaLinux ${{ matrix.release }} (x86_64)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        release: ['9', '10']
-    timeout-minutes: 90
+        include:
+          - release: '9'
+            arch: x86_64
+            runner: ubuntu-24.04
+          - release: '10'
+            arch: x86_64
+            runner: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
@@ -353,14 +359,14 @@ jobs:
         uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
         with:
           release: ${{ matrix.release }}
-          arch: x86_64
+          arch: ${{ matrix.arch }}
           usesh: true
           run: |
             echo "::group::🚀 Khởi tạo máy chủ WPTangToc OLS (Cài đặt hệ thống)"
             export TERM=xterm
             export CI=true
             
-            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}-x86_64.log" 2>/dev/null || true' EXIT
+            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log" 2>/dev/null || true' EXIT
             
             dnf install -y epel-release sudo curl
             dnf install -y bats
@@ -409,12 +415,12 @@ jobs:
             if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
               set -o pipefail
               cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-              > "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-x86_64.log"
+              > "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
               
               for test_file in tests/*.bats; do
-                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-x86_64.log"
+                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
                 cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
-                bats "$test_file" | tee -a "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-x86_64.log"
+                bats "$test_file" | tee -a "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
               done
               
               cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
@@ -437,13 +443,13 @@ jobs:
 
       - name: 🖨️ In Log nếu thất bại
         if: ${{ failure() }}
-        run: cat wptangtoc-install-alma${{ matrix.release }}-x86_64.log || echo "Không có log"
+        run: cat wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log || echo "Không có log"
 
       - name: 📤 Upload Artifacts (Logs AlmaLinux x86)
         if: always()
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
-          name: logs-almalinux-${{ matrix.release }}-x86_64
+          name: logs-almalinux-${{ matrix.release }}-${{ matrix.arch }}
           path: |
             wptangtoc-install-alma*.log
             bats-test-alma*.log
@@ -451,158 +457,20 @@ jobs:
           retention-days: 7
 
 # ============================================================
-# JOB 4B: INSTALLATION TESTS (ALMALINUX ARM) - LXD SYSTEM CONTAINER
+# JOB 4B: INSTALLATION TESTS (ALMALINUX ARM) - CHỈ CHẠY HẸN GIỜ
 # ============================================================
-  install-tests-almalinux-arm-lxd:
-    name: Test Install AlmaLinux ${{ matrix.release }} (aarch64 - LXD)
-    runs-on: ubuntu-24.04-arm
+  install-tests-almalinux-arm:
+    name: Test Install AlmaLinux ${{ matrix.release }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
-        release: ['9', '10']
-    timeout-minutes: 40
-    steps:
-      - name: 📥 Tải mã nguồn
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
-        with:
-          persist-credentials: false
-
-      - name: ⚙️ Cài đặt OS và Khởi tạo LXD
-        run: |
-          sudo snap install lxd || true
-          sudo lxd init --auto
-          
-          sudo iptables -F FORWARD
-          sudo iptables -P FORWARD ACCEPT
-
-          sudo lxc launch images:almalinux/${{ matrix.release }} alma${{ matrix.release }}-arm
-          
-          sleep 10
-          sudo lxc exec alma${{ matrix.release }}-arm -- dnf install -y epel-release sudo curl tar bats
-          
-          tar -cf src.tar .
-          sudo lxc file push src.tar alma${{ matrix.release }}-arm/root/
-          sudo lxc exec alma${{ matrix.release }}-arm -- bash -c 'cd /root && tar -xf src.tar'
-
-      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS
-        run: |
-          cat << 'EOF_TEST' > run_install_lxd.sh
-          #!/bin/bash
-          cd /root
-          export TERM=xterm
-          export CI=true
-          
-          curl -sO https://wptangtoc.com/share/wptangtoc-ols
-          
-          systemctl mask reboot.target halt.target poweroff.target shutdown.target
-          for cmd in reboot shutdown halt poweroff; do
-            rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-            echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-            chmod +x /usr/sbin/$cmd
-            ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-          done
-
-          mv /usr/bin/dnf /usr/bin/dnf_real
-          cat << "EOF_DNF" > /usr/bin/dnf
-          #!/bin/bash
-          if [[ "$1" == "update" || "$1" == "upgrade" ]]; then exit 0; fi
-          exec /usr/bin/dnf_real "$@"
-          EOF_DNF
-          chmod +x /usr/bin/dnf
-          
-          bash wptangtoc-ols --auto
-          
-          chmod -R 755 /etc/wptt/
-          mkdir -p /etc/wptt/tmp
-          curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
-          bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
-          
-          echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-          echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-          echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-          for file in /etc/wptt/wptt-*main; do
-            if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-          done
-          chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
-          EOF_TEST
-          
-          sudo lxc file push run_install_lxd.sh alma${{ matrix.release }}-arm/root/
-          sudo lxc exec alma${{ matrix.release }}-arm -- bash /root/run_install_lxd.sh
-
-      - name: 🧪 Chạy Kiểm thử BATS (Cô lập từng file)
-        run: |
-          cat << 'EOF_BATS' > run_bats_lxd.sh
-          #!/bin/bash
-          cd /root
-          export TERM=xterm
-          export CI=true
-          if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
-            set -o pipefail
-            cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-            > bats-test-alma${{ matrix.release }}-arm.log
-            
-            for test_file in tests/*.bats; do
-              echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a bats-test-alma${{ matrix.release }}-arm.log
-              cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
-              bats "$test_file" | tee -a bats-test-alma${{ matrix.release }}-arm.log
-            done
-            
-            cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
-          fi
-          EOF_BATS
-          
-          sudo lxc file push run_bats_lxd.sh alma${{ matrix.release }}-arm/root/
-          sudo lxc exec alma${{ matrix.release }}-arm -- bash /root/run_bats_lxd.sh
-
-      - name: 📋 Đưa Logs từ LXD ra ngoài
-        if: always()
-        run: |
-          sudo lxc file pull alma${{ matrix.release }}-arm/var/log/wptangtoc-install.log ./wptangtoc-install-alma${{ matrix.release }}-arm.log 2>/dev/null || true
-          sudo lxc file pull alma${{ matrix.release }}-arm/root/bats-test-alma${{ matrix.release }}-arm.log ./ 2>/dev/null || true
-          sudo chown $USER:$USER *.log 2>/dev/null || true
-
-      - name: 🔐 Redact thông tin nhạy cảm trong log
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for LOG in ./wptangtoc-install-alma*.log ./bats-test-alma*.log; do
-            [[ -f "$LOG" ]] || continue
-            sudo sed -i -E \
-              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
-              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
-              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
-              "$LOG" 2>/dev/null || true
-          done
-
-      - name: 🖨️ In Log nếu thất bại
-        if: ${{ failure() }}
-        run: cat wptangtoc-install-alma${{ matrix.release }}-arm.log || echo "Không có log"
-
-      - name: 📤 Upload Artifacts (Logs AlmaLinux ARM)
-        if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        with:
-          name: logs-almalinux-${{ matrix.release }}-arm-lxd
-          path: |
-            wptangtoc-install-alma*.log
-            bats-test-alma*.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-# ============================================================
-# JOB 5: INSTALLATION TESTS (ROCKY LINUX x86_64) - FULL VM (vmactions)
-# ============================================================
-  install-tests-rockylinux-x86:
-    name: Test Install Rocky Linux ${{ matrix.release }} (x86_64)
-    runs-on: ubuntu-24.04
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        release: ['9', '10']
-    timeout-minutes: 160
+        include:
+          - release: '9'
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+    timeout-minutes: 180
     steps:
       - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
@@ -610,17 +478,17 @@ jobs:
           persist-credentials: false
 
       - name: 🚀 Khởi chạy Máy ảo KVM & Test
-        uses: vmactions/rockylinux-vm@6d7fc4bb22b1e201a913e36480c2905b2bb4e171
+        uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
         with:
           release: ${{ matrix.release }}
-          arch: x86_64
+          arch: ${{ matrix.arch }}
           usesh: true
           run: |
             echo "::group::🚀 Khởi tạo máy chủ WPTangToc OLS (Cài đặt hệ thống)"
             export TERM=xterm
             export CI=true
             
-            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-rocky${{ matrix.release }}-x86_64.log" 2>/dev/null || true' EXIT
+            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log" 2>/dev/null || true' EXIT
             
             dnf install -y epel-release sudo curl
             dnf install -y bats
@@ -669,12 +537,140 @@ jobs:
             if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
               set -o pipefail
               cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-              > "$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-x86_64.log"
+              > "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
               
               for test_file in tests/*.bats; do
-                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-x86_64.log"
+                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
                 cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
-                bats "$test_file" | tee -a "$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-x86_64.log"
+                bats "$test_file" | tee -a "$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
+              done
+              
+              cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
+            fi
+            echo "::endgroup::"
+
+      - name: 🔐 Redact thông tin nhạy cảm trong log
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for LOG in ./wptangtoc-install-alma*.log ./bats-test-alma*.log; do
+            [[ -f "$LOG" ]] || continue
+            sudo sed -i -E \
+              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
+              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
+              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
+              "$LOG" 2>/dev/null || true
+          done
+
+      - name: 🖨️ In Log nếu thất bại
+        if: ${{ failure() }}
+        run: cat wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log || echo "Không có log"
+
+      - name: 📤 Upload Artifacts (Logs AlmaLinux ARM)
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: logs-almalinux-${{ matrix.release }}-${{ matrix.arch }}
+          path: |
+            wptangtoc-install-alma*.log
+            bats-test-alma*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+# ============================================================
+# JOB 5: INSTALLATION TESTS (ROCKY LINUX) - CHỈ CHẠY HẸN GIỜ (NIGHTLY)
+# ============================================================
+  install-tests-rockylinux:
+    name: Test Install Rocky Linux ${{ matrix.release }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: '9'
+            arch: x86_64
+            runner: ubuntu-24.04
+          - release: '10'
+            arch: x86_64
+            runner: ubuntu-24.04
+          - release: '9'
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+    timeout-minutes: 160
+    steps:
+      - name: 📥 Tải mã nguồn
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
+
+      - name: 🚀 Khởi chạy Máy ảo Rocky Linux & Test
+        uses: vmactions/rockylinux-vm@6d7fc4bb22b1e201a913e36480c2905b2bb4e171
+        with:
+          release: ${{ matrix.release }}
+          arch: ${{ matrix.arch }}
+          usesh: true
+          run: |
+            echo "::group::🚀 Khởi tạo máy chủ WPTangToc OLS (Cài đặt hệ thống)"
+            export TERM=xterm
+            export CI=true
+            
+            trap 'cp /var/log/wptangtoc-install.log "$GITHUB_WORKSPACE/wptangtoc-install-rocky${{ matrix.release }}-${{ matrix.arch }}.log" 2>/dev/null || true' EXIT
+            
+            dnf install -y epel-release sudo curl
+            dnf install -y bats
+            curl -sO https://wptangtoc.com/share/wptangtoc-ols
+            
+            systemctl mask reboot.target halt.target poweroff.target shutdown.target
+            
+            for cmd in reboot shutdown halt poweroff; do
+              rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
+              echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
+              chmod +x /usr/sbin/$cmd
+              ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
+              ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
+              chattr +i /usr/sbin/$cmd 2>/dev/null || true
+              chattr +i /sbin/$cmd 2>/dev/null || true
+            done
+
+            mv /usr/bin/dnf /usr/bin/dnf_real
+            cat << 'EOF' > /usr/bin/dnf
+            #!/bin/bash
+            if [[ "$1" == "update" || "$1" == "upgrade" ]]; then exit 0; fi
+            exec /usr/bin/dnf_real "$@"
+            EOF
+            chmod +x /usr/bin/dnf
+            
+            bash wptangtoc-ols --auto
+         
+            cd $GITHUB_WORKSPACE
+            chmod -R 755 /etc/wptt/
+            
+            mkdir -p /etc/wptt/tmp
+            curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
+
+            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
+            
+            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
+            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
+            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
+            for file in /etc/wptt/wptt-*main; do
+              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
+            done
+            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
+            echo "::endgroup::"
+
+            echo "::group::🧪 Chạy Kiểm thử BATS (Cô lập từng file)"
+            if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
+              set -o pipefail
+              cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
+              > "$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-${{ matrix.arch }}.log"
+              
+              for test_file in tests/*.bats; do
+                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-${{ matrix.arch }}.log"
+                cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
+                bats "$test_file" | tee -a "$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-${{ matrix.arch }}.log"
               done
               
               cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
@@ -697,154 +693,13 @@ jobs:
 
       - name: 🖨️ In Log nếu thất bại
         if: ${{ failure() }}
-        run: cat wptangtoc-install-rocky${{ matrix.release }}-x86_64.log || echo "Không có log"
+        run: cat wptangtoc-install-rocky${{ matrix.release }}-${{ matrix.arch }}.log || echo "Không có log"
 
       - name: 📤 Upload Artifacts (Logs RockyLinux)
         if: always()
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:
-          name: logs-rockylinux-${{ matrix.release }}-x86_64
-          path: |
-            wptangtoc-install-rocky*.log
-            bats-test-rocky*.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-# ============================================================
-# JOB 5B: INSTALLATION TESTS (ROCKY LINUX ARM) - LXD SYSTEM CONTAINER
-# ============================================================
-  install-tests-rockylinux-arm-lxd:
-    name: Test Install Rocky Linux ${{ matrix.release }} (aarch64 - LXD)
-    runs-on: ubuntu-24.04-arm
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    strategy:
-      fail-fast: false
-      matrix:
-        release: ['9', '10']
-    timeout-minutes: 40
-    steps:
-      - name: 📥 Tải mã nguồn
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
-        with:
-          persist-credentials: false
-
-      - name: ⚙️ Cài đặt OS và Khởi tạo LXD
-        run: |
-          sudo snap install lxd || true
-          sudo lxd init --auto
-          
-          sudo iptables -F FORWARD
-          sudo iptables -P FORWARD ACCEPT
-
-          sudo lxc launch images:rockylinux/${{ matrix.release }} rocky${{ matrix.release }}-arm
-          
-          sleep 10
-          sudo lxc exec rocky${{ matrix.release }}-arm -- dnf install -y epel-release sudo curl tar bats
-          
-          tar -cf src.tar .
-          sudo lxc file push src.tar rocky${{ matrix.release }}-arm/root/
-          sudo lxc exec rocky${{ matrix.release }}-arm -- bash -c 'cd /root && tar -xf src.tar'
-
-      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS
-        run: |
-          cat << 'EOF_TEST' > run_install_lxd.sh
-          #!/bin/bash
-          cd /root
-          export TERM=xterm
-          export CI=true
-          
-          curl -sO https://wptangtoc.com/share/wptangtoc-ols
-          
-          systemctl mask reboot.target halt.target poweroff.target shutdown.target
-          for cmd in reboot shutdown halt poweroff; do
-            rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-            echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-            chmod +x /usr/sbin/$cmd
-            ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-          done
-
-          mv /usr/bin/dnf /usr/bin/dnf_real
-          cat << "EOF_DNF" > /usr/bin/dnf
-          #!/bin/bash
-          if [[ "$1" == "update" || "$1" == "upgrade" ]]; then exit 0; fi
-          exec /usr/bin/dnf_real "$@"
-          EOF_DNF
-          chmod +x /usr/bin/dnf
-          
-          bash wptangtoc-ols --auto
-          
-          chmod -R 755 /etc/wptt/
-          mkdir -p /etc/wptt/tmp
-          curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
-          bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
-          
-          echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-          echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-          echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-          for file in /etc/wptt/wptt-*main; do
-            if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-          done
-          chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
-          EOF_TEST
-          
-          sudo lxc file push run_install_lxd.sh rocky${{ matrix.release }}-arm/root/
-          sudo lxc exec rocky${{ matrix.release }}-arm -- bash /root/run_install_lxd.sh
-
-      - name: 🧪 Chạy Kiểm thử BATS (Cô lập từng file)
-        run: |
-          cat << 'EOF_BATS' > run_bats_lxd.sh
-          #!/bin/bash
-          cd /root
-          export TERM=xterm
-          export CI=true
-          if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then 
-            set -o pipefail
-            cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-            > bats-test-rocky${{ matrix.release }}-arm.log
-            
-            for test_file in tests/*.bats; do
-              echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a bats-test-rocky${{ matrix.release }}-arm.log
-              cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
-              bats "$test_file" | tee -a bats-test-rocky${{ matrix.release }}-arm.log
-            done
-            
-            cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
-          fi
-          EOF_BATS
-          
-          sudo lxc file push run_bats_lxd.sh rocky${{ matrix.release }}-arm/root/
-          sudo lxc exec rocky${{ matrix.release }}-arm -- bash /root/run_bats_lxd.sh
-
-      - name: 📋 Đưa Logs từ LXD ra ngoài
-        if: always()
-        run: |
-          sudo lxc file pull rocky${{ matrix.release }}-arm/var/log/wptangtoc-install.log ./wptangtoc-install-rocky${{ matrix.release }}-arm.log 2>/dev/null || true
-          sudo lxc file pull rocky${{ matrix.release }}-arm/root/bats-test-rocky${{ matrix.release }}-arm.log ./ 2>/dev/null || true
-          sudo chown $USER:$USER *.log 2>/dev/null || true
-
-      - name: 🔐 Redact thông tin nhạy cảm trong log
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          for LOG in ./wptangtoc-install-rocky*.log ./bats-test-rocky*.log; do
-            [[ -f "$LOG" ]] || continue
-            sudo sed -i -E \
-              -e 's/(password|passwd|pwd|secret|token|api_key|apikey)[=:][[:space:]]*"?([^"[:space:]]+)"?/\1=[REDACTED]/gi' \
-              -e 's/(-p|--password=)[^[:space:]]+/\1[REDACTED]/g' \
-              -e 's#(mysql|https?|ftp)://[^:]+:[^@]+@#\1://[REDACTED]@#gi' \
-              "$LOG" 2>/dev/null || true
-          done
-
-      - name: 🖨️ In Log nếu thất bại
-        if: ${{ failure() }}
-        run: cat wptangtoc-install-rocky${{ matrix.release }}-arm.log || echo "Không có log"
-
-      - name: 📤 Upload Artifacts (Logs RockyLinux ARM)
-        if: always()
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        with:
-          name: logs-rockylinux-${{ matrix.release }}-arm-lxd
+          name: logs-rockylinux-${{ matrix.release }}-${{ matrix.arch }}
           path: |
             wptangtoc-install-rocky*.log
             bats-test-rocky*.log
@@ -855,9 +710,9 @@ jobs:
 # JOB 6: INSTALLATION TESTS (ALMALINUX 8 - LXD SYSTEM CONTAINER)
 # ============================================================
   install-tests-almalinux-8:
-    name: Test Install AlmaLinux 8 (x86_64 - LXD)
+    name: Test Install AlmaLinux 8 (x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 180
     steps:
       - name: 📥 Tải mã nguồn
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
@@ -971,7 +826,7 @@ jobs:
               "$LOG" 2>/dev/null || true
           done
 
-      - name: 🖨️ In Log nếu thất bại
+      - name: 🖨️️ In Log nếu thất bại
         if: ${{ failure() }}
         run: cat wptangtoc-install-alma8.log || echo "Không có log"
 
