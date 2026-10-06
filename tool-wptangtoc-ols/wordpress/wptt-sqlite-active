@@ -1,192 +1,210 @@
 #!/bin/bash
-# Tính năng: Auto-Migrate 100% MariaDB sang SQLite
-PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' #bien moi truong full day du
+# Tính năng: Auto-Migrate 100% MariaDB sang SQLite (Bản Fix v1.1.4 Ổn định + Auto Activate)
+# @author: Gia Tuấn - WPTangToc
+PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
 
 . /etc/wptt/echo-color
-
 . /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . /etc/wptt/lang/$ngon_ngu.sh
 
+# =========================================================
+# XỬ LÝ BIẾN ĐẦU VÀO VÀ MENU
+# =========================================================
 NAME=$1
-if [[ $NAME = "98" ]]; then
-  NAME=""
-fi
+[[ "$NAME" == "98" ]] && NAME=""
 
-if [[ $NAME = "" ]]; then
+if [[ -z "$NAME" ]]; then
   . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
-  echo ""
-  echo ""
-  echo "$nhap_lua_chon_website_cua_ban active sqlite: "
-  echo ""
+  echo -e "\n\n$nhap_lua_chon_website_cua_ban active sqlite:\n"
   lua_chon_NAME
 fi
 
-if [[ $NAME = 'Tất cả website' ]]; then
-  if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | grep -v '^\.\.conf$' | sort -uV)" ]; then
-    for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      domain=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
+# Xử lý hàng loạt
+
+if [[ "$NAME" == 'Tất cả website' ]]; then
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    if [[ "$domain" == ?*.?* ]]; then
       path="/usr/local/lsws/$domain/html/wp-config.php"
-      path_html="/usr/local/lsws/$domain/html"
-      i=1
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then #điều kiện domain phải có dấu . và lỗi chỉ có only .
-        if [[ -f "$path" ]]; then
-          if [[ ! -d $path_html/wp-content/plugins/sqlite-database-integration ]]; then #xác thực chưa có sqlite wordpress
-            _runing "active sqlite website $domain"
-            (/etc/wptt/wordpress/wptt-sqlite-active $domain >/dev/null 2>&1)
-            _rundone "active sqlite website $domain"
-          fi
-        fi
+      if [[ -f "$path" ]]; then
+        _runing "active sqlite website $domain"
+        (/etc/wptt/wordpress/wptt-sqlite-active "$domain" >/dev/null 2>&1)
+        _rundone "active sqlite website $domain"
       fi
-    done
-  fi
+    fi
+  done
 
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-wordpress-main 1
-  fi
-  return 2>/dev/null || exit
+  [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-wordpress-main 1
+  exit
 fi
 
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  check_menu_wptangtoc_active=$1
-  if [[ $check_menu_wptangtoc_active = "98" ]]; then
-    exec /etc/wptt/wptt-wordpress-main 1
-  fi
-  return 2>/dev/null || exit
-fi
+[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-wordpress-main 1
 
-DOMAIN=$NAME
-if [ -z "$DOMAIN" ]; then
-  echo "❌ Lỗi: Vui lòng nhập tên miền!"
-  return 2>/dev/null || exit
-fi
-
+DOMAIN="$NAME"
 PATH_HTML="/usr/local/lsws/$DOMAIN/html"
 
-if [ ! -d "$PATH_HTML" ]; then
+if [[ ! -d "$PATH_HTML" ]]; then
   echo "❌ Lỗi: Không tìm thấy thư mục web tại $PATH_HTML"
   return 2>/dev/null || exit 1
 fi
 
-if [[ -d $PATH_HTML/wp-content/plugins/sqlite-database-integration ]]; then #xác thực chưa có sqlite wordpress
-  echo "Đã thiết lập active sqlite cho website $NAME trước đó rồi"
+if [[ -d "$PATH_HTML/wp-content/plugins/sqlite-database-integration" ]]; then
+  echo "Đã thiết lập active sqlite cho website $DOMAIN trước đó rồi"
   return 2>/dev/null || exit 1
 fi
+
+# Lấy User Vhost để thao tác cấp quyền
+USER_VHOST=$(grep 'User_name_vhost' "/etc/wptt/vhost/.$DOMAIN.conf" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
+[[ -z "$USER_VHOST" ]] && USER_VHOST="nobody"
+
+# =========================================================
+# HÀM CẤP CỨU ROLLBACK
+# =========================================================
+function wptt_rollback() {
+  echo -e "\n❌ CÓ LỖI XẢY RA TRONG QUÁ TRÌNH CHUYỂN ĐỔI!"
+  echo "Đang tự động khôi phục (Rollback) lại trạng thái MariaDB cũ..."
+
+  rm -f "$PATH_HTML/wp-content/db.php"
+  rm -rf "$PATH_HTML/wp-content/plugins/sqlite-database-integration"
+  rm -rf "$PATH_HTML/wp-content/database"
+
+  killall -9 lsphp >/dev/null 2>&1
+  echo "✅ Đã Rollback an toàn! Web chạy lại MariaDB bình thường."
+  echo "✅ Plugin SQLite và file cấu hình lỗi đã được xóa sạch sẽ."
+  exit 1
+}
 
 echo "==========================================================="
 echo "🚀 KHỞI ĐỘNG CỖ MÁY CHUYỂN ĐỔI SQLITE CHO $DOMAIN"
 echo "==========================================================="
 
+# Dọn sạch cache cũ để WP-CLI không bị ngáo
+rm -rf /root/.wp-cli/packages/
+
 # ---------------------------------------------------------
-# BƯỚC 0: KIỂM TRA & FIX LỖI LÕI SQLITE / PDO DRIVER
+# BƯỚC 0: KIỂM TRA LÕI SQLITE OS
 # ---------------------------------------------------------
 SQLITE_VERSION=$(sqlite3 -version | awk '{print $1}')
 echo "📌 Phiên bản SQLite hiện tại của OS: $SQLITE_VERSION"
 
-# So sánh phiên bản, nếu nhỏ hơn 3.37.0 thì tự động compile
 if [[ "$(printf '%s\n' "3.37.0" "$SQLITE_VERSION" | sort -V | head -n1)" == "$SQLITE_VERSION" && "$SQLITE_VERSION" != "3.37.0" ]]; then
-  echo "⚠️ Phát hiện lõi SQLite quá cũ. Đang tự động biên dịch bản 3.45.3 (Mất khoảng 1-2 phút)..."
+  echo "⚠️ Phát hiện lõi SQLite quá cũ. Đang tự động biên dịch bản 3.45.3..."
   cd /usr/src
   wget -qO sqlite.tar.gz https://www.sqlite.org/2024/sqlite-autoconf-3450300.tar.gz
   tar -zxf sqlite.tar.gz
   cd sqlite-autoconf-3450300
-
-  # VŨ KHÍ BÍ MẬT: Mở khóa tính năng Column Metadata cho PHP PDO
   export CFLAGS="-DSQLITE_ENABLE_COLUMN_METADATA=1 -O2"
-
   ./configure --prefix=/usr >/dev/null 2>&1
   make -j$(nproc) >/dev/null 2>&1
   make install >/dev/null 2>&1
-
   echo "✅ Đã biên dịch và nâng cấp nhân SQLite thành công!"
 else
   echo "✅ Nhân SQLite đã đạt chuẩn (>= 3.37.0), bỏ qua bước biên dịch."
 fi
-# ---------------------------------------------------------
 
-# Di chuyển đúng vào thư mục mã nguồn
 cd "$PATH_HTML" || exit 1
-
-# Khởi động lại LSPHP để xóa sạch cache tiến trình cũ
 killall -9 lsphp >/dev/null 2>&1
 
-# 1. XUẤT DATA TỪ MARIADB VÀ SAO LƯU AN TOÀN
+# ---------------------------------------------------------
+# 1. XUẤT DATA MARIADB
+# ---------------------------------------------------------
 echo "[1/6] Đang trích xuất dữ liệu từ MariaDB cũ..."
 FILE_SQL="chuyendoi_mariadb.sql"
-wp db export "$FILE_SQL" --allow-root --quiet
-if [ $? -ne 0 ]; then
-  echo "❌ Lỗi: Không thể export Database từ MariaDB. Vui lòng kiểm tra lại kết nối db trong wp-config.php"
+if ! wp db export "$FILE_SQL" --allow-root --skip-packages --quiet --path="$PATH_HTML"; then
+  echo "❌ Lỗi: Không thể export Database. Kiểm tra wp-config.php"
   exit 1
 fi
-# Đưa đường dẫn backup vào biến để lát nữa dễ dàng dọn dẹp
 BACKUP_FILE="/root/backup_${DOMAIN}_mariadb_$(date +%s).sql"
 cp "$FILE_SQL" "$BACKUP_FILE"
 
-# 2. CÀI GÓI CHUYỂN ĐỔI CHUYÊN DỤNG CỦA AUTOMATTIC
-echo "[2/6] Đang nạp vũ khí wp-cli-sqlite-command của Automattic..."
-wp package install automattic/wp-cli-sqlite-command --allow-root >/dev/null 2>&1
+# ---------------------------------------------------------
+# 2. CÀI ĐẶT PLUGIN LÕI (BẢN VÀNG 2.2.20)
+# ---------------------------------------------------------
+echo "[2/6] Đang tải Plugin SQLite phiên bản Vàng 2.2.20 (Khớp 100% với WP-CLI)..."
+DOWNLOAD_URL="https://downloads.wordpress.org/plugin/sqlite-database-integration.2.2.20.zip"
 
-# 3. CÀI ĐẶT PLUGIN LÕI SQLITE
-echo "[3/6] Cài đặt lõi SQLite Database Integration..."
-wp plugin install sqlite-database-integration --allow-root --path=/usr/local/lsws/$NAME/html >/dev/null 2>&1
-(/etc/wptt/wptt-phanquyen $NAME)
-wp plugin activate sqlite-database-integration --allow-root --path=/usr/local/lsws/$NAME/html >/dev/null 2>&1
+if ! curl --output /dev/null --silent --head --fail "$DOWNLOAD_URL"; then
+  echo "-> Bản 2.2.20 tạm nghẽn, tự động chuyển sang 2.2.19..."
+  DOWNLOAD_URL="https://downloads.wordpress.org/plugin/sqlite-database-integration.2.2.19.zip"
+fi
 
+wp plugin install "$DOWNLOAD_URL" --force --activate --allow-root --skip-packages --path="$PATH_HTML" >/dev/null 2>&1 || wptt_rollback
+chown -R "$USER_VHOST:$USER_VHOST" "$PATH_HTML/wp-content/plugins/sqlite-database-integration" 2>/dev/null
+
+# ---------------------------------------------------------
+# 3. CÀI GÓI CHUYỂN ĐỔI WP-CLI (BẢN v1.1.4 SIÊU ỔN ĐỊNH)
+# ---------------------------------------------------------
+echo "[3/6] Đang nạp vũ khí wp-cli-sqlite-command (Bản v1.1.4 siêu ổn định)..."
+git config --global url."https://github.com/".insteadOf git@github.com:
+export GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+
+# Khóa chặt bản 1.1.4, không dính dáng gì đến 1.1.5 nữa
+wp package install automattic/wp-cli-sqlite-command:v1.1.4 --allow-root >/dev/null 2>&1 || wptt_rollback
+
+# ---------------------------------------------------------
 # 4. TẠO THƯ MỤC CHỨA DATABASE
+# ---------------------------------------------------------
 echo "[4/6] Đang chuẩn bị phân vùng lưu trữ File Database..."
 mkdir -p "$PATH_HTML/wp-content/database"
-
-# Phân quyền an toàn cho OpenLiteSpeed
 chmod 755 "$PATH_HTML/wp-content/database"
 
+# ---------------------------------------------------------
 # 5. GẠT CẦU DAO: BẬT CHẾ ĐỘ SQLITE
+# ---------------------------------------------------------
 echo "[5/6] Gạt cầu dao kích hoạt SQLite..."
+if [[ ! -f "$PATH_HTML/wp-content/plugins/sqlite-database-integration/db.copy" ]]; then
+  echo "❌ Lỗi: File db.copy không tồn tại!"
+  wptt_rollback
+fi
+
 cp "$PATH_HTML/wp-content/plugins/sqlite-database-integration/db.copy" "$PATH_HTML/wp-content/db.php"
-
-wp plugin activate sqlite-database-integration --allow-root --path=/usr/local/lsws/$NAME/html 2>/dev/null
-
-(/etc/wptt/wptt-phanquyen $NAME)
-# Dọn dẹp lại RAM và tiến trình PHP một lần nữa để nhận file db.php mới
+wp plugin activate sqlite-database-integration --allow-root --skip-packages --path="$PATH_HTML" >/dev/null 2>&1
 killall -9 lsphp >/dev/null 2>&1
 
-# 6. BƠM DỮ LIỆU MARIADB VÀO SQLITE
+# ---------------------------------------------------------
+# 6. BƠM DỮ LIỆU MARIADB VÀO SQLITE & AUTO UPDATE & ACTIVATE
+# ---------------------------------------------------------
 echo "[6/6] Đang ép nạp (Import) dữ liệu MariaDB vào lõi SQLite..."
-wp sqlite import "$FILE_SQL" --enable-ast-driver --allow-root
+wp sqlite import "$FILE_SQL" --enable-ast-driver --allow-root --path="$PATH_HTML"
 
-wp plugin activate sqlite-database-integration --allow-root --path=/usr/local/lsws/$NAME/html 2>/dev/null
+if [[ $? -eq 0 ]]; then
+  echo -e "\n-> \033[1;32mImport thành công!\033[0m Đang tự động nâng cấp Plugin lên bản xịn nhất..."
 
-# set cau hinh maria database
-# BẪY LỖI AN TOÀN TUYỆT ĐỐI
-if [ $? -eq 0 ]; then
-  # 7. DỌN DẸP CHIẾN TRƯỜNG NẾU THÀNH CÔNG
-  rm -f "$FILE_SQL"
-  rm -f "$BACKUP_FILE" # Xóa bỏ file dự phòng trong /root/ vì đã Migrate thành công
+  # 1. Update lên bản Monorepo mới nhất
+  wp plugin update sqlite-database-integration --allow-root --skip-packages --path="$PATH_HTML" >/dev/null 2>&1
+
+  # 2. ÉP KÍCH HOẠT LẠI PLUGIN TRÁNH BỊ ẨN TRONG ADMIN
+  wp plugin activate sqlite-database-integration --allow-root --skip-packages --path="$PATH_HTML" >/dev/null 2>&1
+
+  # 3. Copy lại db.php mới
+  cp "$PATH_HTML/wp-content/plugins/sqlite-database-integration/db.copy" "$PATH_HTML/wp-content/db.php"
+
+  # 4. Phân quyền
+  chown "$USER_VHOST:$USER_VHOST" "$PATH_HTML/wp-content/db.php"
+  chown -R "$USER_VHOST:$USER_VHOST" "$PATH_HTML/wp-content/database"
+  chown -R "$USER_VHOST:$USER_VHOST" "$PATH_HTML/wp-content/plugins/sqlite-database-integration"
+
+  # ---------------------------------------------------------
+  # 7. DỌN DẸP CHIẾN TRƯỜNG
+  # ---------------------------------------------------------
+  rm -f "$FILE_SQL" "$BACKUP_FILE"
   echo ""
-  if $(cat /etc/*release | grep -q "Ubuntu"); then
-    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
-  else
-    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
-  fi
 
-  if [[ $(cat $duong_dan_cau_hinh_mariadb | grep 'innodb_buffer_pool_size = 16M') = '' ]]; then #chưa setup sqlite mode mini mariadb
+  duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+  grep -q "Ubuntu" /etc/*release && duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+
+  if ! grep -q 'innodb_buffer_pool_size = 16M' "$duong_dan_cau_hinh_mariadb"; then
     _runing "Đang Auto-Tune ép cân MariaDB về cấu hình Mini..."
-    # 1. BƯỚC XÓA (Càn quét sạch các thông số cũ)
-    sed -i '/innodb_buffer_pool_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/key_buffer_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/query_cache_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/query_cache_type/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/max_connections/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/tmp_table_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/max_heap_table_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/table_cache/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/thread_cache_size/d' $duong_dan_cau_hinh_mariadb
-    sed -i '/max_allowed_packet/d' $duong_dan_cau_hinh_mariadb
+    sed -i -E '/^(innodb_buffer_pool_size|key_buffer_size|query_cache_size|query_cache_type|max_connections|tmp_table_size|max_heap_table_size|table_cache|thread_cache_size|max_allowed_packet)[[:space:]]*=/d' "$duong_dan_cau_hinh_mariadb"
 
-    # 2. BƯỚC NỐI (Đắp cấu hình Mini siêu nhẹ nối thẳng vào cuối file)
-    echo "innodb_buffer_pool_size = 16M
+    cat >>"$duong_dan_cau_hinh_mariadb" <<EOF
+innodb_buffer_pool_size = 16M
 key_buffer_size = 8M
 max_connections = 20
 tmp_table_size = 16M
@@ -194,30 +212,20 @@ max_heap_table_size = 16M
 table_cache = 64
 thread_cache_size = 4
 max_allowed_packet = 16M
-" >>$duong_dan_cau_hinh_mariadb
+EOF
 
     _rundone "Đang Auto-Tune ép cân MariaDB về cấu hình Mini..."
-
-    # 3. ÁP DỤNG
     _runing "Khởi động lại dịch vụ MariaDB..."
     systemctl restart mariadb >/dev/null 2>&1
     _rundone "Khởi động lại dịch vụ MariaDB..."
-
     echo "✅ MariaDB đã bị ép cân thành công! Trả lại RAM cho hệ thống."
-
   fi
 
-  echo "==========================================================="
+  echo -e "\n==========================================================="
   echo "🎉 HOÀN TẤT THẦN TỐC 100% TRÊN MẶT TRẬN CLI!"
   echo "Web $DOMAIN đã chạy hoàn toàn trên file .ht.sqlite"
   echo "Web giờ nhanh xé gió luôn!"
   echo "==========================================================="
 else
-  # 8. CẤP CỨU NẾU LỖI IMPORT
-  echo ""
-  echo "❌ CÓ LỖI XẢY RA TRONG QUÁ TRÌNH NẠP DATA!"
-  echo "Đang tự động khôi phục (Rollback) lại trạng thái MariaDB cũ..."
-  mv "$PATH_HTML/wp-content/db.php" "$PATH_HTML/wp-content/db.php.error"
-  killall -9 lsphp >/dev/null 2>&1
-  echo "✅ Đã Rollback an toàn! Web không bị gián đoạn, anh có thể check lại log."
+  wptt_rollback
 fi
