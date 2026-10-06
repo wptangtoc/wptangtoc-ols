@@ -596,20 +596,38 @@ fi
 required_space_kb=$((unzipped_size_kb * 15 / 10))
 
 
+#viết kiểu này mới tương thích được tối với arm
 wptt_apply_permissions() {
-    local target_dir="$1"
+    # Gán biến, sử dụng fallback rỗng nếu $1 không tồn tại
+    local target_dir="${1:-}"
+
+    # 1. PHÒNG THỦ (Defensive): Rất quan trọng! 
+    # Nếu $target_dir bị rỗng, find và chown sẽ chạy sai thư mục (thảm hoạ).
+    if [[ -z "$target_dir" || ! -d "$target_dir" ]]; then
+        return 1 2>/dev/null || exit 1
+    fi
+
     # _runing "Đang thiết lập phân quyền an toàn (Pre-flight) cho: $target_dir"
     
-    find "$target_dir" -type f \( -perm -4000 -o -perm -2000 \) -print0 | xargs -0 -r chmod ugo-s
-    chown -hR "$User_name_vhost":"$User_name_vhost" "$target_dir"
+    # 2. Xóa các bit SUID/SGID nguy hiểm
+    # Chuẩn Enterprise: Dùng -exec {} + thay cho xargs
+    find "$target_dir" -type f \( -perm -4000 -o -perm -2000 \) -exec chmod ugo-s {} + 2>/dev/null || true
+    
+    # 3. Phân quyền sở hữu (hR để an toàn với symlink)
+    chown -hR "${User_name_vhost}:${User_name_vhost}" "$target_dir" 2>/dev/null || true
 
-    if [[ -n "$lock_down" ]]; then
-        find "$target_dir" -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 404
-        find "$target_dir" -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 515
-        [[ -d "$target_dir/wp-content/uploads" ]] && find "$target_dir/wp-content/uploads" -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
+    # 4. Phân quyền tệp và thư mục
+    if [[ -n "${lock_down:-}" ]]; then
+        find "$target_dir" -user "$User_name_vhost" -type f -exec chmod 404 {} + 2>/dev/null || true
+        find "$target_dir" -user "$User_name_vhost" -type d -exec chmod 515 {} + 2>/dev/null || true
+        
+        # Kiểm tra thêm nếu tồn tại uploads
+        if [[ -d "$target_dir/wp-content/uploads" ]]; then
+            find "$target_dir/wp-content/uploads" -user "$User_name_vhost" -type d -exec chmod 755 {} + 2>/dev/null || true
+        fi
     else
-        find "$target_dir" -user "$User_name_vhost" -type f -print0 | xargs -0 chmod 644
-        find "$target_dir" -user "$User_name_vhost" -type d -print0 | xargs -0 chmod 755
+        find "$target_dir" -user "$User_name_vhost" -type f -exec chmod 644 {} + 2>/dev/null || true
+        find "$target_dir" -user "$User_name_vhost" -type d -exec chmod 755 {} + 2>/dev/null || true
     fi
     
     # _rundone "Thiết lập phân quyền hoàn tất"
@@ -617,135 +635,83 @@ wptt_apply_permissions() {
 
 
 thuc_thi_giai_nen() {
-  local target_dir="$1"
-  local HAS_PV=0
-  local exit_code=0
-  if command -v pv &>/dev/null; then HAS_PV=1; fi
-
-  if [[ "$file" == *".zip" ]]; then
-    [[ -z $(command -v unzip 2>/dev/null) ]] && dnf install unzip -y -q >/dev/null 2>&1
-    local total_files=0
-    [[ $HAS_PV -eq 1 ]] && total_files=$(unzip -Z -1 "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | wc -l)
-
-    if unzip -l "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{ print $4 }' | grep -q '^wp-load.php$'; then
-      if [[ $HAS_PV -eq 1 ]]; then
-        unzip -o "$duong_dan_thu_muc_ma_nguon" -d "$target_dir"/ | pv -w 78 -f -p -l -s "$total_files" -N "Tiến độ mã nguồn" >/dev/null
-        exit_code=${PIPESTATUS[0]} # unzip nằm trước pv
-      else
-        unzip -oq "$duong_dan_thu_muc_ma_nguon" -d "$target_dir"/ 2>/dev/null
-        exit_code=$?
-      fi
-      [[ $exit_code -gt 1 ]] && return 1
-    else
-      check_path_file_wp_load=$(unzip -l "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{ print $4 }' | grep '/wp-load.php$')
-      if [[ -n "$check_path_file_wp_load" ]]; then
-        check_path_change=$(echo "$check_path_file_wp_load" | sed 's/wp-load.php/*/g')
-        TEMP_DIR_ma_nguon=$(mktemp -d /etc/wptt/tmp/XXXXXX)
-        if [[ $HAS_PV -eq 1 ]]; then
-          unzip -o "$duong_dan_thu_muc_ma_nguon" -d "$TEMP_DIR_ma_nguon" | pv -w 78 -f -p -l -s "$total_files" -N "Tiến độ mã nguồn" >/dev/null
-          exit_code=${PIPESTATUS[0]}
-        else
-          unzip -oq "$duong_dan_thu_muc_ma_nguon" -d "$TEMP_DIR_ma_nguon" 2>/dev/null
-          exit_code=$?
-        fi
-        [[ $exit_code -gt 1 ]] && { rm -rf "${TEMP_DIR_ma_nguon:?}"; return 1; }
-        
-        mv "$TEMP_DIR_ma_nguon"/"$check_path_change" "$target_dir"/ 2>/dev/null
-        rm -rf "${TEMP_DIR_ma_nguon:?}"
-      else
-        if [[ $HAS_PV -eq 1 ]]; then
-          unzip -o "$duong_dan_thu_muc_ma_nguon" -d "$target_dir"/ | pv -w 78 -f -p -l -s "$total_files" -N "Tiến độ mã nguồn" >/dev/null
-          exit_code=${PIPESTATUS[0]}
-        else
-          unzip -oq "$duong_dan_thu_muc_ma_nguon" -d "$target_dir"/ 2>/dev/null
-          exit_code=$?
-        fi
-        [[ $exit_code -gt 1 ]] && return 1
-      fi
+    local target_dir="${1:-}"
+    local archive_file="${duong_dan_thu_muc_ma_nguon:-$file}"
+    
+    if [[ -z "$target_dir" || -z "$archive_file" || ! -f "$archive_file" ]]; then
+        wptt_logs "ERROR" "Lỗi: Không tìm thấy thư mục đích hoặc file mã nguồn."
+        return 1
     fi
-  elif [[ "$file" == *".tar.zst" ]]; then
-    [[ -z $(command -v zstd 2>/dev/null) ]] && dnf install zstd -y -q >/dev/null 2>&1
-    [[ -z $(command -v tar 2>/dev/null) ]] && dnf install tar -y -q >/dev/null 2>&1
-    local fsize=$(stat -c %s "$duong_dan_thu_muc_ma_nguon")
-    if tar --use-compress-program="zstd" -tf "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{ print $6 }' | grep -q '^./wp-load.php$'; then
-      if [[ $HAS_PV -eq 1 ]]; then
-        pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$duong_dan_thu_muc_ma_nguon" | tar --use-compress-program="zstd" -xf - -C "$target_dir" --overwrite 2>/dev/null
-        exit_code=${PIPESTATUS[1]} # tar nằm sau pv
-      else
-        tar --use-compress-program="zstd" -xf "$duong_dan_thu_muc_ma_nguon" -C "$target_dir" --overwrite 2>/dev/null
-        exit_code=$?
-      fi
-      [[ $exit_code -gt 1 ]] && return 1
-    else
-      check_path=$(tar --use-compress-program="zstd" -tf "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{ print $6 }' | sed 's#\./##g' | grep '/wp-load.php$')
-      if [[ -n "$check_path" ]]; then
-        check_path_change=$(echo "$check_path" | sed 's/wp-load.php/*/g')
-        TEMP_DIR_ma_nguon=$(mktemp -d /etc/wptt/tmp/XXXXXX)
-        if [[ $HAS_PV -eq 1 ]]; then
-          pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$duong_dan_thu_muc_ma_nguon" | tar --use-compress-program="zstd" -xf - -C "$TEMP_DIR_ma_nguon" --overwrite 2>/dev/null
-          exit_code=${PIPESTATUS[1]}
-        else
-          tar --use-compress-program="zstd" -xf "$duong_dan_thu_muc_ma_nguon" -C "$TEMP_DIR_ma_nguon" --overwrite 2>/dev/null
-          exit_code=$?
-        fi
-        [[ $exit_code -gt 1 ]] && { rm -rf "${TEMP_DIR_ma_nguon:?}"; return 1; }
-        
-        mv "$TEMP_DIR_ma_nguon"/"$check_path_change" "$target_dir" 2>/dev/null
-        rm -rf "${TEMP_DIR_ma_nguon:?}"
-      else
-        if [[ $HAS_PV -eq 1 ]]; then
-          pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$duong_dan_thu_muc_ma_nguon" | tar --use-compress-program="zstd" -xf - -C "$target_dir" --overwrite 2>/dev/null
-          exit_code=${PIPESTATUS[1]}
-        else
-          tar --use-compress-program="zstd" -xf "$duong_dan_thu_muc_ma_nguon" -C "$target_dir" --overwrite 2>/dev/null
-          exit_code=$?
-        fi
-        [[ $exit_code -gt 1 ]] && return 1
-      fi
+
+    # 1. KIỂM TRA & CÀI ĐẶT CÔNG CỤ (OS-agnostic - Tự nhận diện dnf/apt)
+    local pkg_mgr=""
+    if command -v dnf >/dev/null 2>&1; then pkg_mgr="dnf install -y -q";
+    elif command -v apt-get >/dev/null 2>&1; then pkg_mgr="apt-get install -y -qq"; fi
+
+    if [[ -n "$pkg_mgr" ]]; then
+        [[ "$archive_file" == *.zip && ! -x "$(command -v unzip)" ]] && $pkg_mgr unzip >/dev/null 2>&1
+        [[ "$archive_file" == *.tar.zst && ! -x "$(command -v zstd)" ]] && $pkg_mgr zstd tar >/dev/null 2>&1
+        [[ "$archive_file" == *.tar.gz && ! -x "$(command -v pigz)" ]] && $pkg_mgr pigz tar >/dev/null 2>&1
     fi
-  elif [[ "$file" == *".tar.gz" ]]; then
-    [[ -z $(command -v pigz 2>/dev/null) ]] && dnf install pigz -y -q >/dev/null 2>&1
-    [[ -z $(command -v tar 2>/dev/null) ]] && dnf install tar -y -q >/dev/null 2>&1
-    local fsize=$(stat -c %s "$duong_dan_thu_muc_ma_nguon")
-    if tar -tvzf "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{ print $6 }' | grep -q '^./wp-load.php$\|^wp-load.php$\|^/wp-load.php$'; then
-      if [[ $HAS_PV -eq 1 ]]; then
-        pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$duong_dan_thu_muc_ma_nguon" | tar -zxf - -C "$target_dir" --overwrite 2>/dev/null
+
+    # 2. TÌM VỊ TRÍ FILE wp-load.php (Xử lý lỗi nén lồng thư mục)
+    local wp_prefix=""
+    if [[ "$archive_file" == *.zip ]]; then
+        wp_prefix=$(unzip -Z1 "$archive_file" 2>/dev/null | grep '/wp-load.php$' | head -n1 | xargs dirname 2>/dev/null)
+    else
+        wp_prefix=$(tar -tf "$archive_file" 2>/dev/null | grep '/wp-load.php$' | head -n1 | xargs dirname 2>/dev/null)
+    fi
+    
+    wp_prefix=$(echo "$wp_prefix" | sed 's/^\.\///; s/^\.$//')
+
+    local dest_dir="$target_dir"
+    local is_temp_extract=0
+    
+    if [[ -n "$wp_prefix" ]]; then
+        dest_dir=$(mktemp -d /tmp/wptt_extract_XXXXXX)
+        is_temp_extract=1
+    fi
+
+    # 3. THỰC THI GIẢI NÉN CÓ PROGRESS BAR (pv)
+    local TAR_SAFE=(--no-same-owner --no-xattrs --no-selinux --no-acl)
+    local exit_code=0
+    local fsize
+    fsize=$(stat -c %s "$archive_file" 2>/dev/null || echo 0)
+
+    if [[ "$archive_file" == *.zip ]]; then
+        local total_files
+        total_files=$(unzip -Z1 "$archive_file" 2>/dev/null | wc -l)
+        
+        # unzip đẩy text ra stdout, pv đếm số dòng (-l) để làm thanh tiến trình
+        unzip -o "$archive_file" -d "$dest_dir" 2>/dev/null | pv -w 78 -f -p -l -s "$total_files" -N "Tiến độ mã nguồn" >/dev/null
+        exit_code=${PIPESTATUS[0]} # Lấy mã lỗi của lệnh unzip
+
+    elif [[ "$archive_file" == *.tar.zst ]]; then
+        pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$archive_file" | tar "${TAR_SAFE[@]}" --use-compress-program="zstd" -xf - -C "$dest_dir" --overwrite 2>/dev/null
+        exit_code=${PIPESTATUS[1]} # Lấy mã lỗi của lệnh tar
+
+    elif [[ "$archive_file" == *.tar.gz ]]; then
+        local gz_cmd="gzip"
+        command -v pigz >/dev/null 2>&1 && gz_cmd="pigz" # Ưu tiên dùng pigz nếu có
+        
+        pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$archive_file" | tar "${TAR_SAFE[@]}" --use-compress-program="$gz_cmd" -xf - -C "$dest_dir" --overwrite 2>/dev/null
         exit_code=${PIPESTATUS[1]}
-      else
-        tar --use-compress-program="pigz" -xf "$duong_dan_thu_muc_ma_nguon" -C "$target_dir" --overwrite 2>/dev/null
-        exit_code=$?
-      fi
-      [[ $exit_code -gt 1 ]] && return 1
-    else
-      check_path=$(tar -tvzf "$duong_dan_thu_muc_ma_nguon" 2>/dev/null | awk '{ print $6 }' | grep '/wp-load.php$')
-      if [[ -n "$check_path" ]]; then
-        check_path_change=$(echo "$check_path" | sed 's/wp-load.php/*/g')
-        TEMP_DIR_ma_nguon=$(mktemp -d /etc/wptt/tmp/XXXXXX)
-        if [[ $HAS_PV -eq 1 ]]; then
-          pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$duong_dan_thu_muc_ma_nguon" | tar -zxf - -C "$TEMP_DIR_ma_nguon" --overwrite 2>/dev/null
-          exit_code=${PIPESTATUS[1]}
-        else
-          tar --use-compress-program="pigz" -xf "$duong_dan_thu_muc_ma_nguon" -C "$TEMP_DIR_ma_nguon" --overwrite 2>/dev/null
-          exit_code=$?
-        fi
-        [[ $exit_code -gt 1 ]] && { rm -rf "${TEMP_DIR_ma_nguon:?}"; return 1; }
-
-        mv "$TEMP_DIR_ma_nguon"/"$check_path_change" "$target_dir" 2>/dev/null
-        rm -rf "${TEMP_DIR_ma_nguon:?}"
-      else
-        if [[ $HAS_PV -eq 1 ]]; then
-          pv -w 78 -f -p -s "$fsize" -N "Tiến độ mã nguồn" "$duong_dan_thu_muc_ma_nguon" | tar -zxf - -C "$target_dir" --overwrite 2>/dev/null
-          exit_code=${PIPESTATUS[1]}
-        else
-          tar --use-compress-program="pigz" -xf "$duong_dan_thu_muc_ma_nguon" -C "$target_dir" --overwrite 2>/dev/null
-          exit_code=$?
-        fi
-        [[ $exit_code -gt 1 ]] && return 1
-      fi
     fi
-  fi
-  
-  return 0
+
+    if [[ $exit_code -gt 1 ]]; then
+        [[ $is_temp_extract -eq 1 ]] && rm -rf "$dest_dir"
+        return 1
+    fi
+
+    # 4. DI CHUYỂN DỮ LIỆU (Chỉ chạy nếu wp-load.php nằm trong thư mục con)
+    if [[ $is_temp_extract -eq 1 ]]; then
+        shopt -s dotglob
+        [[ -d "$dest_dir/$wp_prefix" ]] && mv "$dest_dir/$wp_prefix"/* "$target_dir"/ 2>/dev/null
+        shopt -u dotglob
+        rm -rf "$dest_dir"
+    fi
+
+    return 0
 }
 
 _runing "$giai_nen $ma_nguon website $NAME"
