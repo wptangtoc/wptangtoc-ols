@@ -1,26 +1,46 @@
 #!/bin/bash
-
-# ==============================================================================
-# BỔ SUNG: TỐI ƯU HÓA RAM CHO MARIADB BẰNG JEMALLOC (CHỐNG PHÂN MẢNH)
-# ==============================================================================
 echo "Tiến hành cài đặt jemalloc để tối ưu bộ nhớ cho MariaDB..."
-dnf install jemalloc -y >/dev/null 2>&1
-# Tự động tìm đường dẫn chính xác của file thư viện jemalloc (libjemalloc.so)
-JEMALLOC_PATH=$(rpm -ql jemalloc | grep -E 'libjemalloc\.so\.[0-9]+$' | head -n 1)
+
+# 1. Nhận diện Hệ Điều Hành
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  OS=$ID
+fi
+
+JEMALLOC_PATH=""
+
+# 2. Xử lý cài đặt và tìm đường dẫn theo từng OS
+if [[ "$OS" == "ubuntu" ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update >/dev/null 2>&1
+  apt-get install -y libjemalloc2 >/dev/null 2>&1
+  # Tìm đường dẫn trên Ubuntu
+  JEMALLOC_PATH=$(dpkg -L libjemalloc2 | grep -E 'libjemalloc\.so\.[0-9]+$' | head -n 1)
+
+elif [[ "$OS" == "almalinux" || "$OS" == "rocky" || "$OS" == "centos" || "$OS" == "rhel" ]]; then
+  dnf install jemalloc -y >/dev/null 2>&1
+  # Tìm đường dẫn trên AlmaLinux/RHEL
+  JEMALLOC_PATH=$(rpm -ql jemalloc | grep -E 'libjemalloc\.so\.[0-9]+$' | head -n 1)
+else
+  echo "Hệ điều hành $OS không được hỗ trợ tối ưu jemalloc tự động."
+fi
+
+# 3. Tiến hành cấu hình systemd nếu tìm thấy file thư viện
 if [[ -n "$JEMALLOC_PATH" ]]; then
-  # 1. Tạo thư mục cấu hình ghi đè (drop-in) của systemd cho MariaDB
+  # Tạo thư mục cấu hình ghi đè (drop-in) của systemd cho MariaDB
   mkdir -p /etc/systemd/system/mariadb.service.d/
-  
-  # 2. Tạo file cấu hình ép MariaDB nạp thư viện jemalloc trước tiên (LD_PRELOAD)
-  if [[ ! -f /etc/systemd/system/mariadb.service.d/jemalloc.conf ]];then
-  cat > /etc/systemd/system/mariadb.service.d/jemalloc.conf <<EOF
+
+  # Tạo file cấu hình ép MariaDB nạp thư viện jemalloc (Đã bỏ dấu ngoặc kép)
+  if [[ ! -f /etc/systemd/system/mariadb.service.d/jemalloc.conf ]]; then
+    cat >/etc/systemd/system/mariadb.service.d/jemalloc.conf <<EOF
 [Service]
-Environment="LD_PRELOAD=$JEMALLOC_PATH"
+Environment=LD_PRELOAD=$JEMALLOC_PATH
 EOF
-  # 3. Thông báo cho systemd biết cấu hình vừa thay đổi
-systemctl daemon-reload
-systemctl restart mariadb
-  echo "Đã kích hoạt jemalloc cho MariaDB thành công tại: $JEMALLOC_PATH"
+    # Thông báo cho systemd biết cấu hình vừa thay đổi
+    systemctl daemon-reload
+    # Khởi động lại bằng stop/start để đảm bảo tiến trình ngắt hoàn toàn
+    systemctl stop mariadb
+    systemctl start mariadb
+    echo "Hoàn tất cài đặt jemalloc để tối ưu bộ nhớ cho MariaDB..."
+  fi
 fi
-fi
-# ==============================================================================

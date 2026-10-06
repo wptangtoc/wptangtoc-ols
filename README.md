@@ -73,7 +73,7 @@ Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cun
 
 Đây là phần mềm script cài đặt thiết lập webserver và giúp bạn dễ dàng quản trị webserver, phầm mềm này mình phát triển tập trung vào mã nguồn WordPress là chủ yếu, chỉ đơn vì công việc của mình liên quan rất nhiều về WordPress và WordPress là sở trưởng của mình vì vậy mình chỉ tập trung toàn bộ nguồn lực tối ưu webserver dành cho WordPress.
 
-Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.4 & 8.3 & 8.2 & 8.1 & 8.0 & 7.4 & 7.3 & 7.2 & 7.1) + MariaDB (11.8 & 11.4 & 10.11 & 10.6)... có rất nhiều tính năng khác.
+Phần mềm này hỗ trợ: OpenLiteSpeed + LSPHP (8.5 && 8.4 & 8.3 & 8.2 & 8.1 & 8.0 & 7.4 & 7.3 & 7.2 & 7.1) + MariaDB (11.8 & 11.4 & 10.11 & 10.6)... có rất nhiều tính năng khác.
 
 <h2>Cấu hình tối thiểu</h2>
 Yêu cầu phần cứng: Ram > 512MB, CPU tối thiểu 1 vcore, Ổ cứng > 8GB
@@ -99,15 +99,15 @@ Oracle Linux Server 8 (hỗ trợ CPU x86_64)
 </li>
 
 <li>
-AlmaLinux 9 (Hỗ trợ x86_64 & arm)
+AlmaLinux 9 và 10 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
-Rocky linux 9 (Hỗ trợ x86_64 & arm)
+Rocky linux 9 và 10 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
-Red Hat Enterprise Linux 9 (Hỗ trợ x86_64 & arm)
+Red Hat Enterprise Linux 9 và 10 (Hỗ trợ x86_64 & arm)
 </li>
 
 <li>
