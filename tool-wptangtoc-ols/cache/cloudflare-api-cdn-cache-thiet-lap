@@ -16,186 +16,243 @@ function huong_dan() {
 
   Bằng cách tận dụng API của Cloudflare, bạn có thể nâng cao đáng kể hiệu quả quản lý cache cho website của mình, đảm bảo nội dung luôn được cập nhật và trải nghiệm người dùng được tối ưu.
 }
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. /etc/wptt/lang/$ngon_ngu.sh 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
 
-. /etc/wptt/.wptt.conf
-if [[ $ngon_ngu = '' ]]; then
-  ngon_ngu='vi'
-fi
-. /etc/wptt/lang/$ngon_ngu.sh
-. /etc/wptt/echo-color
-
-echo "========================================================================="
-echo "|$quan_ly_cache => API Cloudflare CDN => Thiết lập Xoá Cache            |"
-echo "========================================================================="
+clear
+echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_cache} ➜ Thiết lập Tự động Xóa Cache Cloudflare CDN${C_RESET}"
+echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 mkdir -p /etc/wptt/cloudflare-cdn-cache
-echo ""
-echo ""
-echo "$lua_chon_website_ban_muon $thiet_lap Cloudflare api $xoa Cache CDN: "
+
+# ==============================================================================
+# HÀM MENU LỌC TRẠNG THÁI THIẾT LẬP (UX BO CONG)
+# ==============================================================================
 function lua_chon_NAME() {
-  NAME=""
-  if [ "$(ls -At /etc/wptt/vhost)" ]; then
-    selects=()
+  unset NAME selects
+  selects=()
+  local box_inner_width=${box_inner_width:-71}
+
+  if [ "$(ls -At /etc/wptt/vhost 2>/dev/null | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for entry in $(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV); do
-      NAME=$(echo $entry | sed 's/^.//' | sed 's/.conf//')
-      if [ "$NAME" != "${NAME/./}" ]; then
-        #tuỳ biến thêm thông báo
-        if [[ -f /etc/wptt/cloudflare-cdn-cache/.wptt-$domain.conf ]]; then
-          NAME="$NAME đã được thiết lập"
+      local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
+      if [[ "$dom" == ?*.?* ]]; then
+        # Fix lỗi biến của bản gốc: Dùng dom thay vì domain
+        if [[ -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$dom.conf" ]]; then
+          selects+=("$dom|1") # 1 = Đã thiết lập
         else
-          NAME="$NAME chưa được thiết lập"
+          selects+=("$dom|0") # 0 = Chưa thiết lập
         fi
-        selects+=("$NAME")
       fi
     done
+  fi
 
-    if [[ $selects = '' ]]; then
-      echo "Tất cả domain trên hệ thống chưa có domain nào được kích hoạt sử dụng chuyển hướng"
-      . /etc/wptt/wptt-domain-main 1
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "${C_YELLOW}⚠️ Hệ thống chưa có website nào được khởi tạo!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-cache-main 1
+  fi
+
+  # Render Khung Bo Cong
+  echo -e "${C_CYAN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Lựa chọn Website để thiết lập/gỡ bỏ API Cloudflare:"
+  local len=$(echo -n "$title_text" | awk '{print length($0)}')
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  local i=1
+  for item in "${selects[@]}"; do
+    local dom=$(echo "$item" | cut -d'|' -f1)
+    local stt=$(echo "$item" | cut -d'|' -f2)
+
+    if [[ "$stt" == "1" ]]; then
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} ${C_GREEN}[Đã thiết lập]${C_RESET}" "$i" "$dom")
+      local clean_text=$(printf "  %3d) %-30s [Đã thiết lập]" "$i" "$dom")
+    else
+      local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-30s${C_RESET} ${C_YELLOW}[Chưa thiết lập]${C_RESET}" "$i" "$dom")
+      local clean_text=$(printf "  %3d) %-30s [Chưa thiết lập]" "$i" "$dom")
     fi
 
-    PS3="
--//- $lua_chon_website_ban_muon [0=$exit_thoat]: "
-    select select in "${selects[@]}"; do
-      NAME=$select
-      index=$REPLY
-      break
-    done
+    local item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+    local pad=$((box_inner_width - item_len))
+    [[ $pad -lt 0 ]] && pad=0
+    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰───────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  local fzf_installed=false
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=${exit_thoat:-Thoát}]: "
   else
-    clear
-    echo "$khong_co_domain_nao_ton_tai_tren_he_thong"
-    exit
+    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
   fi
+
+  while true; do
+    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY=$(echo "$REPLY" | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+    case "$REPLY" in
+    0)
+      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+      NAME="0"
+      return 0
+      ;;
+    00)
+      if $fzf_installed; then
+        local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
+        local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ -n "$dom" ]]; then
+          NAME="$dom"
+          return 0
+        else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+      else
+        echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
+        local action_index=$((REPLY - 1))
+        NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        return 0
+      else
+        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+      fi
+      ;;
+    esac
+  done
 }
 
 lua_chon_NAME
 
-NAME=$(echo $NAME | cut -f1 -d ' ')
-
-# NAME=$1
-# if [[ $NAME = "98" ]];then
-# NAME=""
-# fi
-
-path="/etc/wptt/vhost/.$NAME.conf"
-if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
-  exec /etc/wptt/wptt-cache-main 1
-fi
+[[ "$NAME" == "0" || -z "$NAME" ]] && {
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+  return 2>/dev/null || exit
+}
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
+  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-cache-main 1
-  exit
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+  return 2>/dev/null || exit
 fi
 
-unset da_setup
-if [[ -f /etc/wptt/cloudflare-cdn-cache/.wptt-$domain.conf ]]; then
-  da_setup='1'
-else
-  da_setup='0'
-fi
+# ==============================================================================
+# XỬ LÝ LOGIC (CÀI ĐẶT MỚI HOẶC GỠ BỎ)
+# ==============================================================================
+echo ""
 
-if [[ $da_setup = '0' ]]; then
-  mkdir -p /etc/wptt/cloudflare-cdn-cache
-  unset TRACE_OUTPUT email_cloudflare KEY
+if [[ ! -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf" ]]; then
+  # ---------------------------------------------------------
+  # NHÁNH 1: CHƯA THIẾT LẬP -> TIẾN HÀNH SETUP
+  # ---------------------------------------------------------
+  _runing "Đang kiểm tra kết nối Cloudflare Proxy cho website $NAME..."
   TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$NAME/cdn-cgi/trace" 2>/dev/null)
-  # Kiểm tra output có chứa các key đặc trưng của Cloudflare không
-  if [[ -z $(echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray') ]]; then #check xem có đang sử dụng cloudflare cdn không
-    echo "Xác nhận domain $NAME không sử dụng CDN cloudflare"
-    echo "Tính năng này để sử dụng bạn cần phải sử dụng CDN cloudflare"
+
+  # Fix lỗi grep -q của bản gốc
+  if ! echo "$TRACE_OUTPUT" | grep -qi 'cloudflare\|cf-ray'; then
+    _runloi "Kiểm tra Cloudflare thất bại"
+    echo -e "${C_RED}❌ Lỗi: Website $NAME hiện KHÔNG hoạt động qua Proxy của Cloudflare (Đám mây cam).${C_RESET}"
+    echo -e "${C_YELLOW}Tính năng này yêu cầu website phải bật Proxy Cloudflare để hoạt động.${C_RESET}"
+    sleep 3
     exec /etc/wptt/wptt-cache-main 1
   fi
+  _rundone "Website đã kết nối Cloudflare CDN"
+  echo ""
 
-  read -p "Nhập Email đăng nhập đăng ký cloudflare của domain $NAME [ 0 = Thoát ]: " email_cloudflare
-  if [[ $email_cloudflare = "0" || $email_cloudflare = "" ]]; then
-    exec /etc/wptt/wptt-cache-main 1
-    exit
-  fi
+  echo -e "${C_YELLOW}Hướng dẫn lấy API:${C_RESET} Truy cập https://dash.cloudflare.com/profile/api-tokens ➜ Xem mục ${C_BOLD_WHITE}Global API Key${C_RESET}"
 
-  echo "Truy cập: https://dash.cloudflare.com/profile/api-tokens => rồi ấn vào nút view màu xanh để xem API"
-  read -p "Nhập cloudflare Global API KEY [ 0 = Thoát ]: " KEY
+  echo -en "${C_CYAN}Nhập Email đăng nhập Cloudflare [0=Thoát]: ${C_RESET}"
+  read -r email_cloudflare
+  [[ "$email_cloudflare" == "0" || -z "$email_cloudflare" ]] && exec /etc/wptt/wptt-cache-main 1
 
-  if [[ $KEY = "0" || $KEY = "" ]]; then
-    exec /etc/wptt/wptt-cache-main 1
-    exit
-  fi
+  echo -en "${C_CYAN}Nhập Global API Key [0=Thoát]: ${C_RESET}"
+  read -r KEY
+  [[ "$KEY" == "0" || -z "$KEY" ]] && exec /etc/wptt/wptt-cache-main 1
 
-  _runing "Thiết lập Cloudflare CDN xoá cache"
+  echo ""
+  _runing "Đang xác thực thông tin và lấy Zone ID từ Cloudflare..."
   echo "Thiết lập Cloudflare CDN xoá cache website $NAME : $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
 
   echo "dns_cloudflare_email = $email_cloudflare
-dns_cloudflare_api_key = $KEY" >/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf
+dns_cloudflare_api_key = $KEY" >"/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
 
   chmod 700 -R /etc/wptt/cloudflare-cdn-cache
-  chmod 400 /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf
+  chmod 400 "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
 
   function dns_coudflare_xac_thuc_zones() {
-    AUTH_HEADERS=("X-Auth-Email: $email_cloudflare" "X-Auth-Key: $KEY")
-    kiem_tra_ket_noi=$(curl -X GET "https://api.cloudflare.com/client/v4/zones?name=$1" \
-      "${AUTH_HEADERS[@]/#/-H}" \
+    local check_domain="$1"
+    curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$check_domain" \
+      -H "X-Auth-Email: $email_cloudflare" \
+      -H "X-Auth-Key: $KEY" \
       -H "Content-Type: application/json" |
-      python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if data['result'] else '')" >/tmp/check-dns-cloudflare 2>&1)
+      python3 -c "import sys,json;data=json.loads(sys.stdin.read()); print(data['result'][0]['id'] if 'result' in data and data['result'] else '')" >/tmp/check-dns-cloudflare 2>&1
   }
 
-  if [[ $check_dns_subdomain ]]; then
-    subdomain_to_domain=$(echo $NAME | cut -f2-5 -d '.')
-    dns_coudflare_xac_thuc_zones "$subdomain_to_domain"
+  # Logic tìm kiếm Zone thông minh
+  dns_coudflare_xac_thuc_zones "$NAME"
+
+  # Nếu không tìm thấy Zone của Subdomain, thử lấy Zone của Root domain
+  if [[ -z $(cat /tmp/check-dns-cloudflare 2>/dev/null) ]]; then
+    parent_domain=$(echo "$NAME" | cut -d. -f2-)
+    if [[ "$parent_domain" == *.* ]]; then
+      dns_coudflare_xac_thuc_zones "$parent_domain"
+    fi
+  fi
+
+  if [[ -n $(cat /tmp/check-dns-cloudflare 2>/dev/null) ]]; then
+    _rundone "Xác thực API Cloudflare thành công"
+
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HOÀN TẤT THIẾT LẬP CLOUDFLARE CDN CACHE${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
+    left_text "Trạng thái mới   : Hệ thống sẽ tự động quét và xóa cache Cloudflare" 2
+    left_text "                   mỗi khi bạn sử dụng Menu Xóa Cache của WPTangToc." 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   else
-    dns_coudflare_xac_thuc_zones "$NAME"
+    rm -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
+    _runloi "Xác thực thông tin API thất bại"
+    echo -e "${C_RED}❌ Lỗi: Email hoặc Global API Key không chính xác, hoặc không có quyền truy cập vào Domain này.${C_RESET}"
+    echo -e "Vui lòng kiểm tra lại thông tin và thử lại sau."
   fi
 
-  if [[ $(cat /tmp/check-dns-cloudflare) ]]; then
-    _rundone "Thiết lập Cloudflare CDN xoá cache"
-    echo "Sau này khi bạn xoá cache bằng menu trong wptangtoc ols thì nó sẽ tự động xoá cache của Cloudflare CDN"
+else
+  # ---------------------------------------------------------
+  # NHÁNH 2: ĐÃ THIẾT LẬP -> HỎI GỠ BỎ
+  # ---------------------------------------------------------
+  if wptt_xac_nhan "Website này đang được tự động xóa cache CDN. Bạn có muốn GỠ BỎ thiết lập này không?" "${C_BOLD_WHITE}Website:${C_RESET} $NAME" "" "Đồng ý Gỡ bỏ" "Hủy thao tác"; then
+    echo ""
+    _runing "Đang xóa bỏ cấu hình API Cloudflare cho $NAME..."
+    rm -f "/etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf"
+    _rundone "Đã gỡ bỏ thiết lập thành công"
+
+    echo -e "\n${C_GREEN}╭───────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ CẤU HÌNH API${C_RESET}"
+    echo -e "${C_GREEN}├───────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Kể từ giờ, WPTangToc OLS sẽ không can thiệp vào cache của" 2
+    left_text "Cloudflare cho website ${C_YELLOW}$NAME${C_RESET} nữa." 2
+    echo -e "${C_GREEN}╰───────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   else
-    rm -f /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf
-    _runloi "Thiết lập Cloudflare CDN xoá cache"
-    echoDo "Vui lòng thử lại sau"
-  fi
-
-fi
-
-if [[ $da_setup = '1' ]]; then
-  echo -e "$xac_nhan $xoa $thiet_lap CDN Cloudflare Cache?: "
-  unset dongy
-  prompt="$nhap_lua_chon_cua_ban [1-2]: "
-  dongy="n"
-  options=("$dong_y" "$khong_dong_y")
-  PS3="$prompt"
-  select opt in "${options[@]}"; do
-    case "$REPLY" in
-    1)
-      dongy="y"
-      break
-      ;;
-
-    2)
-      dongy="n"
-      break
-      ;;
-
-    $((${#options[@]} + 1)))
-      printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    *)
-      printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-      break
-      ;;
-    esac
-  done
-
-  if [[ $dongy = 'y' ]]; then
-    _runing "$xoa $thiet_lap CDN Cloudflare Cache $NAME"
-    rm -f /etc/wptt/cloudflare-cdn-cache/.wptt-$NAME.conf
-    _rundone "$xoa $thiet_lap CDN Cloudflare Cache $NAME"
+    echo -e "${C_YELLOW}Đã hủy thao tác gỡ bỏ.${C_RESET}"
   fi
 fi
 
-check_menu_wptangtoc_active=$1
-if [[ $check_menu_wptangtoc_active = "98" ]]; then
-  exec /etc/wptt/wptt-cache-main 1
-fi
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
