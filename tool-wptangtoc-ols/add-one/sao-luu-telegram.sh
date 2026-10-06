@@ -70,6 +70,10 @@ fi
 # ==============================================================================
 # HÀM GỬI FILE (CÓ BẢO VỆ CHỐNG MẤT DỮ LIỆU)
 # ==============================================================================
+
+telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null); telegram_api="${telegram_tmp_api:-$telegram_api}"
+telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null); telegram_id="${telegram_tmp_id:-$telegram_id}"
+
 telegram_uploads_backup() {
     local file_path=$1
     local domain_name=$2
