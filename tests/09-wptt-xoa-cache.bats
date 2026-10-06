@@ -5,8 +5,6 @@ setup_file() {
   export TEST_DOMAIN="test-cache-ols.com"
   export TEST_NO_WP="no-wp-cache.com"
   
-  echo "Đang khởi tạo môi trường WordPress thực tế... Vui lòng đợi!" >&3
-  
   # 1. TẠO WEBSITE 1: Cài đặt Full WordPress (Dành cho test Xóa Cache)
   bash /etc/wptt/domain/wptt-themwebsite "$TEST_DOMAIN" >/dev/null 2>&1 || true
   cat <<EOF > /tmp/wp-answers-cache.txt
