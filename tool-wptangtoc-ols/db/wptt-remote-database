@@ -54,7 +54,7 @@ if [[ $check_remote ]];then
 		mariadb -u "$database_admin_username" -p"$database_admin_password" -e "FLUSH PRIVILEGES"
 
 		if [[ -f /tmp/remote_wptangtoc_ols ]];then
-		rm -f /tmp/remote_wptangtoc_ols
+			rm -f /tmp/remote_wptangtoc_ols
 		fi
 
 		for entry in $(ls -A /etc/wptt/vhost); do
@@ -65,7 +65,7 @@ if [[ $check_remote ]];then
 			if [[ -d "$path" ]]; then
 				. /etc/wptt/vhost/.$domain.conf
 				if [[ $DB_User_web ]];then
-				mariadb -u "$database_admin_username" -p"$database_admin_password" -e "SHOW GRANTS FOR '$DB_User_web'@'%';" 2>/dev/null 1>>/tmp/remote_wptangtoc_ols
+					mariadb -u "$database_admin_username" -p"$database_admin_password" -e "SHOW GRANTS FOR '$DB_User_web'@'%';" 2>/dev/null 1>>/tmp/remote_wptangtoc_ols
 				fi
 			fi
 		done
@@ -80,8 +80,8 @@ if [[ $check_remote ]];then
 			sed -i '/port=/d' $duong_dan_cau_hinh_mariadb
 
 			if [[ $(systemctl status firewalld.service | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs) = 'active' ]];then
-			firewall-cmd --permanent --zone=public --remove-port=${port_mariadb_remote}/tcp >/dev/null 2>&1
-			firewall-cmd --reload >/dev/null 2>&1
+				firewall-cmd --permanent --zone=public --remove-port=${port_mariadb_remote}/tcp >/dev/null 2>&1
+				firewall-cmd --reload >/dev/null 2>&1
 			fi
 
 			#đóng port csf
@@ -91,10 +91,25 @@ if [[ $check_remote ]];then
 				csf -e >/dev/null 2>&1
 			fi
 
+#dong port nftables
+nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+if [[ "$nftables_service" = "active" ]]; then
+	if $(cat /etc/*release | grep -q "Ubuntu") ; then
+		path_nftables_config="/etc/nftables.conf"
+	else
+		path_nftables_config="/etc/sysconfig/nftables.conf"
+	fi
 
-			systemctl restart mysql.service >/dev/null 2>&1
-			sed -i "s/$port_mariadb_remote/3306/g" /etc/fail2ban/jail.local
-			systemctl restart fail2ban.service
+	if [[ -f $path_nftables_config ]];then
+		sed -i '/#port remote mariadb/d' $path_nftables_config
+		systemctl restart nftables
+	fi
+fi
+
+
+systemctl restart mysql.service >/dev/null 2>&1
+sed -i "s/$port_mariadb_remote/3306/g" /etc/fail2ban/jail.local
+systemctl restart fail2ban.service
 		fi
 		_rundone "Tắt kích hoạt Remote Database website $NAME"
 	fi
@@ -110,19 +125,19 @@ if [[ $kichhoatremote = 'y' ]];then
 
 	if [[ $(cat $duong_dan_cau_hinh_mariadb | grep 'Port=') = '' ]];then
 
-	read -p "$nhap port remote database $ban_muon [0=$exit_thoat]: " port
+		read -p "$nhap port remote database $ban_muon [0=$exit_thoat]: " port
 
-	if [[ "$port" = "0" || "$port" = "" ]]; then
-		. /etc/wptt/wptt-db-main 1
-		exit;
-	fi
+		if [[ "$port" = "0" || "$port" = "" ]]; then
+			. /etc/wptt/wptt-db-main 1
+			exit;
+		fi
 
-	if ! [[ $port =~ ^[0-9]+$ ]] || (( $port < 1 || $port > 65536 )); then
-		clear
-		echo "Port $khong_dung_dinh_dang $so_nguyen_duong, vui lòng nhập port từ 1 đến 65536"
-		. /etc/wptt/wptt-db-main 1
-		exit
-	fi
+		if ! [[ $port =~ ^[0-9]+$ ]] || (( $port < 1 || $port > 65536 )); then
+			clear
+			echo "Port $khong_dung_dinh_dang $so_nguyen_duong, vui lòng nhập port từ 1 đến 65536"
+			. /etc/wptt/wptt-db-main 1
+			exit
+		fi
 
 	# kiểm tra port ssh
 	port_checkssh=$(cat /etc/ssh/sshd_config | grep "Port " | cut -f2 -d" ")
@@ -163,6 +178,24 @@ if [[ $kichhoatremote = 'y' ]];then
 			csf -e >/dev/null 2>&1
 		fi
 	fi
+
+
+	#mở port nftables
+	nftables_service=$(systemctl status nftables.service 2>/dev/null | grep 'Active' | cut -f2 -d':' | xargs | cut -f1 -d' ' | xargs)
+	if [[ "$nftables_service" = "active" ]]; then
+		if $(cat /etc/*release | grep -q "Ubuntu") ; then
+			path_nftables_config="/etc/nftables.conf"
+		else
+			path_nftables_config="/etc/sysconfig/nftables.conf"
+		fi
+
+		if [[ -f $path_nftables_config ]];then
+			sed -i '/#port remote mariadb/d' $path_nftables_config
+			sed -i "/chain input /a\ \ tcp dport $port accept #port remote mariadb" $path_nftables_config
+			systemctl restart nftables
+		fi
+	fi
+
 	sed -i "s/3306/$port/g" /etc/fail2ban/jail.local
 	systemctl restart mysql.service >/dev/null 2>&1
 	systemctl restart fail2ban.service
