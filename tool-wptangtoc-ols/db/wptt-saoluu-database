@@ -236,14 +236,40 @@ mkdir -p "/usr/local/backup-website/$NAME"
 _runing "$sao_luu_database website $NAME"
 timedate=$(date +%Hgio\_%d\_%m\_%Y)
 
+#TẠO FILE AUTH TẠM THỜI (BẢO MẬT)
+# Thay vì dùng -p$PASS, ta tạo file .my.cnf tạm, cải tiến bảo mật để tránh xem trình
+
+#Hiện tại: Đoạn lệnh backup mysqldump -u ... -p"..." truyền mật khẩu trực tiếp vào dòng lệnh. Nếu ai đó chạy lệnh ps aux hoặc htop đúng lúc backup diễn ra, họ có thể nhìn thấy mật khẩu database.
+#Cải tiến: Sử dụng file cấu hình tạm thời (.my.cnf) hoặc biến môi trường để truyền mật khẩu, tránh hiện plain-text trong danh sách tiến trình.
+
+#quick: Tham số này bắt buộc mysqldump lấy dữ liệu từ server về và ghi ra đĩa ngay lập tức từng dòng một (row by row). Nếu không có nó, mysqldump có thể cố tải cả bảng vào RAM trước khi ghi, gây tràn RAM (OOM) nếu VPS yếu và database lớn.
+#quote-names: Đảm bảo các tên bảng/cột là từ khóa đặc biệt (như GROUP, ORDER...) được bao bọc kỹ lưỡng, tránh lỗi cú pháp khi restore.
+TEMP_CNF=$(mktemp)
+chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+cat >"$TEMP_CNF" <<EOF
+[client]
+user=${DB_User_web}
+password=${DB_Password_web}
+host=localhost
+max_allowed_packet=1G
+default-character-set=utf8mb4
+
+[mysqldump]
+quick
+quote-names
+max_allowed_packet=1G
+EOF
+
 #--ssl-verify-server-cert=false thêm để nếu như có làm sai múi giờ thì vẫn có thể dump sql
 if [[ $sql_gz = '1' ]]; then
-  mariadb-dump -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
+  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
 elif [[ $sql_gz = '2' ]]; then
-  mariadb-dump -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst
+  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst
 else
-  mariadb-dump -u "$DB_User_web" -p"$DB_Password_web" "$DB_Name_web" --ssl-verify-server-cert=false >/usr/local/backup-website/$NAME/$NAME$timedate.sql
+  mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false >/usr/local/backup-website/$NAME/$NAME$timedate.sql
 fi
+
+rm -rf $TEMP_CNF
 
 if [[ ! -f /usr/local/backup-website/$NAME/$NAME$timedate.sql && ! -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz && ! -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.zst ]]; then
   _runloi "$sao_luu_database website $NAME"
