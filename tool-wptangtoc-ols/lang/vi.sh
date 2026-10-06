@@ -436,3 +436,5 @@ dang_xay_ra_su_co="Đang gặp sự cố"
 
 #service menu ben trong
 tinh_trang_hoat_dong_cac_service_hien_tai="Tình trạng hoạt động các service hiện tại"
+
+add_ons="add ons"
