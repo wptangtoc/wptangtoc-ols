@@ -3,6 +3,7 @@ import re
 import time
 import statistics
 import sys
+import os
 
 def xac_dinh_isp(ip):
     """Xác định nhà cung cấp dịch vụ dựa trên địa chỉ IP."""
@@ -88,9 +89,9 @@ def main():
     jitter_toi_da = 20  # Jitter tối đa
     thoi_gian_chay = 60
 
-    print("=" * 72)
-    print("| Kiểm tra độ ổn định của mạng                                    |")
-    print("=" * 72)
+    print("─" * 79)
+    print("Kiểm tra độ ổn định của mạng")
+    print("─" * 79)
     print(f"Chạy kiểm tra ping đến các máy chủ DNS trong {thoi_gian_chay} giây.")
     print("Kiểm tra: mất gói, độ trễ, và jitter...")
 
@@ -162,17 +163,16 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n\n" + "─" * 78)
+        print("\n\n" + "─" * 79)
         print("⚠ TIẾN TRÌNH ĐÃ BỊ HỦY BỞI NGƯỜI DÙNG (Ctrl+C)")
-        print("─" * 78)
+        print("─" * 79)
         
-        # Xử lý trả về menu WPTangToc nếu người dùng chạy từ menu (có đối số "98")
+        # Xử lý trả về menu WPTangToc
         if len(sys.argv) > 1 and sys.argv[1] == "98":
             try:
-                subprocess.run(["/etc/wptt/wptt-tai-nguyen-main", "1"], check=True)
-            except FileNotFoundError:
-                print("Lỗi: Không tìm thấy file /etc/wptt/wptt-tai-nguyen-main")
-            except Exception as e:
+                # Dùng os.execl để thay thế hoàn toàn tiến trình Python bằng Bash Menu
+                os.execl("/bin/bash", "bash", "/etc/wptt/wptt-tai-nguyen-main", "1")
+            except Exception:
                 pass
                 
-        sys.exit(130) # 130 là mã thoát chuẩn của Linux cho SIGINT (Ctrl+C)
+        sys.exit(130) # 130 là mã thoát chuẩn của Linux cho SIGINT
