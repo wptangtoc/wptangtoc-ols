@@ -1,3 +1,18 @@
+# WPTangToc OLS v8.1.3
+
+### 🛠️ Tối ưu hệ thống & Bảo mật
+* **Cơ chế Atomic Delete cho LSCache:** Chuyển đổi sang phương thức xóa nguyên tử (atomic) khi dọn dẹp bộ nhớ đệm dung lượng lớn, loại bỏ hoàn toàn tình trạng nghẽn I/O (Disk I/O Spike) gây đơ máy chủ.
+* **Tối ưu dọn dẹp Cache WordPress:** Tăng tốc quy trình xóa cache website mượt mà, hạn chế chiếm dụng tài nguyên hệ thống.
+* **Khóa biến môi trường thực thi:** Tự động loại bỏ các biến nhạy cảm (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `BASH_ENV`, `ENV`, `CDPATH`) nhằm ngăn chặn nguy cơ chèn mã độc và tấn công leo thang đặc quyền.
+* **Bảo mật cài đặt OpenLiteSpeed (nhánh RHEL/AlmaLinux):** Loại bỏ cơ chế tải/thực thi shell trực tiếp (`curl | bash`), chuyển sang phương thức xác thực an toàn nhằm phòng chống giả mạo nguồn tải.
+* **Chuẩn hóa System & Print Log:** Đồng bộ định dạng log hệ thống và giao diện hiển thị, giúp quản trị viên dễ dàng theo dõi trạng thái máy chủ cũng như xử lý sự cố (troubleshooting) nhanh chóng.
+
+### 🐛 Sửa lỗi
+* **Kiểm soát cấu hình PHP-CLI Domain:** Bổ sung cơ chế phát hiện và xử lý ngoại lệ cho `php-cli-domain-config`, tránh xung đột hoặc gián đoạn tiến trình khi cấu hình môi trường PHP riêng lẻ cho từng tên miền.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## 🔖 WPTangToc OLS v8.1.2.9 Release Notes
 
 Bản phát hành **WPTangToc OLS v8.1.2.9** tập trung vào việc gia cố bảo mật môi trường thực thi, chuẩn hóa cơ chế ghi log hệ thống và tối ưu hóa hiệu năng xử lý cache cho WordPress.
