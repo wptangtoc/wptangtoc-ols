@@ -24,7 +24,7 @@ clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Tải file backup từ Telegram${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-echo "Tải file backup từ Telegram: $(date '+%d-%m-%Y %H:%M')" >>/var/log/wptangtoc-ols.log
+wptt_logs "INFO" "Tải file backup từ Telegram"
 
 . /etc/wptt/tenmien
 lua_chon_NAME "Download file backup từ Telegram"
