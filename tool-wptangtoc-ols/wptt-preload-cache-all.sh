@@ -50,14 +50,15 @@ function echoB {
   echo -e "\033[1;3;94m${1}\033[0m"
 }
 function echoCYAN {
-  FLAG=$1
+  local FLAG="$1"
   shift
-  echo -e "\033[1;36m$FLAG\033[0m$@"
+  echo -e "\033[1;36m$FLAG\033[0m$*"
 }
+
 function echow {
-  FLAG=${1}
+  local FLAG="$1"
   shift
-  echo -e "\033[1m${EPACE}${FLAG}\033[0m${@}"
+  echo -e "\033[1m${EPACE}${FLAG}\033[0m$*"
 }
 
 function help_message() {

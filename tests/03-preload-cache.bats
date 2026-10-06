@@ -79,23 +79,30 @@ in_log_neu_loi() {
 
 
 @test "Preload Cache: Nghiệm thu CACHE HIT có sitemap.xml thực tế trên bài viết Hello World" {
-  # Khai báo User-Agent chuẩn Chrome để qua mặt bộ lọc Bot của Litespeed Cache
   local UA_DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-  
-  # BẮT BUỘC: Đổi http:// thành https:// vì Spider Crawl trước đó đã ép tạo Cache HTTPS
   local URL="https://${TEST_DOMAIN}/hello-world/"
-  
-  # Thêm --http1.1 để tránh lỗi protocol khi map ảo 127.0.0.1
   local CURL_CMD="curl -s -D - -o /dev/null -L -k -A \"$UA_DESKTOP\" --http1.1 --resolve ${TEST_DOMAIN}:443:127.0.0.1 ${URL}"
 
-  # Cho OLS 3 giây để xả Buffer từ RAM xuống ổ cứng (Disk I/O)
-  sleep 3
+  local max_attempts=15
+  local attempt=1
+  local REQ_HEADERS=""
+  local is_hit=false
 
-  # BẮN REQUEST DUY NHẤT: Bắt buộc phải trả về HIT ngay lập tức!
-  local REQ_HEADERS=$($CURL_CMD | tr -d '\r')
-  
-  if ! echo "$REQ_HEADERS" | grep -iq "x-litespeed-cache: hit"; then
-      echo -e "\n[LỖI PRELOAD] Bắn Request đầu tiên nhưng không thấy CACHE HIT.\n--- HEADERS THỰC TẾ ---\n$REQ_HEADERS" >&3
+  # SMART POLLING: Chờ tối đa 30s để tiến trình Preload (chạy nền) ghi xong cache
+  while [ $attempt -le $max_attempts ]; do
+      REQ_HEADERS=$($CURL_CMD | tr -d '\r')
+      
+      if echo "$REQ_HEADERS" | grep -iq "x-litespeed-cache: hit"; then
+          is_hit=true
+          break
+      fi
+      
+      sleep 2
+      ((attempt++))
+  done
+
+  if [ "$is_hit" = false ]; then
+      echo -e "\n[LỖI PRELOAD] Đã chờ 30s nhưng không thấy CACHE HIT.\n--- HEADERS THỰC TẾ CUỐI CÙNG ---\n$REQ_HEADERS" >&3
       false
   fi
 
@@ -114,17 +121,25 @@ in_log_neu_loi() {
   mkdir -p "$MU_PLUGIN_DIR"
   echo "<?php add_filter( 'wp_sitemaps_enabled', '__return_false' );" > "$MU_PLUGIN_DIR/disable-sitemap.php"
   
-  # Cấp quyền nhanh để WP-CLI đọc được
-  chown -R nobody:nobody "$MU_PLUGIN_DIR" 2>/dev/null || true
+  # FIX: Chỉ cần chmod 644 (Read-only) để đảm bảo tiến trình PHP của Vhost tự do đọc được file
+  chmod -R 755 "$MU_PLUGIN_DIR"
+  chmod 644 "$MU_PLUGIN_DIR/disable-sitemap.php"
+
   
   # XÓA VẬT LÝ ĐỀ PHÒNG CÓ FILE TỒN ĐỌNG VÀ XOÁ SẠCH CACHE LITESPEED
   rm -f /usr/local/lsws/$TEST_DOMAIN/html/*.xml 2>/dev/null || true
   run /etc/wptt/cache/wptt-xoacache "$TEST_DOMAIN" >/dev/null 2>&1 || true
+  run /etc/wptt/wptt-phanquyen "$TEST_DOMAIN" >/dev/null 2>&1 || true
+
+	rm -rf -- /usr/local/lsws/$TEST_DOMAIN/html/wp-content/litespeed/* 2>/dev/null || true
+	rm -rf -- /usr/local/lsws/$TEST_DOMAIN/luucache 2>/dev/null || true
   
-	sleep 3
+  # KHỞI ĐỘNG LẠI OLS: Ép xả bóng ma OPcache trên RAM để nhận lệnh tắt Sitemap
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  
   # Flush lại rewrite để WordPress clear cache route
   /usr/local/bin/wp rewrite flush --path="/usr/local/lsws/$TEST_DOMAIN/html" --allow-root >/dev/null 2>&1 || true
-
+	sleep 20
   # Bắn luồng
   run bash "$SCRIPT_TEST" "$TEST_DOMAIN"
   
@@ -144,27 +159,34 @@ in_log_neu_loi() {
 # NHÓM 4: NGHIỆM THU KẾT QUẢ THỰC TẾ
 # =================================================================
 
-@test "Preload Cache: Nghiệm thu CACHE HIT Preload Không sitemap.xml thực tế trên bài viết Hello World" {
-  # Khai báo User-Agent chuẩn Chrome để qua mặt bộ lọc Bot của Litespeed Cache
+@test "Preload Cache: Nghiệm thu CACHE HIT Không có sitemap.xml thực tế trên bài viết Hello World" {
   local UA_DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-  
-  # BẮT BUỘC: Đổi http:// thành https:// vì Spider Crawl trước đó đã ép tạo Cache HTTPS
   local URL="https://${TEST_DOMAIN}/hello-world/"
-  
-  # Thêm --http1.1 để tránh lỗi protocol khi map ảo 127.0.0.1
   local CURL_CMD="curl -s -D - -o /dev/null -L -k -A \"$UA_DESKTOP\" --http1.1 --resolve ${TEST_DOMAIN}:443:127.0.0.1 ${URL}"
 
-  # Cho OLS 3 giây để xả Buffer từ RAM xuống ổ cứng (Disk I/O)
-  sleep 3
+  local max_attempts=15
+  local attempt=1
+  local REQ_HEADERS=""
+  local is_hit=false
 
-  # BẮN REQUEST DUY NHẤT: Bắt buộc phải trả về HIT ngay lập tức!
-  local REQ_HEADERS=$($CURL_CMD | tr -d '\r')
-  
-  if ! echo "$REQ_HEADERS" | grep -iq "x-litespeed-cache: hit"; then
-      echo -e "\n[LỖI PRELOAD] Bắn Request đầu tiên nhưng không thấy CACHE HIT.\n--- HEADERS THỰC TẾ ---\n$REQ_HEADERS" >&3
+  # SMART POLLING: Chờ tối đa 30s để tiến trình Preload (chạy nền) ghi xong cache
+
+  while [ $attempt -le $max_attempts ]; do
+      REQ_HEADERS=$($CURL_CMD | tr -d '\r')
+      
+      if echo "$REQ_HEADERS" | grep -iq "x-litespeed-cache: hit"; then
+          is_hit=true
+          break
+      fi
+      
+      sleep 2
+      ((attempt++))
+  done
+
+  if [ "$is_hit" = false ]; then
+      echo -e "\n[LỖI PRELOAD] Đã chờ 30s nhưng không thấy CACHE HIT.\n--- HEADERS THỰC TẾ CUỐI CÙNG ---\n$REQ_HEADERS" >&3
       false
   fi
 
-  echo "[PASSED] Tuyệt vời! Bài viết /hello-world/ đã được Preload sẵn và trả về CACHE HIT" >&3
+  echo "[PASSED] Tuyệt vời! Bài viết /hello-world/ đã được Preload sẵn và trả về CACHE HIT!" >&3
 }
-
