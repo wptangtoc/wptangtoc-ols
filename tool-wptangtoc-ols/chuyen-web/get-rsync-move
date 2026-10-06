@@ -18,10 +18,21 @@ function huong_dan() {
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 
+if [[ "$1" == '98' ]]; then
+  WPTT_IN_MENU="yes"
+  WPTT_MENU_BACK="/etc/wptt/wptt-domain-main 1"
+fi
+
+
 clear
 print_border_top
 center_text "${C_YELLOW}Chuyển Website ➜ Khởi tạo Website sau di cư (Get Rsync)${C_RESET}"
 print_border_bot
+
+
+wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối tạo thêm Get domain mới."
+wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị sập! Đã hủy thao tác để an toàn!"
+
 
 list_file=$(find /usr/local/lsws/*/html/danh-sach-website-wptangtoc-ols.txt 2>/dev/null | head -n 1)
 domain_them=$(cat "$list_file" 2>/dev/null)
@@ -52,19 +63,54 @@ for filepath in /etc/wptt/vhost/.*.conf; do
 done
 
 # ==============================================================================
+# KHỞI TẠO FILE TẠM VÀ BẪY LỖI (TRAP) DỌN DẸP
+# ==============================================================================
+TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
+chmod 600 "$TEMP_CNF_ROOT"
+WPTT_TMP_IMPORT_SCRIPT="/etc/wptt/tmp/wptt-import-db.sh"
+
+# Bẫy dọn dẹp: Tự động xóa file rác nếu lệnh chạy xong hoặc bị ngắt đột ngột (Ctrl+C)
+trap 'rm -f "$TEMP_CNF_ROOT" "$WPTT_TMP_IMPORT_SCRIPT" 2>/dev/null' EXIT INT TERM
+
+# Tải trước script Import với Timeout chống treo mạng
+curl --connect-timeout 10 -m 30 --tlsv1.3 -s -o "$WPTT_TMP_IMPORT_SCRIPT" "https://wptangtoc.com/giatuan/wptt-import-db"
+
+# ==============================================================================
 # BƯỚC 1: KHỞI TẠO VHOST & SUBFOLDER
 # ==============================================================================
 for NAME in $domain_them; do
   if [[ ! " ${domain_da_co[@]} " =~ " ${NAME} " ]]; then
     _runing "Khởi tạo website: $NAME"
-    . /etc/wptt/domain/wptt-themwebsite "$NAME" >/dev/null 2>&1
+    
+    # CHỐNG VĂNG TIẾN TRÌNH: Dùng bash thay vì source (.) để chặn lệnh exit từ script con
+    bash /etc/wptt/domain/wptt-themwebsite "$NAME" >/dev/null 2>&1
+    
+    # EDGE BUG BYPASS: Kiểm tra xem file cấu hình vhost có thực sự được tạo không
+    if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
+      _runloi "Lỗi: Khởi tạo Vhost cho $NAME thất bại! Đã Bypass (Bỏ qua)."
+      echo ""
+      print_border_bot
+      echo ""
+      continue # Bỏ qua toàn bộ các bước DB phía dưới cho domain lỗi này
+    fi
+
+
+		if [[ ! -f "/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf" ]]; then
+			_runloi "Lỗi: Khởi tạo Vhost cho $NAME thất bại! Đã Bypass (Bỏ qua)."
+			echo ""
+			print_border_bot
+			echo ""
+			continue # Bỏ qua toàn bộ các bước DB phía dưới cho domain lỗi này
+		fi
+
+
     rm -f "/usr/local/lsws/${NAME:?}/html/index.html"
 
     # Xử lý Subfolder (Nếu có)
     sub_file="/usr/local/lsws/$NAME/html/subfolder-wptt.txt"
     if [[ -f "$sub_file" ]]; then
       for thumuc in $(cat "$sub_file"); do
-        . /etc/wptt/domain/wptt-subfolder-website "$NAME" "$thumuc" >/dev/null 2>&1
+        bash /etc/wptt/domain/wptt-subfolder-website "$NAME" "$thumuc" >/dev/null 2>&1
       done
     fi
     _rundone "Khởi tạo website: $NAME"
@@ -72,26 +118,20 @@ for NAME in $domain_them; do
 done
 
 # ==============================================================================
-# BƯỚC 2: XỬ LÝ DATABASE & IMPORT SQL (UX PV TÀNG HÌNH)
+# BƯỚC 2: XỬ LÝ DATABASE & IMPORT SQL (UX PV TÀNG HÌNH + BẮT LỖI PIPEFAIL)
 # ==============================================================================
 INIT_SQL="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET AUTOCOMMIT=0;"
 END_SQL="COMMIT; SET FOREIGN_KEY_CHECKS=1; SET UNIQUE_CHECKS=1; SET AUTOCOMMIT=1;"
 
-#như thêm website cách thứ unset password lên vì vậy phải call lại cho chắc
-. /etc/wptt/.wptt.conf #call lại cho chắc file global main wptt
+. /etc/wptt/.wptt.conf # Call lại file cấu hình gốc
 password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
 [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
 
-# Kiểm tra an toàn cấu hình Root
 if [[ -z "$password_database_root" || -z "$database_admin_username" ]]; then
     echo -e "${C_RED}❌ Lỗi: Không thể lấy được thông tin quản trị viên Database từ /etc/wptt/.wptt.conf!${C_RESET}"
     exit 1
 fi
 
-TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
-chmod 600 "$TEMP_CNF_ROOT"
-
-# Tối ưu bọc ngoặc kép cho User và Password để xử lý ký tự đặc biệt
 cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user="${database_admin_username}"
@@ -105,8 +145,8 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
-trap "rm -f ${TEMP_CNF_ROOT}" EXIT
-unset password_database_root database_admin_password #giải biến
+
+unset password_database_root database_admin_password # Giải biến root bảo mật
 
 for NAME in $domain_them; do
   sql_file="/usr/local/lsws/$NAME/html/giatuan-wptangtoc.sql"
@@ -115,53 +155,79 @@ for NAME in $domain_them; do
     print_border_top "${C_GREEN}"
     left_text "➜ Get xử lý Website: ${C_BOLD_WHITE}$NAME${C_RESET}"
 
-    # Nạp cấu hình Database vừa tạo
+    # CHỐNG RÒ RỈ BIẾN (VARIABLE LEAK): Xóa rác biến từ vòng lặp trước đó
+    unset DB_Name_web DB_User_web DB_Password_web password_database_website_giai_ma
+
+    # Nạp cấu hình Database vừa được tạo ở Bước 1
     . "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null
 
-    #begin local sql bảo mật
-    # 1. Khai báo hàm xử lý lỗi dùng chung ngay tại chỗ
     wptt_abort_db_injection() {
         _runloi "$1"
         sleep 2
         continue
     }
 
-    # 2. Thực thi kiểm tra 3 lớp bằng toán tử ngắn mạch (&&)
     [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
     [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
 
-    password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null) #giải mã
-    [[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web" #không mã hoá trả tuơng thích nguợc
+    password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
+    [[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
 
-    [[ "$password_database_website_giai_ma" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu USer Database chứa ký tự cấm (khoảng trắng, dấu nháy, backtick...)!" "$1"
-    #end local sql bảo mật
+    [[ "$password_database_website_giai_ma" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu User Database chứa ký tự cấm!" "$1"
 
-    # Tạo Database & User (Thêm cờ --skip-auto-rehash và backtick bao tên DB)
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --skip-auto-rehash -e "DROP DATABASE IF EXISTS \`${DB_Name_web}\`; CREATE DATABASE \`${DB_Name_web}\`;"
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --skip-auto-rehash -e "DROP USER IF EXISTS '${DB_User_web}'@'localhost'; CREATE USER '${DB_User_web}'@'localhost' IDENTIFIED BY '${password_database_website_giai_ma}'; GRANT ALL PRIVILEGES ON \`${DB_Name_web}\`.* TO '${DB_User_web}'@'localhost'; FLUSH PRIVILEGES;"
+    # Khởi tạo Database & User trong 1 luồng Heredoc duy nhất
+    if ! mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false <<EOF_SQL
+DROP DATABASE IF EXISTS \`${DB_Name_web}\`;
+CREATE DATABASE IF NOT EXISTS \`${DB_Name_web}\`;
+DROP USER IF EXISTS '${DB_User_web}'@'localhost';
+CREATE USER IF NOT EXISTS '${DB_User_web}'@'localhost' IDENTIFIED BY '${password_database_website_giai_ma}';
+GRANT ALL PRIVILEGES ON \`${DB_Name_web}\`.* TO '${DB_User_web}'@'localhost';
+FLUSH PRIVILEGES;
+EOF_SQL
+    then
+      _runloi "Lỗi khởi tạo Database/User cho website $NAME! Đã Bypass (Bỏ qua)."
+      echo ""
+      print_border_bot
+      echo ""
+      continue
+    fi
 
-    # Import SQL siêu tốc với Giao diện PV Tàng Hình
+    # Import SQL siêu tốc với PV Tàng Hình và BẮT LỖI PIPELINE
     _runing "Import website $NAME"
+    import_success=true
 
+    set -o pipefail
     if command -v pv &>/dev/null; then
-      (
+      if ! (
         echo "$INIT_SQL"
-        # Bỏ cờ -n, thay bằng cấu hình vẽ biểu đồ. File local nên PV tự tính Size không cần truyền -s
         pv -N "Import Database" -p -t -e -r -b -w 78 "$sql_file"
         echo "$END_SQL"
-      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --skip-auto-rehash "$DB_Name_web" 2>/dev/null
-      
+      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false "$DB_Name_web" 2>/dev/null; then
+        import_success=false
+      fi
     else
-      (
+      if ! (
         echo "$INIT_SQL"
         cat "$sql_file"
         echo "$END_SQL"
-      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --skip-auto-rehash "$DB_Name_web" 2>/dev/null
+      ) | mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false "$DB_Name_web" 2>/dev/null; then
+        import_success=false
+      fi
     fi
-    # Dọn dẹp & Phân quyền
+    set +o pipefail
+
+    if [ "$import_success" = false ]; then
+      _runloi "Lỗi Import SQL cho $NAME (File hỏng/MariaDB sập)! Đã Bypass (Bỏ qua)."
+      echo ""
+      print_border_bot
+      echo ""
+      continue
+    fi
+
+    # Dọn dẹp & Phân quyền (Chạy Subprocess bash để an toàn)
     rm -f "${sql_file:?}"
-    . /etc/wptt/db/wptt-ket-noi "$NAME" >/dev/null 2>&1
-    . /etc/wptt/wptt-phanquyen "$NAME" >/dev/null 2>&1
+    bash /etc/wptt/db/wptt-ket-noi "$NAME" >/dev/null 2>&1
+    bash /etc/wptt/wptt-phanquyen "$NAME" >/dev/null 2>&1
 
     if [[ -d /usr/local/lsws/$NAME/logs ]]; then
       sed -i -e '/^errorlog /,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
@@ -186,7 +252,6 @@ accesslog $VH_ROOT/logs/access.log {
     echo -en "\033[1A\033[2K\r"
     print_border_bot
     echo ""
-    # Cấu hình Logs cho Vhost
   fi
 
   # Xử lý Website trong Subfolder (nếu có)
@@ -195,12 +260,13 @@ accesslog $VH_ROOT/logs/access.log {
     wp_configs=$(find "/usr/local/lsws/$NAME/html" -type f -name 'wp-config.php')
     for config_path in $wp_configs; do
       dir_path=$(dirname "$config_path")
-      # Bỏ qua folder gốc
       [[ "$dir_path" == "/usr/local/lsws/$NAME/html" ]] && continue
 
       if [[ -f "$dir_path/giatuan-wptangtoc.sql" ]]; then
         _runing "Đang xử lý Sub-Website tại: $(basename "$dir_path")"
-        (cd "$dir_path" && curl --tlsv1.3 -sO https://wptangtoc.com/giatuan/wptt-import-db && bash wptt-import-db >/dev/null 2>&1)
+        if [[ -f "$WPTT_TMP_IMPORT_SCRIPT" ]]; then
+            (cd "$dir_path" && bash "$WPTT_TMP_IMPORT_SCRIPT" >/dev/null 2>&1)
+        fi
         rm -f "${dir_path:?}/giatuan-wptangtoc.sql"
         _rundone "Đang xử lý Sub-Website tại: $(basename "$dir_path")"
       fi
@@ -208,7 +274,7 @@ accesslog $VH_ROOT/logs/access.log {
     rm -f "${sub_file:?}"
   fi
 
-  if grep -q 'begin-proxy-wptangtoc' "/usr/local/lsws/$NAME/html/.htaccess"; then #sửa lỗi nỡ đâu người dùng rsync họ chuyển lại trong lúc họ đang dùng chế độ proxy nguợc chuyển website GHOST chuyển nhà
+  if grep -q 'begin-proxy-wptangtoc' "/usr/local/lsws/$NAME/html/.htaccess"; then
     sed -i -e '/^#begin-proxy-wptangtoc/,/^#end-proxy-wptangtoc$/d' /usr/local/lsws/"$NAME"/html/.htaccess
   fi
 
@@ -217,14 +283,12 @@ done
 chown root:root /usr/local/lsws
 wptt_smart_reload_lsws >/dev/null 2>&1
 
-rm -f "${TEMP_CNF_ROOT:?}"
 rm -f wptt-rsync-move ~/wptt-rsync-move
 
 # Lấy IP Máy chủ
 ip=$(curl -skf --connect-timeout 5 "https://ipv4.icanhazip.com" || curl -skf --connect-timeout 5 "https://checkip.amazonaws.com")
 [[ -z "$ip" ]] && ip=$(curl -sk --connect-timeout 5 "https://ipv6.icanhazip.com")
 
-#check xem hệ thống có đang dùng ipv6 không nếu có thì print ra
 unset ipv6
 if grep -q 'address.*\[ANY\]' /usr/local/lsws/conf/httpd_config.conf; then
     ipv6=$(curl -s --connect-timeout 5 --max-time 10 https://ipv6.icanhazip.com)
@@ -233,11 +297,11 @@ fi
 print_border_top "${C_GREEN}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT NẠP TẤT CẢ WEBSITE VÀO HỆ THỐNG${C_RESET}"
 print_border_mid "${C_GREEN}"
-left_text "Quá trình di cư và khởi tạo đã thành công tốt đẹp!" 2
+left_text "Quá trình di cư và khởi tạo đã hoàn tất!" 2
 print_border_mid "${C_GREEN}"
 left_text "Địa chỉ IPv4 máy chủ mới : ${C_YELLOW}$ip${C_RESET}" 2
 
-if [[ -n "$ipv6" ]];then
+if [[ -n "$ipv6" ]]; then
     left_text "Địa chỉ IPv6 máy chủ mới : ${C_YELLOW}$ipv6${C_RESET}" 2
 fi
 
