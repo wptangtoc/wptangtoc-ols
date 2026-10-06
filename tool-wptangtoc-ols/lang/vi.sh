@@ -248,6 +248,7 @@ xoa_php_extension="Xóa PHP extension"
 cai_dat_zip_php_extension="Cài đặt ZIP PHP extension"
 cau_hinh_max_excution_time="Cấu hình max execution time"
 cau_hinh_memory_litmit="Cấu hình memory_limit"
+ban_co_the="bạn có thể"
 
 #quan ly logs menu main
 xem_error_log_server="Xem error log server"
