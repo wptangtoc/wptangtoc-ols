@@ -36,12 +36,6 @@ systemctl mask fail2ban
 mkdir -p /usr/local/lsws/$NAME/bao-mat
 cp -f /etc/wptt/bao-mat/nftables/anti2.py /usr/local/lsws/$NAME/bao-mat/anti.py
 
-if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
-  systemctl restart crond
-else
-  systemctl restart cron
-fi
-
 chmod +x /usr/local/lsws/$NAME/bao-mat/anti.py
 
 # sed -i '/log_file_path =/d' /usr/local/lsws/$NAME/bao-mat/anti.py
@@ -116,4 +110,9 @@ fi
 
 systemctl restart nftables
 
+if $(cat /etc/*release | grep -q "AlmaLinux\|Rocky\|CentOS"); then
+  systemctl restart crond
+else
+  systemctl restart cron
+fi
 echo "hoàn tất thiết lập nftables chống ddos"
