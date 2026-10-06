@@ -1,8 +1,8 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
-# @since: 2025
+# @description: Sao lưu Database
+# @since: 2026
 
 function huong_dan() {
   Tính năng Sao lưu database [Database Backup] là quá trình tạo ra một bản sao của toàn bộ cơ sở dữ liệu của bạn – bao gồm cấu trúc [các bảng, cột], dữ liệu chứa trong đó, các chỉ mục [index] – rồi lưu trữ bản sao đó ở một nơi an toàn. Khôi phục là cặp đôi không thể thiếu cho sự an toàn của dữ liệu.
@@ -25,7 +25,6 @@ if [[ $ngon_ngu = '' ]]; then
 fi
 . /etc/wptt/lang/$ngon_ngu.sh
 . /etc/wptt/core-functions
-
 . /etc/wptt/echo-color
 
 if [[ "$1" == '98' ]]; then
@@ -72,18 +71,41 @@ fi
 ggdriver=$2
 ggdriver2=$3
 
+# ==============================================================================
+# HÀM PHỤ TRỢ: NHẬN DIỆN CLOUD HIỆN TẠI
+# ==============================================================================
+get_cloud_name() {
+  local conf="/root/.config/rclone/rclone.conf"
+  if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$conf" 2>/dev/null; then
+    echo "OneDrive"
+  elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$conf" 2>/dev/null; then
+    echo "S3 Storage"
+  else
+    echo "Google Drive"
+  fi
+}
+
+get_cloud_dir() {
+  local conf="/root/.config/rclone/rclone.conf"
+  if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$conf" 2>/dev/null; then
+    echo "wptangtoc-ols-backup"
+  elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
+    echo "wptangtoc-ols-backup"
+  else
+    echo "wptangtoc_ols_backup"
+  fi
+}
+
+# ==============================================================================
+# XỬ LÝ KHI CHỌN ALL WEBSITE
+# ==============================================================================
 if [[ $NAME = 'Tất cả website' ]]; then
   if [[ -z $3 ]]; then #doi số 3 không có giá trị auto mới hỏi
     unset ggdriver ggdriver2 checkdathietlap
-    checkdathietlap=$(grep -rnw '/root/.config/rclone/rclone.conf' -e "wptangtoc" >>/dev/null 2>&1 && echo 1)
+    checkdathietlap=$(grep -q '\[wptangtoc\]' ~/.config/rclone/rclone.conf 2>/dev/null && echo 1)
     if [[ $checkdathietlap ]]; then
-      if [[ $(cat ~/.config/rclone/rclone.conf | grep 'onedrive') ]]; then
-        echo "$ban_co_muon file backup uploads OneDrive?"
-        drive_name="OneDrive"
-      else
-        echo "$ban_co_muon file backup uploads Google Drive?"
-        drive_name="Google Drive"
-      fi
+      drive_name=$(get_cloud_name)
+      echo "$ban_co_muon file backup uploads $drive_name?"
 
       prompt="$nhap_lua_chon_cua_ban [1-2]: "
       ggdriver="n"
@@ -91,26 +113,12 @@ if [[ $NAME = 'Tất cả website' ]]; then
       PS3="$prompt"
       select opt in "${options[@]}"; do
         case "$REPLY" in
-        1)
-          ggdriver="1998"
-          break
-          ;;
-
-        2)
-          ggdriver="n"
-          break
-          ;;
-
-        $((${#options[@]} + 1)))
-          printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-          break
-          ;;
-        *)
-          printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-          break
-          ;;
+        1) ggdriver="1998"; break ;;
+        2) ggdriver="n"; break ;;
+        *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
         esac
       done
+      
       if [[ "$ggdriver" = "1998" ]]; then
         kiem_tra_xem_cloud_drive_co_hoat_dong_khong=$(rclone about wptangtoc: 2>/dev/null | grep 'Free:')
         if [[ $kiem_tra_xem_cloud_drive_co_hoat_dong_khong ]]; then
@@ -121,24 +129,9 @@ if [[ $NAME = 'Tất cả website' ]]; then
           PS3="$prompt"
           select opt in "${options[@]}"; do
             case "$REPLY" in
-            1)
-              ggdriver2="1998"
-              break
-              ;;
-
-            2)
-              ggdriver2="12345"
-              break
-              ;;
-
-            $((${#options[@]} + 1)))
-              printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-              break
-              ;;
-            *)
-              printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-              break
-              ;;
+            1) ggdriver2="1998"; break ;;
+            2) ggdriver2="12345"; break ;;
+            *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
             esac
           done
         fi
@@ -171,7 +164,7 @@ if [[ $NAME = 'Tất cả website' ]]; then
 
   check_menu_wptangtoc_active=$1
   if [[ $check_menu_wptangtoc_active = "98" || $check_menu_wptangtoc_active = "97" ]]; then
-    END_TIMESTAMP_FILE=$(mktemp) #kết thúc file temp để xác định những website nào đã được thực thi backup thành công
+    END_TIMESTAMP_FILE=$(mktemp) #kết thúc file temp
     clear
     echo "==================================================================="
     echo "Hoàn tất backup $sao_luu_tat_ca_website"
@@ -182,7 +175,7 @@ if [[ $NAME = 'Tất cả website' ]]; then
       i=1
 
       if [[ -d "$path" ]]; then
-        if [[ $ggdriver2 != '1998' ]]; then #xac nhan da xoa tai local thì không phải check điều kiện file đã được khhởi tạo chưa
+        if [[ $ggdriver2 != '1998' ]]; then
           if [[ $(find "/usr/local/backup-website/$domain" -type f -newer "$START_TIMESTAMP_FILE" ! -newer "$END_TIMESTAMP_FILE" -ls) ]]; then
             echo "Hoàn tất backup database website: $domain"
           fi
@@ -191,14 +184,16 @@ if [[ $NAME = 'Tất cả website' ]]; then
         fi
       fi
     done
-    if [[ $ggdriver2 != '1998' ]]; then #xac nhan da xoa tai local thì không phải check điều kiện file đã được khhởi tạo chưa
+    
+    if [[ $ggdriver2 != '1998' ]]; then
       echo "==================================================================="
-      echo "Dung lượng thư mục trước khi sao lưu	: $before_optimize_full_all"
-      echo "Dung lượng thư mục sau khi sao lưu	: $(du -hs /usr/local/backup-website)"
+      echo "Dung lượng thư mục trước khi sao lưu  : $before_optimize_full_all"
+      echo "Dung lượng thư mục sau khi sao lưu    : $(du -hs /usr/local/backup-website)"
       echo "==================================================================="
     fi
 
-    if [[ $ggdriver = '1998' ]]; then #xac nhan có uploads drive
+    if [[ $ggdriver = '1998' ]]; then
+      drive_name=$(get_cloud_name)
       echo "Dung lượng $drive_name của bạn trước khi sao lưu: $dung_luong_drive_truoc_khi_sao_luu"
       echo "Dung lượng $drive_name của bạn sau khi sao lưu: $(rclone size wptangtoc: 2>/dev/null | grep 'size' | cut -f2 -d ':' | cut -f1 -d '(' | head -1)"
     fi
@@ -208,8 +203,6 @@ if [[ $NAME = 'Tất cả website' ]]; then
     if [[ $check_menu_wptangtoc_active = "98" ]]; then
       exec /etc/wptt/wptt-db-main 1
     fi
-
-    check_menu_wptangtoc_active=$1
     if [[ $check_menu_wptangtoc_active = "97" ]]; then
       exec /etc/wptt/wptt-backup-restore-main 1
     fi
@@ -227,7 +220,6 @@ if [[ "$NAME" = "0" || "$NAME" = "" ]]; then
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-db-main 1
   fi
-  check_menu_wptangtoc_active=$1
   if [[ $check_menu_wptangtoc_active = "97" ]]; then
     exec /etc/wptt/wptt-backup-restore-main 1
   fi
@@ -247,16 +239,12 @@ mkdir -p "/usr/local/backup-website/$NAME"
 _runing "$sao_luu_database website $NAME"
 
 # ==============================================================================
-# BẮT ĐẦU CƠ CHẾ LOCKING (CHỐNG ĐỤNG ĐỘ TIẾN TRÌNH BACKUP)
+# BẮT ĐẦU CƠ CHẾ LOCKING
 # ==============================================================================
 if [[ -n "$NAME" && "$NAME" != "Tất cả website" && "$NAME" != "98" ]]; then
-  # 1. Định nghĩa file khóa riêng biệt cho từng domain
-  LOCK_FILE="/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME}.lock" #ổ khoá riêng biệt của tiến trình
-
-  # 2. Gán File Descriptor 200 cho file khóa này
+  LOCK_FILE="/tmp/wptt_lock_sao_luu_khoi_phuc_${NAME}.lock"
   exec 200>"$LOCK_FILE"
 
-  # 3. Thử lấy khóa (Non-blocking với -n). Nếu thất bại sẽ chui vào vòng if
   if ! flock -n 200; then
     echo ""
     echo "========================================================================="
@@ -272,8 +260,7 @@ if [[ -n "$NAME" && "$NAME" != "Tất cả website" && "$NAME" != "98" ]]; then
     if [[ $check_menu_wptangtoc_active = "97" ]]; then
       exec /etc/wptt/wptt-backup-restore-main 1
     fi
-    return 2>/dev/null
-    exit 1
+    return 2>/dev/null || exit 1
   fi
 fi
 # ==============================================================================
@@ -282,16 +269,8 @@ fi
 
 timedate=$(date +%Hgio\_%d\_%m\_%Y)
 
-#TẠO FILE AUTH TẠM THỜI (BẢO MẬT)
-# Thay vì dùng -p$PASS, ta tạo file .my.cnf tạm, cải tiến bảo mật để tránh xem trình
-
-#Hiện tại: Đoạn lệnh backup mysqldump -u ... -p"..." truyền mật khẩu trực tiếp vào dòng lệnh. Nếu ai đó chạy lệnh ps aux hoặc htop đúng lúc backup diễn ra, họ có thể nhìn thấy mật khẩu database.
-#Cải tiến: Sử dụng file cấu hình tạm thời (.my.cnf) hoặc biến môi trường để truyền mật khẩu, tránh hiện plain-text trong danh sách tiến trình.
-
-#quick: Tham số này bắt buộc mysqldump lấy dữ liệu từ server về và ghi ra đĩa ngay lập tức từng dòng một (row by row). Nếu không có nó, mysqldump có thể cố tải cả bảng vào RAM trước khi ghi, gây tràn RAM (OOM) nếu VPS yếu và database lớn.
-#quote-names: Đảm bảo các tên bảng/cột là từ khóa đặc biệt (như GROUP, ORDER...) được bao bọc kỹ lưỡng, tránh lỗi cú pháp khi restore.
 TEMP_CNF=$(mktemp)
-chmod 600 "$TEMP_CNF" # Chỉ root mới đọc được
+chmod 600 "$TEMP_CNF"
 cat >"$TEMP_CNF" <<EOF
 [client]
 user=${DB_User_web}
@@ -309,25 +288,14 @@ EOF
 
 trap "rm -f $TEMP_CNF" EXIT
 
-#--ssl-verify-server-cert=false thêm để nếu như có làm sai múi giờ thì vẫn có thể dump sql
-# if [[ $sql_gz = '1' ]]; then
-#   mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | gzip >/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
-# elif [[ $sql_gz = '2' ]]; then
-#   mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | zstd >/usr/local/backup-website/$NAME/$NAME$timedate.sql.zst
-# else
-#   mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false >/usr/local/backup-website/$NAME/$NAME$timedate.sql
-# fi
-
 # ==================================================================
-# BƯỚC 1: TÍNH TOÁN DUNG LƯỢNG (Giữ nguyên hệ số 95% cho mượt)
+# BƯỚC 1: TÍNH TOÁN DUNG LƯỢNG
 # ==================================================================
 RAW_SIZE=$(mariadb --defaults-extra-file="$TEMP_CNF" -N -e "SELECT SUM(data_length) FROM information_schema.TABLES WHERE table_schema='$DB_Name_web'")
 if [[ -z "$RAW_SIZE" || "$RAW_SIZE" == "NULL" ]]; then RAW_SIZE=1024; fi
 ADJUSTED_SIZE=$((RAW_SIZE * 95 / 100))
 
 if command -v pv &>/dev/null; then
-  # -q: Không cần thiết lắm, nhưng ở đây ta dùng các tham số hiển thị chuẩn
-  # Quan trọng: Không dùng -S (Stop) nữa để ta tự xử lý việc xóa
   PV_CMD="pv -s $ADJUSTED_SIZE -N 'Exporting' -p -t -e -w 80"
 else
   PV_CMD="cat"
@@ -336,10 +304,8 @@ fi
 _runing "$sao_luu_database website $NAME"
 echo ""
 # ==================================================================
-# BƯỚC 2: THỰC THI
+# BƯỚC 2: THỰC THI DUMP DATABASE
 # ==================================================================
-
-#ionice Rảnh rỗi mới làm tránh quá tải ổ cứng, cho disk ổ cứng rảnh rỗi từ từ thực thi xếp hàng quyền ưu tiên truy cập Ổ cứng (Disk I/O). chế độ -c 3 là chế độ yêu tiên thấp nhất
 
 if [[ $sql_gz = '1' ]]; then
   ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | bash -c "$PV_CMD" | ionice -c 3 nice -n 19 gzip >"/usr/local/backup-website/$NAME/$NAME$timedate.sql.gz"
@@ -349,14 +315,7 @@ else
   ionice -c 3 nice -n 19 mariadb-dump --defaults-extra-file="$TEMP_CNF" "$DB_Name_web" --ssl-verify-server-cert=false | ionice -c 3 nice -n 19 bash -c "$PV_CMD" >"/usr/local/backup-website/$NAME/$NAME$timedate.sql"
 fi
 
-# --- GIẢI THÍCH MÃ LỆNH ---
-# \033[1A : Di chuyển con trỏ lên 1 dòng (Để quay lại dòng chứa thanh pv)
-# \r      : Về đầu dòng
-# \033[K  : Xóa trắng toàn bộ dòng đó
 echo -ne "\033[1A\r\033[K"
-
-# Kiểm tra lại lần nữa cho chắc (nếu pv bị lag in ra 2 dòng)
-# Lệnh này để dọn dẹp thêm 1 lần nữa cho sạch bóng
 echo -ne "\033[1A\r\033[K"
 
 rm -rf $TEMP_CNF
@@ -367,7 +326,7 @@ fi
 
 if [[ $sql_gz = '1' ]]; then
   check_file_error=$(du -c /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz | awk '{print $1}' | sed '1d')
-  if ((${check_file_error:-0} < 3)); then #${check_file_error:-0} dùng kiểu này Nếu file SQL không tồn tại (do lỗi tải lên, sai đường dẫn, hoặc file chứa khoảng trắng không được bọc ngoặc kép), lệnh du sẽ ném ra dòng cảnh báo lỗi vào Standard Error. Lúc đó, biến $check_file_error sẽ bị Rỗng (""). nếu biến rỗng dùng cách này thì nó sẽ chuyển về 0
+  if ((${check_file_error:-0} < 3)); then
     _runloi "$sao_luu_database website $NAME"
     rm -f /usr/local/backup-website/$NAME/$NAME$timedate.sql.gz
     return 2>/dev/null
@@ -393,82 +352,54 @@ fi
 
 _rundone "$sao_luu_database website $NAME"
 
-checkdathietlap=$(grep -rnw '/root/.config/rclone/rclone.conf' -e "wptangtoc" >>/dev/null 2>&1 && echo 1)
+checkdathietlap=$(grep -q '\[wptangtoc\]' /root/.config/rclone/rclone.conf 2>/dev/null && echo 1)
 if [[ $checkdathietlap ]]; then
+  drive_name=$(get_cloud_name)
+  CLOUD_DIR=$(get_cloud_dir)
+
   if [[ "$ggdriver" != "1998" ]]; then
-    echo "$ban_co_muon file backup uploads Google Drive?"
+    echo "$ban_co_muon file backup uploads $drive_name?"
     prompt="$nhap_lua_chon_cua_ban [1-2]: "
     uploads="n"
     options=("$dong_y" "$khong_dong_y")
     PS3="$prompt"
     select opt in "${options[@]}"; do
       case "$REPLY" in
-      1)
-        uploads="y"
-        break
-        ;;
-
-      2)
-        uploads="n"
-        break
-        ;;
-
-      $((${#options[@]} + 1)))
-        printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-        break
-        ;;
-      *)
-        printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-        break
-        ;;
+      1) uploads="y"; break ;;
+      2) uploads="n"; break ;;
+      *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
       esac
     done
-
   fi
+  
   if [[ "$uploads" = "y" || "$ggdriver" = "1998" ]]; then
-    _runing "file backup database uploads Google Drive"
-    truoc_khi=$(rclone size wptangtoc:wptangtoc_ols_backup)
+    _runing "File backup database uploads $drive_name"
 
     if [[ $sql_gz = '1' ]]; then
-      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.gz wptangtoc:wptangtoc_ols_backup/$NAME
+      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.gz wptangtoc:$CLOUD_DIR/$NAME
     elif [[ $sql_gz = '2' ]]; then
-      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.zst wptangtoc:wptangtoc_ols_backup/$NAME
+      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql.zst wptangtoc:$CLOUD_DIR/$NAME
     else
-      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql wptangtoc:wptangtoc_ols_backup/$NAME
+      rclone copy /usr/local/backup-website/"$NAME"/$NAME$timedate.sql wptangtoc:$CLOUD_DIR/$NAME
     fi
 
-    _rundone "file backup database uploads Google Drive"
+    _rundone "File backup database uploads $drive_name hoàn tất"
+    
     if ! [[ "$ggdriver2" = "1998" || "$ggdriver2" = "12345" ]]; then
-
-      echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây Google Driver không?"
+      echo "$ban_co_muon $xoa file backup tại local khi đã được lưu trữ đám mây $drive_name không?"
       prompt="$nhap_lua_chon_cua_ban [1-2]: "
       clearfile="n"
       options=("$dong_y" "$khong_dong_y")
       PS3="$prompt"
       select opt in "${options[@]}"; do
         case "$REPLY" in
-        1)
-          clearfile="y"
-          break
-          ;;
-
-        2)
-          clearfile="n"
-          break
-          ;;
-
-        $((${#options[@]} + 1)))
-          printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-          break
-          ;;
-        *)
-          printf "$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"
-          break
-          ;;
+        1) clearfile="y"; break ;;
+        2) clearfile="n"; break ;;
+        *) printf "\n$ban_nhap_sai_he_thong_se_chon_khong_dong_y\n"; break ;;
         esac
       done
-
     fi
+    
     if [[ "$clearfile" = "y" || "$ggdriver2" = "1998" ]]; then
       _runing "$xoa file backup database tại local"
       if [[ $sql_gz = '1' ]]; then
@@ -487,20 +418,18 @@ if [[ $clearfile != 'y' ]]; then
   echo ''
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   if [[ $sql_gz = '1' ]]; then
-    left_text "file database: $NAME$timedate.sql.gz"
-    left_text "lưu trữ trong thư mục: /usr/local/backup-website/$NAME"
+    left_text "File database: $NAME$timedate.sql.gz"
+    left_text "Lưu trữ trong thư mục: /usr/local/backup-website/$NAME"
   elif [[ $sql_gz = '2' ]]; then
-    left_text "file database: $NAME$timedate.sql.zst"
-    left_text "lưu trữ trong thư mục: /usr/local/backup-website/$NAME"
+    left_text "File database: $NAME$timedate.sql.zst"
+    left_text "Lưu trữ trong thư mục: /usr/local/backup-website/$NAME"
   else
-    left_text "file database: $NAME$timedate.sql"
-    left_text "lưu trữ trong thư mục: /usr/local/backup-website/$NAME"
+    left_text "File database: $NAME$timedate.sql"
+    left_text "Lưu trữ trong thư mục: /usr/local/backup-website/$NAME"
   fi
-
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 fi
 
-#nhả khoá chủ động locking
 # 1. Báo cho Kernel mở khóa đồng bộ và chờ xác nhận (Synchronous)
 flock -u 200
 # 2. Đóng File Descriptor
