@@ -135,7 +135,7 @@ echo -e "${C_CYAN}╰───────────────────�
 
 # 1. SAO LƯU DATABASE
 _runing "Đang kết xuất Cơ sở dữ liệu (Database)..."
-TEMP_CNF=$(mktemp)
+TEMP_CNF=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
 chmod 600 "$TEMP_CNF"
 cat >"$TEMP_CNF" <<EOF
 [client]

@@ -1,4 +1,7 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 # --- Cấu hình ---
 backup_dir="$1"
@@ -6,13 +9,12 @@ zip_file="$2"
 min_free_space_gb=1
 compression_ratio=0.75 # Ước tính dựa trên nén mặc định của zip
 
-# Thư mục cần loại trừ (có thể thêm nhiều thư mục, cách nhau bằng -o -path)
+# Thư mục cần loại trừ (Xóa phần tử bị trùng lặp cho gọn)
 exclude_dirs=(
   "wp-content/cache"
-  ".git" # Ví dụ: loại bỏ thư mục .git
+  ".git"
   "wp-content/ai1wm-backups"
   "wp-content/updraft"
-  "wp-content/ai1wm-backups" # Lặp lại là không sao, find và zip sẽ xử lý
   "error_log"
   "wp-content/debug.log"
   "wp-content/uploads/backupbuddy_backups"
@@ -23,26 +25,24 @@ exclude_dirs=(
 # --- Hàm ---
 dir_size() {
   local dir="$1"
-  local exclude_str=""
+  local find_args=() # Sử dụng mảng để chứa đối số thay vì dùng chuỗi
 
-  # Tạo chuỗi loại trừ cho lệnh find
+  # Xây dựng mảng đối số một cách an toàn và tường minh
   if ((${#exclude_dirs[@]} > 0)); then
-    exclude_str="-path \"$dir/${exclude_dirs[0]}\""
+    find_args+=("-path" "$dir/${exclude_dirs[0]}")
     for ((i = 1; i < ${#exclude_dirs[@]}; i++)); do
-      exclude_str+=" -o -path \"$dir/${exclude_dirs[$i]}\""
+      find_args+=("-o" "-path" "$dir/${exclude_dirs[$i]}")
     done
   fi
 
-  # Sử dụng find để tìm tất cả các file và thư mục, loại trừ các thư mục đã chỉ định,
-  # sau đó tính tổng kích thước (byte)
-  if [ -n "$exclude_str" ]; then
-    find "$dir" \( -type f -o -type d \) \( "$exclude_str" \) -prune -o -print0 |
+  # Truyền mảng đã bung ("${find_args[@]}") vào find để bash hiểu từng đối số độc lập
+  if ((${#find_args[@]} > 0)); then
+    find "$dir" \( -type f -o -type d \) \( "${find_args[@]}" \) -prune -o -print0 |
       du -cbs --files0-from=- | tail -n 1 | awk '{print $1}'
   else
     find "$dir" \( -type f -o -type d \) -print0 |
       du -cbs --files0-from=- | tail -n 1 | awk '{print $1}'
   fi
-
 }
 
 bytes_to_gb() {
@@ -53,15 +53,14 @@ bytes_to_gb() {
 if [ -z "$backup_dir" ] || [ -z "$zip_file" ]; then
   echo "Lỗi: Cần cung cấp thư mục và tên file zip."
   echo "Ví dụ: $0 /path/to/data backup.zip"
-  return 2>/dev/null
-  exit
+  return 2>/dev/null || exit 1
 fi
 
 if [ ! -d "$backup_dir" ]; then
   echo "Lỗi: '$backup_dir' không tồn tại."
-  return 2>/dev/null
-  exit
+  return 2>/dev/null || exit 1
 fi
+
 # --- Tính toán ---
 dir_size_bytes=$(dir_size "$backup_dir")
 estimated_zip_size_bytes=$(echo "scale=0; $dir_size_bytes * $compression_ratio" | bc)
@@ -72,8 +71,7 @@ if [ "$output_dir" = "." ]; then
   output_dir=$(pwd)
 fi
 
-#Cách Fix: Thêm cờ -P (POSIX format) vào lệnh df để ép nó luôn luôn in trên 1 dòng duy nhất:
-#Trên các VPS sử dụng LVM hoặc ổ cứng block storage, tên thiết bị ổ cứng có thể rất dài (ví dụ /dev/mapper/almalinux-root). Lệnh df mặc định khi gặp tên quá dài sẽ tự động ngắt phần thông số xuống dòng thứ 3. Khi đó, lệnh awk 'NR==2' của bạn sẽ lấy trúng dòng chứa tên, biến $free_space_bytes bị rỗng. Các bước check toán học bên dưới sẽ văng lỗi Syntax Error khiến backup không chạy được
+# Cách Fix: Thêm cờ -P (POSIX format) vào lệnh df để ép nó luôn luôn in trên 1 dòng duy nhất.
 free_space_bytes=$(df -P -B1 "$output_dir" | awk 'NR==2 {print $4}')
 free_space_gb=$(bytes_to_gb "$free_space_bytes")
 
@@ -82,14 +80,14 @@ if (($(echo "$free_space_gb >= ($estimated_zip_size_gb + $min_free_space_gb)" | 
   dieu_kien_disk='1'
 else
   dieu_kien_disk='0'
-  . /etc/wptt/echo-color
+  . /etc/wptt/echo-color 2>/dev/null
   echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}KHÔNG ĐỦ DUNG LƯỢNG Ổ CỨNG DISK ĐỂ BACKUP{C_RESET}"
+  center_text "${C_BOLD_WHITE}KHÔNG ĐỦ DUNG LƯỢNG Ổ CỨNG DISK ĐỂ BACKUP${C_RESET}"
   echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "  - Thư mục (đã loại trừ cache): $(bytes_to_gb "$dir_size_bytes") GB"
-  left_text "  - Ước tính ZIP: $estimated_zip_size_gb GB (dựa trên nén mặc định)"
-  left_text "  - Trống: $free_space_gb GB"
-  left_text "  - Tối thiểu: $min_free_space_gb GB"
-  left_text "  - Cần thêm: $(bytes_to_gb "$((estimated_zip_size_bytes + (min_free_space_gb * 1024 * 1024 * 1024) - free_space_bytes))") GB"
+  left_text "  - Ước tính dung lượng nén: $estimated_zip_size_gb GB"
+  left_text "  - Ổ cứng trống hiện tại: $free_space_gb GB"
+  left_text "  - Tối thiểu giữ lại an toàn: $min_free_space_gb GB"
+  left_text "  - Cần giải phóng thêm: $(bytes_to_gb "$((estimated_zip_size_bytes + (min_free_space_gb * 1024 * 1024 * 1024) - free_space_bytes))") GB"
   echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 fi
