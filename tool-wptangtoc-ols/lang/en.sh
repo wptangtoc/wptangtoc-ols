@@ -262,3 +262,19 @@ chuyen_tat_ca_website_wptangtoc_ve_wptangtoc_ols="Transfer all WPTangToc ols web
 chuyen_tat_ca_website_wptangtoc_ols_ve_wptangtoc_bang_rsync="Transfer all WPTangToc OLS websites to WPTangToc OLS Using Rsync"
 chuyen_1_website_wptangtoc_ols_ve_wptangtoc_ols_bang_rsync="Transfer a WPTangToc OLS website to WPTangToc OLS Using Rsync"
 
+#quản lý tài nguyên menu main
+kiem_tra="Check"
+toc_do="speed"
+o_cung="disk"
+cong_nghe_ao_hoa="virtualization VPS"
+xem="view"
+
+#giả lập website main menu
+gia_lap_website_tu_website_nao_do_trong_he_thong="Staging from a certain website in this system"
+gia_lap_website_moi_trang="Staging from new WordPress"
+chuyen_web_site_gia_lap_ve_website_chinh="Transfer the emulator website to the main website"
+
+#thay đổi ngôn ngữ menu main
+tieng_viet="Vietnamese"
+tieng_anh="English"
+
