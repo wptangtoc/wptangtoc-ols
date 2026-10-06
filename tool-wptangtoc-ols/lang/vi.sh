@@ -444,3 +444,6 @@ quan_ly_csf="Quản lý CSF"
 
 #quản lý băng thông
 quan_ly_bang_thong="Quản lý băng thông"
+
+kich_hoat_object_cache_lsmemcached="Kích hoạt object cache lsmemcached"
+huy_kich_hoat_object_cache_lsmemcached="Huỷ Kích hoạt object cache lsmemcached"
