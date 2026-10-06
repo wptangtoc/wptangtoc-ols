@@ -440,12 +440,57 @@ trap "rm -f ${TEMP_CNF_ROOT}" EXIT
 unset password_database_root database_admin_password #giải biến
 
 
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS ${database}"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${database}"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP USER IF EXISTS '${username}'@'localhost'"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE USER IF NOT EXISTS '${username}'@'localhost' IDENTIFIED BY '${password}'"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${database}.* TO '${username}'@'localhost' WITH GRANT OPTION"
-mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES"
+#Rollback-based error handling
+# Thực thi toàn bộ chuỗi lệnh SQL trong 1 lần kết nối duy nhất để bắt lỗi chính xác
+if ! mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false <<EOF_SQL
+DROP DATABASE IF EXISTS \`${database}\`;
+CREATE DATABASE IF NOT EXISTS \`${database}\`;
+DROP USER IF EXISTS '${username}'@'localhost';
+CREATE USER IF NOT EXISTS '${username}'@'localhost' IDENTIFIED BY '${password}';
+GRANT ALL PRIVILEGES ON \`${database}\`.* TO '${username}'@'localhost';
+FLUSH PRIVILEGES;
+EOF_SQL
+then
+    # Bắt lỗi nếu MariaDB từ chối hoặc sập
+    _runloi "Lỗi khởi tạo: MariaDB từ chối tạo Database/User!"
+    echo -e "${C_RED}Vui lòng kiểm tra lại mật khẩu Root của MariaDB hoặc tình trạng dịch vụ.${C_RESET}"
+ 
+		# KHỐI ROLLBACK (DỌN RÁC)
+		# 1. Dọn cấu hình OLS và thư mục chính
+		sed -i "/map[[:space:]]*${NAME2:?}[[:space:]]*${NAME2:?}/d" /usr/local/lsws/conf/httpd_config.conf
+		sed -i -e '/^virtualhost '"${NAME2:?}"'/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+		rm -rf "/usr/local/lsws/${NAME2:?}"
+		rm -f /usr/local/lsws/conf/vhosts/"${NAME2:?}"/"${NAME2:?}".conf 2>/dev/null
+		rm -f "/etc/wptt/vhost/.${NAME2:?}.conf" 2>/dev/null
+
+		# 2. Xóa User Linux và gỡ Chroot SSH
+		userdel -f "$USER" >/dev/null 2>&1
+		sed -i -e "/^#begin-WPTT_JAIL_$USER/,/^#end-WPTT_JAIL_$USER$/d" /etc/ssh/sshd_config 2>/dev/null || true
+		systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+
+		# 3. Dọn sạch SSL tự ký, thư mục Backup và các Shortcut (Symlink)
+		rm -rf "/etc/wptt-ssl-tu-ky/${NAME2:?}"
+		rm -rf "/usr/local/backup-website/${NAME2:?}"
+		rm -rf "/wptangtoc-ols/${NAME2:?}"
+		rm -rf "/home/${NAME2:?}"
+		# ==========================================
+		rm -rf "${TEMP_CNF_ROOT:?}"
+
+		if [[ "${1:-}" == "98" ]];then
+			echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Menu Chính...${C_RESET}"
+			read -r _
+			exec wptangtoc 1
+		fi
+   return 2>/dev/null || exit 1
+fi
+
+
+# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP DATABASE IF EXISTS ${database}"
+# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE DATABASE IF NOT EXISTS ${database}"
+# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "DROP USER IF EXISTS '${username}'@'localhost'"
+# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "CREATE USER IF NOT EXISTS '${username}'@'localhost' IDENTIFIED BY '${password}'"
+# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "GRANT ALL PRIVILEGES ON ${database}.* TO '${username}'@'localhost' WITH GRANT OPTION"
+# mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "FLUSH PRIVILEGES"
 _rundone "Khởi tạo Database hoàn tất"
 
 _runing "Đang Clone dữ liệu từ $NAME sang $NAME2 (Sẽ mất vài phút)..."
