@@ -69,13 +69,6 @@ hoặc
 
 <pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols</pre>
 
-Nếu bạn muốn cài đặt luôn sẵn mã nguồn WordPress vào domain luôn thì có thể dùng đoạn này:
-
-<pre>curl -sO https://wptangtoc.com/share/wptangtoc-ols && bash wptangtoc-ols wp</pre>
-
-hoặc:
-
-<pre>curl -sO https://wptangtoc.github.io/wptangtoc-ols/wptangtoc-ols && bash wptangtoc-ols wp</pre>
 
 Nếu bạn chưa có VPS: thì bạn có thể tìm kiếm một đơn vị cung cấp VPS nào đó mà bạn cảm thấy uy tín bạn có thể thuê ở đó. Để có thể sử dụng công cụ này.
 
