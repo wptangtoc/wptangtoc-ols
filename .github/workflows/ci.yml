@@ -1,49 +1,173 @@
-name: WPTangToc OLS CI/CD & Security
+name: WPTangToc OLS Security CI
 
-# Kích hoạt Robot khi đẩy code hoặc tạo Pull Request vào nhánh main
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+# Chống kẹt tiến trình: Hủy job cũ nếu có commit mới đẩy lên
+concurrency:
+  group: wptangtoc-ols-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # -------------------------------------------------------------
-  # ROBOT 1: QUÉT CÚ PHÁP BASH & SHELLCHECK (TỐI ƯU TỐC ĐỘ)
-  # -------------------------------------------------------------
-  bash-syntax-and-shellcheck:
+# ============================================================
+# JOB 1: KIỂM TRA CÚ PHÁP, CHẤT LƯỢNG CODE & WORKFLOW SECURITY
+# ============================================================
+  code-quality:
     name: Kiểm tra Cú pháp & ShellCheck
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: 📥 Tải mã nguồn về máy ảo GitHub
-        uses: actions/checkout@v4
+      - name: 📥 Tải mã nguồn
+        # Sử dụng SHA bất biến (Immutable SHA) cho Checkout v6 thay vì tag @v6
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
 
-      - name: 🛠️ 1. Kiểm tra Cú pháp Bash thuần (bash -n)
-        # Quét bằng lõi Bash gốc, bỏ qua các file có đuôi mở rộng (trừ .sh), dừng ngay nếu vỡ cú pháp
+      - name: 🛠️️ 1. Kiểm tra Cú pháp Bash thuần (Đa luồng)
         run: |
-          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r -I {} bash -n {}
+          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r -P "$(nproc)" -I {} bash -n {}
 
-      - name: 🔍 2. Chạy ShellCheck phân tích Logic
+      - name: 🔍 2. Chạy ShellCheck phân tích Logic (Đa luồng)
         env:
-          # Bịt mắt ShellCheck với các mã lỗi kinh điển do include file và function text
+          # Giữ lại BÍ QUYẾT THỰC CHIẾN để tránh lỗi oan trong hệ sinh thái WPTangToc
           SHELLCHECK_OPTS: "-e SC1091 -e SC1090 -e SC2154 -e SC2102 -e SC2211 -e SC2034"
         run: |
-          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r shellcheck
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + | xargs -r -P "$(nproc)" shellcheck
         continue-on-error: true
 
-  # -------------------------------------------------------------
-  # ROBOT 2: QUÉT BẢO MẬT & LỘ LỌT API KEY (GITLEAKS)
-  # -------------------------------------------------------------
-  security-scan:
-    name: Quét rò rỉ Mật khẩu/API Key
-    runs-on: ubuntu-latest
-    steps:
-      - name: 📥 Tải mã nguồn về máy ảo GitHub
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Tải toàn bộ lịch sử commit để quét sâu
+      - name: 📝 3. Validate YAML Configuration
+        run: |
+          python3 -m pip install --disable-pip-version-check "yamllint==1.37.1"
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 180}}}" .github/workflows
 
-      - name: 🛡️ Chạy quét Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - name: 🔒 4. Kiểm tra Chuỗi cung ứng (Bắt buộc ghim SHA cho mọi Action)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FAILED=0
+          while IFS= read -r -d '' file; do
+            while IFS= read -r line; do
+              # Bỏ qua dòng comment
+              trimmed="${line#"${line%%[![:space:]]*}"}"
+              [[ "$trimmed" == "#"* ]] && continue
+              
+              # Neo "uses:" vào đầu dòng (chống tự khớp)
+              if [[ "$line" =~ ^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*([^[:space:]#]+) ]]; then
+                action="${BASH_REMATCH[2]}"
+                [[ "$action" == ./* || "$action" == docker://* ]] && continue
+                
+                # Phải là mã SHA 40 ký tự
+                if [[ ! "$action" =~ @([0-9a-fA-F]{40})$ ]]; then
+                  echo "::error file=${file}::BẢO MẬT: Action chưa được ghim SHA 40 ký tự: ${action}"
+                  FAILED=1
+                fi
+              fi
+            done < "$file"
+          done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 2>/dev/null || true)
+          
+          if (( FAILED != 0 )); then exit 1; fi
+
+# ============================================================
+# JOB 2: QUÉT BẢO MẬT & VỆ SINH REPOSITORY
+# ============================================================
+  security-scan:
+    name: Quét Bảo mật & Vệ sinh Repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write 
+    steps:
+      - name: 📥 Tải mã nguồn (Full History)
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          fetch-depth: 0 
+          persist-credentials: false
+
+      - name: 🛡️ Quét rò rỉ Secret/API (Gitleaks v3)
+        # Sử dụng SHA bất biến (Immutable SHA) cho Gitleaks v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🛑 Quét Code nguy hiểm & Vệ sinh Repo
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FAILED=0
+          
+          echo "::group::Quét Shell Patterns nguy hiểm"
+          if grep -RInE --exclude-dir=.git 'curl[^|]*\|[[:space:]]*(ba)?sh' .; then
+            echo "::error::Phát hiện mẫu lệnh nguy hiểm (curl | bash)."
+            FAILED=1
+          fi
+          
+          if grep -RInE --exclude-dir=.git 'wget[^|]*\|[[:space:]]*(ba)?sh' .; then
+            echo "::error::Phát hiện mẫu lệnh nguy hiểm (wget | bash)."
+            FAILED=1
+          fi
+
+          # REGEX HOÀN HẢO: Bắt 777 và 0777, nhưng an toàn bỏ qua 1777 của Sticky Bit!
+          if grep -RInE --exclude-dir=.git 'chmod[[:space:]]+(-R[[:space:]]+)?(0)?777([[:space:]]|$)' .; then
+            echo "::error::CẢNH BÁO: Phát hiện quyền nguy hiểm. Hãy dùng 755 hoặc 644!"
+            FAILED=1
+          fi
+
+          if grep -RInE --exclude-dir=.git 'chmod[[:space:]]+.*o\+w' .; then
+            echo "::error::CẢNH BÁO: Cấp quyền ghi cho World-writable (o+w) là không an toàn!"
+            FAILED=1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Quét Anti-Log-Leak"
+          if grep -RInE --exclude-dir=.git '^[[:space:]]*set[[:space:]]+-[a-zA-Z]*x' .; then
+            echo "::error::Phát hiện lệnh 'set -x'. Xóa ngay để tránh lộ Password trên GitHub Logs!"
+            FAILED=1
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Quét Vệ sinh Repository"
+          if find . -type d -name .git -prune -o -type f \( -name '*.pem' -o -name '*.key' -o -name 'id_rsa' -o -name 'id_ed25519' \) -print | grep -q .; then
+            echo "::error::Cảnh báo: Phát hiện khóa Private Key bị commit lên mạng!"
+            FAILED=1
+          fi
+
+          if find . -type d -name .git -prune -o -type f \( -name '*.sql' -o -name '*.sql.gz' -o -name '*.sql.zst' \) -print | grep -q .; then
+            echo "::warning::Phát hiện Database Dumps (.sql / .gz / .zst)!"
+          fi
+          echo "::endgroup::"
+
+          if (( FAILED != 0 )); then exit 1; fi
+
+# ============================================================
+# JOB 3: METADATA & TESTS
+# ============================================================
+  metadata-tests:
+    name: Kiểm tra Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 📥 Tải mã nguồn
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
+
+      - name: 🧪 Chạy BATS Unit Tests (Nếu có)
+        shell: bash
+        run: |
+          if find tests -type f \( -name '*.bats' -o -name '*.sh' \) 2>/dev/null | grep -q .; then
+            sudo apt-get update && sudo apt-get install -y bats
+            bats --recursive tests
+          else
+            echo "Không tìm thấy thư mục tests/. Bỏ qua bước này."
+          fi
