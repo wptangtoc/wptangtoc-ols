@@ -159,7 +159,7 @@ in_log_neu_loi() {
   run bash -c "chown $vhost_user $test_file"
 
   # Đã bù khoảng trắng ở đây
-  run bash -c "sudo -u $vhost_user /usr/local/lsws/lsphp*/bin/lsphp$test_file"
+  run bash -c "sudo -u $vhost_user /usr/local/lsws/lsphp*/bin/lsphp $test_file"
   rm -f -- "$test_file"
   
   in_log_neu_loi 0
