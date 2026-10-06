@@ -1,3 +1,12 @@
+## [8.1.4.6]
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp cơ chế cập nhật hệ thống:** Tinh chỉnh quy trình nâng cấp phần mềm, đảm bảo quá trình update diễn ra an toàn, mượt mà và hạn chế tối đa rủi ro gián đoạn dịch vụ.
+- **Tối ưu kiểm tra kết nối mạng (Ping):** Cải tiến công cụ kiểm tra ping internet, giúp đo lường độ trễ mạng chính xác và ổn định hơn trong quá trình vận hành máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## [8.1.4.5]
 
 ### 🛠️ Tối ưu hệ thống
