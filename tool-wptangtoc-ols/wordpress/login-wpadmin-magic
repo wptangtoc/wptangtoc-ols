@@ -1,10 +1,15 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
 function huong_dan() {
-  Tính năng này đăng nhập nhanh vào tài khoản dashboard WP-admin không cần biết tài khoản admin WordPress
+  Tính năng này đăng nhập nhanh vào tài khoản dashboard WP-admin không cần biết tài khoản admin WordPress.
+  [TÍNH NĂNG ĐỘT PHÁ]: Tự động dọn sạch rác Database, vô hiệu hóa plugin và bốc hơi hoàn toàn thư mục mu-plugins nếu trống sau khi login thành công.
 }
 
-. /etc/wptt/echo-color
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}Quản lý WordPress ➜ Đăng nhập Login WP-Admin Magic Link${C_RESET}"
@@ -17,7 +22,7 @@ if [[ $NAME = "98" ]]; then
 fi
 
 if [[ "$NAME" = "" ]]; then
-  . /etc/wptt/tenmien-only-website-by-wordpress
+  . /etc/wptt/tenmien-only-website-by-wordpress 2>/dev/null
   lua_chon_NAME "Magic Link đăng nhập WP-Admin"
 fi
 
@@ -30,7 +35,7 @@ fi
 . /etc/wptt/php/php-cli-domain-config $NAME
 
 # ==============================================================================
-# KIỂM TRA TƯƠNG THÍCH PHP 8.4
+# KIỂM TRA TƯƠNG THÍCH PHP 8.4+
 # ==============================================================================
 if [[ "$phien_ban_php_domain_thuc_thi" == "84" || "$phien_ban_php_domain_thuc_thi" == "85" ]]; then
   phien_ban_php_co_cham="${phien_ban_php_domain_thuc_thi:0:1}.${phien_ban_php_domain_thuc_thi:1:1}"
@@ -99,6 +104,71 @@ if [[ ! -d "$pathlogin" ]]; then
   _rundone "Download plugin WP CLI login"
 fi
 
+# ==============================================================================
+# TUYỆT KỸ MU-PLUGIN: SÁT THỦ LỌC SẠCH DATABASE + PHẦN CỨNG RỖNG
+# ==============================================================================
+MU_DIR="${path}/wp-content/mu-plugins"
+mkdir -p "$MU_DIR"
+MU_FILE="${MU_DIR}/wptt-magic-destruct.php"
+
+cat << 'EOF' > "$MU_FILE"
+<?php
+/**
+ * Plugin Name: WPTangToc Magic Link Destruct Pro
+ * Description: Tự động dọn dẹp hệ thống, Database và thư mục mu-plugins sau khi đăng nhập thành công.
+ */
+add_action('admin_init', 'wptt_magic_link_cleanup_pro');
+function wptt_magic_link_cleanup_pro() {
+    if (defined('DOING_AJAX') && DOING_AJAX) return;
+    
+    // Chỉ kích hoạt khi một tài khoản đã xác thực login thành công vào admin dashboard
+    if (!function_exists('is_user_logged_in') || !is_user_logged_in()) return;
+    if (!current_user_can('manage_options')) return;
+
+    require_once ABSPATH . 'wp-admin/includes/plugin.php';
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    
+    // 1. Tắt plugin an toàn theo chuẩn WordPress
+    $plugin_slug = 'wp-cli-login-server/wp-cli-login-server.php';
+    if (is_plugin_active($plugin_slug)) {
+        deactivate_plugins($plugin_slug, true);
+    }
+    
+    // 2. Xóa sạch toàn bộ thư mục plugin tạm
+    $plugin_dir = WP_PLUGIN_DIR . '/wp-cli-login-server';
+    if (file_exists($plugin_dir)) {
+        WP_Filesystem();
+        global $wp_filesystem;
+        if (is_object($wp_filesystem)) {
+            $wp_filesystem->delete($plugin_dir, true);
+        } else {
+            array_map('unlink', glob("$plugin_dir/*.*"));
+            @rmdir($plugin_dir);
+        }
+    }
+    
+    // 3. THỰC THI CẢI TIẾN: DỌN SẠCH RÁC DATABASE (An toàn tuyệt đối, tự nhận diện Prefix bảng)
+    delete_option('wp_cli_login');
+    update_option('recently_activated', array());
+    
+    // 4. Tự sát: Xóa file mu-plugin này
+    $current_file = __FILE__;
+    $mu_dir = dirname($current_file);
+    @unlink($current_file);
+    
+    // 5. THỰC THI CẢI TIẾN: Kiểm tra nếu thư mục mu-plugins rỗng thì xóa luôn cả thư mục
+    if (file_exists($mu_dir) && is_dir($mu_dir)) {
+        $remaining_files = array_diff(scandir($mu_dir), array('.', '..'));
+        if (empty($remaining_files)) {
+            @rmdir($mu_dir);
+        }
+    }
+}
+EOF
+
+# Trả lại quyền sở hữu chuẩn xác cho user vhost
+chown -R $User_name_vhost:$User_name_vhost "$MU_DIR"
+
 clear
 _runing "Đang tạo mã Magic Link mã hóa"
 tuan=$($WP_ROOT user list --role=administrator --field=user_login --path="$path" --allow-root 2>/dev/null | head -n 1)
@@ -124,11 +194,11 @@ if [[ -n "$giatuandzdz" ]]; then
   center_text ""
   center_text "Hãy bôi đen và COPY đường dẫn bên dưới dán vào trình duyệt:"
 
-  # Căn giữa hoàn toàn link đăng nhập, không dùng Emoji để chống lệch khung
   center_text "${C_CYAN}$giatuandzdz${C_RESET}"
 
   center_text ""
   center_text "${C_YELLOW}[!] Lưu ý: Link này chỉ sử dụng 1 lần duy nhất trong vòng 15 phút!${C_RESET}"
+  center_text "${C_CYAN}Hệ thống tự động xóa sạch Plugin, dọn Database rác & xóa thư mục mu-plugins khi xong.${C_RESET}"
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
 else
