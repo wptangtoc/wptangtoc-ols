@@ -264,13 +264,30 @@ if [[ "$dieu_kien_disk" = '0' ]]; then #không đủ điều kiện để sao l�
   if [[ $check_menu_wptangtoc_active = "98" ]]; then
     exec /etc/wptt/wptt-backup-restore-main 1
   fi
-  return 2>/dev/null
-  exit
+  return 2>/dev/null || exit
 fi
 
 _runing "$sao_luu_database website $NAME"
 
 
+
+#Nguy cơ Local SQL Injection
+#Biến $DB_Name_web được sếp source từ tệp .conf của vhost. Nếu trước đó hacker (hoặc khách hàng táy máy) đổi tên database thành một chuỗi chứa dấu backtick (`), ví dụ: wp_db`; GRANT ALL PRIVILEGES ON *.* TO 'hacker'@'%'; --.  
+# BỘ KHIÊN CHỐNG LOCAL SQL INJECTION
+
+# 1. Khai báo hàm xử lý lỗi dùng chung ngay tại chỗ
+wptt_abort_db_injection() {
+    _runloi "$1"
+    sleep 2
+    [[ "$2" == "98" ]] && exec /etc/wptt/wptt-backup-restore-main 1
+    return 2>/dev/null || exit 1
+}
+
+# 2. Thực thi kiểm tra 3 lớp bằng toán tử ngắn mạch (&&)
+[[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
+[[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
+[[ "$DB_Password_web" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu Database chứa ký tự cấm (khoảng trắng, dấu nháy, backtick...)!" "$1"
+#end nguy cơ local sql Injection
 
 # 2. Ép mktemp đẻ file tạm trong Boong-ke này (Tên file có đuôi .cnf cho chuẩn)
 TEMP_CNF=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
@@ -454,6 +471,7 @@ if [[ $checkdathietlap ]]; then
     # -------------------------------------------------------------
     # KIỂM TRA CHUẨN TÊN THƯ MỤC/BUCKET (Fix lỗi S3)
     # -------------------------------------------------------------
+	
     CLOUD_DIR="wptangtoc_ols_backup"
 	if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' /root/.config/rclone/rclone.conf 2>/dev/null; then
       CLOUD_DIR="wptangtoc-ols-backup"
@@ -462,60 +480,64 @@ if [[ $checkdathietlap ]]; then
     fi
 
 	# -------------------------------------------------------------
-    # BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE)
-    # -------------------------------------------------------------
-    TOTAL_CORES=$(nproc 2>/dev/null || echo 1)
-    TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
+	# BỘ ĐIỀU TỐC THÔNG MINH CHO RCLONE (DYNAMIC PERFORMANCE ENGINE)
+	# -------------------------------------------------------------
+	TOTAL_CORES=$(nproc 2>/dev/null || echo 1)
+	TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
 
-    if (( TOTAL_CORES <= 2 )) || (( TOTAL_RAM_MB <= 2048 )); then
-      OPT_TRANSFERS=2
-      OPT_CHUNK="32M"
-    else
-      OPT_TRANSFERS=4
-      OPT_CHUNK="64M"
-    fi
+	if (( TOTAL_CORES <= 2 )) || (( TOTAL_RAM_MB <= 2048 )); then
+		OPT_TRANSFERS=2
+		OPT_CHUNK="32M"
+	else
+		OPT_TRANSFERS=4
+		OPT_CHUNK="64M"
+	fi
 
-    if [[ "$ggdriver" == "1998" ]]; then
-      if (( TOTAL_CORES == 1 )); then OPT_TRANSFERS=1; fi
-    fi
+	# 1. KHAI BÁO MẢNG THAM SỐ (Thay vì dùng String như cũ)
+	RCLONE_OPTS=(
+		"--transfers=$OPT_TRANSFERS"
+		"--checkers=$OPT_TRANSFERS"
+		"--drive-chunk-size=$OPT_CHUNK"
+		"--s3-upload-concurrency=$OPT_TRANSFERS"
+		"--contimeout" "60s"
+		"--timeout" "300s"
+		"--retries" "3"
+		"--log-level" "ERROR"
+	)
 
-    # Thêm cờ --log-level ERROR để bịt mõm các dòng NOTICE rác của Rclone
+	if [[ "$ggdriver" == "1998" ]]; then
+		# 2. Nhồi thêm tham số có khoảng trắng vào Mảng cực kỳ an toàn
+		if (( TOTAL_CORES == 1 )); then OPT_TRANSFERS=1; fi
+	fi
 
-#--contimeout 60s: Ép rclone chỉ được phép cố gắng kết nối đến Google Drive/S3 trong đúng 60 giây. Nếu mạng nghẽn không thể kết nối (bắt tay TCP thất bại), nó lập tức báo lỗi và thoát ngay, không chờ đợi vô vọng.
+	# =============================================================
+	# HÀM UPLOAD GIAO DIỆN CHUẨN UX (KẾT HỢP PV + RCAT + AUTO CLEAN)
+	# =============================================================
+	# GHI CHÚ: Tên hàm ở file luỹ tiến sẽ là wptt_upload_luy_tien_ux nhé sếp
+	function wptt_upload_ux() {
+		local src_file="$1"
+		local dest_dir="$2"
+		local file_type="$3"
+		local fname
+		fname=$(basename "$src_file")
 
-#--timeout 300s: Nếu quá trình đang upload mà bị đứt gánh giữa đường (không có bất kỳ byte dữ liệu nào được truyền/nhận), nó sẽ đợi tối đa 5 phút rồi tự động cắt đứt kết nối.
-
-#--retries 3: Linh hoạt thử kết nối lại tối đa 3 lần nếu gặp rớt mạng đột ngột.
-
-    RCLONE_OPTS="--transfers=$OPT_TRANSFERS --checkers=$OPT_TRANSFERS --drive-chunk-size=$OPT_CHUNK --s3-upload-concurrency=$OPT_TRANSFERS --contimeout 60s --timeout 300s --retries 3 --log-level ERROR"
-
-    # =============================================================
-    # HÀM UPLOAD GIAO DIỆN CHUẨN UX (KẾT HỢP PV + RCAT + AUTO CLEAN)
-    # =============================================================
-    function wptt_upload_ux() {
-      local src_file="$1"
-      local dest_dir="$2"
-      local file_type="$3" # Nhận diện đang đẩy Mã Nguồn hay Database
-      local fname=$(basename "$src_file")
-
-      if [[ "$ggdriver" == "1998" ]]; then
-        # Chạy ngầm Cronjob: Im lặng tuyệt đối
-        $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy "$src_file" "$dest_dir" "$RCLONE_OPTS" >/dev/null 2>&1
-      else
-        # Chạy tay: Vẽ tiến trình và Tự động dọn dẹp
-        if command -v pv &>/dev/null; then
-          local fsize=$(du -b "$src_file" | cut -f1)
-          # In tên tiến trình rõ ràng: "Upload Mã Nguồn" hoặc "Upload Database"
-          pv -s "$fsize" -N "Upload $file_type" -p -t -e -r -b -w 90 "$src_file" | rclone rcat "$dest_dir/$fname" "$RCLONE_OPTS"
-          
-          # Tuyệt kỹ Tàng Hình: Vừa chạy xong 100% -> Nhảy lên 1 dòng -> Xóa sạch thanh tiến trình
-          echo -en "\033[1A\033[2K\r"
-        else
-          rclone copy "$src_file" "$dest_dir" "$RCLONE_OPTS" --progress --stats-one-line
-          echo -en "\033[1A\033[2K\r"
-        fi
-      fi
-    }
+		if [[ "$ggdriver" == "1998" ]]; then
+			# 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
+			$ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" >/dev/null 2>&1
+		else
+			if command -v pv &>/dev/null; then
+				local fsize
+				fsize=$(du -b "$src_file" | cut -f1)
+				# 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
+				pv -s "$fsize" -N "Upload $file_type" -p -t -e -r -b -w 90 "$src_file" | rclone rcat "$dest_dir/$fname" "${RCLONE_OPTS[@]}"
+				echo -en "\033[1A\033[2K\r"
+			else
+				# 3. Ép bung Mảng ra bằng "${RCLONE_OPTS[@]}"
+				rclone copy "$src_file" "$dest_dir" "${RCLONE_OPTS[@]}" --progress --stats-one-line
+				echo -en "\033[1A\033[2K\r"
+			fi
+		fi
+	}
 
     # 1. Gọi hàm đẩy Mã Nguồn lên Cloud
     if [[ $dinh_dang_nen_ma_nguon = '1' ]]; then
