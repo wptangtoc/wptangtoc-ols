@@ -1,3 +1,14 @@
+## [8.1.4.5]
+
+### 🛠️ Tối ưu hệ thống
+- **Tăng cường bảo mật Rclone:** Nâng cấp cơ chế xác thực và mã hóa thông tin kết nối, đảm bảo dữ liệu sao lưu đám mây luôn an toàn tuyệt đối.
+
+### 🐛 Sửa lỗi
+- **Sao lưu đám mây S3:** Khắc phục lỗi kết nối và đồng bộ dữ liệu tới các dịch vụ lưu trữ tương thích S3 (AWS S3, Cloudflare R2, Wasabi...), giúp tiến trình backup tự động vận hành ổn định và chính xác.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## 📌 Lịch sử cập nhật WPTangToc OLS 8.1.4.4
 
 - 71c1797a cải tiến bảo mật
