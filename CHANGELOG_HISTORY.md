@@ -1,3 +1,12 @@
+## WPTangToc OLS v8.2.1.6
+
+### 🛠️ Tối ưu hệ thống
+- **Tăng cường độ tin cậy cho tính năng Preload Cache:** Chuẩn hóa và tự động hóa quy trình kiểm chuẩn cơ chế nạp trước bộ nhớ đệm (Preload Cache), đảm bảo quá trình quét sitemap và kích hoạt cache luôn vận hành chính xác, giúp website đạt tốc độ tải trang tối đa ngay khi có lượt truy cập mới.
+- **Củng cố độ ổn định cho tiến trình cập nhật:** Nâng cấp bộ kiểm thử tích hợp cho cơ chế nâng cấp hệ thống (WPTT Update), đảm bảo tính toàn vẹn của tệp cấu hình máy chủ và ngăn ngừa rủi ro gián đoạn dịch vụ trong suốt quá trình cập nhật phiên bản.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.5
 
 ### 🐛 Sửa lỗi
