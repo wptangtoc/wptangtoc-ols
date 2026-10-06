@@ -203,6 +203,23 @@ jobs:
           fi
           done
 
+      - name: 🛠️ Bypass (Mocking) công cụ ionice và nice cho CI/CD
+        run: |
+          # Tạo script đóng thế: Nuốt các cờ (như -c 3, -n 19) và chạy lệnh gốc phía sau
+          cat << 'EOF' | sudo tee /usr/local/bin/ionice > /dev/null
+          #!/bin/bash
+          while [[ $# -gt 0 ]]; do
+            if [[ "$1" != -* ]]; then break; fi
+            shift 2 # Bỏ qua cờ và giá trị (VD: Bỏ qua "-c" và "3")
+          done
+          exec "$@" # Thực thi phần lệnh còn lại (VD: chown, chmod...)
+          EOF
+
+          # Copy kịch bản y hệt cho lệnh nice
+          sudo cp /usr/local/bin/ionice /usr/local/bin/nice
+
+          # Cấp quyền thực thi cho 2 công cụ giả
+          sudo chmod +x /usr/local/bin/ionice /usr/local/bin/nice
 
       - name: 🧪 Chạy Kiểm thử BATS Integration
         shell: bash
@@ -231,7 +248,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🚀 Khởi chạy Máy ảo AlmaLinux 9 và 10 & Test Cài đặt
+      - name: 🚀 Khởi chạy Máy ảo AlmaLinux 9 và 10 & Test Cài đặt và BATS
         uses: vmactions/almalinux-vm@f064f3e6615e3eaf053d727d3f6deb05a821fddf
         with:
           release: ${{ matrix.release }}
@@ -240,7 +257,8 @@ jobs:
             export TERM=xterm
             export CI=true
             
-            dnf install -y epel-release sudo curl
+            # Đã BỔ SUNG GÓI 'bats' VÀO ĐÂY
+            dnf install -y epel-release sudo curl bats
 
             curl -sO https://wptangtoc.com/share/wptangtoc-ols
             
@@ -281,7 +299,7 @@ jobs:
             echo "" > /root/.bashrc
             
             bash wptangtoc-ols --auto
-      
+       
             cd $GITHUB_WORKSPACE
             
             # cp -a ./* /etc/wptt/ 2>/dev/null || true
@@ -295,6 +313,27 @@ jobs:
             bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com gihub.wptangtoc.com
             
             echo "✅ Cài đặt thành công trên AlmaLinux ${{ matrix.release }}!"
+
+            # ============================================================
+            # TÍCH HỢP BATS TEST TRÊN ALMALINUX VM
+            # ============================================================
+            echo "🛠️ Đang vô hiệu hóa Menu để chuẩn bị chạy BATS..."
+            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
+            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
+            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
+            for file in /etc/wptt/wptt-*main; do
+              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
+            done
+            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
+
+            echo "🧪 Đang chạy BATS Integration Tests trên AlmaLinux ${{ matrix.release }}..."
+            if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
+              bats tests/
+            else
+              echo "Không tìm thấy file test (.bats). Bỏ qua."
+              exit 1
+            fi
+
       - name: 🖨️ In Log cài đặt nếu thất bại
         if: ${{ failure() }} # Chỉ in ra khi các bước trên bị lỗi
         run: cat /var/log/wptangtoc-install.log || echo "Không tìm thấy file log"
