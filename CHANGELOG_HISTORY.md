@@ -91,28 +91,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.1.4.1
-
-### 🐛 Sửa lỗi
-- **Kiểm tra tính toàn vẹn mã nguồn WordPress:** Tăng cường cơ chế xác thực gói dữ liệu khi tải về, chủ động phát hiện và xử lý lỗi giải nén do đường truyền mạng chập chờn hoặc tải thiếu file.
-
-### 🛠️ Tối ưu hệ thống
-- **Tinh gọn lịch sử thay đổi (Changelog History):** Tối ưu hóa dung lượng lưu trữ bằng cách duy trì 10 phiên bản phát hành gần nhất, giúp việc tra cứu thông tin nhanh chóng và thuận tiện hơn.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-# WPTangToc OLS v8.1.4.0
-
-### 🚀 Tính năng mới
-- **Hỗ trợ trở lại AlmaLinux 10:** Khôi phục khả năng tương thích toàn diện với AlmaLinux 10, giúp quản trị viên tự tin triển khai hệ thống trên nền tảng hệ điều hành thế hệ mới nhất.
-
-### 🐛 Sửa lỗi
-- **Khắc phục lỗi thư viện Certbot:** Xử lý triệt để xung đột phụ thuộc gói của Certbot, đảm bảo quy trình cấp phát và tự động gia hạn chứng chỉ SSL/TLS Let's Encrypt luôn hoạt động ổn định, không bị gián đoạn.
-
-### 🛠️ Tối ưu hệ thống
-- **Tối ưu hóa bộ cài đặt:** Tinh chỉnh luồng kịch bản cài đặt tự động, giúp rút ngắn thời gian thiết lập máy chủ và loại bỏ triệt để nguy cơ xung đột gói phần mềm trong quá trình khởi tạo.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*

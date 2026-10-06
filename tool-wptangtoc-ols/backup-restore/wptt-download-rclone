@@ -1,8 +1,12 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
 umask 077
 
 function huong_dan() {
-  Tính năng tải [download] file sao lưu từ lưu trữ đám mây để phục vụ khôi phục là quá trình bạn lấy lại các tệp tin mã nguồn và cơ sở dữ liệu website đã được lưu trữ trên dịch vụ đám mây [như Google Drive, OneDrive v.v.] về máy chủ của mình.
+  Tính năng tải [download] file sao lưu từ lưu trữ đám mây để phục vụ khôi phục là quá trình bạn lấy lại các tệp tin mã nguồn và cơ sở dữ liệu website đã được lưu trữ trên dịch vụ đám mây [như Google Drive, OneDrive, S3 v.v.] về máy chủ của mình.
 
   Nói đơn giản, đây là bước quan trọng để mang bản sao lưu từ nơi cất giữ an toàn trên mạng về lại nơi bạn cần [ví dụ: máy chủ web] để có thể tiến hành quá trình phục hồi website sau khi gặp sự cố.
 
@@ -14,11 +18,13 @@ function huong_dan() {
   Đây là một bước không thể thiếu trong quy trình khôi phục website từ các bản sao lưu được lưu trữ từ xa.
 }
 
+
+
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -26,12 +32,145 @@ center_text "${C_YELLOW}SAO LƯU & KHÔI PHỤC ➜ Tải file backup từ Lưu 
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 wptt_logs "INFO" "Tải file backup từ lưu trữ đám mây"
 
+# HÀM TẢI FILE ĐA LỚP BẢO VỆ
+function e_download_and_verify() {
+  local target_file="$1"
+  local dest_dir="/usr/local/backup-website/$NAME"
+  local final_dest="$dest_dir/$target_file"
+
+  # 1. TRÍCH XUẤT DUNG LƯỢNG TỪ CLOUD
+  # Dùng awk để cắt đúng dung lượng gốc từ chuỗi rclone_raw đã lấy ở dưới
+  local cloud_size=$(echo "$rclone_raw" | grep -F "$target_file" | head -n1 | awk '{print $1}')
+  
+  if [[ -z "$cloud_size" || ! "$cloud_size" =~ ^[0-9]+$ ]]; then
+    _runloi "Lỗi API: Không thể trích xuất dung lượng file từ Cloud. Hủy tải!"
+    return 1
+  fi
+
+  local human_cloud_size=$(awk "BEGIN {printf \"%.2f MB\", $cloud_size/1024/1024}")
+
+  # 2. KIỂM TRA BỘ NHỚ Ổ CỨNG (DISC SPACE AWARENESS)
+  mkdir -p "$dest_dir"
+  local avail_kb=$(df -k "$dest_dir" | awk 'NR==2 {print $4}')
+  local avail_bytes=$(( avail_kb * 1024 ))
+  local required_bytes=$(( cloud_size + 1073741824 )) # Yêu cầu = Size File + 1GB (1073741824 byte) an toàn đệm
+  
+  if [[ $avail_bytes -lt $required_bytes ]]; then
+    local human_avail=$(awk "BEGIN {printf \"%.2f MB\", $avail_bytes/1024/1024}")
+    _runloi "TỪ CHỐI TẢI - Ổ CỨNG SẮP ĐẦY!"
+    echo -e "   ➜ Dung lượng cần tối thiểu: ${C_YELLOW}$human_cloud_size${C_RESET} (Cộng thêm 1GB vùng đệm bung nén)"
+    echo -e "   ➜ Ổ cứng thực có hiện tại: ${C_RED}$human_avail${C_RESET}"
+    return 1
+  fi
+
+  # 3. MÔI TRƯỜNG TẢI ATOMIC (TẠO THƯ MỤC TEMP RIÊNG BIỆT)
+  mkdir -p /etc/wptt/tmp
+  local tmp_dir=$(mktemp -d /etc/wptt/tmp/dwn_XXXXXX)
+  local tmp_file="$tmp_dir/$target_file"
+
+  echo -e "${C_CYAN}➜ Đang kết nối tải xuống: ${C_YELLOW}$target_file${C_RESET} (Size: $human_cloud_size)"
+
+  # 4. LOGIC RETRY BASH CẤP CAO
+  local max_retries=3
+  local attempt=1
+  local success=false
+
+  while (( attempt <= max_retries )); do
+    if (( attempt > 1 )); then
+      echo -e "   ${C_YELLOW}⟳ Đang thử kết nối tải lại lần $attempt/$max_retries...${C_RESET}"
+    fi
+
+    # Gọi Rclone nguyên bản, an toàn tuyệt đối.
+    rclone copyto "wptangtoc:$CLOUD_DIR/$NAME/$target_file" "$tmp_file" \
+      --stats-one-line --stats=1s --log-level INFO 2>&1 | while IFS= read -r line; do
+      
+      # Tuyệt chiêu bắt lỗi rclone in thẳng ra màn hình để Sysadmin dễ check
+      if [[ "$line" =~ "ERROR" || "$line" =~ "Fatal error" ]]; then
+          echo -e "\n   ${C_RED}Rclone Error: $line${C_RESET}"
+      fi
+      
+      if [[ "$line" == *"%"* && "$line" == *"/"* && "$line" != *"0 B /"* ]]; then
+        local clean_stat=$(echo "$line" | sed -E 's/.*Transferred:[ \t]*//Ig' | sed 's/^[ \t]*//')
+        printf "\r\033[K   ${C_GREEN}⬇ Tiến độ:${C_RESET} %s" "$clean_stat"
+      fi
+    done
+    
+    # Bắt exit code thật sự của Rclone
+    local rclone_exit_code=${PIPESTATUS[0]}
+    echo "" # Xuống dòng sau thanh tiến trình
+    
+    if [[ $rclone_exit_code -eq 0 ]]; then
+      success=true
+      break # Tải 100% thành công, thoát vòng lặp
+    else
+      _runloi "Luồng dữ liệu đứt gãy (Mã lỗi API: $rclone_exit_code)."
+      if (( attempt < max_retries )); then
+        local backoff=$(( attempt * 5 ))
+        echo -e "   ➜ Hệ thống tạm nghỉ ${backoff}s để ổn định lại kết nối..."
+        sleep $backoff
+      fi
+      ((attempt++))
+    fi
+  done
+
+  if [[ "$success" != "true" ]]; then
+    _runloi "THẤT BẠI: Quá 3 lần rớt mạng. Đã hủy diệt file rác để bảo vệ hệ thống!"
+    rm -rf "${tmp_dir:?}"
+    return 1
+  fi
+
+  # 5. KIỂM ĐỊNH SIZE KHỚP 100% (CHỐNG LỖI ĐỨT BIT)
+  _runing "Đang đối chiếu khối lượng dữ liệu Cloud và Local..."
+  local local_size=$(stat -c%s "$tmp_file" 2>/dev/null)
+  
+  if [[ "$local_size" != "$cloud_size" ]]; then
+    _runloi "CẢNH BÁO: Bất đồng bộ dung lượng! (Tải về: $local_size Byte | Gốc: $cloud_size Byte)"
+    rm -rf "${tmp_dir:?}"
+    return 1
+  fi
+  _rundone "Dung lượng khớp hoàn hảo."
+
+  # 6. KIỂM ĐỊNH CẤU TRÚC ZIP/GZ/ZST (INTEGRITY CHECK)
+  _runing "Đang rà quét cấu trúc nội tại (Integrity Check)..."
+  if echo "$target_file" | grep -Eq "\.zip$"; then
+    if ! unzip -tq "$tmp_file" >/dev/null 2>&1; then
+      _runloi "MÃ ĐỘC/HỎNG: Cấu trúc file ZIP bị rách vỡ do quá trình truyền tải!"
+      rm -rf "${tmp_dir:?}"
+      return 1
+    fi
+  elif echo "$target_file" | grep -Eq "\.(gz|sql\.gz|tar\.gz)$"; then
+    if ! gzip -t "$tmp_file" >/dev/null 2>&1; then
+      _runloi "MÃ ĐỘC/HỎNG: Cấu trúc file GZ bị vỡ nát!"
+      rm -rf "${tmp_dir:?}"
+      return 1
+    fi
+  elif echo "$target_file" | grep -Eq "\.(zst|tar\.zst)$"; then
+    if command -v zstd >/dev/null 2>&1; then
+      if ! zstd -tq "$tmp_file" >/dev/null 2>&1; then
+        _runloi "MÃ ĐỘC/HỎNG: Cấu trúc file ZSTD bị vỡ nát!"
+        rm -rf "${tmp_dir:?}"
+        return 1
+      fi
+    fi
+  fi
+  _rundone "Xác thực mã nén (CRC32/Integrity) an toàn tuyệt đối."
+
+  # 7. HOÀN TẤT & ATOMIC MOVE (DI CHUYỂN NHANH VÀO ĐÍCH)
+  _runing "Đang hoàn tất và bảo mật file..."
+  mv "$tmp_file" "$final_dest"
+  chmod 600 "$final_dest"
+   rm -rf "${tmp_dir:?}"
+  _rundone "Dữ liệu toàn vẹn. Đã đưa vào phân vùng khôi phục an toàn!"
+  
+  return 0
+}
+
 # ==============================================================================
-# KIỂM TRA RCLONE VÀ NHẬN DIỆN CLOUD (CHUẨN XÁC THEO TYPE)
+# KIỂM TRA RCLONE VÀ NHẬN DIỆN CLOUD
 # ==============================================================================
 RCLONE_CONF="/root/.config/rclone/rclone.conf"
 
-if ! grep -q 'wptangtoc' "$RCLONE_CONF" 2>/dev/null; then
+if ! grep -q '\[wptangtoc\]' "$RCLONE_CONF" 2>/dev/null; then
   echo -e "${C_RED}❌ Lỗi: Bạn chưa kích hoạt Rclone trên hệ thống này!${C_RESET}"
   echo -e "Vui lòng cấu hình Rclone trước khi sử dụng tính năng tải backup."
   sleep 3
@@ -42,34 +181,32 @@ fi
 CLOUD_DIR="wptangtoc_ols_backup"
 cloud_service="Google Drive"
 
-# Bắt buộc quét đúng tham số "type =" để tránh nhận diện nhầm chuỗi Token
 if grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*onedrive' "$RCLONE_CONF" 2>/dev/null; then
   cloud_service="OneDrive"
 elif grep -E -q '^[[:space:]]*type[[:space:]]*=[[:space:]]*s3' "$RCLONE_CONF" 2>/dev/null; then
   cloud_service="S3 Storage"
-  CLOUD_DIR="wptangtoc-ols-backup" # S3 không hỗ trợ dấu gạch dưới
+  CLOUD_DIR="wptangtoc-ols-backup"
 elif rclone lsd wptangtoc: 2>/dev/null | grep -q 'wptangtoc-ols-backup'; then
   CLOUD_DIR="wptangtoc-ols-backup"
 fi
 
-
-#tuơng thích những nguời dùng custom ánh xạ alias thư mục custom đuờng dẫn
-ALIAS_TARGET=$(grep -A 5 '\[wptangtoc\]' "$RCLONE_CONF" | grep 'remote[[:space:]]*=' | awk -F'=' '{print $2}' | tr -d ' ')
+# Tương thích ánh xạ Alias thư mục
+ALIAS_TARGET=$(grep -A 5 '\[wptangtoc\]' "$RCLONE_CONF" 2>/dev/null | grep 'remote[[:space:]]*=' | awk -F'=' '{print $2}' | tr -d ' ' | head -n 1)
 if [[ -n $ALIAS_TARGET ]];then
-	if [[ "$ALIAS_TARGET" == *"s3:"* || $ALIAS_TARGET == *"wptangtoc_s3_goc:"* ]]; then
-		cloud_service="S3 Storage"
-		CLOUD_DIR="wptangtoc-ols-backup" # S3 dùng gạch ngang
-	elif [[ "$ALIAS_TARGET" == *"gdrive:"* ]]; then
-		cloud_service="Google Drive"
-		CLOUD_DIR="wptangtoc_ols_backup" # GDrive dùng gạch dướ
-	elif [[ "$ALIAS_TARGET" == *"onedrive:"* ]]; then
-		cloud_service="OneDrive"
-		CLOUD_DIR="wptangtoc_ols_backup" # GDrive dùng gạch dướ
-	fi
+  if [[ "$ALIAS_TARGET" == *"s3:"* || $ALIAS_TARGET == *"wptangtoc_s3_goc:"* ]]; then
+    cloud_service="S3 Storage"
+    CLOUD_DIR="wptangtoc-ols-backup"
+  elif [[ "$ALIAS_TARGET" == *"gdrive:"* ]]; then
+    cloud_service="Google Drive"
+    CLOUD_DIR="wptangtoc_ols_backup"
+  elif [[ "$ALIAS_TARGET" == *"onedrive:"* ]]; then
+    cloud_service="OneDrive"
+    CLOUD_DIR="wptangtoc_ols_backup"
+  fi
 fi
 
 # ==============================================================================
-# GỌI THƯ VIỆN CHỌN DOMAIN LÕI
+# CHỌN TÊN MIỀN
 # ==============================================================================
 . /etc/wptt/tenmien
 lua_chon_NAME "Download file backup từ CLOUD"
@@ -90,6 +227,7 @@ fi
 echo ""
 _runing "Đang tải danh sách file từ $cloud_service..."
 
+# Lưu kết quả rclone lsl vào biến toàn cục để dùng cho check Size phía trên
 rclone_raw=$(rclone lsl "wptangtoc:$CLOUD_DIR/$NAME" 2>/dev/null | tr -d '\r')
 rclone_output=$(echo "$rclone_raw" | sort -k2,3r | sed -E 's/^[ \t]*[0-9]+[ \t]+[0-9-]+[ \t]+[0-9:\.]+[ \t]+//' | grep -E "\.(zip|tar\.gz|tar\.zst|sql|sql\.gz|sql\.zst)$")
 
@@ -100,12 +238,13 @@ fi
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   _runloi "Truy xuất danh sách thất bại"
-  echo -e "${C_YELLOW}Không có file backup hợp lệ nào đang lưu trữ trên Cloud!${C_RESET}"
+  echo -e "${C_YELLOW}Không có file backup hợp lệ nào đang lưu trữ trên Cloud của domain này!${C_RESET}"
   sleep 3
   exec /etc/wptt/wptt-backup-restore-main 1
 fi
 _rundone "Tải danh sách từ $cloud_service thành công"
 
+# HỘP THOẠI DANH SÁCH CLOUD
 box_inner_width=${box_inner_width:-78}
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}DANH SÁCH FILE BACKUP ĐANG LƯU TRÊN CLOUD${C_RESET}"
@@ -138,38 +277,30 @@ while true; do
   fi
 done
 
-# XÁC NHẬN TẢI FILE 1
+# ==============================================================================
+# TẢI FILE 1
+# ==============================================================================
 echo ""
 dongy_taifile1="n"
-if wptt_xac_nhan "Xác nhận để tải File này về máy chủ?" "${C_BOLD_WHITE}Tên file:${C_RESET} ${C_YELLOW}$file1${C_RESET}" "" "Đồng ý Tải" "Hủy bỏ"; then
+status_file1="none"
+
+if wptt_xac_nhan "Xác nhận tải File này về hệ thống phục hồi?" "${C_BOLD_WHITE}Tên file:${C_RESET} ${C_YELLOW}$file1${C_RESET}" "" "Đồng ý Tải" "Hủy bỏ"; then
   dongy_taifile1="y"
   echo ""
   
-  mkdir -p "/usr/local/backup-website/$NAME"
-  rm -f "/usr/local/backup-website/${NAME:?}/${file1:?}"
-  
-  echo -e "${C_CYAN}➜ Đang tải xuống: ${C_YELLOW}$file1${C_RESET}"
-  
-  # [TUYỆT KỸ HỨNG LUỒNG] Ống dẫn Pipe chặn bắt Output của Rclone
-  rclone copyto "wptangtoc:$CLOUD_DIR/$NAME/$file1" "/usr/local/backup-website/$NAME/$file1" \
-    --stats-one-line --stats=1s --log-level INFO 2>&1 | while IFS= read -r line; do
-    
-    if [[ "$line" == *"%"* && "$line" == *"/"* && "$line" != *"0 B /"* ]]; then
-      clean_stat=$(echo "$line" | sed -E 's/.*Transferred:[ \t]*//Ig' | sed 's/^[ \t]*//')
-      printf "\r\033[K   ${C_GREEN}⬇ Tiến độ:${C_RESET} %s" "$clean_stat"
-    fi
-  done
-  
-  chmod 600 /usr/local/backup-website/"$NAME"/"$file1" #chmod 600 luôn nâng cao bảo mật
-  echo "" 
-  _rundone "Đã tải thành công $file1"
+  if e_download_and_verify "$file1"; then
+    status_file1="success"
+  else
+    status_file1="failed"
+  fi
 fi
 
 # ==============================================================================
-# BƯỚC 2: LOGIC GỢI Ý TẢI THÊM FILE ĐỒNG BỘ
+# LOGIC GỢI Ý TẢI THÊM FILE ĐỒNG BỘ (FILE 2)
 # ==============================================================================
 echo ""
 dongy_taifile2="n"
+status_file2="none"
 file2=""
 
 filtered_selects=()
@@ -178,17 +309,17 @@ for f in "${selects[@]}"; do
 done
 selects=("${filtered_selects[@]}")
 
-if [[ ${#selects[@]} -gt 0 ]]; then
+if [[ ${#selects[@]} -gt 0 && "$status_file1" != "failed" ]]; then
   
   if echo "$file1" | grep -Eq "\.(zip|tar\.gz|tar\.zst)$"; then
-    echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Mã nguồn. Nên tải thêm Database để khôi phục đồng bộ."
+    echo -e "${C_YELLOW} Gợi ý:${C_RESET} Bạn đã tải file Mã nguồn. Nên tải thêm Database để khôi phục đồng bộ."
     ggdrthem="File Database (.sql / .gz / .zst)"
   elif echo "$file1" | grep -Eq "\.(sql|sql\.gz|sql\.zst)$"; then
-    echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Database. Nên tải thêm Mã nguồn để khôi phục đồng bộ."
+    echo -e "${C_YELLOW} Gợi ý:${C_RESET} Bạn đã tải file Database. Nên tải thêm Mã nguồn để khôi phục đồng bộ."
     ggdrthem="File Mã nguồn (.zip / .tar\.gz / .tar\.zst)"
   fi
 
-  if [[ -n "$ggdrthem" ]]; then
+  if [[ -n "${ggdrthem:-}" ]]; then
     if wptt_xac_nhan "Bạn có muốn TIẾP TỤC tải thêm $ggdrthem không?" "" "" "Có (Tải thêm)" "Không cần"; then
       echo ""
       echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -223,22 +354,12 @@ if [[ ${#selects[@]} -gt 0 ]]; then
       if [[ -n "$file2" ]]; then
         dongy_taifile2="y"
         echo ""
-        rm -f "/usr/local/backup-website/${NAME:?}/${file2:?}"
         
-        echo -e "${C_CYAN}➜ Đang tải xuống: ${C_YELLOW}$file2${C_RESET}"
-        
-        rclone copyto "wptangtoc:$CLOUD_DIR/$NAME/$file2" "/usr/local/backup-website/$NAME/$file2" \
-          --stats-one-line --stats=1s --log-level INFO 2>&1 | while IFS= read -r line; do
-          if [[ "$line" == *"%"* && "$line" == *"/"* && "$line" != *"0 B /"* ]]; then
-            clean_stat=$(echo "$line" | sed -E 's/.*Transferred:[ \t]*//Ig' | sed 's/^[ \t]*//')
-            printf "\r\033[K   ${C_GREEN}⬇ Tiến độ:${C_RESET} %s" "$clean_stat"
-          fi
-        done
-        
-		chmod 600 /usr/local/backup-website/"$NAME"/"$file2" #chmod 600 luôn nâng cao bảo mật
-
-        echo "" 
-        _rundone "Đã tải thành công $file2"
+        if e_download_and_verify "$file2"; then
+          status_file2="success"
+        else
+          status_file2="failed"
+        fi
       fi
     fi
   fi
@@ -247,38 +368,39 @@ fi
 # ==============================================================================
 # BẢNG BÁO CÁO TỔNG HỢP (UX BO CONG)
 # ==============================================================================
-echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}TIẾN TRÌNH DOWNLOAD HOÀN TẤT${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
 has_error=false
 
 if [[ "$dongy_taifile1" == "y" ]]; then
-  if [[ -f "/usr/local/backup-website/$NAME/$file1" ]]; then
-    left_text "▪ Đã lưu thành công : ${C_GREEN}$file1${C_RESET}" 2
+  if [[ "$status_file1" == "success" ]]; then
+    left_text "▪ Đã lưu an toàn   : ${C_GREEN}$file1${C_RESET}" 2
   else
-    left_text "▪ Lỗi tải xuống     : ${C_RED}$file1${C_RESET}" 2
+    left_text "▪ Lỗi tải xuống    : ${C_RED}$file1${C_RESET}" 2
     has_error=true
   fi
 fi
 
 if [[ "$dongy_taifile2" == "y" && -n "$file2" ]]; then
-  if [[ -f "/usr/local/backup-website/$NAME/$file2" ]]; then
-    left_text "▪ Đã lưu thành công : ${C_GREEN}$file2${C_RESET}" 2
+  if [[ "$status_file2" == "success" ]]; then
+    left_text "▪ Đã lưu an toàn   : ${C_GREEN}$file2${C_RESET}" 2
   else
-    left_text "▪ Lỗi tải xuống     : ${C_RED}$file2${C_RESET}" 2
+    left_text "▪ Lỗi tải xuống    : ${C_RED}$file2${C_RESET}" 2
     has_error=true
   fi
 fi
 
-if ! $has_error; then
+if ! $has_error && [[ "$dongy_taifile1" == "y" || "$dongy_taifile2" == "y" ]]; then
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Khu vực lưu trữ: /usr/local/backup-website/$NAME/"
+  left_text "Khu vực lưu trữ: /usr/local/backup-website/$NAME/" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-  echo -e "${C_CYAN}Ghi chú:${C_RESET} File đã sẵn sàng. Bạn có thể sử dụng Menu Khôi phục ngay bây giờ."
+  echo -e "${C_CYAN}Ghi chú:${C_RESET} Dữ liệu đã vượt qua vòng kiểm duyệt. Bạn có thể sử dụng Menu Khôi phục."
 else
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "${C_YELLOW}Trạng thái: Có file bị lỗi hoặc không đầy đủ trong quá trình tải!${C_RESET}"
+  left_text "${C_YELLOW}Trạng thái: Tiến trình bị hủy do mạng đứt gãy hoặc sai lệch dữ liệu!${C_RESET}" 2
+  left_text "${C_RED}Hệ thống đã dọn sạch tệp rác rưởi để bảo vệ an toàn cho website.${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 fi
 
