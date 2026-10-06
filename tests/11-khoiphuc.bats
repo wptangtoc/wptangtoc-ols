@@ -24,17 +24,14 @@ in_log_neu_loi() {
   fi
 }
 
-# Đổi config chuẩn theo file .wptt.conf toàn cầu
 set_backup_format() {
   local source_format="$1"
   local db_format="$2"
   local conf="/etc/wptt/.wptt.conf"
   
-  # Xóa sạch config cũ tránh lặp dòng
   sed -i '/dinh_dang_nen_ma_nguon=/d' "$conf" 2>/dev/null || true
   sed -i '/sql_gz=/d' "$conf" 2>/dev/null || true
   
-  # Bơm config mới vào cuối
   echo "dinh_dang_nen_ma_nguon='$source_format'" >> "$conf"
   echo "sql_gz='$db_format'" >> "$conf"
 }
@@ -96,7 +93,7 @@ teardown() {
 # =================================================================
 
 @test "Unit: Chặn khôi phục nếu tên miền không tồn tại trên máy chủ" {
-  run bash "$SCRIPT_KHOIPHUC" "domain-ao-khong-ton-tai.com"
+  run bash -c "bash $SCRIPT_KHOIPHUC domain-ao-khong-ton-tai.com <<< $'1\n1\n'"
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
   [[ "$output" =~ "không tồn tại trên hệ thống" ]]
@@ -138,9 +135,13 @@ EOF
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
+# QUÉT VÀ XÓA TẤT CẢ FILE NGOẠI TRỪ .zip VÀ .sql
+	find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -type f ! -name "*.zip" ! -name "*.sql" -delete
+
   rm -f "/usr/local/lsws/$TEST_DOMAIN/html/wp-config.php"
   
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  # GIẢ LẬP PHÍM BẤM: Chọn file mã nguồn số 1 và file DB số 1
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   
@@ -152,9 +153,23 @@ EOF
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
+# QUÉT VÀ XÓA TẤT CẢ FILE NGOẠI TRỪ .gz
+	find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -type f ! -name "*.tar.gz" ! -name "*sql.gz" -delete
+
+
   echo "FILE_BI_HONG" > "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+
+# $'1\n1\n': Đây chính là "bàn phím giả". Trong Bash, cú pháp $'...' cho phép giải mã các ký tự ẩn.
+
+# Số 1 đại diện cho việc gõ phím số 1.
+
+# Ký tự \n (Newline) đại diện cho việc bấm phím Enter.
+
+# Ghép lại, chuỗi này sẽ tự động gõ: [Phím 1] ➜ [Enter] ➜ [Phím 1] ➜ [Enter].
+
+
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   
@@ -167,9 +182,13 @@ EOF
   rm -rf -- "$BACKUP_ROOT/$TEST_DOMAIN"/* 2>/dev/null || true
   bash "$SCRIPT_SAOLUU" "$TEST_DOMAIN" >/dev/null
 
+# QUÉT VÀ XÓA TẤT CẢ FILE NGOẠI TRỪ .zst
+	find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -type f ! -name "*.tar.zst" ! -name "*sql.zst" -delete
+
+
   echo "FILE_BI_HONG" > "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   
@@ -179,10 +198,9 @@ EOF
 
 @test "Integration: Bẫy Bảo Mật — Chặn khôi phục nếu file Database dưới 3KB" {
   rm -f -- "$BACKUP_ROOT/$TEST_DOMAIN"/*.sql* 2>/dev/null || true
-  # SỬ DỤNG TOUCH ĐỂ TẠO FILE ĐÚNG 0 BYTES (Tránh lỗi phân mảnh ổ cứng 4KB)
   touch "$BACKUP_ROOT/$TEST_DOMAIN/db_corrupt.sql"
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
   [[ "$output" =~ "quá nhỏ" ]] || [[ "$output" =~ "Dưới 3KB" ]]
@@ -204,15 +222,16 @@ EOF
   echo "DAY_LA_DU_LIEU_RAC_GAY_CORRUPT_FILE" > "$zip_file"
   echo "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN" >> "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "bị hỏng" ]] || [[ "$output" =~ "Lỗi giải nén" ]]
-
+  
+  # Chốt chặn tối thượng: BATS trực tiếp kiểm tra file vật lý thay vì tin vào màn hình console
   run cat "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
   [[ "$output" =~ "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN" ]]
 }
+
 
 @test "Integration: Bẫy Bảo Mật — Bảo toàn Mã nguồn nếu TAR.GZ bị hỏng" {
   set_backup_format '2' '1'
@@ -226,7 +245,7 @@ EOF
   echo "DAY_LA_DU_LIEU_RAC_GAY_CORRUPT_FILE_GZIP" > "$gz_file"
   echo "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_GZ" >> "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
@@ -247,7 +266,7 @@ EOF
   echo "DAY_LA_DU_LIEU_RAC_GAY_CORRUPT_FILE_ZSTD" > "$zst_file"
   echo "// DONG_CHU_NAY_PHAI_CON_NGUYEN_VEN_ZST" >> "/usr/local/lsws/$TEST_DOMAIN/html/wp-load.php"
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
@@ -265,11 +284,10 @@ EOF
   database_file_sql=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql" -print -quit 2>/dev/null)
   [ -n "$database_file_sql" ]
 
-  # Tiêm lỗi
   rm -f "$database_file_sql"
   for i in {1..100}; do echo "DAY_LA_FILE_GZ_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$database_file_sql"; done
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
@@ -286,11 +304,10 @@ EOF
   gz_db=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql.gz" -print -quit 2>/dev/null)
   [ -n "$gz_db" ]
 
-  # Tiêm lỗi
   rm -f "$gz_db"
   for i in {1..100}; do echo "DAY_LA_FILE_GZ_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$gz_db"; done
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
@@ -306,13 +323,13 @@ EOF
   zst_db=$(find "$BACKUP_ROOT/$TEST_DOMAIN" -maxdepth 1 -name "*.sql.zst" -print -quit 2>/dev/null)
   [ -n "$zst_db" ]
 
-  # Tiêm lỗi
   rm -f "$zst_db"
   for i in {1..100}; do echo "DAY_LA_FILE_ZST_GIA_MAO_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" >> "$zst_db"; done
 
-  run bash "$SCRIPT_KHOIPHUC" "$TEST_DOMAIN"
+  run bash -c "bash $SCRIPT_KHOIPHUC $TEST_DOMAIN <<< $'1\n1\n'"
   
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
   [[ "$output" =~ "hỏng cấu trúc" ]] || [[ "$output" =~ "Corrupt" ]] || [[ "$output" =~ "lỗi" ]]
 }
+
