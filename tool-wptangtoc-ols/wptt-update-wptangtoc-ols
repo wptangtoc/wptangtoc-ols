@@ -1,15 +1,15 @@
 #!/bin/bash
 . /etc/wptt/.wptt.conf
-wptangtocols_version=$(curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-update-tu-dong=$Website_chinh)
+wptangtocols_version=$(curl -s --connect-timeout 5 --max-time 15 https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-update-tu-dong=$Website_chinh)
 if [[ "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
 
   #get checksum
   unset checksum_wptangtoc_file id_checksum id_checksum_user
   # Lấy nội dung file về
-  checksum_wptangtoc_file=$(curl -s https://wptangtoc.com/share/checksum.txt)
+  checksum_wptangtoc_file=$(curl -s --connect-timeout 5 --max-time 15 https://wptangtoc.com/share/checksum.txt)
   if [[ $checksum_wptangtoc_file = '' ]]; then
     sleep 3
-    checksum_wptangtoc_file=$(curl -skL http://wptangtoc.com/share/checksum.txt)
+    checksum_wptangtoc_file=$(curl -skL --connect-timeout 5 --max-time 15 http://wptangtoc.com/share/checksum.txt)
   fi
 
   # Chuyển thành mảng (Array) - Tự động tách theo dòng
@@ -19,10 +19,14 @@ if [[ "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
   id_checksum="${checksum_array[0]}"      # Dòng 1
   id_checksum_user="${checksum_array[1]}" # Dòng 2
 
-  cd
-  rm -f wptangtoc-ols.zip #xoá file wptangtoc-ols.zip hiện hữu nếu có
+  OLD_PWD=$(pwd)
+  TMP_DIR=$(mktemp -d)
+  cd "$TMP_DIR" || exit
 
-  wget -q https://wptangtoc.com/share/wptangtoc-ols.zip #download file
+  # cd
+  # rm -f wptangtoc-ols.zip #xoá file wptangtoc-ols.zip hiện hữu nếu có
+
+  wget -q --timeout=15 --tries=3 https://wptangtoc.com/share/wptangtoc-ols.zip #download file
 
   if [[ $id_checksum != $(/usr/bin/md5sum wptangtoc-ols.zip | cut -f1 -d ' ' | head -1) ]]; then #xác thực nếu khác checksum sẽ báo lỗi
     rm -f wptangtoc-ols.zip                                                                      #xoá file nếu như checksum không đúng để báo lỗi không thực thi luôn
@@ -30,13 +34,15 @@ if [[ "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
 
   if [[ ! -f wptangtoc-ols.zip ]]; then
     sleep 3 #nghỉ ngắt để xem máy chủ phục hồi
-    wget -q http://wptangtoc.com/share/wptangtoc-ols.zip --no-check-certificate
+    wget -q --timeout=15 --tries=3 http://wptangtoc.com/share/wptangtoc-ols.zip --no-check-certificate
     if [[ $id_checksum != $(/usr/bin/md5sum wptangtoc-ols.zip | cut -f1 -d ' ' | head -1) ]]; then #xác thực nếu khác checksum sẽ báo lỗi
       rm -f wptangtoc-ols.zip                                                                      #xoá file nếu như checksum không đúng để báo lỗi không thực thi luôn
     fi
   fi
 
   if [[ ! -f wptangtoc-ols.zip ]]; then
+    cd "$OLD_PWD" || cd /root
+    rm -rf "$TMP_DIR"
     exit #thoát nếu không download được không checksum được
   fi
 
@@ -65,7 +71,20 @@ if [[ "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
   kiem_tra_ton_tai_nhom=$(cat /etc/group | grep '^wptangtoc-ols:')
 
   unzip -o wptangtoc-ols.zip
-  \cp -rf tool-wptangtoc-ols/* /etc/wptt/
+
+  # \cp -rf tool-wptangtoc-ols/* /etc/wptt/
+
+  if ! \cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null; then #ệnh \cp -rf bên dưới nếu bị lỗi, lý do bất ngờ nào đó tiến trình dừng lại không hoàn tất được lệnh copy. Bộ code mới bị chép đè dang dở, bộ code cũ thì đã hỏng. phương án thực thi an toàn hơn nếu cp bị lỗi sẽ có phương án tự cứu chữa
+    unzip -oq "$BACKUP_FILE" -d /etc/wptt/
+    \cp -f /etc/wptt/wptangtoc /usr/bin
+    rm -f /etc/wptt/wptangtoc
+    \cp -f /etc/wptt/wptt /usr/bin
+    rm -f /etc/wptt/wptt
+    cd "$OLD_PWD" || cd /root
+    rm -rf "$TMP_DIR"
+    exit
+  fi
+
   rm -f wptangtoc-ols.zip
   rm -rf tool-wptangtoc-ols
 
@@ -108,14 +127,23 @@ if [[ "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
   sed -i "/version_wptangtoc_ols/d" /etc/wptt/.wptt.conf
   echo "version_wptangtoc_ols=$wptangtocols_version" >>/etc/wptt/.wptt.conf
   echo "$wptangtocols_version" >/tmp/wptangtoc-ols-version
-  curl -sO https://wptangtoc.com/share/update && bash update
+
+  curl -sO https://wptangtoc.com/share/update --connect-timeout 5 --max-time 15
+  if grep -q 'UPDATE_DONE="YES"' update; then #xác thực file update download có bảo toàn file hay không hay bị giám đoạn
+    /bin/bash update
+  fi
   rm -f update
+
   if [[ $key_activate ]]; then
-    wget -q https://key.wptangtoc.com/?${key_activate} --no-check-certificate -U "Activate key WPTangToc OLS" -O premium.zip
+    wget -q --timeout=15 --tries=3 https://key.wptangtoc.com/?${key_activate} --no-check-certificate -U "Activate key WPTangToc OLS" -O premium.zip
     if [[ -s premium.zip ]]; then
       unzip -oq premium.zip -d /etc/wptt/add-one
       rm -f premium.zip
       chmod -R 700 /etc/wptt/add-one
     fi
   fi
+
+  cd "$OLD_PWD" || cd /root
+  rm -rf "$TMP_DIR"
+#hoàn tất update
 fi
