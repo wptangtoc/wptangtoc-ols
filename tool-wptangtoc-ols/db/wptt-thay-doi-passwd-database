@@ -15,7 +15,6 @@ function huong_dan() {
   * Khi nhân viên/người quản lý cũ nghỉ việc: Đổi mật khẩu của user mà họ sử dụng.
   * Sau khi thiết lập ban đầu: Đặt một mật khẩu mạnh hơn cho user sau khi tạo.
   * Tuân thủ chính sách mật khẩu: Đảm bảo mật khẩu đủ mạnh và phức tạp theo quy định.
-
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
@@ -78,11 +77,11 @@ if wptt_xac_nhan "Xác nhận ĐỔI MẬT KHẨU Database?" "${C_BOLD_WHITE}Web
   password=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 36)
 
   password_database_root=$(wptt_giai_ma "$database_admin_password" 2>/dev/null)
-[[ -z "$password_database_root" ]] && password_database_root="$database_admin_password" #không mã hoá trả tuơng thích nguợc
+  [[ -z "$password_database_root" ]] && password_database_root="$database_admin_password"
 
-TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
-chmod 600 "$TEMP_CNF_ROOT"
-cat >"$TEMP_CNF_ROOT" <<EOF
+  TEMP_CNF_ROOT=$(mktemp -p "/etc/wptt/tmp" wptt_db_XXXXXX.cnf)
+  chmod 600 "$TEMP_CNF_ROOT"
+  cat >"$TEMP_CNF_ROOT" <<EOF
 [client]
 user="${database_admin_username}"
 password="${password_database_root}"
@@ -95,37 +94,41 @@ quick
 quote-names
 max_allowed_packet=1G
 EOF
-trap "rm -f ${TEMP_CNF_ROOT}" EXIT
 
+  # Lớp khiên bảo vệ chống rò rỉ file cấu hình tạm khi tiến trình bị ngắt đột ngột
+  trap 'rm -f "${TEMP_CNF_ROOT}"' EXIT INT TERM
 
-#begin nguy cơ local sql Injection
-wptt_abort_db_injection() {
-	_runloi "$1"
-	sleep 2
-	[[ "$2" == "98" ]] && exec /etc/wptt/wptt-db-main 1
-	return 2>/dev/null || exit 1
-}
+  # Khai báo hàm hủy an toàn
+  wptt_abort_db_injection() {
+    _runloi "$1"
+    rm -f "${TEMP_CNF_ROOT}"
+    sleep 2
+    [[ "$2" == "98" ]] && exec /etc/wptt/wptt-db-main 1
+    return 2>/dev/null || exit 1
+  }
 
-# 2. Thực thi kiểm tra 3 lớp bằng toán tử ngắn mạch (&&)
-[[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
-[[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
+  # Kiểm tra tính hợp lệ đầu vào chống Local SQL Injection
+  [[ ! "$DB_Name_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên Database chứa ký tự không hợp lệ!" "$1"
+  [[ ! "$DB_User_web" =~ ^[a-zA-Z0-9_]+$ ]] && wptt_abort_db_injection "Tên User Database chứa ký tự không hợp lệ!" "$1"
 
-#giải mã password database username
-password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
-[[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web" #không mã hoá trả tuơng thích nguợc
-[[ "$password_database_website_giai_ma" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu USer Database chứa ký tự cấm (khoảng trắng, dấu nháy, backtick...)!" "$1"
+  password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
+  [[ -z "$password_database_website_giai_ma" ]] && password_database_website_giai_ma="$DB_Password_web"
+  [[ "$password_database_website_giai_ma" =~ [[:space:]\'\"\`\\] ]] && wptt_abort_db_injection "Mật khẩu User Database chứa ký tự cấm!" "$1"
 
-#end nguy cơ local sql Injection
-
-
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "SET PASSWORD FOR '$DB_User_web'@'localhost' = PASSWORD('${password}')" >/dev/null 2>&1
-
-  check_remote=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "SHOW GRANTS FOR '$DB_User_web'@'%';" 2>/dev/null)
-  if [[ -n "$check_remote" ]]; then
-    mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "SET PASSWORD FOR '$DB_User_web'@'%' = PASSWORD('${password}')" >/dev/null 2>&1
+  # THỰC THI CHUẨN HIỆN ĐẠI (Thay thế hàm PASSWORD() đã bị gỡ bỏ ở MariaDB mới)
+  if ! mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false \
+       -e "ALTER USER '$DB_User_web'@'localhost' IDENTIFIED BY '${password}'; FLUSH PRIVILEGES;" >/dev/null 2>&1; then
+      wptt_abort_db_injection "Đổi mật khẩu MariaDB cho localhost thất bại!" "$1"
   fi
 
-  mariadb --defaults-extra-file="$TEMP_CNF_ROOT" -e "FLUSH PRIVILEGES" >/dev/null 2>&1
+  check_remote=$(mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false -e "SHOW GRANTS FOR '$DB_User_web'@'%';" 2>/dev/null)
+  if [[ -n "$check_remote" ]]; then
+      if ! mariadb --defaults-extra-file="$TEMP_CNF_ROOT" --ssl-verify-server-cert=false \
+           -e "ALTER USER '$DB_User_web'@'%' IDENTIFIED BY '${password}'; FLUSH PRIVILEGES;" >/dev/null 2>&1; then
+          wptt_abort_db_injection "Đổi mật khẩu MariaDB cho host từ xa (%) thất bại!" "$1"
+      fi
+  fi
+
   rm -f "${TEMP_CNF_ROOT:?}"
 
   # Ghi đè vào file cấu hình WPTangToc
@@ -135,20 +138,20 @@ password_database_website_giai_ma=$(wptt_giai_ma "$DB_Password_web" 2>/dev/null)
   echo "DB_Password_web='${password_database_website_ma_hoa_luu_tru}'" >>"$pathcheck"
 
   systemctl restart mariadb.service >/dev/null 2>&1
-  wptt_smart_reload_lsws >/dev/null 2>&1
 
   _rundone "Đang khởi tạo mật khẩu và cập nhật MariaDB..."
 
   # ==============================================================================
   # CẬP NHẬT TỰ ĐỘNG VÀO WP-CONFIG.PHP
   # ==============================================================================
-  wp_config_status="Không tìm thấy WordPress để tự động cập nhật"
-  checkplugin="/usr/local/lsws/$NAME/html/wp-config.php"
-  if [[ -f "$checkplugin" || -f /usr/local/lsws/$NAME/html/configuration.php ]]; then
-    _runing "Đồng bộ tài khoản database mới với mã nguồn"
-    (/etc/wptt/db/wptt-ket-noi "$NAME" >/dev/null 2>&1)
-    _rundone "Đồng bộ tài khoản database mới với mã nguồn"
-  fi
+	wp_config_status="Không tìm thấy WordPress để tự động cập nhật"
+	checkplugin="/usr/local/lsws/$NAME/html/wp-config.php"
+	if [[ -f "$checkplugin" || -f /usr/local/lsws/$NAME/html/configuration.php ]]; then
+		_runing "Đồng bộ tài khoản database mới với mã nguồn"
+		. /etc/wptt/db/wptt-ket-noi "$NAME" >/dev/null 2>&1
+		wp_config_status="Đã đồng bộ tự động thành công"
+		_rundone "Đồng bộ tài khoản database mới với mã nguồn"
+	fi
 
   # ==============================================================================
   # BẢNG BÁO CÁO THÀNH CÔNG (UX BO CONG)
