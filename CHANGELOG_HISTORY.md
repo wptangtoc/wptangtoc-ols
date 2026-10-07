@@ -1,3 +1,11 @@
+## Phiên bản 8.2.1.7
+
+### 🛠️ Tối ưu hệ thống
+- **Tối ưu bộ cài đặt trên Ubuntu:** Nâng cấp cơ chế cấu hình và nạp kho lưu trữ (repository) LiteSpeed, giúp quá trình triển khai máy chủ diễn ra nhanh chóng, ổn định và tránh lỗi thiếu phụ thuộc khi cài đặt.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.1.6
 
 ### 🛠️ Tối ưu hệ thống
