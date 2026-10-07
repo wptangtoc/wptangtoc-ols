@@ -526,11 +526,57 @@ _step "Cài đặt Repository & Môi trường OpenLiteSpeed"
 mkdir -p /etc/wptt/ /etc/wptt/vhost /etc/wptt-user
 
 wptt_run bash -c '
-OUTPUT=$(cat /etc/*release)
-if echo "$OUTPUT" | grep -q "Ubuntu 22.04"; then
-  wget -qO - https://rpms.litespeedtech.com/debian/enable_lst_debian_repo.sh | sudo bash
-elif echo "$OUTPUT" | grep -q "Ubuntu 24.04"; then
-  wget -qO openlitespeed.sh https://repo.litespeed.sh && bash openlitespeed.sh && rm -f openlitespeed.sh
+# 1. Trích xuất OS Info an toàn qua biến môi trường thay vì grep chuỗi thô
+if [[ -f /etc/os-release ]]; then
+    . /etc/os-release
+else
+    echo "Lỗi: Không thể xác định hệ điều hành (thiếu /etc/os-release)."
+    exit 1
+fi
+
+# Chốt chặn: Chỉ thực thi nếu đúng là Ubuntu
+if [[ "$ID" != "ubuntu" ]]; then
+    exit 0
+fi
+
+# 2. Hàm tải script có Retry & Chống thực thi file rác (Thay cho lệnh pipe nguy hiểm)
+install_repo_script() {
+    local url="$1"
+    local tmp_script="$WPTT_SECURE_TMP/ols_repo_setup_$$.sh"
+    local retries=3
+    local attempt=1
+
+    while [[ $attempt -le $retries ]]; do
+        # Ép timeout 10s để hệ thống không bị treo cứng nếu đứt cáp quang
+        if wget -q --timeout=10 --tries=1 -O "$tmp_script" "$url"; then
+            # Cờ -s đảm bảo file tải về có dung lượng > 0 byte trước khi chạy
+            if [[ -s "$tmp_script" ]]; then
+                bash "$tmp_script"
+                local status=$?
+                rm -f "$tmp_script"
+                return $status
+            fi
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    rm -f "$tmp_script"
+    echo "Lỗi: Không thể tải script từ $url sau $retries lần thử."
+    exit 1
+}
+
+# 3. Phân luồng cài đặt & Áp dụng tính Lũy đẳng (Idempotency)
+if [[ "$VERSION_ID" == "22.04" ]]; then
+    # Chỉ gọi script tải mạng nếu repo này chưa từng được cài đặt
+    if [[ ! -f /etc/apt/sources.list.d/lst_debian_repo.list ]]; then
+        install_repo_script "https://rpms.litespeedtech.com/debian/enable_lst_debian_repo.sh"
+    fi
+elif [[ "$VERSION_ID" == "24.04" ]]; then
+    if [[ ! -f /etc/apt/sources.list.d/litespeed.list ]]; then
+        install_repo_script "https://repo.litespeed.sh"
+    fi
+else
+    echo "Cảnh báo: Phiên bản Ubuntu $VERSION_ID có thể chưa được hỗ trợ chính thức."
 fi
 '
 _success "Chuẩn bị Repositories hoàn tất"
