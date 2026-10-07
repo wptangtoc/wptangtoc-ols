@@ -512,51 +512,6 @@ function wptt_smart_reload_lsws() {
     return 0
 }
 
-# function wptt_smart_reload_lsws() {
-#     local lock_file="/etc/wptt/tmp/.wptt_ls_reload.lock"
-#     local lsws_marker="/usr/local/lsws/cgid"
-
-#     (
-#         flock -n 9 || exit 0
-
-#         local current_time=$(date +%s)
-#         local last_run=0
-        
-#         # Đọc trực tiếp Timestamp từ file do chính LiteSpeed quản lý
-#         if [[ -f "$lsws_marker" ]]; then
-#             last_run=$(stat -c %Y "$lsws_marker" 2>/dev/null || echo 0)
-#         fi
-
-#         local time_diff=$((current_time - last_run))
-
-#         if [[ $time_diff -lt 8 ]]; then
-#             sleep $((8 - time_diff))
-#         fi
-
-#         /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-        
-#         # Cho LiteSpeed 3 giây để thở và ghi đè file cgid mới, thuờng 1 lệnh reload của litespeed cũng mất khoảng 3 giây thì cho sleep 3 giây là hợp lý
-# 		# time /usr/local/lsws/bin/lswsctrl reload
-# 		# Cho LiteSpeed 3.2 giây để "thở" sau khi tốn ~3s gửi tín hiệu SIGUSR1
-#         sleep 3.2
-
-#         # Kiểm tra sinh hiệu
-#         if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running'; then
-# 			:
-#         else
-#             wptt_logs "INFO" "Kích hoạt Auto-Heal do lỗi Reload"
-            
-#             systemctl stop lsws.service >/dev/null 2>&1
-#             rm -f /tmp/lshttpd/lshttpd.pid
-#             killall -9 openlitespeed litespeed lshttpd 2>/dev/null
-#             systemctl start lsws.service >/dev/null 2>&1
-#             # Khi start thành công, file cgid tự động được hệ thống nạp lại
-#         fi
-
-#     ) 9> "$lock_file" &
-# }
-
-
 
 # ==============================================================================
 # HÀM MÃ HÓA & GIẢI MÃ AES-256-CBC
@@ -641,4 +596,51 @@ wptt_logs() {
   # Ghi log bằng printf. Đưa file ra phía sau cùng.
   # %s đại diện cho chuỗi, \n là xuống dòng
   printf "[%s] [%s] %s [File: %s]\n" "$timestamp" "$level" "$clean_msg" "$script_name" >> "$WPTT_LOG_FILE"
+}
+
+
+#Hệ thống Enterprise tuyệt đối cấm can thiệp trực tiếp vào file cấu hình bằng sed -i. Nếu máy chủ bị sập nguồn (OOM Kill, Kernel Panic) ngay tại mili-giây lệnh sed hoặc echo đang chạy, file /etc/wptt/.wptt.conf sẽ bị ghi đè thành file rỗng hoặc corrupt, làm tê liệt toàn bộ hệ sinh thái WPTangToc.
+
+#vị dụ chỉ muốn xóa thì hàm callback: wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "beta_wptangtoc_ols" "delete"
+#vị dụ chỉ muốn update giá trị: wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "beta_wptangtoc_ols=1"
+#ví dụ để tránh bị biến giá trị gán linh tinh ký tự đặc biệt: wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$wptangtocols_version" "secure"
+wptt_atomic_edit_config() {
+    local target_file="$1"
+    local input_string="$2"
+    local mode="${3:-normal}" # normal, secure, hoặc delete
+    
+    # Bẫy lỗi: Đảm bảo file tồn tại và input không rỗng
+    [[ ! -f "$target_file" || -z "$input_string" ]] && return 1
+    
+    # Tự động bóc tách Key và Value
+    local key="${input_string%%=*}"
+    local value=""
+    
+    # Nếu có dấu '=' thì cắt lấy phần Value phía sau
+    if [[ "$input_string" == *"="* ]]; then
+        value="${input_string#*=}"
+    fi
+    
+    local tmp_file
+    tmp_file=$(mktemp -p "/etc/wptt/tmp" atomic_edit.XXXXXX) || return 1
+    
+    # Dùng đường dẫn tuyệt đối /bin/cp để VÔ HIỆU HÓA HOÀN TOÀN mọi bí danh (Alias)
+    /bin/cp -fp "$target_file" "$tmp_file"
+    
+    # Xóa dòng cấu hình cũ (nếu có)
+    sed -i "/^${key}=/d" "$tmp_file"
+    
+    # Xử lý chèn dữ liệu mới nếu không phải là lệnh delete
+    if [[ "$mode" != "delete" ]]; then
+        if [[ "$mode" == "secure" ]]; then
+            # Chế độ bảo mật: Bọc %q cho Value, chặn đứng Command Injection
+            printf "%s=%q\n" "$key" "$value" >> "$tmp_file"
+        else
+            # Chế độ bình thường: Ráp lại nguyên bản
+            echo "${key}=${value}" >> "$tmp_file"
+        fi
+    fi
+    
+    # Dùng đường dẫn tuyệt đối /bin/mv để ghi đè automic trong im lặng
+    /bin/mv -fT "$tmp_file" "$target_file"
 }
