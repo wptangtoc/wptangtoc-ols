@@ -81,11 +81,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.1
-
-### 🛠️ Tối ưu hệ thống
-- **Tối ưu tiến trình khôi phục dữ liệu:** Cải tiến hiệu năng xử lý tác vụ khôi phục (Restore), giúp rút ngắn thời gian phục hồi website và giảm tải tài nguyên máy chủ trong suốt quá trình thực thi.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
