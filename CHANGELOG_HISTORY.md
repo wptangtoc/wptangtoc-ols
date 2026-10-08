@@ -1,3 +1,14 @@
+# WPTangToc OLS 8.2.1.9
+
+### 🛠️ Tối ưu hệ thống
+
+- **Cơ chế hoàn tác (Rollback) an toàn khi đổi cổng SSH:** Bổ sung khả năng tự động khôi phục cổng kết nối ban đầu nếu tiến trình thay đổi gặp lỗi, loại bỏ hoàn toàn rủi ro quản trị viên bị mất kết nối hoặc bị khóa ngoài máy chủ (server lockout).
+- **Tăng cường bảo mật SSL cho WordPress Multisite:** Cải tiến quy trình cấp phát và thiết lập chứng chỉ SSL cho mô hình mạng đa trang (Multisite), đảm bảo kết nối mã hóa HTTPS chuẩn xác, ngăn ngừa rủi ro xung đột chứng chỉ và thắt chặt an toàn dữ liệu giữa các subsite.
+- **Tối ưu hóa cấu hình SSH và tường lửa CSF:** Chuẩn hóa tệp cấu hình SSH kết hợp nâng cấp khả năng tương thích với tường lửa ConfigServer Security & Firewall (CSF), giúp siết chặt an ninh truy cập từ xa và chống dò quét cổng trái phép hiệu quả hơn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.2.1.8
 
 ### 🛠️ Tối ưu hệ thống
