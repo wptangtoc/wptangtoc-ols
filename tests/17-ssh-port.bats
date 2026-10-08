@@ -1,26 +1,46 @@
 #!/usr/bin/env bats
 
 # ==============================================================================
-# WPTangToc OLS - Kiểm thử wptt-ssh-port
+# WPTangToc OLS - Kiểm thử wptt-ssh-port (phiên bản hoàn nguyên cả TIẾN TRÌNH sshd)
 # ==============================================================================
+
+# Lưu PATH gốc TRƯỚC khi setup() chèn thư mục mock vào đầu PATH.
+# Dùng để gọi systemctl/sshd thật trong teardown.
+ORIG_PATH="$PATH"
 
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_DROPIN="/etc/ssh/sshd_config.d"
 WPTT_CONF="/etc/wptt/.wptt.conf"
 WPTT_SSH_SCRIPT="/etc/wptt/ssh/wptt-ssh-port"
-# Các port mà bài test sẽ thử đổi sang (dùng để dọn firewall/SELinux nếu bị rò rỉ)
 TEST_PORTS="22222 33333"
 
 # ------------------------------------------------------------------------------
 # HÀM TIỆN ÍCH
 # ------------------------------------------------------------------------------
 
+# Danh sách port mà tiến trình sshd ĐANG THỰC SỰ lắng nghe (khác với port trong file)
+_sshd_listen_ports() {
+  ss -Hltnp 2>/dev/null | awk '/"sshd"/ { n = split($4, a, ":"); print a[n] }' | sort -un
+}
+
+# Tên unit systemd của sshd (sshd trên RHEL/Alma, ssh trên Debian/Ubuntu)
+_sshd_unit() {
+  local u
+  for u in sshd ssh; do
+    if PATH="$ORIG_PATH" systemctl list-unit-files "${u}.service" 2>/dev/null | grep -q "^${u}.service"; then
+      echo "$u"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Chụp lại toàn bộ trạng thái hệ thống vào thư mục $1
 _snapshot_state() {
   local dir="$1"
   mkdir -p "$dir"
 
-  # File cấu hình SSH + thư mục drop-in (OpenSSH mới ưu tiên file trong .d/)
+  # --- Lớp 1: file ---
   cp -a "$SSHD_CONFIG" "$dir/sshd_config"
   if [ -d "$SSHD_DROPIN" ]; then
     rm -rf "$dir/sshd_config.d"
@@ -29,36 +49,78 @@ _snapshot_state() {
     touch "$dir/no_dropin"
   fi
 
-  # File cấu hình chính của WPTangToc (nếu có)
   if [ -f "$WPTT_CONF" ]; then
     cp -a "$WPTT_CONF" "$dir/wptt.conf"
   else
     touch "$dir/no_wptt_conf"
   fi
 
-  # Firewall: iptables / firewalld / ufw
+  ls -1 /etc/ssh 2>/dev/null >"$dir/etc_ssh.listing" || true
+
+  # --- Lớp 2: firewall ---
   if command -v iptables-save >/dev/null 2>&1; then
     iptables-save >"$dir/iptables.rules" 2>/dev/null || true
   fi
   if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
     firewall-cmd --permanent --list-ports >"$dir/firewalld.ports" 2>/dev/null || true
+    firewall-cmd --permanent --list-services >"$dir/firewalld.services" 2>/dev/null || true
+    touch "$dir/firewalld.active"
   fi
   if command -v ufw >/dev/null 2>&1; then
     ufw status 2>/dev/null >"$dir/ufw.status" || true
   fi
-
-  # SELinux: danh sách port được gán nhãn ssh_port_t
   if command -v semanage >/dev/null 2>&1; then
     semanage port -l 2>/dev/null | awk '/^ssh_port_t/' >"$dir/selinux.ssh_port_t" || true
   fi
 
-  # Các file backup mà script có thể sinh ra cạnh sshd_config
-  ls -1 /etc/ssh 2>/dev/null >"$dir/etc_ssh.listing" || true
+  # --- Lớp 3: tiến trình sshd đang chạy ---
+  _sshd_listen_ports >"$dir/sshd.listen" || true
 }
 
-# Khôi phục trạng thái từ thư mục $1 (idempotent, không bao giờ làm teardown sập)
+# Đưa sshd đang chạy về đúng tập port ban đầu. Trả về 1 nếu không làm được.
+_restore_sshd_service() {
+  local dir="$1" want now unit i pid
+  # Baseline không có sshd đang chạy (ví dụ container) thì không động vào
+  [ -s "$dir/sshd.listen" ] || return 0
+
+  want="$(tr '\n' ' ' <"$dir/sshd.listen")"
+  now="$(_sshd_listen_ports | tr '\n' ' ')"
+  [ "$want" = "$now" ] && return 0
+
+  # Chỉ restart khi cấu hình đã khôi phục hợp lệ, tránh tự làm sập sshd
+  if ! /usr/sbin/sshd -t 2>/dev/null; then
+    echo "CẢNH BÁO: sshd_config sau khi khôi phục không qua được sshd -t, bỏ qua restart" >&2
+    return 1
+  fi
+
+  unit="$(_sshd_unit)" || unit=""
+  if [ -n "$unit" ]; then
+    PATH="$ORIG_PATH" systemctl restart "$unit" >/dev/null 2>&1 || true
+    # Ubuntu mới dùng socket activation: port nằm ở ssh.socket
+    if PATH="$ORIG_PATH" systemctl is-active --quiet ssh.socket 2>/dev/null; then
+      PATH="$ORIG_PATH" systemctl restart ssh.socket >/dev/null 2>&1 || true
+    fi
+  else
+    # Không có systemd (container): ép master sshd đọc lại cấu hình
+    pid="$(pgrep -o -x sshd 2>/dev/null || true)"
+    if [ -n "$pid" ]; then
+      kill -HUP "$pid" 2>/dev/null || true
+    fi
+  fi
+
+  # Chờ sshd bind lại port, tối đa 10 giây
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    now="$(_sshd_listen_ports | tr '\n' ' ')"
+    [ "$want" = "$now" ] && return 0
+    sleep 1
+  done
+  echo "RÒ RỈ: sshd đang lắng nghe [${now}] nhưng baseline là [${want}]" >&2
+  return 1
+}
+
+# Khôi phục file + firewall từ thư mục $1 (idempotent, không bao giờ làm teardown sập)
 _restore_state() {
-  local dir="$1"
+  local dir="$1" f p q changed
   [ -d "$dir" ] || return 0
 
   # 1. sshd_config: ghi đè bằng cp để giữ nguyên quyền/owner
@@ -74,11 +136,12 @@ _restore_state() {
     rm -rf "$SSHD_DROPIN" 2>/dev/null || true
   fi
 
-  # 3. Xóa các file rác mà script có thể tạo trong /etc/ssh (backup, .tmp, ...)
+  # 3. Xóa file rác mà script có thể tạo trong /etc/ssh (backup, .tmp, ...)
   if [ -f "$dir/etc_ssh.listing" ]; then
-    local f
     for f in $(ls -1 /etc/ssh 2>/dev/null); do
-      grep -qxF "$f" "$dir/etc_ssh.listing" || rm -rf "/etc/ssh/$f" 2>/dev/null || true
+      if ! grep -qxF "$f" "$dir/etc_ssh.listing"; then
+        rm -rf "/etc/ssh/$f" 2>/dev/null || true
+      fi
     done
   fi
 
@@ -87,19 +150,45 @@ _restore_state() {
     cp -a "$dir/wptt.conf" "$WPTT_CONF" 2>/dev/null || true
   fi
 
-  # 5. iptables
-  if [ -f "$dir/iptables.rules" ] && [ -s "$dir/iptables.rules" ] &&
-    command -v iptables-restore >/dev/null 2>&1; then
+  # 5. firewalld: đưa về đúng tập port/service ban đầu (gỡ cái thêm, thêm lại cái bị gỡ)
+  if [ -f "$dir/firewalld.active" ] && command -v firewall-cmd >/dev/null 2>&1 &&
+    firewall-cmd --state >/dev/null 2>&1; then
+    changed=0
+    for q in $(firewall-cmd --permanent --list-ports 2>/dev/null); do
+      if ! grep -qw -- "$q" "$dir/firewalld.ports"; then
+        firewall-cmd --permanent --remove-port="$q" >/dev/null 2>&1 || true
+        changed=1
+      fi
+    done
+    for q in $(cat "$dir/firewalld.ports" 2>/dev/null); do
+      if ! firewall-cmd --permanent --query-port="$q" >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-port="$q" >/dev/null 2>&1 || true
+        changed=1
+      fi
+    done
+    for q in $(firewall-cmd --permanent --list-services 2>/dev/null); do
+      if ! grep -qw -- "$q" "$dir/firewalld.services"; then
+        firewall-cmd --permanent --remove-service="$q" >/dev/null 2>&1 || true
+        changed=1
+      fi
+    done
+    for q in $(cat "$dir/firewalld.services" 2>/dev/null); do
+      if ! firewall-cmd --permanent --query-service="$q" >/dev/null 2>&1; then
+        firewall-cmd --permanent --add-service="$q" >/dev/null 2>&1 || true
+        changed=1
+      fi
+    done
+    if [ "$changed" -eq 1 ]; then
+      firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+  elif [ -s "$dir/iptables.rules" ] && command -v iptables-restore >/dev/null 2>&1 &&
+    ! { command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; }; then
+    # Chỉ restore iptables khi không có firewalld/ufw quản lý (tránh xung đột)
     iptables-restore <"$dir/iptables.rules" 2>/dev/null || true
   fi
 
-  # 6. firewalld / ufw / SELinux: chỉ gỡ port TEST mà baseline không có
-  local p
+  # 6. ufw / SELinux: gỡ port TEST mà baseline không có
   for p in $TEST_PORTS; do
-    if [ -f "$dir/firewalld.ports" ] && ! grep -qw "${p}/tcp" "$dir/firewalld.ports"; then
-      firewall-cmd --permanent --remove-port="${p}/tcp" >/dev/null 2>&1 || true
-      firewall-cmd --remove-port="${p}/tcp" >/dev/null 2>&1 || true
-    fi
     if [ -f "$dir/ufw.status" ] && ! grep -qw "${p}/tcp" "$dir/ufw.status"; then
       ufw --force delete allow "${p}/tcp" >/dev/null 2>&1 || true
     fi
@@ -119,7 +208,7 @@ _cleanup_mock_sshd() {
 
 # Kiểm tra hệ thống đã sạch hoàn toàn chưa; trả về != 0 nếu còn rò rỉ
 _assert_clean() {
-  local dir="$1" rc=0
+  local dir="$1" rc=0 want now
 
   if ! cmp -s "$dir/sshd_config" "$SSHD_CONFIG"; then
     echo "RÒ RỈ: $SSHD_CONFIG khác với bản gốc" >&2
@@ -134,6 +223,15 @@ _assert_clean() {
     echo "RÒ RỈ: còn thư mục tạm /etc/wptt/tmp/ssh_port.*" >&2
     rc=1
   fi
+  # Quan trọng nhất cho CI: sshd phải lắng nghe đúng port ban đầu
+  if [ -s "$dir/sshd.listen" ]; then
+    want="$(tr '\n' ' ' <"$dir/sshd.listen")"
+    now="$(_sshd_listen_ports | tr '\n' ' ')"
+    if [ "$want" != "$now" ]; then
+      echo "RÒ RỈ: sshd đang lắng nghe [${now}] thay vì [${want}]" >&2
+      rc=1
+    fi
+  fi
   return $rc
 }
 
@@ -144,7 +242,6 @@ setup_file() {
   export BASELINE_DIR="$BATS_FILE_TMPDIR/baseline"
   _snapshot_state "$BASELINE_DIR"
 
-  # Ghi nhận host keys: nếu chưa có thì sau cùng sẽ xóa các key do test sinh ra
   if ls /etc/ssh/ssh_host_*_key >/dev/null 2>&1; then
     echo "yes" >"$BASELINE_DIR/had_hostkeys"
   else
@@ -153,35 +250,37 @@ setup_file() {
 }
 
 teardown_file() {
-  # Dù từng test đã tự hoàn nguyên, vẫn khôi phục lần cuối từ baseline gốc
   while mount | grep -q " on /usr/sbin/sshd "; do
     umount -l /usr/sbin/sshd 2>/dev/null || break
   done
-  _restore_state "$BASELINE_DIR"
 
-  # Xóa host keys ảo do test sinh ra (chỉ khi trước đó hệ thống chưa có)
+  # Dù từng test đã tự hoàn nguyên, vẫn khôi phục lần cuối từ baseline gốc
+  _restore_state "$BASELINE_DIR"
+  _restore_sshd_service "$BASELINE_DIR" || true
+
   if [ "$(cat "$BASELINE_DIR/had_hostkeys" 2>/dev/null)" = "no" ]; then
     rm -f /etc/ssh/ssh_host_* 2>/dev/null || true
   fi
 
   rm -rf /etc/wptt/tmp/ssh_port.* 2>/dev/null || true
+
+  # In trạng thái cuối để dễ debug trên log CI
+  echo "# [teardown_file] sshd đang lắng nghe: $(_sshd_listen_ports | tr '\n' ' ')" >&3
 }
 
 # ==============================================================================
 # KHỞI TẠO MÔI TRƯỜNG CÔ LẬP (SETUP / TEARDOWN) CHO TỪNG TEST
 # ==============================================================================
 setup() {
-  # Tiền điều kiện: cần root và có sshd_config, nếu không thì bỏ qua thay vì làm hỏng máy
   [ "$(id -u)" -eq 0 ] || skip "Cần quyền root để chạy bộ test này"
   [ -f "$SSHD_CONFIG" ] || skip "Không tìm thấy $SSHD_CONFIG"
-  [ -x "$WPTT_SSH_SCRIPT" ] || [ -f "$WPTT_SSH_SCRIPT" ] || skip "Không tìm thấy $WPTT_SSH_SCRIPT"
+  [ -f "$WPTT_SSH_SCRIPT" ] || skip "Không tìm thấy $WPTT_SSH_SCRIPT"
 
-  # Thư mục mock riêng cho từng test (không dùng đường dẫn cố định dễ đụng nhau)
   MOCK_DIR="${BATS_TEST_TMPDIR:-$(mktemp -d)}/mock"
   export MOCK_DIR
   mkdir -p "$MOCK_DIR/bin"
 
-  # 1. Giả lập systemctl/service để không restart sshd thật trong Docker/GitHub Actions
+  # 1. Giả lập systemctl/service để script không restart sshd thật (khi gọi qua PATH)
   printf '#!/bin/bash\nexit 0\n' >"$MOCK_DIR/bin/systemctl"
   printf '#!/bin/bash\nexit 0\n' >"$MOCK_DIR/bin/service"
   chmod +x "$MOCK_DIR/bin/systemctl" "$MOCK_DIR/bin/service"
@@ -190,12 +289,12 @@ setup() {
   # 2. Sinh Host Keys ảo để vượt qua bài test cú pháp sshd -t
   ssh-keygen -A >/dev/null 2>&1 || true
 
-  # 3. Chụp lại TOÀN BỘ trạng thái gốc của test này (không chỉ sshd_config)
+  # 3. Chụp lại TOÀN BỘ trạng thái gốc, gồm cả port sshd đang lắng nghe
   TEST_BASELINE="$MOCK_DIR/baseline"
   export TEST_BASELINE
   _snapshot_state "$TEST_BASELINE"
 
-  # 4. Xóa cấu hình Port nhiễu (cả file chính lẫn drop-in) và đặt Port 22 làm mốc
+  # 4. Xóa cấu hình Port nhiễu (file chính + drop-in) và đặt Port 22 làm mốc
   sed -i '/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]/d' "$SSHD_CONFIG"
   if [ -d "$SSHD_DROPIN" ]; then
     sed -i '/^[[:space:]]*Port[[:space:]]/d' "$SSHD_DROPIN"/*.conf 2>/dev/null || true
@@ -207,23 +306,24 @@ setup() {
 }
 
 teardown() {
-  # Bắt buộc chạy được cả khi test FAIL hoặc setup bị skip giữa chừng
   [ -n "${TEST_BASELINE:-}" ] || return 0
 
-  # 1. Gỡ mount giả lập TRƯỚC (nếu không, việc khôi phục có thể chạm vào sshd giả)
+  # 1. Gỡ mount giả lập trước
   _cleanup_mock_sshd
 
-  # 2. Hoàn nguyên toàn bộ: sshd_config, drop-in, wptt.conf, firewall, SELinux
+  # 2. Hoàn nguyên file + firewall
   _restore_state "$TEST_BASELINE"
 
-  # 3. Dọn rác của script (bẫy trap EXIT có thể không chạy nếu script bị kill)
+  # 3. Hoàn nguyên TIẾN TRÌNH sshd (restart bằng systemctl thật qua ORIG_PATH)
+  _restore_sshd_service "$TEST_BASELINE" || true
+
+  # 4. Dọn rác của script
   rm -rf /etc/wptt/tmp/ssh_port.* 2>/dev/null || true
 
-  # 4. Kiểm chứng: nếu còn rò rỉ thì test này bị đánh FAIL để lộ ngay trên CI
+  # 5. Kiểm chứng: còn rò rỉ thì test bị FAIL để lộ ngay trên CI
   local rc=0
   _assert_clean "$TEST_BASELINE" || rc=1
 
-  # 5. Cuối cùng mới xóa mock
   rm -rf "$MOCK_DIR" 2>/dev/null || true
   return $rc
 }
@@ -244,6 +344,11 @@ teardown() {
   [[ "$output" == *"không hợp lệ"* ]]
 }
 
+@test "[Validation] Từ chối Port bằng 0" {
+  run bash "$WPTT_SSH_SCRIPT" "0"
+  [ "$status" -eq 1 ]
+}
+
 @test "[Validation] Khóa cứng bảo vệ các Port mặc định của Webserver (80, 443)" {
   run bash "$WPTT_SSH_SCRIPT" "443"
   [ "$status" -eq 1 ]
@@ -253,7 +358,6 @@ teardown() {
 @test "[Validation] Hủy tiến trình nếu Port mới trùng Port hiện tại" {
   run bash "$WPTT_SSH_SCRIPT" "22"
   [ "$status" -eq 1 ]
-  # Thông báo có thể là "trùng"/"đang được sử dụng": chấp nhận cả hai để test không giòn
   [[ "$output" == *"đang được sử dụng"* || "$output" == *"trùng"* ]]
 }
 
@@ -269,33 +373,28 @@ teardown() {
 # ==============================================================================
 
 @test "[Enterprise] Thực thi đổi Port nguyên tử và dọn dẹp Workspace tự động" {
-  # Bơm chuỗi "1" qua stdin để tự động pass qua hàm wptt_xac_nhan
   run bash "$WPTT_SSH_SCRIPT" 22222 <<<"1"
 
-  # --- ĐOẠN DEBUG (IN LOG NẾU LỖI ĐỂ TÌM NGUYÊN NHÂN TRÊN GITHUB ACTIONS) ---
   if [ "$status" -ne 0 ]; then
     echo -e "\n=== 🚨 DỮ LIỆU DEBUG (OUTPUT CỦA SCRIPT) ===" >&3
     echo "$output" >&3
     echo -e "=============================================\n" >&3
   fi
 
-  # Kịch bản phải trả về status 0 (Thành công hoàn toàn)
   [ "$status" -eq 0 ]
 
-  # File sshd_config phải chứa đúng 1 dòng Port 22222 và không còn Port 22
   run grep -E "^Port 22222$" "$SSHD_CONFIG"
   [ "$status" -eq 0 ]
   [ "$(grep -cE '^Port[[:space:]]' "$SSHD_CONFIG")" -eq 1 ]
 
-  # Bẫy trap EXIT phải xóa sạch thư mục tạm
   run ls -d /etc/wptt/tmp/ssh_port.*
   [ "$status" -ne 0 ]
 
-  # teardown() sẽ tự hoàn nguyên Port 22 và FAIL test nếu còn rò rỉ
+  # Ghi lại để debug: sshd thật có bị đổi port không (teardown sẽ tự khôi phục)
+  echo "# sshd lắng nghe sau khi đổi port: $(_sshd_listen_ports | tr '\n' ' ')" >&3
 }
 
 @test "[Fail-Safe] Bắt buộc Rollback khi file cấu hình nháp không vượt qua Syntax Check" {
-  # Giả lập sshd -t luôn lỗi bằng mount --bind lên đường dẫn tuyệt đối
   mkdir -p "$MOCK_DIR/sshd"
   cat <<'EOF' >"$MOCK_DIR/sshd/sshd_fake"
 #!/bin/bash
@@ -307,34 +406,29 @@ EOF
   chmod +x "$MOCK_DIR/sshd/sshd_fake"
   mount --bind "$MOCK_DIR/sshd/sshd_fake" /usr/sbin/sshd
 
-  # Khởi chạy script đổi sang cổng 33333
   run bash "$WPTT_SSH_SCRIPT" 33333 <<<"1"
 
-  # Tháo mount NGAY và không phụ thuộc kết quả (teardown vẫn sẽ gỡ lại lần nữa)
   umount -l /usr/sbin/sshd 2>/dev/null || true
 
-  # Kịch bản phải phát hiện lỗi và ép dừng khẩn cấp (Exit 1)
   [ "$status" -eq 1 ]
-
-  # Giao diện phải in ra cảnh báo Rollback
   [[ "$output" == *"Lỗi cú pháp bị phát hiện trên file tạm"* ]]
 
-  # Zero-Trust: file gốc tuyệt đối không bị suy xuyển (vẫn đúng Port 22)
   run grep -E "^Port 22$" "$SSHD_CONFIG"
   [ "$status" -eq 0 ]
 
-  # Cổng 33333 không được phép xuất hiện trong file gốc
   run grep -q "33333" "$SSHD_CONFIG"
   [ "$status" -ne 0 ]
 }
 
-@test "[Isolation] Sau test đổi Port, hệ thống phải trở về Port 22 (kiểm chứng teardown)" {
+@test "[Isolation] Sau test đổi Port, file + firewall + tiến trình sshd phải về trạng thái ban đầu" {
   run bash "$WPTT_SSH_SCRIPT" 22222 <<<"1"
   [ "$status" -eq 0 ]
 
-  # Mô phỏng chính thao tác của teardown rồi xác nhận baseline được khôi phục
+  # Mô phỏng chính thao tác của teardown rồi xác nhận mọi lớp đã sạch
   _restore_state "$TEST_BASELINE"
+  _restore_sshd_service "$TEST_BASELINE"
+  _assert_clean "$TEST_BASELINE"
+
   run grep -E "^Port 22222" "$SSHD_CONFIG"
   [ "$status" -ne 0 ]
-  cmp -s "$TEST_BASELINE/sshd_config" "$SSHD_CONFIG"
 }
