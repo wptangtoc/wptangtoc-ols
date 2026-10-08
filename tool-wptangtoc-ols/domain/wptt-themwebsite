@@ -216,6 +216,10 @@ if [ "$TOTAL_RAM_MB" -le 1200 ]; then KA_REQS="1000"; elif [ "$TOTAL_RAM_MB" -le
 # ==============================================================================
 # KHỞI TẠO VHOST & SSL TỰ KÝ
 # ==============================================================================
+# Ngăn chặn lỗi Partial Read (Đảm bảo Zero-Downtime): Nếu dùng echo >> hoặc sed -i trực tiếp lên file gốc, sẽ có một khoảng thời gian trống (vài mili-giây) file đang bị ghi dở hoặc cắt xén. Nếu OpenLiteSpeed vô tình đọc file đúng khoảnh khắc đó, web server sẽ báo lỗi cú pháp hoặc crash. Lệnh mv -fT tráo đổi file ở tầng hệ thống tập tin (Filesystem) ngay lập tức, đảm bảo OLS luôn thấy một file hoàn chỉnh 100%.
+# Miễn nhiễm với sự cố đứt gãy (Crash Resilience): Nếu VPS hết RAM, sập nguồn, hoặc người dùng lỡ bấm Ctrl+C ngay lúc lệnh echo hay sed đang chạy, file cấu hình gốc /usr/local/lsws/conf/httpd_config.conf vẫn bình yên vô sự. Mọi tác động vật lý hỏng hóc chỉ xảy ra trên file nháp ở /etc/wptt/tmp.
+tmp_conf_httpd=$(mktemp -p "/etc/wptt/tmp" httpd_config.XXXXXX) || exit 1
+/bin/cp -fp "/usr/local/lsws/conf/httpd_config.conf" "$tmp_conf_httpd"
 echo "virtualhost $NAME {
 vhRoot                  /usr/local/lsws/$NAME/
 configFile              /usr/local/lsws/conf/vhosts/$NAME/$NAME.conf
@@ -226,11 +230,14 @@ maxKeepAliveReq         $KA_REQS
 setUIDMode              2
 user                    $USER
 group                   $USER
-}" >>/usr/local/lsws/conf/httpd_config.conf
+}" >>"$tmp_conf_httpd"
 
-sed -i "/listener http/a map 		$NAME $NAME" /usr/local/lsws/conf/httpd_config.conf
+sed -i "/listener http/a map 		$NAME $NAME" "$tmp_conf_httpd"
+/bin/mv -fT "$tmp_conf_httpd" "/usr/local/lsws/conf/httpd_config.conf"
+
 mkdir -p "/usr/local/lsws/conf/vhosts/$NAME/"
 touch "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+chmod -R 750 "/usr/local/lsws/conf/vhosts/$NAME" #chmod luôn là file rỗng trước khi có giá trị
 
 NAMEPHP=${NAME//[-._]/}
 
@@ -363,7 +370,7 @@ enableQuic              1
 fi
 
 if grep -q "Ubuntu" /etc/*release 2>/dev/null; then tuong_thich_nhom_litespeed="nogroup"; else tuong_thich_nhom_litespeed="nobody"; fi
-chown -hR lsadm:$tuong_thich_nhom_litespeed "/usr/local/lsws/conf/vhosts/$NAME"
+chown -hR lsadm:"$tuong_thich_nhom_litespeed" "/usr/local/lsws/conf/vhosts/$NAME"
 chmod -R 750 "/usr/local/lsws/conf/vhosts/$NAME"
 
 # Tạo thư mục gốc
