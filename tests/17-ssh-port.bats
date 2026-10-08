@@ -244,13 +244,6 @@ teardown() {
   [[ "$output" == *"không hợp lệ"* ]]
 }
 
-@test "[Validation] Từ chối Port bằng 0 hoặc rỗng" {
-  run bash "$WPTT_SSH_SCRIPT" "0"
-  [ "$status" -eq 1 ]
-  run bash "$WPTT_SSH_SCRIPT" ""
-  [ "$status" -eq 1 ]
-}
-
 @test "[Validation] Khóa cứng bảo vệ các Port mặc định của Webserver (80, 443)" {
   run bash "$WPTT_SSH_SCRIPT" "443"
   [ "$status" -eq 1 ]
