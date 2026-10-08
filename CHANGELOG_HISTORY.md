@@ -1,3 +1,13 @@
+# WPTangToc OLS 8.2.1.8
+
+### 🛠️ Tối ưu hệ thống
+
+- **Cơ chế ghi cấu hình nguyên tử (Atomic Writes):** Áp dụng ghi file cấu hình nguyên tử toàn diện cho máy chủ web (`httpd_config`) và hệ thống quản trị WPTT, loại bỏ hoàn toàn rủi ro file cấu hình bị hỏng hoặc mất dữ liệu khi xảy ra sự cố gián đoạn đột ngột (mất điện, kill tiến trình).
+- **Nâng cao tính toàn vẹn và ổn định:** Tối ưu hóa chu trình lưu và đồng bộ cấu hình WPTT (v3), đảm bảo trạng thái dịch vụ luôn nhất quán và vận hành an toàn tuyệt đối trong quá trình cập nhật.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## Phiên bản 8.2.1.7
 
 ### 🛠️ Tối ưu hệ thống
