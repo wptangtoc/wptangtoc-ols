@@ -1,37 +1,57 @@
 #!/usr/bin/env bats
 
 setup() {
+  # 1. [ENTERPRISE FIX]: Giả lập (Mock) TOÀN BỘ các lệnh nguy hiểm gây mất mạng CI/CD
   mkdir -p /tmp/mock_bin
+
+  # Ép systemctl trả về 0 để lọt qua các bài check điều kiện
   echo -e '#!/bin/bash\nexit 0' >/tmp/mock_bin/systemctl
-  chmod +x /tmp/mock_bin/systemctl
+
+  # Khóa mỏm tường lửa: Ngăn firewall-cmd, csf, fail2ban flush mạng của GitHub Actions
+  echo -e '#!/bin/bash\nexit 0' >/tmp/mock_bin/firewall-cmd
+  echo -e '#!/bin/bash\nexit 0' >/tmp/mock_bin/csf
+  echo -e '#!/bin/bash\nexit 0' >/tmp/mock_bin/fail2ban-client
+  echo -e '#!/bin/bash\nexit 0' >/tmp/mock_bin/semanage
+
+  chmod +x /tmp/mock_bin/*
   export PATH="/tmp/mock_bin:$PATH"
 
-  # 2. [ENTERPRISE FIX]: Sinh Host Keys ảo để vượt qua bài test cú pháp sshd -t
+  # 2. Sinh Host Keys ảo để vượt qua bài test cú pháp sshd -t
   ssh-keygen -A >/dev/null 2>&1 || true
 
-  # 3. Sao lưu nguyên trạng file cấu hình gốc của hệ thống
-  cp /etc/ssh/sshd_config /tmp/sshd_config.bats.bak
+  # 3. Sao lưu cấu hình gốc (Backup đa tầng)
+  cp -p /etc/ssh/sshd_config /tmp/sshd_config.bats.bak
+  cp -p /etc/wptt/.wptt.conf /tmp/wptt.conf.bats.bak 2>/dev/null || true
 
-  # 4. Xóa các cấu hình Port nhiễu và thiết lập Port 22 làm mốc kiểm thử
+  # 4. Đặt cấu hình chuẩn để test (Đưa về Port 22)
   sed -i '/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]/d' /etc/ssh/sshd_config
   echo "Port 22" >>/etc/ssh/sshd_config
 
-  # 5. Đảm bảo thư mục tmp sạch sẽ trước khi test
+  # 5. Dọn dẹp rác nháp cũ nếu có
   rm -rf /etc/wptt/tmp/ssh_port.* 2>/dev/null || true
 }
 
 teardown() {
-  # 1. Rollback hệ thống về trạng thái nguyên thủy sau mỗi test case
+  # 1. Phục hồi cấu hình gốc chính xác tới từng byte
   mv -f /tmp/sshd_config.bats.bak /etc/ssh/sshd_config
+  if [ -f "/tmp/wptt.conf.bats.bak" ]; then
+    mv -f /tmp/wptt.conf.bats.bak /etc/wptt/.wptt.conf
+  fi
 
-  # 2. Xóa các hàm mock hoặc unmount nếu có sử dụng trong bài test
+  # 2. Gỡ bỏ Mount giả lập (Nếu có dùng trong test Fail-Safe)
   if mount | grep -q "/usr/sbin/sshd"; then
     umount /usr/sbin/sshd 2>/dev/null || true
   fi
   rm -rf /tmp/mock_sshd 2>/dev/null || true
+
+  # 3. Gỡ bỏ lớp Mock (Trả lại quyền điều khiển cho lệnh hệ thống gốc)
   rm -rf /tmp/mock_bin 2>/dev/null || true
 
-  # 3. Quét và dọn dẹp rác (Đảm bảo bẫy trap EXIT của script hoạt động)
+  # 4. [QUAN TRỌNG] Ép dịch vụ SSH thật khởi động lại với cấu hình đã khôi phục (Port gốc)
+  # Dùng đường dẫn tuyệt đối /bin/systemctl để chắc chắn không gọi nhầm file giả lập
+  /bin/systemctl restart sshd 2>/dev/null || /usr/bin/systemctl restart sshd 2>/dev/null || true
+
+  # 5. Dọn dẹp rác nháp của kịch bản
   rm -rf /etc/wptt/tmp/ssh_port.* 2>/dev/null || true
 }
 
@@ -67,7 +87,7 @@ teardown() {
 # NHÓM KIỂM THỬ 2: GIAO DỊCH NGUYÊN TỬ VÀ KHẢ NĂNG TỰ CHỮA LÀNH
 # ==============================================================================
 
-@test "[Enterprise] Thực thi đổi Port nguyên tử và dọn dẹp Workspace tự động" {
+@test "[Enterprise] Thực thi đổi Port atomic và dọn dẹp Workspace tự động" {
   # Bơm chuỗi "1" qua stdin để tự động pass qua hàm wptt_xac_nhan
   run bash /etc/wptt/ssh/wptt-ssh-port 22222 <<<"1"
 
