@@ -1,29 +1,37 @@
 #!/bin/bash
-
-function huong_dan() {
-    cat << 'EOF'
-  Thời gian chờ SSH [SSH timeout] là khoảng thời gian được định cấu hình mà sau đó một kết nối SSH không hoạt động sẽ tự động bị ngắt bởi máy chủ hoặc máy khách.
-  Mục đích chính của việc này là để tăng cường bảo mật bằng cách đóng các phiên không sử dụng và giải phóng tài nguyên hệ thống.
-EOF
-}
-
+# Nạp thư viện WPTangToc
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+. /etc/wptt/core-functions 2>/dev/null
+
+mkdir -p /etc/wptt/tmp 2>/dev/null
+TMP_WORKSPACE=$(mktemp -d -p "/etc/wptt/tmp" ssh_timeout.XXXXXX) || {
+  echo -e "${C_RED}Lỗi: Không thể tạo thư mục tạm${C_RESET}"
+  exit 1
+}
+trap '/bin/rm -rf "$TMP_WORKSPACE"' EXIT
+
+function huong_dan() {
+  cat <<'EOF'
+ Thời gian chờ SSH [SSH timeout] là khoảng thời gian được định cấu hình mà sau đó một kết nối SSH không hoạt động sẽ tự động bị ngắt bởi máy chủ hoặc máy khách.
+ Mục đích chính của việc này là để tăng cường bảo mật bằng cách đóng các phiên không sử dụng và giải phóng tài nguyên hệ thống.
+EOF
+}
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_ssh} ➜ Cấu hình Thời gian chờ SSH (Timeout)${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ SSH ➜ Cấu hình Thời gian chờ SSH (Timeout)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if [[ -w /etc/ssh/sshd_config ]] && systemctl is-active --quiet sshd; then
-	:
-else
-	echo -e "\nHệ thống kiểm tra máy chủ không sử dụng, hoặc service SSHD đang không hoạt động!"
-	[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
-	return 1 2>/dev/null || exit 1
+# Kiểm tra dịch vụ SSH có hoạt động không
+if [[ ! -w /etc/ssh/sshd_config ]] || ! systemctl is-active --quiet sshd; then
+  if ! systemctl is-active --quiet ssh; then # Dự phòng cho Ubuntu
+    echo -e "\nHệ thống kiểm tra máy chủ không sử dụng, hoặc service SSH đang không hoạt động!"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
+    return 1 2>/dev/null || exit 1
+  fi
 fi
 
 wptt_logs "INFO" "Thiết lập SSH TIME OUT"
@@ -31,7 +39,7 @@ wptt_logs "INFO" "Thiết lập SSH TIME OUT"
 sshd_file="/etc/ssh/sshd_config"
 is_active=false
 
-if grep -q "^ClientAliveInterval [1-9]" "$sshd_file"; then
+if grep -q "^[[:space:]]*ClientAliveInterval[[:space:]]\+[1-9]" "$sshd_file"; then
   is_active=true
 fi
 
@@ -50,50 +58,54 @@ fi
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# XỬ LÝ LỰA CHỌN ĐẢO TRẠNG THÁI (TOGGLE) KÈM ROLLBACK
+# XỬ LÝ LỰA CHỌN ĐẢO TRẠNG THÁI (TOGGLE) KÈM ROLLBACK (ATOMIC EDIT)
 # ==============================================================================
 thao_tac_thanh_cong=false
 msg_action=""
+TMP_SSHD_CONF="$TMP_WORKSPACE/sshd_config"
 
 if $is_active; then
   # ĐANG BẬT -> HỎI KHÔI PHỤC MẶC ĐỊNH
   if wptt_xac_nhan "Bạn có muốn TẮT giữ kết nối và khôi phục về cấu hình Mặc định không?" "" "" "Đồng ý TẮT" "Hủy bỏ"; then
     echo ""
-    _runing "Đang khôi phục cấu hình SSH và kiểm tra bằng sshd -t..."
+    _runing "Đang khôi phục cấu hình SSH và kiểm tra"
 
-    # 1. Tạo file dự phòng
-    cp -p "$sshd_file" "${sshd_file}.bkwptt"
+    # 1. Cập nhật File cấu hình nguyên tử
+    /bin/cp -fp "$sshd_file" "$TMP_SSHD_CONF"
 
-    # Dùng Regex thay thế thông minh (Bao trọn mọi giá trị cũ)
-    sed -i -E 's/^#?ClientAliveInterval.*/#ClientAliveInterval 0/g' "$sshd_file"
-    sed -i -E 's/^#?ClientAliveCountMax.*/#ClientAliveCountMax 3/g' "$sshd_file"
+    # Giữ thêm 1 bản backup dự phòng hệ thống
+    /bin/cp -fp "$sshd_file" "$TMP_WORKSPACE/sshd_config.bkwptt"
 
-    # 2. Kiểm tra cú pháp bằng sshd -t
-    if ! sshd -t >/dev/null 2>&1; then
+    # Dùng Regex thay thế thông minh trên file nháp
+    /bin/sed -i -E 's/^[[:space:]]*#?[[:space:]]*ClientAliveInterval.*/#ClientAliveInterval 0/g' "$TMP_SSHD_CONF"
+    /bin/sed -i -E 's/^[[:space:]]*#?[[:space:]]*ClientAliveCountMax.*/#ClientAliveCountMax 3/g' "$TMP_SSHD_CONF"
+
+    # 2. Kiểm thử cô lập bằng file nháp
+    if ! /usr/sbin/sshd -t -f "$TMP_SSHD_CONF" >/dev/null 2>&1; then
       echo -en "\033[1A\033[2K\r"
-      _runloi "Lỗi cú pháp SSHD! Đang tiến hành Rollback..."
-      mv -f "${sshd_file}.bkwptt" "$sshd_file"
-      echo -e "${C_RED}Đã khôi phục lại cấu hình cũ. Máy chủ không bị ảnh hưởng.${C_RESET}"
+      _runloi "Cập nhật cấu hình và kiểm tra SSHD"
+      echo -e "${C_RED}Lỗi cú pháp bị phát hiện trên file tạm! Quá trình đã bị hủy. Máy chủ an toàn tuyệt đối.${C_RESET}"
       sleep 3
       [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
       exit 1
     fi
 
-    # 3. Khởi động lại dịch vụ và kiểm tra lỗi
-    if ! (systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null); then
+    # Ghi đè nguyên tử Zero-Downtime
+    /bin/mv -fT "$TMP_SSHD_CONF" "$sshd_file"
+
+    # 3. Nạp lại dịch vụ Zero-Downtime (Reload thay vì Restart)
+    if ! (systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null); then
       echo -en "\033[1A\033[2K\r"
-      _runloi "Lỗi khởi động dịch vụ SSH! Đang tiến hành Rollback..."
-      mv -f "${sshd_file}.bkwptt" "$sshd_file"
-      systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
-      echo -e "${C_RED}Đã khôi phục lại cấu hình cũ do dịch vụ không thể khởi động.${C_RESET}"
+      _runloi "Cập nhật cấu hình và kiểm tra SSHD"
+      echo -e "${C_RED}Lỗi nạp lại dịch vụ SSH! Đang tiến hành Rollback...${C_RESET}"
+      /bin/mv -fT "$TMP_WORKSPACE/sshd_config.bkwptt" "$sshd_file"
+      systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null
       sleep 3
       [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
       exit 1
     fi
 
-    # 4. Thành công -> Xóa file dự phòng
-    rm -f "${sshd_file}.bkwptt"
-    _rundone "Đã khôi phục thành công"
+    _rundone "Cập nhật cấu hình và kiểm tra SSHD"
 
     thao_tac_thanh_cong=true
     msg_action="TẮT giữ kết nối (Trở về Mặc định)"
@@ -102,50 +114,53 @@ else
   # ĐANG TẮT -> HỎI BẬT LÊN 24H
   if wptt_xac_nhan "Bạn có muốn BẬT tính năng giữ kết nối SSH liên tục 24 giờ không?" "" "" "Đồng ý BẬT" "Hủy bỏ"; then
     echo ""
-    _runing "Đang thiết lập thông số ClientAliveInterval và kiểm tra bằng sshd -t..."
+    _runing "Thiết lập thông số và kiểm tra SSHD"
 
-    # 1. Tạo file dự phòng
-    cp -p "$sshd_file" "${sshd_file}.bkwptt"
+    # 1. Cập nhật File cấu hình nguyên tử
+    /bin/cp -fp "$sshd_file" "$TMP_SSHD_CONF"
 
-    # Kiểm tra xem tham số có tồn tại trong file chưa
-    if grep -q -E "^#?ClientAliveInterval" "$sshd_file"; then
-      sed -i -E 's/^#?ClientAliveInterval.*/ClientAliveInterval 28800/g' "$sshd_file"
+    # Giữ thêm 1 bản backup dự phòng hệ thống
+    /bin/cp -fp "$sshd_file" "$TMP_WORKSPACE/sshd_config.bkwptt"
+
+    # Kiểm tra xem tham số có tồn tại trong file nháp chưa
+    if grep -q -E "^[[:space:]]*#?[[:space:]]*ClientAliveInterval" "$TMP_SSHD_CONF"; then
+      /bin/sed -i -E 's/^[[:space:]]*#?[[:space:]]*ClientAliveInterval.*/ClientAliveInterval 28800/g' "$TMP_SSHD_CONF"
     else
-      echo "ClientAliveInterval 28800" >>"$sshd_file"
+      echo "ClientAliveInterval 28800" >>"$TMP_SSHD_CONF"
     fi
 
-    if grep -q -E "^#?ClientAliveCountMax" "$sshd_file"; then
-      sed -i -E 's/^#?ClientAliveCountMax.*/ClientAliveCountMax 3/g' "$sshd_file"
+    if grep -q -E "^[[:space:]]*#?[[:space:]]*ClientAliveCountMax" "$TMP_SSHD_CONF"; then
+      /bin/sed -i -E 's/^[[:space:]]*#?[[:space:]]*ClientAliveCountMax.*/ClientAliveCountMax 3/g' "$TMP_SSHD_CONF"
     else
-      echo "ClientAliveCountMax 3" >>"$sshd_file"
+      echo "ClientAliveCountMax 3" >>"$TMP_SSHD_CONF"
     fi
 
-    # 2. Kiểm tra cú pháp bằng sshd -t
-    if ! sshd -t >/dev/null 2>&1; then
+    # 2. Kiểm thử cô lập bằng file nháp
+    if ! /usr/sbin/sshd -t -f "$TMP_SSHD_CONF" >/dev/null 2>&1; then
       echo -en "\033[1A\033[2K\r"
-      _runloi "Lỗi cú pháp SSHD! Đang tiến hành Rollback..."
-      mv -f "${sshd_file}.bkwptt" "$sshd_file"
-      echo -e "${C_RED}Đã khôi phục lại cấu hình cũ. Máy chủ không bị ảnh hưởng.${C_RESET}"
+      _runloi "Thiết lập thông số và kiểm tra SSHD"
+      echo -e "${C_RED}Lỗi cú pháp bị phát hiện trên file tạm! Quá trình đã bị hủy. Máy chủ an toàn tuyệt đối.${C_RESET}"
       sleep 3
       [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
       exit 1
     fi
 
-    # 3. Khởi động lại dịch vụ và kiểm tra lỗi
-    if ! (systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null); then
+    # Ghi đè nguyên tử Zero-Downtime
+    /bin/mv -fT "$TMP_SSHD_CONF" "$sshd_file"
+
+    # 3. Nạp lại dịch vụ Zero-Downtime (Reload thay vì Restart)
+    if ! (systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null); then
       echo -en "\033[1A\033[2K\r"
-      _runloi "Lỗi khởi động dịch vụ SSH! Đang tiến hành Rollback..."
-      mv -f "${sshd_file}.bkwptt" "$sshd_file"
-      systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
-      echo -e "${C_RED}Đã khôi phục lại cấu hình cũ do dịch vụ không thể khởi động.${C_RESET}"
+      _runloi "Thiết lập thông số và kiểm tra SSHD"
+      echo -e "${C_RED}Lỗi nạp lại dịch vụ SSH! Đang tiến hành Rollback...${C_RESET}"
+      /bin/mv -fT "$TMP_WORKSPACE/sshd_config.bkwptt" "$sshd_file"
+      systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null
       sleep 3
       [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-ssh-main 1
       exit 1
     fi
 
-    # 4. Thành công -> Xóa file dự phòng
-    rm -f "${sshd_file}.bkwptt"
-    _rundone "Áp dụng cấu hình thành công"
+    _rundone "Thiết lập thông số và kiểm tra SSHD"
 
     thao_tac_thanh_cong=true
     msg_action="BẬT giữ kết nối 24 Giờ (28800s * 3)"
@@ -160,7 +175,7 @@ if $thao_tac_thanh_cong; then
   center_text "${C_BOLD_WHITE}CẤU HÌNH SSH TIMEOUT HOÀN TẤT${C_RESET}"
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "Hành động    : ${C_YELLOW}$msg_action${C_RESET}" 2
-  left_text "Dịch vụ SSH  : Đã được khởi động lại để áp dụng thay đổi." 2
+  left_text "Dịch vụ SSH  : Đã được nạp lại để áp dụng thay đổi." 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 else
   echo -e "${C_YELLOW}Đã hủy thao tác cấu hình SSH Timeout.${C_RESET}"
