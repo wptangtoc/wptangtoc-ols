@@ -83,11 +83,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.1.0
-
-### 🛠️ Tối ưu hệ thống
-- **Cải tiến độ chuẩn xác phân quyền tập tin và thư mục:** Nâng cao cơ chế kiểm soát và thiết lập quyền hạn (permissions/ownership), đảm bảo mã nguồn website luôn vận hành an toàn, ổn định và ngăn ngừa các lỗi phân quyền trong quá trình quản trị máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
