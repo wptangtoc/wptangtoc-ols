@@ -1,15 +1,22 @@
 #!/usr/bin/env bats
 
-#test tình huống thay đổi port ssh
 setup() {
-  # 1. Sao lưu nguyên trạng file cấu hình gốc của hệ thống
+  mkdir -p /tmp/mock_bin
+  echo -e '#!/bin/bash\nexit 0' >/tmp/mock_bin/systemctl
+  chmod +x /tmp/mock_bin/systemctl
+  export PATH="/tmp/mock_bin:$PATH"
+
+  # 2. [ENTERPRISE FIX]: Sinh Host Keys ảo để vượt qua bài test cú pháp sshd -t
+  ssh-keygen -A >/dev/null 2>&1 || true
+
+  # 3. Sao lưu nguyên trạng file cấu hình gốc của hệ thống
   cp /etc/ssh/sshd_config /tmp/sshd_config.bats.bak
 
-  # 2. Xóa các cấu hình Port nhiễu và thiết lập Port 22 làm mốc kiểm thử
+  # 4. Xóa các cấu hình Port nhiễu và thiết lập Port 22 làm mốc kiểm thử
   sed -i '/^[[:space:]]*#\?[[:space:]]*Port[[:space:]]/d' /etc/ssh/sshd_config
   echo "Port 22" >>/etc/ssh/sshd_config
 
-  # 3. Đảm bảo thư mục tmp sạch sẽ trước khi test
+  # 5. Đảm bảo thư mục tmp sạch sẽ trước khi test
   rm -rf /etc/wptt/tmp/ssh_port.* 2>/dev/null || true
 }
 
@@ -22,6 +29,7 @@ teardown() {
     umount /usr/sbin/sshd 2>/dev/null || true
   fi
   rm -rf /tmp/mock_sshd 2>/dev/null || true
+  rm -rf /tmp/mock_bin 2>/dev/null || true
 
   # 3. Quét và dọn dẹp rác (Đảm bảo bẫy trap EXIT của script hoạt động)
   rm -rf /etc/wptt/tmp/ssh_port.* 2>/dev/null || true
@@ -62,6 +70,14 @@ teardown() {
 @test "[Enterprise] Thực thi đổi Port nguyên tử và dọn dẹp Workspace tự động" {
   # Bơm chuỗi "1" qua stdin để tự động pass qua hàm wptt_xac_nhan
   run bash /etc/wptt/ssh/wptt-ssh-port 22222 <<<"1"
+
+  # --- ĐOẠN DEBUG (IN LOG NẾU LỖI ĐỂ TÌM NGUYÊN NHÂN TRÊN GITHUB ACTIONS) ---
+  if [ "$status" -ne 0 ]; then
+    echo -e "\n=== 🚨 DỮ LIỆU DEBUG (OUTPUT CỦA SCRIPT) ===" >&3
+    echo "$output" >&3
+    echo -e "=============================================\n" >&3
+  fi
+  # -----------------------------------
 
   # Kịch bản phải trả về status 0 (Thành công hoàn toàn)
   [ "$status" -eq 0 ]
