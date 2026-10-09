@@ -57,14 +57,37 @@ if [[ ! -f "$vhost_conf" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$httpd_conf" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy file cấu hình máy chủ OpenLiteSpeed ($httpd_conf)!${C_RESET}"
+  sleep 3
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
+
 # ==============================================================================
-# KHÓA ĐỒNG THỜI (CONCURRENCY CONTROL)
+# KHÓA ĐỒNG THỜI TOÀN HỆ THỐNG (GLOBAL & DOMAIN CONCURRENCY CONTROL)
 # ==============================================================================
 /bin/mkdir -p "/etc/wptt/tmp"
-LOCK_FILE="/etc/wptt/tmp/wptt_lock_vhost_${NAME}.lock"
-exec 200>"$LOCK_FILE"
+
+# 1. Khóa riêng biệt theo domain
+LOCK_DOMAIN="/etc/wptt/tmp/wptt_lock_vhost_${NAME}.lock"
+exec 200>"$LOCK_DOMAIN"
 if ! flock -n 200; then
   _runloi "Website $NAME đang có một tác vụ khác can thiệp. Vui lòng thử lại sau!"
+  sleep 2
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
+
+# 2. Khóa toàn cục cho httpd_config.conf (Chống ghi đè giữa các domain chạy song song)
+LOCK_GLOBAL="/etc/wptt/tmp/wptt_lock_httpd_config.lock"
+exec 201>"$LOCK_GLOBAL"
+if ! flock -x -w 10 201; then
+  _runloi "Hệ thống đang bận cập nhật file máy chủ httpd_config.conf. Vui lòng thử lại sau!"
   sleep 2
   if [[ "${1:-}" == "98" ]]; then
     exec /etc/wptt/wptt-domain-main 1
@@ -158,30 +181,48 @@ fi
 _runing "Gỡ bỏ Alias $domain_xoa khỏi Vhost $NAME"
 
 # ==============================================================================
-# GIAO DỊCH NGUYÊN TỬ (ATOMIC UPDATE VỚI FALLBACK AN TOÀN)
+# GIAO DỊCH 2 TỆP NGUYÊN TỬ (TÁCH BIỆT BẢN BACKUP VÀ BẢN CANDIDATE)
 # ==============================================================================
-tmp_vhost=$(/bin/mktemp -p "/etc/wptt/tmp" "vhost_${NAME}_XXXXXX.conf")
-tmp_httpd=$(/bin/mktemp -p "/etc/wptt/tmp" "httpd_XXXXXX.conf")
+# Tạo 2 tệp backup nguyên trạng (Clean Backup)
+bak_vhost=$(/bin/mktemp -p "/etc/wptt/tmp" "vhost_${NAME}_bak_XXXXXX.conf")
+bak_httpd=$(/bin/mktemp -p "/etc/wptt/tmp" "httpd_bak_XXXXXX.conf")
 
-# Đăng ký bẫy dọn dẹp file tạm đề phòng crash
-trap 'rm -f -- "$tmp_vhost" "$tmp_httpd"' EXIT INT TERM
+# Tạo 2 tệp candidate dùng để chỉnh sửa thử nghiệm (Working Copy)
+tmp_vhost=$(/bin/mktemp -p "/etc/wptt/tmp" "vhost_${NAME}_cand_XXXXXX.conf")
+tmp_httpd=$(/bin/mktemp -p "/etc/wptt/tmp" "httpd_cand_XXXXXX.conf")
 
-/bin/cp -f -- "$vhost_conf" "$tmp_vhost"
-/bin/cp -f -- "$httpd_conf" "$tmp_httpd"
+# Đăng ký bẫy dọn dẹp file nháp
+trap '/bin/rm -f -- "$bak_vhost" "$bak_httpd" "$tmp_vhost" "$tmp_httpd" 2>/dev/null || true' EXIT INT TERM
 
+# Sao chép nguyên trạng và bảo toàn tuyệt đối thuộc tính/quyền tệp (-fp)
+/bin/cp -fp -- "$vhost_conf" "$bak_vhost" || {
+  _runloi "Không thể tạo file backup vhost"
+  exit 1
+}
+/bin/cp -fp -- "$httpd_conf" "$bak_httpd" || {
+  _runloi "Không thể tạo file backup httpd_config"
+  exit 1
+}
+/bin/cp -fp -- "$vhost_conf" "$tmp_vhost" || {
+  _runloi "Không thể chuẩn bị file candidate vhost"
+  exit 1
+}
+/bin/cp -fp -- "$httpd_conf" "$tmp_httpd" || {
+  _runloi "Không thể chuẩn bị file candidate httpd"
+  exit 1
+}
+
+# Thực hiện sửa trên bản candidate
 if [[ $total -eq 1 ]]; then
-  # Trường hợp chỉ có 1 Alias: Dọn sạch vhAliases và map phụ
   /bin/sed -i -E "/^[[:space:]]*map[[:space:]]+${NAME}[[:space:]]+/d" "$tmp_httpd"
   /bin/sed -i "/listener.*http/a \  map                     $NAME $NAME" "$tmp_httpd"
   /bin/sed -i "/^[[:space:]]*vhAliases[[:space:]]/d" "$tmp_vhost"
 else
-  # Lọc danh sách còn lại
   new_aliases=()
   for a in "${selects[@]}"; do
     [[ "$a" != "$domain_xoa" ]] && new_aliases+=("$a")
   done
 
-  # Nối mảng an toàn bằng printf (Khử triệt để warning IFS của Semgrep)
   printf -v domain_alias_con_lai "%s," "${new_aliases[@]}"
   domain_alias_con_lai="${domain_alias_con_lai%,}"
 
@@ -191,27 +232,47 @@ else
 fi
 
 # ==============================================================================
-# CHỐT CHẶN ENTERPRISE: VALIDATE CÚ PHÁP TRƯỚC KHI THAY THẾ THẬT
+# COMMIT GIAO DỊCH VÀ KIỂM TRA TỰ HOÀN NGUYÊN (REVERT ON ERROR)
 # ==============================================================================
-# Tráo đổi nguyên tử file tạm sang vị trí thật
-/bin/cp -f -- "$tmp_vhost" "$vhost_conf"
-/bin/cp -f -- "$tmp_httpd" "$httpd_conf"
+# Ghi cấu hình candidate vào file thật (giữ nguyên quyền sở hữu và phân quyền)
+/bin/cp -fp -- "$tmp_vhost" "$vhost_conf"
+/bin/cp -fp -- "$tmp_httpd" "$httpd_conf"
 
-# Kiểm tra cú pháp bằng chính nhị phân của OpenLiteSpeed
+# Kiểm tra cú pháp bằng nhị phân OpenLiteSpeed
 if ! /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
-  _runloi "Lỗi cú pháp OpenLiteSpeed sau khi sửa file! Tiến hành hoàn nguyên..."
-  # Phục hồi nguyên bản cấu hình cũ (Auto-healing)
-  /bin/cp -f -- "$tmp_vhost" "$vhost_conf" 2>/dev/null || true
-  /bin/cp -f -- "$tmp_httpd" "$httpd_conf" 2>/dev/null || true
-  wptt_smart_reload_lsws >/dev/null 2>&1
+  _runloi "Lỗi cú pháp OpenLiteSpeed! Đang khôi phục lại cấu hình gốc từ bản backup sạch..."
+
+  # ROLLBACK CHUẨN: Chép lại từ bản backup nguyên trạng (bak_*), KHÔNG chép từ tmp_*
+  /bin/cp -fp -- "$bak_vhost" "$vhost_conf"
+  /bin/cp -fp -- "$bak_httpd" "$httpd_conf"
+
+  # Kiểm tra lại cú pháp sau khi đã rollback để đảm bảo máy chủ không bị chết
+  if ! /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
+    _runloi "CẢNH BÁO NGUY HIỂM: Cấu hình gốc vẫn không qua được kiểm tra cú pháp!"
+  else
+    _runloi "Đã hoàn nguyên hệ thống về trạng thái ban đầu an toàn 100%."
+  fi
+
+  wptt_logs "ERROR" "Lỗi kiểm tra cú pháp OpenLiteSpeed khi xóa alias $domain_xoa trên $NAME. Đã tự động rollback."
+
   if [[ "${1:-}" == "98" ]]; then
     exec /etc/wptt/wptt-domain-main 1
   fi
   exit 1
 fi
 
-# Reload dịch vụ mượt mà (Zero-Downtime)
-wptt_smart_reload_lsws >/dev/null 2>&1
+# CHỈ THỰC THI RELOAD KHI ĐÃ VƯỢT QUA BÀI TEST VALIDATION CÚ PHÁP
+if ! wptt_smart_reload_lsws >/dev/null 2>&1; then
+  _runloi "Không thể reload OpenLiteSpeed! Đang hoàn nguyên cấu hình cũ..."
+  /bin/cp -fp -- "$bak_vhost" "$vhost_conf"
+  /bin/cp -fp -- "$bak_httpd" "$httpd_conf"
+  wptt_smart_reload_lsws >/dev/null 2>&1 || true
+
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
 
 _rundone "Gỡ bỏ Alias $domain_xoa khỏi Vhost $NAME"
 wptt_logs "INFO" "Xóa alias domain $domain_xoa khỏi $NAME thành công"
