@@ -7,7 +7,7 @@
 # Lưu PATH gốc TRƯỚC khi setup() chèn thư mục mock vào đầu PATH.
 # Dùng để gọi systemctl/sshd thật trong teardown.
 ORIG_PATH="$PATH"
-
+export CI="true"
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_DROPIN="/etc/ssh/sshd_config.d"
 WPTT_CONF="/etc/wptt/.wptt.conf"
@@ -352,13 +352,13 @@ teardown() {
 @test "[Validation] Khóa cứng bảo vệ các Port mặc định của Webserver (80, 443)" {
   run bash "$WPTT_SSH_SCRIPT" "443"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"đang được sử dụng bởi hệ thống Webserver"* ]]
+  [[ "$output" == *"dành riêng cho máy chủ web"* ]]
 }
 
 @test "[Validation] Hủy tiến trình nếu Port mới trùng Port hiện tại" {
   run bash "$WPTT_SSH_SCRIPT" "22"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"đang được sử dụng"* || "$output" == *"trùng"* ]]
+  [[ "$output" == *"Không cần thay đổi"* || "$output" == *"trùng"* ]]
 }
 
 @test "[Validation] Đầu vào lỗi không được làm thay đổi sshd_config" {
