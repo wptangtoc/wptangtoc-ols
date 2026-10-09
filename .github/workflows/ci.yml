@@ -856,3 +856,97 @@ jobs:
             bats-test-alma8*.log
           if-no-files-found: ignore
           retention-days: 7
+
+# ============================================================
+# QUÉT LỖ HỔNG MÃ NGUỒN SAST 
+# ============================================================
+  semgrep-scan:
+    name: Quét Lỗ hổng Mã nguồn (Semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: 📥 Tải mã nguồn
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
+
+      - name: 🛡️ Quét Bảo mật Semgrep (Chỉ quét Bash Script)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          # 1. Tạo môi trường cách ly trong /tmp
+          WORK_DIR="/tmp/semgrep-workspace"
+          rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
+          cp -a . "$WORK_DIR/"
+
+          # 2. Gán tạm đuôi .sh cho toàn bộ script không đuôi có Shebang
+          COUNT_RENAMED=0
+          while IFS= read -r -d '' file; do
+            if head -n 1 "$file" 2>/dev/null | grep -qE '^#!.*(bash|sh)'; then
+              mv "$file" "${file}.sh"
+              COUNT_RENAMED=$((COUNT_RENAMED + 1))
+            fi
+          done < <(find "$WORK_DIR" -type d -name ".git" -prune -o -type f ! -name "*.*" -print0)
+
+          echo "🔍 Đã chuẩn hóa ${COUNT_RENAMED} script Bash sang .sh."
+          chmod -R 755 "$WORK_DIR"
+
+          # 3. CHỈ QUÉT BASH: Dùng cờ --include "*.sh"
+          docker run --rm \
+            -v "${WORK_DIR}:/src" \
+            -w /src \
+            semgrep/semgrep \
+            semgrep scan \
+              --config "p/default" \
+              --config "p/security-audit" \
+              --config "p/secrets" \
+              --include "*.sh" \
+              --exclude "tests" \
+              --exclude "*.bats" \
+              --sarif \
+              --output /src/semgrep.sarif \
+              . || true
+
+          # 4. Chuyển file SARIF về lại workspace và khử đuôi .sh
+          if [ -f "${WORK_DIR}/semgrep.sarif" ]; then
+            mv "${WORK_DIR}/semgrep.sarif" ./semgrep.sarif
+            sed -i -E 's/("uri":\s*"[^"]+)\.sh"/\1"/g' semgrep.sarif
+          fi
+
+          rm -rf "$WORK_DIR"
+
+          # 5. In bảng kết quả trực quan ra Console CI/CD
+          if [ -s semgrep.sarif ] && command -v jq >/dev/null 2>&1; then
+            TOTAL_FINDINGS=$(jq -r '.runs[].results | length' semgrep.sarif 2>/dev/null || echo "0")
+            
+            echo "::group::📋 Chi tiết các cảnh báo Semgrep trên Bash (Tổng số: $TOTAL_FINDINGS)"
+            if [ "$TOTAL_FINDINGS" -gt 0 ]; then
+              echo -e "\n--------------------------------------------------------------------------------"
+              printf "%-10s | %-45s | %s\n" "MỨC ĐỘ" "VỊ TRÍ (FILE:DÒNG)" "MÔ TẢ LỖ HỔNG"
+              echo -e "--------------------------------------------------------------------------------"
+              
+              jq -r '.runs[].results[]? | 
+                [
+                  (.level // "warning" | ascii_upcase), 
+                  "\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):\(.locations[0].physicalLocation.region.startLine // 0)", 
+                  (.message.text // "No description" | gsub("\n"; " "))
+                ] | @tsv' semgrep.sarif | while IFS=$'\t' read -r level location msg; do
+                  printf "%-10s | %-45s | %s\n" "[$level]" "$location" "$msg"
+              done
+              echo -e "--------------------------------------------------------------------------------\n"
+            else
+              echo "✅ Toàn bộ Bash Script sạch sẽ, không có cảnh báo nào!"
+            fi
+            echo "::endgroup::"
+          fi
+
+      - name: 📤 Upload kết quả lên GitHub Security
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@5aa5056e2d064690968faa15e019d7d823ef6d7b
+        with:
+          sarif_file: 'semgrep.sarif'
+          category: 'semgrep-sast'
