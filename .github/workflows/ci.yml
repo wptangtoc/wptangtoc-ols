@@ -858,38 +858,58 @@ jobs:
           retention-days: 7
 
 
+# ============================================================
+# QUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP CHO BASH)
+# ============================================================
+  semgrep-scan:
+    name: Quét Lỗ hổng Mã nguồn (Semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: 📥 Tải mã nguồn
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
+        with:
+          persist-credentials: false
+
       - name: 🛡️ Quét Bảo mật Semgrep (Bao gồm script không đuôi .sh)
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          # 1. Thu thập toàn bộ file shell có shebang hoặc đuôi .sh
-          mapfile -t SHELL_FILES < <(
-            find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) \
-              -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} +
-          )
+          # 1. Lọc tất cả các file có Shebang hoặc đuôi .sh, chuẩn hóa bỏ tiền tố ./
+          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) \
+            -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + \
+            | sed 's|^\./||' > semgrep-targets.txt
 
-          echo "Tìm thấy ${#SHELL_FILES[@]} file Bash Script cần quét."
-          printf '%s\n' "${SHELL_FILES[@]}" > /tmp/semgrep-target-files.txt
+          TOTAL_FILES=$(wc -l < semgrep-targets.txt)
+          echo "🔍 Tìm thấy ${TOTAL_FILES} file Bash Script hợp lệ cần quét."
 
-          # 2. Chạy Semgrep trong docker, ép đọc danh sách file qua flag --include hoặc file target
+          # 2. Ép Semgrep quét ĐÚNG danh sách file này qua cờ --target-list
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
-            -v "/tmp/semgrep-target-files.txt:/tmp/targets.txt:ro" \
             -w /src \
             semgrep/semgrep \
             semgrep scan \
               --config "p/default" \
               --config "p/security-audit" \
               --config "p/secrets" \
+              --target-list /src/semgrep-targets.txt \
               --sarif \
-              --output semgrep.sarif \
-              --lang bash \
-              . || true
+              --output semgrep.sarif || true
 
-          # 3. In kết quả chi tiết ra console
+          # 3. In kết quả trực tiếp ra GitHub Actions Console
           if [ -s semgrep.sarif ] && command -v jq >/dev/null 2>&1; then
-            echo "::group::📋 Danh sách cảnh báo Semgrep"
-            jq -r '.runs[].results[]? | "[\(.level // "warning")] \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) - \(.message.text)"' semgrep.sarif || true
+            echo "::group::📋 Chi tiết các cảnh báo Semgrep phát hiện"
+            jq -r '.runs[].results[]? | "[\(.level // "warning" | ascii_upcase)] \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) - \(.message.text)"' semgrep.sarif || true
             echo "::endgroup::"
           fi
+
+      - name: 📤 Upload kết quả lên GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        with:
+          sarif_file: 'semgrep.sarif'
+          category: 'semgrep-sast'
