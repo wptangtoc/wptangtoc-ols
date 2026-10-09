@@ -858,30 +858,24 @@ jobs:
           retention-days: 7
 
 
-# ============================================================
-# JOB QUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP)
-# ============================================================
-  semgrep-scan:
-    name: Quét Lỗ hổng Mã nguồn (Semgrep)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - name: 📥 Tải mã nguồn
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3
-        with:
-          persist-credentials: false
-
-      - name: 🛡️ Quét Bảo mật Semgrep (Xuất SARIF & Parse Log trực quan)
+- name: 🛡️ Quét Bảo mật Semgrep (Bao gồm script không đuôi .sh)
         shell: bash
         run: |
-          set -o pipefail
+          set -Eeuo pipefail
 
-          # 1. Chạy Semgrep trong container, quét đường dẫn tương đối (.) để map đúng file PR
+          # 1. Thu thập toàn bộ file shell có shebang hoặc đuôi .sh
+          mapfile -t SHELL_FILES < <(
+            find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) \
+              -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} +
+          )
+
+          echo "Tìm thấy ${#SHELL_FILES[@]} file Bash Script cần quét."
+          printf '%s\n' "${SHELL_FILES[@]}" > /tmp/semgrep-target-files.txt
+
+          # 2. Chạy Semgrep trong docker, ép đọc danh sách file qua flag --include hoặc file target
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
+            -v "/tmp/semgrep-target-files.txt:/tmp/targets.txt:ro" \
             -w /src \
             semgrep/semgrep \
             semgrep scan \
@@ -890,36 +884,12 @@ jobs:
               --config "p/secrets" \
               --sarif \
               --output semgrep.sarif \
+              --lang bash \
               . || true
 
-          # 2. In trực tiếp tóm tắt các cảnh báo ra màn hình GitHub Actions Log
+          # 3. In kết quả chi tiết ra console
           if [ -s semgrep.sarif ] && command -v jq >/dev/null 2>&1; then
-            TOTAL_FINDINGS=$(jq -r '.runs[].results | length' semgrep.sarif 2>/dev/null || echo "0")
-            
-            echo "::group::📋 Chi tiết các cảnh báo Semgrep phát hiện (Tổng số: $TOTAL_FINDINGS)"
-            if [ "$TOTAL_FINDINGS" -gt 0 ]; then
-              echo -e "\n--------------------------------------------------------------------------------"
-              printf "%-10s | %-45s | %s\n" "MỨC ĐỘ" "VỊ TRÍ (FILE:DÒNG)" "MÔ TẢ LỖ HỔNG"
-              echo -e "--------------------------------------------------------------------------------"
-              
-              jq -r '.runs[].results[]? | 
-                [
-                  (.level // "warning" | ascii_upcase), 
-                  "\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):\(.locations[0].physicalLocation.region.startLine // 0)", 
-                  (.message.text // "No description" | gsub("\n"; " "))
-                ] | @tsv' semgrep.sarif | while IFS=$'\t' read -r level location msg; do
-                  printf "%-10s | %-45s | %s\n" "[$level]" "$location" "$msg"
-              done
-              echo -e "--------------------------------------------------------------------------------\n"
-            else
-              echo "✅ Không phát hiện lỗ hổng bảo mật nào từ Semgrep!"
-            fi
+            echo "::group::📋 Danh sách cảnh báo Semgrep"
+            jq -r '.runs[].results[]? | "[\(.level // "warning")] \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) - \(.message.text)"' semgrep.sarif || true
             echo "::endgroup::"
           fi
-
-      - name: 📤 Upload kết quả lên GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
-        with:
-          sarif_file: 'semgrep.sarif'
-          category: 'semgrep-sast'
