@@ -861,6 +861,9 @@ jobs:
 # ============================================================
 # QUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP CHO BASH)
 # ============================================================
+# ============================================================
+# JOB 2C: QUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP CHO BASH)
+# ============================================================
   semgrep-scan:
     name: Quét Lỗ hổng Mã nguồn (Semgrep)
     runs-on: ubuntu-24.04
@@ -879,15 +882,16 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # 1. Lọc tất cả các file có Shebang hoặc đuôi .sh, chuẩn hóa bỏ tiền tố ./
-          find . -type d -name ".git" -prune -o -type f \( -name "*.sh" -o ! -name "*.*" \) \
-            -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + \
-            | sed 's|^\./||' > semgrep-targets.txt
+          # 1. Tìm tất cả file shell không có đuôi mở rộng nhưng có Shebang bash/sh
+          mapfile -t NO_EXT_FILES < <(
+            find . -type d -name ".git" -prune -o -type f ! -name "*.*" \
+              -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + \
+              | sed 's|^\./||'
+          ) || true
 
-          TOTAL_FILES=$(wc -l < semgrep-targets.txt)
-          echo "🔍 Tìm thấy ${TOTAL_FILES} file Bash Script hợp lệ cần quét."
+          echo "🔍 Tìm thấy ${#NO_EXT_FILES[@]} file Bash không đuôi mở rộng cần quét."
 
-          # 2. Ép Semgrep quét ĐÚNG danh sách file này qua cờ --target-list
+          # 2. Truyền trực tiếp danh sách file vào cuối lệnh semgrep scan
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
             -w /src \
@@ -896,20 +900,38 @@ jobs:
               --config "p/default" \
               --config "p/security-audit" \
               --config "p/secrets" \
-              --target-list /src/semgrep-targets.txt \
               --sarif \
-              --output semgrep.sarif || true
+              --output semgrep.sarif \
+              . ${NO_EXT_FILES[@]+"${NO_EXT_FILES[@]}"} || true
 
-          # 3. In kết quả trực tiếp ra GitHub Actions Console
+          # 3. In bảng kết quả chi tiết trực tiếp ra màn hình Console CI/CD
           if [ -s semgrep.sarif ] && command -v jq >/dev/null 2>&1; then
-            echo "::group::📋 Chi tiết các cảnh báo Semgrep phát hiện"
-            jq -r '.runs[].results[]? | "[\(.level // "warning" | ascii_upcase)] \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) - \(.message.text)"' semgrep.sarif || true
+            TOTAL_FINDINGS=$(jq -r '.runs[].results | length' semgrep.sarif 2>/dev/null || echo "0")
+            
+            echo "::group::📋 Chi tiết các cảnh báo Semgrep phát hiện (Tổng số: $TOTAL_FINDINGS)"
+            if [ "$TOTAL_FINDINGS" -gt 0 ]; then
+              echo -e "\n--------------------------------------------------------------------------------"
+              printf "%-10s | %-45s | %s\n" "MỨC ĐỘ" "VỊ TRÍ (FILE:DÒNG)" "MÔ TẢ LỖ HỔNG"
+              echo -e "--------------------------------------------------------------------------------"
+              
+              jq -r '.runs[].results[]? | 
+                [
+                  (.level // "warning" | ascii_upcase), 
+                  "\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):\(.locations[0].physicalLocation.region.startLine // 0)", 
+                  (.message.text // "No description" | gsub("\n"; " "))
+                ] | @tsv' semgrep.sarif | while IFS=$'\t' read -r level location msg; do
+                  printf "%-10s | %-45s | %s\n" "[$level]" "$location" "$msg"
+              done
+              echo -e "--------------------------------------------------------------------------------\n"
+            else
+              echo "✅ Không phát hiện lỗ hổng bảo mật nào từ Semgrep!"
+            fi
             echo "::endgroup::"
           fi
 
       - name: 📤 Upload kết quả lên GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: github/codeql-action/upload-sarif@5aa5056e2d064690968faa15e019d7d823ef6d7b
         with:
           sarif_file: 'semgrep.sarif'
           category: 'semgrep-sast'
