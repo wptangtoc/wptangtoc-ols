@@ -877,23 +877,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🛡️ Quét Bảo mật Semgrep (Bao gồm script không đuôi .sh)
+      - name: 🛡️ Quét Bảo mật Semgrep (Cô lập /tmp & Chuẩn hóa Bash)
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          # 1. Tìm tất cả file shell không có đuôi mở rộng nhưng có Shebang bash/sh
-          mapfile -t NO_EXT_FILES < <(
-            find . -type d -name ".git" -prune -o -type f ! -name "*.*" \
-              -exec awk 'FNR==1 && /^#!.*(bash|sh)/{print FILENAME}' {} + \
-              | sed 's|^\./||'
-          ) || true
+          # 1. Tạo không gian làm việc cách ly trong /tmp (không tác động đến Git workspace)
+          WORK_DIR="/tmp/semgrep-workspace"
+          rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
+          cp -a . "$WORK_DIR/"
 
-          echo "🔍 Tìm thấy ${#NO_EXT_FILES[@]} file Bash không đuôi mở rộng cần quét."
+          # 2. Tìm tất cả script có Shebang bash/sh không đuôi và gán tạm đuôi .sh
+          COUNT_RENAMED=0
+          while IFS= read -r -d '' file; do
+            if head -n 1 "$file" 2>/dev/null | grep -qE '^#!.*(bash|sh)'; then
+              mv "$file" "${file}.sh"
+              ((COUNT_RENAMED++))
+            fi
+          done < <(find "$WORK_DIR" -type d -name ".git" -prune -o -type f ! -name "*.*" -print0)
 
-          # 2. Truyền trực tiếp danh sách file vào cuối lệnh semgrep scan
+          echo "🔍 Đã chuẩn hóa ${COUNT_RENAMED} script Bash không đuôi sang .sh trong môi trường cách ly."
+
+          # 3. Quét Semgrep trong Docker container
           docker run --rm \
-            -v "${{ github.workspace }}:/src" \
+            -v "${WORK_DIR}:/src" \
             -w /src \
             semgrep/semgrep \
             semgrep scan \
@@ -901,10 +908,19 @@ jobs:
               --config "p/security-audit" \
               --config "p/secrets" \
               --sarif \
-              --output semgrep.sarif \
-              . ${NO_EXT_FILES[@]+"${NO_EXT_FILES[@]}"} || true
+              --output /src/semgrep.sarif \
+              . || true
 
-          # 3. In bảng kết quả chi tiết trực tiếp ra màn hình Console CI/CD
+          # 4. Chuyển file SARIF về workspace và gỡ bỏ đuôi .sh để map đúng với PR
+          if [ -f "${WORK_DIR}/semgrep.sarif" ]; then
+            mv "${WORK_DIR}/semgrep.sarif" ./semgrep.sarif
+            sed -i -E 's/("uri":\s*"[^"]+)\.sh"/\1"/g' semgrep.sarif
+          fi
+
+          # Dọn dẹp thư mục tạm
+          rm -rf "$WORK_DIR"
+
+          # 5. In bảng kết quả chi tiết trực tiếp ra màn hình Console CI/CD
           if [ -s semgrep.sarif ] && command -v jq >/dev/null 2>&1; then
             TOTAL_FINDINGS=$(jq -r '.runs[].results | length' semgrep.sarif 2>/dev/null || echo "0")
             
