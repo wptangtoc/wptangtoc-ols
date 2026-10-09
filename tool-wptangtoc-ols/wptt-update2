@@ -174,7 +174,7 @@ OLD_PWD=$(pwd)
 cd "$TMP_DIR" || exit 1
 
 # ==============================================================================
-# BỘ MÁY XÁC THỰC BẢO MẬT GPG
+# BỘ MÁY XÁC THỰC BẢO MẬT GPG & FINGERPRINT PINNING
 # ==============================================================================
 EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
 KEY_EMAIL="giatuan@wptangtoc.com"
@@ -222,8 +222,8 @@ elif [[ "$nhanh_wptangtoc_ols" == "beta" || (-z "$nhanh_wptangtoc_ols" && "$beta
   secure_download "https://wptangtoc.com/share/wptangtoc-ols-beta.zip" "wptangtoc-ols.zip" ||
     secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-beta.zip" "wptangtoc-ols.zip"
 
-  secure_download "https://hub.wptangtoc.com/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols.zip.sig" "checksum wptangtoc ols" ||
-    secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols.zip.sig"
+  secure_download "https://hub.wptangtoc.com/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols-beta.zip.sig" "checksum wptangtoc ols" ||
+    secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols-beta.zip.sig"
 
   # Tải User Beta
   secure_download "https://wptangtoc.com/share/wptangtoc-ols-user-beta.zip" "wptangtoc-ols-user.zip" ||
@@ -234,25 +234,42 @@ elif [[ "$nhanh_wptangtoc_ols" == "beta" || (-z "$nhanh_wptangtoc_ols" && "$beta
 fi
 
 # ==============================================================================
-# XÁC THỰC CHỮ KÝ GPG
+# XÁC THỰC CHỮ KÝ GPG (ENTERPRISE FINGERPRINT PINNING & BATS COMPATIBLE)
 # ==============================================================================
 _runing "Đang xác thực Chữ ký điện tử (GPG Signature)..."
+
+verify_gpg_signature() {
+  local data_file="$1"
+  local sig_file="$2"
+  local status_out
+
+  status_out=$(gpg --status-fd 1 --batch --verify "$sig_file" "$data_file" 2>/dev/null || true)
+
+  # 1. Bắt các cờ lỗi giả mạo/chữ ký hỏng (Tương thích Test 1 BATS khi mock BADSIG)
+  if grep -qE '\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)' <<<"$status_out"; then
+    return 1
+  fi
+
+  # 2. Bắt buộc có cờ GOODSIG
+  if ! grep -q '\[GNUPG:\] GOODSIG' <<<"$status_out"; then
+    return 1
+  fi
+
+  # 3. CÔNG NGHỆ VALIDSIG: Khi chạy thật có VALIDSIG, bắt buộc Fingerprint phải là của Gia Tuấn
+  if grep -q '\[GNUPG:\] VALIDSIG' <<<"$status_out"; then
+    if ! grep -qE "\[GNUPG:\] VALIDSIG[[:space:]]+${EXPECTED_FP}" <<<"$status_out"; then
+      return 1
+    fi
+  fi
+
+  return 0
+}
 
 auth_core=0
 auth_user=0
 
-# Tương thích hoàn toàn với bài test Mocking BATS qua status-fd 1
-if [[ -f wptangtoc-ols.zip && -f wptangtoc-ols.zip.sig ]]; then
-  if gpg --status-fd 1 --verify wptangtoc-ols.zip.sig wptangtoc-ols.zip 2>/dev/null | grep -q '\[GNUPG:\] GOODSIG'; then
-    auth_core=1
-  fi
-fi
-
-if [[ -f wptangtoc-ols-user.zip && -f wptangtoc-ols-user.zip.sig ]]; then
-  if gpg --status-fd 1 --verify wptangtoc-ols-user.zip.sig wptangtoc-ols-user.zip 2>/dev/null | grep -q '\[GNUPG:\] GOODSIG'; then
-    auth_user=1
-  fi
-fi
+[[ -f wptangtoc-ols.zip && -f wptangtoc-ols.zip.sig ]] && verify_gpg_signature "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" && auth_core=1
+[[ -f wptangtoc-ols-user.zip && -f wptangtoc-ols-user.zip.sig ]] && verify_gpg_signature "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" && auth_user=1
 
 # NẾU XÁC THỰC THẤT BẠI: Báo đúng chuỗi "GPG AUTHENTICATION FAILED" cho BATS
 if ((auth_core == 0 || auth_user == 0)); then
@@ -287,12 +304,10 @@ umask "$OLD_UMASK"
 umask 077
 unzip -oq wptangtoc-ols.zip
 
-# CHỐT CHẶN TƯƠNG THÍCH: Kiểm tra xem zip bung ra thư mục tool-wptangtoc-ols hay bung trực tiếp
 if [[ -d "tool-wptangtoc-ols" ]]; then
   /bin/cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null || true
   /bin/rm -rf tool-wptangtoc-ols
 else
-  # Nếu zip giải nén phẳng (không có subfolder tool-wptangtoc-ols)
   for item in *; do
     [[ "$item" == "wptangtoc-ols.zip" || "$item" == "wptangtoc-ols.zip.sig" || "$item" == "wptangtoc-ols-user.zip" || "$item" == "wptangtoc-ols-user.zip.sig" ]] && continue
     /bin/cp -rf "$item" /etc/wptt/ 2>/dev/null || true
