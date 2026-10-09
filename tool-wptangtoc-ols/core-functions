@@ -4,19 +4,20 @@
 # Mọi script cần gọi: . /etc/wptt/core-functions để sử dụng
 # ==============================================================================
 
-
 # Bash script wptangtoc ols kế thừa toàn bộ rủi ro từ môi trường bên ngoài và hành xử một cách hên xui từ môi trường ngoài. Việc áp dụng nó mang lại 3 lớp khiên bảo vệ cốt lõi, chuyển đổi mô hình hệ thống từ "Tin tưởng ngầm định" sang "Zero Trust" (Không tin tưởng bất kỳ ai): giảm thiểu ngoại vi tác động đến code.
 # BẢO MẬT: LÀM SẠCH MÔI TRƯỜNG THỰC THI (ENVIRONMENT SANITIZATION)
 # 1. Tiêu diệt các biến môi trường độc hại (Chống Code Execution & Path Hijacking)
 unset LD_PRELOAD LD_LIBRARY_PATH BASH_ENV ENV CDPATH
 
 # 2. Ép cứng vách ngăn từ ngữ chuẩn của Bash (Tránh tấn công Word-Splitting)
-IFS=$' \t\n'
+# Đặt lại IFS mặc định nếu nó bị thay đổi bất thường
+if [[ "${IFS}" != $' \t\n' ]]; then
+  IFS=$' \t\n'
+fi
 
 # 3. Đóng đinh đường dẫn PATH (Chống chạy nhầm file thực thi giả mạo)
 export PATH="/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # BẢO MẬT END: LÀM SẠCH MÔI TRƯỜNG THỰC THI (ENVIRONMENT SANITIZATION)
-
 
 # ------------------------------------------------------------------------------
 # 1. HÀM NHẬN DIỆN HỆ ĐIỀU HÀNH (OS DETECTION)
@@ -69,7 +70,7 @@ function wptt_get_ram_mb() {
   # Kiểm tra biến có tồn tại VÀ chỉ chứa chữ số (để tránh lỗi cú pháp Bash Math)
   if [[ -n "$ram_bytes" && "$ram_bytes" =~ ^[0-9]+$ ]]; then
     # Dùng phép chia số nguyên mặc định của Bash (thay thế hoàn hảo cho bc)
-    echo $(( ram_bytes / 1024 ))
+    echo $((ram_bytes / 1024))
   else
     echo "2048" # Fallback an toàn nếu đọc /proc/meminfo thất bại
   fi
@@ -149,7 +150,7 @@ wptt_check_lsws() {
   local wait_time=2
   local attempt=1
 
-  while (( attempt <= max_retries )); do
+  while ((attempt <= max_retries)); do
     # Lớp 1: Kiểm tra Service cấp Hệ điều hành (systemd)
     if ! systemctl is-active --quiet lsws; then
       systemctl start lsws >/dev/null 2>&1
@@ -187,11 +188,10 @@ wptt_check_lsws() {
 # ==============================================================================
 function wptt_xac_nhan() {
 
-	#nếu là CLI thì trả giá trị báo lỗi về luôn
-	if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
-		return 0   # Mặc định tự động bấm Đồng ý
-	fi
-
+  #nếu là CLI thì trả giá trị báo lỗi về luôn
+  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    return 0 # Mặc định tự động bấm Đồng ý
+  fi
 
   local msg_title="${1:-Bạn có chắc chắn muốn thực hiện thao tác này?}"
   local info_1="$2"
@@ -245,7 +245,6 @@ function wptt_xac_nhan() {
 
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-
   #dùng while tốt hơn, còn dùng case dễ bị bẫy lỗi biến rỗng
   #nhập sai thì thông báo đỏ chót bắt nhập lại, không bao giờ lo script bị văng lỗi undefined (không xác định).
   while true; do
@@ -255,7 +254,7 @@ function wptt_xac_nhan() {
     1)
       return 0 # Mã 0 = True (Bấm Đồng ý)
       ;;
-    2|0)       # Nhập 2 hoặc 0 đều nhảy vào nhánh này
+    2 | 0)     # Nhập 2 hoặc 0 đều nhảy vào nhánh này
       return 1 # Mã 1 = False (Bấm Không đồng ý / Bấm Thoát)
       ;;
     *)
@@ -265,251 +264,265 @@ function wptt_xac_nhan() {
   done
 }
 
-
 # ============================================================
 # WPTangToc OLS - Smart Graceful Reload
 # ============================================================
 function wptt_smart_reload_lsws() {
 
-    # --------------------------------------------------------
-    # CẤU HÌNH
-    # --------------------------------------------------------
-    local RUN_DIR="/run/wptangtoc"
-    local LOCK_FILE="$RUN_DIR/lsws-reload.lock"
-    local PENDING_FILE="$RUN_DIR/lsws-reload.pending"
-    local PROCESSING_FILE="$RUN_DIR/lsws-reload.processing"
-    local WORKER_PID_FILE="$RUN_DIR/lsws-reload.worker.pid"
-    local CB_FILE="$RUN_DIR/lsws-reload.cb"         
-    local BACKOFF_FILE="$RUN_DIR/lsws-reload.backoff" 
+  # --------------------------------------------------------
+  # CẤU HÌNH
+  # --------------------------------------------------------
+  local RUN_DIR="/run/wptangtoc"
+  local LOCK_FILE="$RUN_DIR/lsws-reload.lock"
+  local PENDING_FILE="$RUN_DIR/lsws-reload.pending"
+  local PROCESSING_FILE="$RUN_DIR/lsws-reload.processing"
+  local WORKER_PID_FILE="$RUN_DIR/lsws-reload.worker.pid"
+  local CB_FILE="$RUN_DIR/lsws-reload.cb"
+  local BACKOFF_FILE="$RUN_DIR/lsws-reload.backoff"
 
-    local LSWSCTRL="/usr/local/lsws/bin/lswsctrl"
-    local PID_FILE="/tmp/lshttpd/lshttpd.pid"
-    #OLS luôn touch cgid khi worker mới sẵn sàng
-    local CGID_FILE="/usr/local/lsws/cgid"
-    
-    local SERVICE="lsws.service"
-    local LOG_FILE="/var/log/wptangtoc-ols.log"
+  local LSWSCTRL="/usr/local/lsws/bin/lswsctrl"
+  local PID_FILE="/tmp/lshttpd/lshttpd.pid"
+  #OLS luôn touch cgid khi worker mới sẵn sàng
+  local CGID_FILE="/usr/local/lsws/cgid"
 
-    local MIN_RELOAD_INTERVAL=15
-    local BACKOFF_CAP=60
-    local RELOAD_TIMEOUT=25
-    local HEALTH_INTERVAL=1
-    local CB_MAX=5
-    local CB_WINDOW=300
+  local SERVICE="lsws.service"
+  local LOG_FILE="/var/log/wptangtoc-ols.log"
 
-    local HEALTH_HOST="${WPTT_LSWS_HEALTH_HOST:-localhost}"
-    local HEALTH_URL="${WPTT_LSWS_HEALTH_URL:-http://127.0.0.1/}"
+  local MIN_RELOAD_INTERVAL=15
+  local BACKOFF_CAP=60
+  local RELOAD_TIMEOUT=25
+  local HEALTH_INTERVAL=1
+  local CB_MAX=5
+  local CB_WINDOW=300
 
-    mkdir -p "$RUN_DIR" 2>/dev/null || return 1
+  local HEALTH_HOST="${WPTT_LSWS_HEALTH_HOST:-localhost}"
+  local HEALTH_URL="${WPTT_LSWS_HEALTH_URL:-http://127.0.0.1/}"
 
-    # ========================================================
-    # 1. XẾP HÀNG SỰ KIỆN 
-    # ========================================================
-    touch "$PENDING_FILE" 2>/dev/null || return 1
+  mkdir -p "$RUN_DIR" 2>/dev/null || return 1
 
-    # ========================================================
-    # 2. TƯỜNG LỬA CHỐNG BÃO TIẾN TRÌNH
-    # ========================================================
-    if [[ -r "$WORKER_PID_FILE" ]]; then
-        local existing_pid="$(cat "$WORKER_PID_FILE" 2>/dev/null)"
-        if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
-            return 0
+  # ========================================================
+  # 1. XẾP HÀNG SỰ KIỆN
+  # ========================================================
+  touch "$PENDING_FILE" 2>/dev/null || return 1
+
+  # ========================================================
+  # 2. TƯỜNG LỬA CHỐNG BÃO TIẾN TRÌNH
+  # ========================================================
+  if [[ -r "$WORKER_PID_FILE" ]]; then
+    local existing_pid="$(cat "$WORKER_PID_FILE" 2>/dev/null)"
+    if [[ "$existing_pid" =~ ^[0-9]+$ ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+
+  # ========================================================
+  # 3. FORK LUỒNG NGẦM DUY NHẤT (WORKER)
+  # ========================================================
+  (
+    flock -n 9 || exit 0
+    echo $BASHPID >"$WORKER_PID_FILE"
+    trap 'rm -f "$WORKER_PID_FILE"' EXIT
+
+    # --- HELPER FUNCTIONS ---
+    _log() { printf '[%s] [LSWS-RELOAD] [%s] %s\n' "$(date '+%d-%m-%Y %H:%M:%S')" "$1" "${*:2}" >>"$LOG_FILE" 2>/dev/null; }
+
+    _get_pid() {
+      local pid=""
+      [[ -r "$PID_FILE" ]] && pid="$(cat "$PID_FILE" 2>/dev/null)"
+      [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && {
+        echo "$pid"
+        return 0
+      }
+      return 1
+    }
+
+    _get_cgid_mtime() { stat -c %Y "$CGID_FILE" 2>/dev/null || echo 0; }
+    _alive() { [[ "$1" =~ ^[0-9]+$ ]] && (($1 > 1)) && kill -0 "$1" 2>/dev/null; }
+
+    _http_health() {
+      command -v curl >/dev/null 2>&1 || {
+        _log "WARN" "Không có curl, bỏ qua HTTP health."
+        return 0
+      }
+      local code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 -H "Host: $HEALTH_HOST" "$HEALTH_URL" 2>/dev/null)"
+      [[ "$code" =~ ^[1-4][0-9][0-9]$ ]]
+    }
+
+    _health() {
+      local pid="$1"
+      _alive "$pid" || return 1
+      _http_health || return 1
+      return 0
+    }
+
+    _cb_allowed() {
+      local now="$(date +%s)" line count=0 tmp=""
+      [[ -f "$CB_FILE" ]] || return 0
+      while read -r line; do
+        [[ "$line" =~ ^[0-9]+$ ]] || continue
+        if ((now - line < CB_WINDOW)); then
+          count=$((count + 1))
+          tmp+="$line"$'\n'
         fi
+      done <"$CB_FILE"
+      printf '%s' "$tmp" >"$CB_FILE"
+      ((count < CB_MAX))
+    }
+    _cb_record() { date +%s >>"$CB_FILE" 2>/dev/null; }
+
+    _get_backoff() {
+      local fails=0
+      [[ -f "$BACKOFF_FILE" ]] && fails="$(cat "$BACKOFF_FILE" 2>/dev/null)"
+      [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+      local wait=$((8 * (2 ** fails)))
+      ((wait > BACKOFF_CAP)) && wait=$BACKOFF_CAP
+      echo "$wait"
+    }
+    _bump_backoff() {
+      local fails=0
+      [[ -f "$BACKOFF_FILE" ]] && fails="$(cat "$BACKOFF_FILE" 2>/dev/null)"
+      [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
+      echo $((fails + 1)) >"$BACKOFF_FILE"
+    }
+    _reset_backoff() { echo 0 >"$BACKOFF_FILE" 2>/dev/null; }
+
+    if [[ ! -x "$LSWSCTRL" ]]; then
+      _log "ERROR" "Không tìm thấy lswsctrl: $LSWSCTRL"
+      exit 1
     fi
 
-    # ========================================================
-    # 3. FORK LUỒNG NGẦM DUY NHẤT (WORKER)
-    # ========================================================
-    (
-        flock -n 9 || exit 0
-        echo $BASHPID > "$WORKER_PID_FILE"
-        trap 'rm -f "$WORKER_PID_FILE"' EXIT
+    local LAST_RELOAD_TIME=0
 
-        # --- HELPER FUNCTIONS ---
-        _log() { printf '[%s] [LSWS-RELOAD] [%s] %s\n' "$(date '+%d-%m-%Y %H:%M:%S')" "$1" "${*:2}" >> "$LOG_FILE" 2>/dev/null; }
-        
-        _get_pid() { 
-            local pid=""
-            [[ -r "$PID_FILE" ]] && pid="$(cat "$PID_FILE" 2>/dev/null)"
-            [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) && { echo "$pid"; return 0; }
-            return 1
-        }
-        
-        _get_cgid_mtime() { stat -c %Y "$CGID_FILE" 2>/dev/null || echo 0; }
-        _alive() { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 > 1 )) && kill -0 "$1" 2>/dev/null; }
-        
-        _http_health() {
-            command -v curl >/dev/null 2>&1 || { _log "WARN" "Không có curl, bỏ qua HTTP health."; return 0; }
-            local code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 4 -H "Host: $HEALTH_HOST" "$HEALTH_URL" 2>/dev/null)"
-            [[ "$code" =~ ^[1-4][0-9][0-9]$ ]]
-        }
-        
-        _health() { 
-            local pid="$1"; _alive "$pid" || return 1; _http_health || return 1; return 0; 
-        }
+    # ====================================================
+    # 4. VÒNG LẶP XỬ LÝ HÀNG ĐỢI
+    # ====================================================
+    while mv "$PENDING_FILE" "$PROCESSING_FILE" 2>/dev/null; do
 
-        _cb_allowed() {
-            local now="$(date +%s)" line count=0 tmp=""
-            [[ -f "$CB_FILE" ]] || return 0
-            while read -r line; do
-                [[ "$line" =~ ^[0-9]+$ ]] || continue
-                if (( now - line < CB_WINDOW )); then
-                    count=$((count + 1)); tmp+="$line"$'\n'
-                fi
-            done < "$CB_FILE"
-            printf '%s' "$tmp" > "$CB_FILE"
-            (( count < CB_MAX ))
-        }
-        _cb_record() { date +%s >> "$CB_FILE" 2>/dev/null; }
+      local EFFECTIVE_INTERVAL=$MIN_RELOAD_INTERVAL
+      local EXTRA_BACKOFF="$(_get_backoff)"
+      ((EXTRA_BACKOFF > EFFECTIVE_INTERVAL)) && EFFECTIVE_INTERVAL=$EXTRA_BACKOFF
 
-        _get_backoff() {
-            local fails=0; [[ -f "$BACKOFF_FILE" ]] && fails="$(cat "$BACKOFF_FILE" 2>/dev/null)"
-            [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
-            local wait=$(( 8 * (2 ** fails) )); (( wait > BACKOFF_CAP )) && wait=$BACKOFF_CAP
-            echo "$wait"
-        }
-        _bump_backoff() {
-            local fails=0; [[ -f "$BACKOFF_FILE" ]] && fails="$(cat "$BACKOFF_FILE" 2>/dev/null)"
-            [[ "$fails" =~ ^[0-9]+$ ]] || fails=0
-            echo $((fails + 1)) > "$BACKOFF_FILE"
-        }
-        _reset_backoff() { echo 0 > "$BACKOFF_FILE" 2>/dev/null; }
+      if ((LAST_RELOAD_TIME > 0)); then
+        local NOW=$(date +%s)
+        local DIFF=$((NOW - LAST_RELOAD_TIME))
+        if ((DIFF < EFFECTIVE_INTERVAL)); then
+          local WAIT=$((EFFECTIVE_INTERVAL - DIFF))
+          _log "INFO" "Gộp lệnh reload, chờ ${WAIT}s (backoff=${EXTRA_BACKOFF}s)."
+          sleep "$WAIT"
+        fi
+      fi
 
-        if [[ ! -x "$LSWSCTRL" ]]; then
-            _log "ERROR" "Không tìm thấy lswsctrl: $LSWSCTRL"
-            exit 1
+      local OLD_PID="$(_get_pid 2>/dev/null || echo 0)"
+      local OLD_CGID_MTIME="$(_get_cgid_mtime)"
+
+      if [[ "$OLD_PID" == "0" ]] || ! _alive "$OLD_PID"; then
+        _log "WARN" "OLS không chạy. Kích hoạt systemd start."
+        if ! _cb_allowed; then
+          _log "CRITICAL" "Circuit breaker OPEN. Ngừng Auto-Heal."
+          rm -f "$PROCESSING_FILE"
+          continue
         fi
 
-        local LAST_RELOAD_TIME=0
+        _cb_record
+        systemctl start "$SERVICE" >/dev/null 2>&1
+        sleep 2
 
-        # ====================================================
-        # 4. VÒNG LẶP XỬ LÝ HÀNG ĐỢI
-        # ====================================================
-        while mv "$PENDING_FILE" "$PROCESSING_FILE" 2>/dev/null; do
+        local NEW_PID="$(_get_pid 2>/dev/null || echo 0)"
+        if [[ "$NEW_PID" != "0" ]] && _health "$NEW_PID"; then
+          _log "INFO" "OLS khởi động lại thành công qua systemd."
+          _reset_backoff
+        else
+          _log "CRITICAL" "Systemd start nhưng health check thất bại."
+          _bump_backoff
+        fi
+        LAST_RELOAD_TIME="$(date +%s)"
+        rm -f "$PROCESSING_FILE"
+        continue
+      fi
 
-            local EFFECTIVE_INTERVAL=$MIN_RELOAD_INTERVAL
-            local EXTRA_BACKOFF="$(_get_backoff)"
-            (( EXTRA_BACKOFF > EFFECTIVE_INTERVAL )) && EFFECTIVE_INTERVAL=$EXTRA_BACKOFF
+      # --- GRACEFUL RELOAD CHÍNH THỨC ---
+      _log "INFO" "Graceful reload. PID=$OLD_PID"
+      local RELOAD_START=$(date +%s)
+      local RELOAD_RC=0
 
-            if (( LAST_RELOAD_TIME > 0 )); then
-                local NOW=$(date +%s)
-                local DIFF=$((NOW - LAST_RELOAD_TIME))
-                if (( DIFF < EFFECTIVE_INTERVAL )); then
-                    local WAIT=$((EFFECTIVE_INTERVAL - DIFF))
-                    _log "INFO" "Gộp lệnh reload, chờ ${WAIT}s (backoff=${EXTRA_BACKOFF}s)."
-                    sleep "$WAIT"
-                fi
+      "$LSWSCTRL" reload >/dev/null 2>&1 || RELOAD_RC=$?
+
+      if ((RELOAD_RC != 0)); then
+        _log "ERROR" "Lệnh lswsctrl reload thất bại, exit code=$RELOAD_RC."
+        _bump_backoff
+        rm -f "$PROCESSING_FILE"
+        continue
+      fi
+
+      # --- KIỂM TRA CHUYỂN GIAO TIẾN TRÌNH BẰNG CGID ---
+      local SUCCESS=0 CONSECUTIVE_OK=0
+      while true; do
+        local NOW=$(date +%s)
+        local ELAPSED=$((NOW - RELOAD_START))
+        local CURRENT_PID="$(_get_pid 2>/dev/null || echo 0)"
+        local CURRENT_CGID_MTIME="$(_get_cgid_mtime)"
+
+        # CHỈ TIN LÀ ĐÃ NẠP CẤU HÌNH NẾU CGID BỊ CHẠM TỚI
+        if [[ "$CURRENT_CGID_MTIME" -gt "$OLD_CGID_MTIME" ]]; then
+          if [[ "$CURRENT_PID" != "0" ]] && _health "$CURRENT_PID"; then
+            CONSECUTIVE_OK=$((CONSECUTIVE_OK + 1))
+            if ((CONSECUTIVE_OK >= 2)); then
+              _log "INFO" "Graceful reload hoàn tất (CGID đã nạp). PID=$CURRENT_PID."
+              SUCCESS=1
+              break
             fi
+          else
+            CONSECUTIVE_OK=0
+          fi
+        fi
 
-            local OLD_PID="$(_get_pid 2>/dev/null || echo 0)"
-            local OLD_CGID_MTIME="$(_get_cgid_mtime)"
+        ((ELAPSED >= RELOAD_TIMEOUT)) && break
+        sleep "$HEALTH_INTERVAL"
+      done
 
-            if [[ "$OLD_PID" == "0" ]] || ! _alive "$OLD_PID"; then
-                _log "WARN" "OLS không chạy. Kích hoạt systemd start."
-                if ! _cb_allowed; then
-                    _log "CRITICAL" "Circuit breaker OPEN. Ngừng Auto-Heal."
-                    rm -f "$PROCESSING_FILE"; continue
-                fi
-                
-                _cb_record
-                systemctl start "$SERVICE" >/dev/null 2>&1
-                sleep 2
-                
-                local NEW_PID="$(_get_pid 2>/dev/null || echo 0)"
-                if [[ "$NEW_PID" != "0" ]] && _health "$NEW_PID"; then
-                    _log "INFO" "OLS khởi động lại thành công qua systemd."
-                    _reset_backoff
-                else
-                    _log "CRITICAL" "Systemd start nhưng health check thất bại."
-                    _bump_backoff
-                fi
-                LAST_RELOAD_TIME="$(date +%s)"
-                rm -f "$PROCESSING_FILE"; continue
-            fi
+      LAST_RELOAD_TIME="$(date +%s)"
 
-            # --- GRACEFUL RELOAD CHÍNH THỨC ---
-            _log "INFO" "Graceful reload. PID=$OLD_PID"
-            local RELOAD_START=$(date +%s)
-            local RELOAD_RC=0
-            
-            "$LSWSCTRL" reload >/dev/null 2>&1 || RELOAD_RC=$?
+      if ((SUCCESS == 1)); then
+        _reset_backoff
+        rm -f "$PROCESSING_FILE"
+        continue
+      fi
 
-            if (( RELOAD_RC != 0 )); then
-                _log "ERROR" "Lệnh lswsctrl reload thất bại, exit code=$RELOAD_RC."
-                _bump_backoff
-                rm -f "$PROCESSING_FILE"
-                continue
-            fi
+      # --- XỬ LÝ TIMEOUT (TRÁNH PHẠT OAN FALSE NEGATIVE) ---
+      local FINAL_PID="$(_get_pid 2>/dev/null || echo 0)"
 
-            # --- KIỂM TRA CHUYỂN GIAO TIẾN TRÌNH BẰNG CGID ---
-            local SUCCESS=0 CONSECUTIVE_OK=0
-            while true; do
-                local NOW=$(date +%s)
-                local ELAPSED=$((NOW - RELOAD_START))
-                local CURRENT_PID="$(_get_pid 2>/dev/null || echo 0)"
-                local CURRENT_CGID_MTIME="$(_get_cgid_mtime)"
+      if [[ "$FINAL_PID" != "0" ]] && _health "$FINAL_PID"; then
+        # OLS khỏe, HTTP trả 200, nhưng CGID không đổi sau 25s
+        # => Chắc chắn khách cấu hình sai file (Bad Config) khiến OLS từ chối nạp,
+        # HOẶC là một edge-bug vô hại nào đó. KHÔNG phạt backoff, KHÔNG kill server!
+        _log "WARN" "Timeout 25s: CGID không đổi, có thể do Bad Config. Tuy nhiên server vẫn Health OK (PID=$FINAL_PID). Bỏ qua lỗi này."
+        _reset_backoff # Server vẫn khoẻ, tha bổng, reset backoff về 0
+      else
+        # Thực sự đã chết ngúm
+        _bump_backoff
+        _log "CRITICAL" "OLS đã chết ngúm sau reload. Kích hoạt Controlled Recovery."
 
-                # CHỈ TIN LÀ ĐÃ NẠP CẤU HÌNH NẾU CGID BỊ CHẠM TỚI
-                if [[ "$CURRENT_CGID_MTIME" -gt "$OLD_CGID_MTIME" ]]; then
-                    if [[ "$CURRENT_PID" != "0" ]] && _health "$CURRENT_PID"; then
-                        CONSECUTIVE_OK=$((CONSECUTIVE_OK + 1))
-                        if (( CONSECUTIVE_OK >= 2 )); then
-                            _log "INFO" "Graceful reload hoàn tất (CGID đã nạp). PID=$CURRENT_PID."
-                            SUCCESS=1
-                            break
-                        fi
-                    else
-                        CONSECUTIVE_OK=0
-                    fi
-                fi
+        if _cb_allowed; then
+          _cb_record
+          systemctl start "$SERVICE" >/dev/null 2>&1
+          sleep 2
+          FINAL_PID="$(_get_pid 2>/dev/null || echo 0)"
+          if [[ "$FINAL_PID" != "0" ]] && _health "$FINAL_PID"; then
+            _log "INFO" "Auto-Heal thành công. PID=$FINAL_PID."
+          else
+            _log "CRITICAL" "Auto-Heal thất bại."
+          fi
+        else
+          _log "CRITICAL" "Circuit breaker OPEN. Dừng Auto-Heal."
+        fi
+      fi
 
-                (( ELAPSED >= RELOAD_TIMEOUT )) && break
-                sleep "$HEALTH_INTERVAL"
-            done
+      rm -f "$PROCESSING_FILE"
+    done
 
-            LAST_RELOAD_TIME="$(date +%s)"
+  ) 9>"$LOCK_FILE" &
 
-            if (( SUCCESS == 1 )); then
-                _reset_backoff
-                rm -f "$PROCESSING_FILE"
-                continue
-            fi
-
-            # --- XỬ LÝ TIMEOUT (TRÁNH PHẠT OAN FALSE NEGATIVE) ---
-            local FINAL_PID="$(_get_pid 2>/dev/null || echo 0)"
-
-            if [[ "$FINAL_PID" != "0" ]] && _health "$FINAL_PID"; then
-                # OLS khỏe, HTTP trả 200, nhưng CGID không đổi sau 25s
-                # => Chắc chắn khách cấu hình sai file (Bad Config) khiến OLS từ chối nạp,
-                # HOẶC là một edge-bug vô hại nào đó. KHÔNG phạt backoff, KHÔNG kill server!
-                _log "WARN" "Timeout 25s: CGID không đổi, có thể do Bad Config. Tuy nhiên server vẫn Health OK (PID=$FINAL_PID). Bỏ qua lỗi này."
-                _reset_backoff # Server vẫn khoẻ, tha bổng, reset backoff về 0
-            else
-                # Thực sự đã chết ngúm
-                _bump_backoff
-                _log "CRITICAL" "OLS đã chết ngúm sau reload. Kích hoạt Controlled Recovery."
-                
-                if _cb_allowed; then
-                    _cb_record
-                    systemctl start "$SERVICE" >/dev/null 2>&1
-                    sleep 2
-                    FINAL_PID="$(_get_pid 2>/dev/null || echo 0)"
-                    if [[ "$FINAL_PID" != "0" ]] && _health "$FINAL_PID"; then
-                        _log "INFO" "Auto-Heal thành công. PID=$FINAL_PID."
-                    else
-                        _log "CRITICAL" "Auto-Heal thất bại."
-                    fi
-                else
-                    _log "CRITICAL" "Circuit breaker OPEN. Dừng Auto-Heal."
-                fi
-            fi
-
-            rm -f "$PROCESSING_FILE"
-        done
-
-    ) 9>"$LOCK_FILE" &
-
-    return 0
+  return 0
 }
 
 # function wptt_smart_reload_lsws() {
@@ -521,7 +534,7 @@ function wptt_smart_reload_lsws() {
 
 #         local current_time=$(date +%s)
 #         local last_run=0
-        
+
 #         # Đọc trực tiếp Timestamp từ file do chính LiteSpeed quản lý
 #         if [[ -f "$lsws_marker" ]]; then
 #             last_run=$(stat -c %Y "$lsws_marker" 2>/dev/null || echo 0)
@@ -534,7 +547,7 @@ function wptt_smart_reload_lsws() {
 #         fi
 
 #         /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-        
+
 #         # Cho LiteSpeed 3 giây để thở và ghi đè file cgid mới, thuờng 1 lệnh reload của litespeed cũng mất khoảng 3 giây thì cho sleep 3 giây là hợp lý
 # 		# time /usr/local/lsws/bin/lswsctrl reload
 # 		# Cho LiteSpeed 3.2 giây để "thở" sau khi tốn ~3s gửi tín hiệu SIGUSR1
@@ -545,7 +558,7 @@ function wptt_smart_reload_lsws() {
 # 			:
 #         else
 #             wptt_logs "INFO" "Kích hoạt Auto-Heal do lỗi Reload"
-            
+
 #             systemctl stop lsws.service >/dev/null 2>&1
 #             rm -f /tmp/lshttpd/lshttpd.pid
 #             killall -9 openlitespeed litespeed lshttpd 2>/dev/null
@@ -556,71 +569,67 @@ function wptt_smart_reload_lsws() {
 #     ) 9> "$lock_file" &
 # }
 
-
-
 # ==============================================================================
 # HÀM MÃ HÓA & GIẢI MÃ AES-256-CBC
 # ==============================================================================
 
 # Hàm Mã hóa
 wptt_ma_hoa() {
-# thời gian nữa xoá tuơng thích nguợc
-WPTT_AES_DIR="/etc/wptt-aes"
-WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
+  # thời gian nữa xoá tuơng thích nguợc
+  WPTT_AES_DIR="/etc/wptt-aes"
+  WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
 
-# 1. Xây boong-ke và khóa cửa (Chỉ Root được vào)
-if [[ ! -d "$WPTT_AES_DIR" ]]; then
-	mkdir -p "$WPTT_AES_DIR"
-	chmod 700 "$WPTT_AES_DIR"
-fi
+  # 1. Xây boong-ke và khóa cửa (Chỉ Root được vào)
+  if [[ ! -d "$WPTT_AES_DIR" ]]; then
+    mkdir -p "$WPTT_AES_DIR"
+    chmod 700 "$WPTT_AES_DIR"
+  fi
 
-# 2. Sinh chìa khóa ngẫu nhiên nếu chưa có
-if [[ ! -f "$WPTT_KEY_FILE" ]]; then
-	openssl rand -base64 48 > "$WPTT_KEY_FILE"
-	chmod 600 "$WPTT_KEY_FILE"
-fi
-# thời gian nữa xoá tuơng thích nguợc
+  # 2. Sinh chìa khóa ngẫu nhiên nếu chưa có
+  if [[ ! -f "$WPTT_KEY_FILE" ]]; then
+    openssl rand -base64 48 >"$WPTT_KEY_FILE"
+    chmod 600 "$WPTT_KEY_FILE"
+  fi
+  # thời gian nữa xoá tuơng thích nguợc
 
+  local WPTT_KEY_FILE="/etc/wptt-aes/.wptt_salt.bin"
+  local plaintext="$1"
 
-    local WPTT_KEY_FILE="/etc/wptt-aes/.wptt_salt.bin"
-    local plaintext="$1"
-    
-    # Bơm cờ -A để ép OpenSSL xuất Base64 trên 1 dòng duy nhất, không rớt dòng
-    echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null
+  # Bơm cờ -A để ép OpenSSL xuất Base64 trên 1 dòng duy nhất, không rớt dòng
+  echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null
 }
 
 # Hàm Giải mã Thông minh
 wptt_giai_ma() {
 
-# thời gian nữa xoá tuơng thích nguợc
-	WPTT_AES_DIR="/etc/wptt-aes"
-	WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
+  # thời gian nữa xoá tuơng thích nguợc
+  WPTT_AES_DIR="/etc/wptt-aes"
+  WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
 
-	# 1. Xây boong-ke và khóa cửa (Chỉ Root được vào)
-	if [[ ! -d "$WPTT_AES_DIR" ]]; then
-		mkdir -p "$WPTT_AES_DIR"
-		chmod 700 "$WPTT_AES_DIR"
-	fi
+  # 1. Xây boong-ke và khóa cửa (Chỉ Root được vào)
+  if [[ ! -d "$WPTT_AES_DIR" ]]; then
+    mkdir -p "$WPTT_AES_DIR"
+    chmod 700 "$WPTT_AES_DIR"
+  fi
 
-	# 2. Sinh chìa khóa ngẫu nhiên nếu chưa có
-	if [[ ! -f "$WPTT_KEY_FILE" ]]; then
-		openssl rand -base64 48 > "$WPTT_KEY_FILE"
-		chmod 600 "$WPTT_KEY_FILE"
-	fi
-# thời gian nữa xoá tuơng thích nguợc
+  # 2. Sinh chìa khóa ngẫu nhiên nếu chưa có
+  if [[ ! -f "$WPTT_KEY_FILE" ]]; then
+    openssl rand -base64 48 >"$WPTT_KEY_FILE"
+    chmod 600 "$WPTT_KEY_FILE"
+  fi
+  # thời gian nữa xoá tuơng thích nguợc
 
+  local WPTT_KEY_FILE="/etc/wptt-aes/.wptt_salt.bin"
+  local ciphertext="$1"
 
-    local WPTT_KEY_FILE="/etc/wptt-aes/.wptt_salt.bin"
-    local ciphertext="$1"
-    
-    # Kiểm tra xem có phải chuỗi đã mã hóa không (Chữ ký U2FsdGVkX1)
-    if [[ "$ciphertext" == U2FsdGVkX1* ]]; then
-        # Bơm cờ -A để OpenSSL hiểu và đọc được Base64 một dòng
-        echo -n "$ciphertext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -d -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null
-    else
-        # Nếu là Pass cũ chưa mã hóa thì nhả ra y nguyên
-        echo -n "$ciphertext"
-    fi
+  # Kiểm tra xem có phải chuỗi đã mã hóa không (Chữ ký U2FsdGVkX1)
+  if [[ "$ciphertext" == U2FsdGVkX1* ]]; then
+    # Bơm cờ -A để OpenSSL hiểu và đọc được Base64 một dòng
+    echo -n "$ciphertext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -d -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null
+  else
+    # Nếu là Pass cũ chưa mã hóa thì nhả ra y nguyên
+    echo -n "$ciphertext"
+  fi
 }
 
 WPTT_LOG_FILE="/var/log/wptangtoc-ols.log"
@@ -630,62 +639,60 @@ wptt_logs() {
   local level="$1"
   local message="$2"
   local timestamp=$(date '+%d-%m-%Y %H:%M:%S')
-  
+
   # Chỉ lấy tên file cho gọn (Ví dụ: wptt-them-domain thay vì /etc/wptt/domain/wptt-them-domain)
   # Việc này giúp file log nằm ở cuối không bị quá dài
-  local script_name=$(basename "$0") 
-  
+  local script_name=$(basename "$0")
+
   # Dùng printf '%b' thay cho echo -e để xử lý chuỗi an toàn tuyệt đối trước khi tẩy màu
   local clean_msg=$(printf '%b' "$message" | sed -E 's/\x1B\[[0-9;]*[a-zA-Z]//g')
-  
+
   # Ghi log bằng printf. Đưa file ra phía sau cùng.
   # %s đại diện cho chuỗi, \n là xuống dòng
-  printf "[%s] [%s] %s [File: %s]\n" "$timestamp" "$level" "$clean_msg" "$script_name" >> "$WPTT_LOG_FILE"
+  printf "[%s] [%s] %s [File: %s]\n" "$timestamp" "$level" "$clean_msg" "$script_name" >>"$WPTT_LOG_FILE"
 }
-
 
 #vị dụ chỉ muốn xóa thì hàm callback: wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "beta_wptangtoc_ols" "delete"
 #vị dụ chỉ muốn update giá trị: wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "beta_wptangtoc_ols=1"
 #ví dụ để tránh bị biến giá trị gán linh tinh ký tự đặc biệt: wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$wptangtocols_version" "secure"
 
 wptt_atomic_edit_config() {
-    local target_file="$1"
-    local input_string="$2"
-    local mode="${3:-normal}" # normal, secure, hoặc delete
-    
-    # Bẫy lỗi: Đảm bảo file tồn tại và input không rỗng
-    [[ ! -f "$target_file" || -z "$input_string" ]] && return 1
-    
-    # Tự động bóc tách Key và Value
-    local key="${input_string%%=*}"
-    local value=""
-    
-    # Nếu có dấu '=' thì cắt lấy phần Value phía sau
-    if [[ "$input_string" == *"="* ]]; then
-        value="${input_string#*=}"
-    fi
-    
-    local tmp_file
-    tmp_file=$(mktemp -p "/etc/wptt/tmp" atomic_edit.XXXXXX) || return 1
-    
-    # Dùng đường dẫn tuyệt đối /bin/cp để VÔ HIỆU HÓA HOÀN TOÀN mọi bí danh (Alias)
-    /bin/cp -fp "$target_file" "$tmp_file"
-    
-    # Xóa dòng cấu hình cũ (nếu có)
-    sed -i "/^${key}=/d" "$tmp_file"
-    
-    # Xử lý chèn dữ liệu mới nếu không phải là lệnh delete
-    if [[ "$mode" != "delete" ]]; then
-        if [[ "$mode" == "secure" ]]; then
-            # Chế độ bảo mật: Bọc %q cho Value, chặn đứng Command Injection
-            printf "%s=%q\n" "$key" "$value" >> "$tmp_file"
-        else
-            # Chế độ bình thường: Ráp lại nguyên bản
-            echo "${key}=${value}" >> "$tmp_file"
-        fi
-    fi
-    
-    # Dùng đường dẫn tuyệt đối /bin/mv để ghi đè automic trong im lặng
-    /bin/mv -fT "$tmp_file" "$target_file"
-}
+  local target_file="$1"
+  local input_string="$2"
+  local mode="${3:-normal}" # normal, secure, hoặc delete
 
+  # Bẫy lỗi: Đảm bảo file tồn tại và input không rỗng
+  [[ ! -f "$target_file" || -z "$input_string" ]] && return 1
+
+  # Tự động bóc tách Key và Value
+  local key="${input_string%%=*}"
+  local value=""
+
+  # Nếu có dấu '=' thì cắt lấy phần Value phía sau
+  if [[ "$input_string" == *"="* ]]; then
+    value="${input_string#*=}"
+  fi
+
+  local tmp_file
+  tmp_file=$(mktemp -p "/etc/wptt/tmp" atomic_edit.XXXXXX) || return 1
+
+  # Dùng đường dẫn tuyệt đối /bin/cp để VÔ HIỆU HÓA HOÀN TOÀN mọi bí danh (Alias)
+  /bin/cp -fp "$target_file" "$tmp_file"
+
+  # Xóa dòng cấu hình cũ (nếu có)
+  sed -i "/^${key}=/d" "$tmp_file"
+
+  # Xử lý chèn dữ liệu mới nếu không phải là lệnh delete
+  if [[ "$mode" != "delete" ]]; then
+    if [[ "$mode" == "secure" ]]; then
+      # Chế độ bảo mật: Bọc %q cho Value, chặn đứng Command Injection
+      printf "%s=%q\n" "$key" "$value" >>"$tmp_file"
+    else
+      # Chế độ bình thường: Ráp lại nguyên bản
+      echo "${key}=${value}" >>"$tmp_file"
+    fi
+  fi
+
+  # Dùng đường dẫn tuyệt đối /bin/mv để ghi đè automic trong im lặng
+  /bin/mv -fT "$tmp_file" "$target_file"
+}
