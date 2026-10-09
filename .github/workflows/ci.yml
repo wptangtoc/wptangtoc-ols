@@ -859,10 +859,7 @@ jobs:
 
 
 # ============================================================
-# JQUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP)
-# ============================================================
-# ============================================================
-# JOB 2C: QUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP)
+# JOB QUÉT LỖ HỔNG MÃ NGUỒN SAST (SEMGREP)
 # ============================================================
   semgrep-scan:
     name: Quét Lỗ hổng Mã nguồn (Semgrep)
@@ -877,18 +874,48 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 🛡️ Quét Bảo mật Semgrep (Xuất file SARIF)
+      - name: 🛡️ Quét Bảo mật Semgrep (Xuất SARIF & Parse Log trực quan)
+        shell: bash
         run: |
+          set -o pipefail
+
+          # 1. Chạy Semgrep trong container, quét đường dẫn tương đối (.) để map đúng file PR
           docker run --rm \
             -v "${{ github.workspace }}:/src" \
+            -w /src \
             semgrep/semgrep \
             semgrep scan \
               --config "p/default" \
               --config "p/security-audit" \
               --config "p/secrets" \
               --sarif \
-              --output /src/semgrep.sarif \
-              /src || true
+              --output semgrep.sarif \
+              . || true
+
+          # 2. In trực tiếp tóm tắt các cảnh báo ra màn hình GitHub Actions Log
+          if [ -s semgrep.sarif ] && command -v jq >/dev/null 2>&1; then
+            TOTAL_FINDINGS=$(jq -r '.runs[].results | length' semgrep.sarif 2>/dev/null || echo "0")
+            
+            echo "::group::📋 Chi tiết các cảnh báo Semgrep phát hiện (Tổng số: $TOTAL_FINDINGS)"
+            if [ "$TOTAL_FINDINGS" -gt 0 ]; then
+              echo -e "\n--------------------------------------------------------------------------------"
+              printf "%-10s | %-45s | %s\n" "MỨC ĐỘ" "VỊ TRÍ (FILE:DÒNG)" "MÔ TẢ LỖ HỔNG"
+              echo -e "--------------------------------------------------------------------------------"
+              
+              jq -r '.runs[].results[]? | 
+                [
+                  (.level // "warning" | ascii_upcase), 
+                  "\(.locations[0].physicalLocation.artifactLocation.uri // "unknown"):\(.locations[0].physicalLocation.region.startLine // 0)", 
+                  (.message.text // "No description" | gsub("\n"; " "))
+                ] | @tsv' semgrep.sarif | while IFS=$'\t' read -r level location msg; do
+                  printf "%-10s | %-45s | %s\n" "[$level]" "$location" "$msg"
+              done
+              echo -e "--------------------------------------------------------------------------------\n"
+            else
+              echo "✅ Không phát hiện lỗ hổng bảo mật nào từ Semgrep!"
+            fi
+            echo "::endgroup::"
+          fi
 
       - name: 📤 Upload kết quả lên GitHub Security
         if: always()
