@@ -1,6 +1,10 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Tính năng Hiển thị IP real Cloudflare CDN trong WPTangToc OLS là một công cụ giúp bạn xác minh hoặc cấu hình để máy chủ web OpenLiteSpeed của bạn có thể nhận diện và ghi lại địa chỉ IP thực của người dùng khi website đang sử dụng dịch vụ CDN của Cloudflare.
 
   Tại sao cần quan tâm IP thực khi dùng Cloudflare?
@@ -24,54 +28,114 @@ EOF
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
+PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# ==============================================================================
+# KHỞI TẠO MÔI TRƯỜNG & KHÓA TIẾN TRÌNH CONCURRENCY CONTROL
+# ==============================================================================
+/bin/mkdir -p "/etc/wptt/tmp"
+
+LOCK_GLOBAL="/etc/wptt/tmp/wptt_lock_httpd_config.lock"
+exec 201>"$LOCK_GLOBAL"
+if ! flock -x -w 15 201; then
+  _runloi "Hệ thống đang bận cập nhật file máy chủ httpd_config.conf. Vui lòng thử lại sau!"
+  sleep 2
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-add-one-main 1
+  fi
+  exit 1
+fi
+
+httpd_conf="/usr/local/lsws/conf/httpd_config.conf"
+if [[ ! -f "$httpd_conf" || ! -w "$httpd_conf" ]]; then
+  echo -e "\n${C_RED}Lỗi: File cấu hình $httpd_conf không tồn tại hoặc không thể ghi!${C_RESET}"
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-add-one-main 1
+  fi
+  exit 1
+fi
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}TÍCH HỢP CLOUDFLARE -> Hiển Thị IP Thực (Dynamic Update)${C_RESET}"
+center_text "${C_YELLOW}TÍCH HỢP CLOUDFLARE ➜ Hiển Thị IP Thực (Dynamic Update)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-
-# Giữ log không dấu để an toàn cho file hệ thống
-wptt_logs "INFO" "Show IP thuc client Cloudflare (Dynamic)"
+wptt_logs "INFO" "Cập nhật dải IP thực Cloudflare cho OpenLiteSpeed"
 
 # ==============================================================================
-# KHỞI TẠO DANH SÁCH DỰ PHÒNG (OFFLINE BACKUP)
+# DANH SÁCH DỰ PHÒNG NGOẠI TUYẾN (STATIC HARDENED FALLBACK)
 # ==============================================================================
 BACKUP_V4="103.21.244.0/22T, 103.22.200.0/22T, 103.31.4.0/22T, 104.16.0.0/13T, 104.24.0.0/14T, 108.162.192.0/18T, 131.0.72.0/22T, 141.101.64.0/18T, 162.158.0.0/15T, 172.64.0.0/13T, 173.245.48.0/20T, 188.114.96.0/20T, 190.93.240.0/20T, 197.234.240.0/22T, 198.41.128.0/17T"
 BACKUP_V6="2400:cb00::/32T, 2606:4700::/32T, 2803:f800::/32T, 2405:b500::/32T, 2405:8100::/32T, 2a06:98c0::/29T, 2c0f:f248::/32T"
 
 # ==============================================================================
-# KIỂM TRA MÔI TRƯỜNG & LẤY DỮ LIỆU ONLINE (HYBRID FETCH)
+# HÀM TẢI DỮ LIỆU CHUẨN ENTERPRISE (RETRY + CIDR REGEX VALIDATION)
+# ==============================================================================
+fetch_cf_ips() {
+  local url="$1"
+  local type="$2" # "v4" hoặc "v6"
+  local raw_data=""
+  local max_retries=3
+
+  for ((attempt = 1; attempt <= max_retries; attempt++)); do
+    raw_data=$(curl -fsSL \
+      --connect-timeout 5 \
+      --max-time 15 \
+      --proto "=https" \
+      --tlsv1.2 \
+      "$url" 2>/dev/null) && [[ -n "$raw_data" ]] && break
+    sleep 1
+  done
+
+  if [[ -z "$raw_data" ]]; then
+    return 1
+  fi
+
+  # Validate regex định dạng CIDR
+  local valid_count=0
+  if [[ "$type" == "v4" ]]; then
+    valid_count=$(grep -cE '^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$' <<<"$raw_data" || true)
+    ((valid_count < 5)) && return 1
+  elif [[ "$type" == "v6" ]]; then
+    valid_count=$(grep -cE '^[0-9a-fA-F:]+/[0-9]{1,3}$' <<<"$raw_data" || true)
+    ((valid_count < 3)) && return 1
+  fi
+
+  # Định dạng gán hậu tố "T" cho OpenLiteSpeed Trusted IP
+  awk '{print $1"T"}' <<<"$raw_data" | paste -sd "," -
+}
+
+# ==============================================================================
+# KIỂM TRA MÔI TRƯỜNG & LẤY DỮ LIỆU
 # ==============================================================================
 _runing "Đang kết nối Cloudflare API để cập nhật dải IP mới nhất..."
 
-# Kiểm tra OLS có đang dùng IPv6 không
-if grep -q 'address.*\[ANY\]' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+ENABLE_IPV6=0
+if grep -qE 'address[[:space:]]+.*\[ANY\]' "$httpd_conf" 2>/dev/null; then
   ENABLE_IPV6=1
-else
-  ENABLE_IPV6=0
 fi
 
-# Fetch IPv4 (Bắt buộc)
-ONLINE_V4=$(curl -s --connect-timeout 5 https://www.cloudflare.com/ips-v4/ | grep -v '^$' | awk '{print $1"T"}' | paste -sd "," -)
-
+# Tải IPv4
+ONLINE_V4=$(fetch_cf_ips "https://www.cloudflare.com/ips-v4" "v4" || true)
 if [[ -n "$ONLINE_V4" ]]; then
   FINAL_V4="$ONLINE_V4"
-  STATUS_V4="[Online]"
+  STATUS_V4="[Online - Đã xác thực]"
 else
   FINAL_V4="$BACKUP_V4"
   STATUS_V4="[Dự phòng Ngoại tuyến]"
 fi
 
-# Khởi tạo list IP cơ bản
 CF_TRUSTED_LIST="ALL, $FINAL_V4"
 
-# Chỉ Fetch và nối thêm IPv6 nếu VPS có bật IPv6
+# Tải IPv6 (nếu hệ thống có bật IPv6)
 if [[ "$ENABLE_IPV6" -eq 1 ]]; then
-  ONLINE_V6=$(curl -s --connect-timeout 5 https://www.cloudflare.com/ips-v6/ | grep -v '^$' | awk '{print $1"T"}' | paste -sd "," -)
+  ONLINE_V6=$(fetch_cf_ips "https://www.cloudflare.com/ips-v6" "v6" || true)
   if [[ -n "$ONLINE_V6" ]]; then
     FINAL_V6="$ONLINE_V6"
-    STATUS_V6="[Online]"
+    STATUS_V6="[Online - Đã xác thực]"
   else
     FINAL_V6="$BACKUP_V6"
     STATUS_V6="[Dự phòng Ngoại tuyến]"
@@ -83,53 +147,109 @@ else
 fi
 
 # ==============================================================================
-# CẤU HÌNH OPENLITESPEED
+# GIAO DỊCH NGUYÊN TỬ CẤU HÌNH (ATOMIC UPDATE VỚI ROLLBACK CLEANUP)
 # ==============================================================================
 _runing "Đang đồng bộ cấu hình vào httpd_config.conf..."
 
-# 1. Bật nhận diện Header Proxy
-sed -i '/useIpInProxyHeader/d' /usr/local/lsws/conf/httpd_config.conf
-sed -i '/adminEmails/i useIpInProxyHeader     2' /usr/local/lsws/conf/httpd_config.conf
+bak_httpd=$(/bin/mktemp -p "/etc/wptt/tmp" "httpd_cf_bak_XXXXXX.conf")
+tmp_httpd=$(/bin/mktemp -p "/etc/wptt/tmp" "httpd_cf_cand_XXXXXX.conf")
 
-# 2. Xử lý Access Control
-ip_block_by_litespeed=$(grep 'deny' /usr/local/lsws/conf/httpd_config.conf)
-sed -i -e '/^accessControl/,/^}$/d' /usr/local/lsws/conf/httpd_config.conf
+# Bẫy dọn dẹp file tạm
+trap '/bin/rm -f -- "$bak_httpd" "$tmp_httpd" 2>/dev/null || true' EXIT INT TERM
 
-if [[ -z "$ip_block_by_litespeed" ]]; then
-  echo "
+# Sao chép bảo toàn quyền thuộc tính (-fp)
+/bin/cp -fp -- "$httpd_conf" "$bak_httpd" || {
+  _runloi "Không thể tạo bản backup httpd_config"
+  exit 1
+}
+/bin/cp -fp -- "$httpd_conf" "$tmp_httpd" || {
+  _runloi "Không thể tạo bản candidate httpd_config"
+  exit 1
+}
+
+# 1. Trích xuất danh sách deny hiện có (để không làm mất các IP bị chặn từ trước)
+current_deny_rules=$(sed -n '/^[[:space:]]*accessControl[[:space:]]*{/,/^[[:space:]]*}/p' "$tmp_httpd" | grep '^[[:space:]]*deny[[:space:]]' || true)
+
+# 2. Xóa các khai báo cũ trong bản candidate
+/bin/sed -i '/^[[:space:]]*useIpInProxyHeader[[:space:]]/d' "$tmp_httpd"
+/bin/sed -i -e '/^[[:space:]]*accessControl[[:space:]]*{/,/^[[:space:]]*}/d' "$tmp_httpd"
+
+# 3. Tạo khối cấu hình accessControl & useIpInProxyHeader mới
+tmp_block=$(/bin/mktemp -p "/etc/wptt/tmp" "cf_block_XXXXXX.conf")
+cat <<EOF >"$tmp_block"
+useIpInProxyHeader        2
+
 accessControl  {
   allow                   $CF_TRUSTED_LIST
-}
-" >>/usr/local/lsws/conf/httpd_config.conf
-else
-  echo "
-accessControl  {
-  allow                   $CF_TRUSTED_LIST
-$ip_block_by_litespeed
-}
-" >>/usr/local/lsws/conf/httpd_config.conf
+EOF
+
+if [[ -n "$current_deny_rules" ]]; then
+  echo "$current_deny_rules" >>"$tmp_block"
 fi
+
+echo "}" >>"$tmp_block"
+
+# Chèn vào trước adminEmails nếu có, ngược lại chèn vào cuối file
+if grep -q '^[[:space:]]*adminEmails[[:space:]]' "$tmp_httpd"; then
+  /bin/sed -i "/^[[:space:]]*adminEmails[[:space:]]/e cat '$tmp_block'" "$tmp_httpd"
+else
+  cat "$tmp_block" >>"$tmp_httpd"
+fi
+/bin/rm -f -- "$tmp_block"
+
+# ==============================================================================
+# COMMIT GIAO DỊCH & KIỂM TRA CÚ PHÁP OPENLITESPEED
+# ==============================================================================
+/bin/cp -fp -- "$tmp_httpd" "$httpd_conf"
+
+if ! /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
+  _runloi "Lỗi cú pháp OpenLiteSpeed sau khi cấu hình! Đang hoàn nguyên..."
+  /bin/cp -fp -- "$bak_httpd" "$httpd_conf"
+  wptt_logs "ERROR" "Lỗi cú pháp OpenLiteSpeed khi cập nhật Cloudflare Real IP. Đã tự động rollback."
+
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-add-one-main 1
+  fi
+  exit 1
+fi
+
 _rundone "Đồng bộ cấu hình [OK]"
 
-_runing "Đang khởi động lại dịch vụ OpenLiteSpeed..."
-wptt_smart_reload_lsws >/dev/null 2>&1
+# ==============================================================================
+# RELOAD DỊCH VỤ AN TOÀN
+# ==============================================================================
+_runing "Đang tải lại dịch vụ OpenLiteSpeed..."
+if ! wptt_smart_reload_lsws >/dev/null 2>&1; then
+  _runloi "Lỗi khi tải lại OpenLiteSpeed! Đang hoàn nguyên cấu hình cũ..."
+  /bin/cp -fp -- "$bak_httpd" "$httpd_conf"
+  wptt_smart_reload_lsws >/dev/null 2>&1 || true
+
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-add-one-main 1
+  fi
+  exit 1
+fi
 _rundone "Khởi động lại OpenLiteSpeed [OK]"
 
+# ==============================================================================
+# BÁO CÁO KẾT QUẢ
+# ==============================================================================
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}[HOÀN TẤT] CẬP NHẬT DYNAMIC REAL IP${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "  - Nguồn dữ liệu V4: $STATUS_V4" 2
 
-# Cải tiến UX: Chỉ in ra dòng báo cáo IPv6 nếu hệ thống thực sự có dùng IPv6
 if [[ "$ENABLE_IPV6" -eq 1 ]]; then
   left_text "  - Nguồn dữ liệu V6: $STATUS_V6" 2
 fi
 
-left_text "  - Dải IP mới nhất đã được nạp vào hệ thống Trusted." 2
-left_text "  - OLS sẽ tự động nhận diện IP thực từ môi trường CDN." 2
+left_text "  - Cấu hình useIpInProxyHeader = 2 (Đã kích hoạt)" 2
+left_text "  - Dải IP Cloudflare đã được nạp cờ Trusted (T) an toàn." 2
+left_text "  - OpenLiteSpeed sẽ nhận diện IP thực của khách qua proxy header." 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-check_menu_wptangtoc_active=${1:-}
-if [[ "$check_menu_wptangtoc_active" == "98" ]]; then
+if [[ "${1:-}" == "98" ]]; then
+  echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+  read -r _
   exec /etc/wptt/wptt-add-one-main 1
 fi
