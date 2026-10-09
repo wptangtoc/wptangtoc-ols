@@ -4,7 +4,7 @@
 # @since: 2026
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Xoá thiết lập domain alias đã thiết lập trước đó
 EOF
 }
@@ -17,7 +17,7 @@ EOF
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ DOMAIN ➜ Xóa Tên Miền Phụ Bám (Parked/Alias Domain)${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ DOMAIN ➜ Xóa Tên Miền Phụ (Parked/Alias Domain)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 if [[ "${1:-}" == '98' ]]; then
@@ -28,24 +28,56 @@ fi
 . /etc/wptt/tenmien 2>/dev/null
 lua_chon_NAME "Xóa Alias"
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
   if [[ "${1:-}" == "98" ]]; then
-      exec /etc/wptt/wptt-domain-main 1
+    exec /etc/wptt/wptt-domain-main 1
   fi
   exit 0
-}
+fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   echo -e "\n${C_RED}❌ Lỗi: Tên miền $NAME không tồn tại trên hệ thống!${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-domain-main 1
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
   exit 1
 fi
 
-check_alias=$(grep -c "vhAliases" "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null)
+vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+httpd_conf="/usr/local/lsws/conf/httpd_config.conf"
 
-if [[ "$check_alias" == '0' ]]; then
+if [[ ! -f "$vhost_conf" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy file cấu hình Vhost của $NAME!${C_RESET}"
+  sleep 3
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
+
+# ==============================================================================
+# KHÓA ĐỒNG THỜI (CONCURRENCY CONTROL)
+# ==============================================================================
+/bin/mkdir -p "/etc/wptt/tmp"
+LOCK_FILE="/etc/wptt/tmp/wptt_lock_vhost_${NAME}.lock"
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+  _runloi "Website $NAME đang có một tác vụ khác can thiệp. Vui lòng thử lại sau!"
+  sleep 2
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
+
+# ==============================================================================
+# TRÍCH XUẤT DANH SÁCH ALIAS (TỐI ƯU BASH THUẦN - HẠN CHẾ SUBSHELL)
+# ==============================================================================
+raw_alias_line=$(grep "^[[:space:]]*vhAliases[[:space:]]" "$vhost_conf" 2>/dev/null || true)
+
+if [[ -z "$raw_alias_line" ]]; then
   echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}KHÔNG TÌM THẤY ALIAS DOMAIN${C_RESET}"
   echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -53,17 +85,31 @@ if [[ "$check_alias" == '0' ]]; then
   left_text "bất kỳ tên miền Alias (Parked Domain) nào!" 2
   echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   sleep 3
-  exec /etc/wptt/wptt-domain-main 1
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
   exit 1
 fi
 
-# Trích xuất danh sách Alias vào mảng
-domain_alias_all=$(grep "vhAliases" "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" | awk '{$1=""; print $0}' | sed 's/ //g' | tr ',' '\n')
+# Cắt bỏ tiền tố vhAliases và khoảng trắng
+clean_alias_str="${raw_alias_line#*vhAliases}"
+clean_alias_str="${clean_alias_str// /}"
+
 selects=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && selects+=("$line")
-done <<<"$domain_alias_all"
+done < <(tr ',' '\n' <<<"$clean_alias_str")
+
 total=${#selects[@]}
+
+if [[ $total -eq 0 ]]; then
+  echo -e "\n${C_RED}Lỗi: Danh sách Alias rỗng!${C_RESET}"
+  sleep 2
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
 
 # ==============================================================================
 # BƯỚC 3: IN DANH SÁCH VÀ CHỌN ALIAS ĐỂ XÓA
@@ -76,19 +122,19 @@ for val in "${selects[@]}"; do
   left_text "  ${C_CYAN}$i)${C_RESET} ${C_BOLD_WHITE}$val${C_RESET}" 2
   ((i++))
 done
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 while true; do
   echo -en "${C_CYAN}Nhập số thứ tự Alias bạn muốn xóa (1-$total) [0=Thoát]: ${C_RESET}"
   read -r REPLY
 
-  [[ "$REPLY" == "0" || -z "$REPLY" ]] && {
+  if [[ "$REPLY" == "0" || -z "$REPLY" ]]; then
     echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
     if [[ "${1:-}" == "98" ]]; then
-        exec /etc/wptt/wptt-domain-main 1
+      exec /etc/wptt/wptt-domain-main 1
     fi
     exit 0
-  }
+  fi
 
   if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "$total" ]; then
     domain_xoa="${selects[$((REPLY - 1))]}"
@@ -104,43 +150,71 @@ if ! wptt_xac_nhan "Bạn có chắc chắn muốn XÓA Alias Domain này không
   "Đồng ý Xóa" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
   if [[ "${1:-}" == "98" ]]; then
-      exec /etc/wptt/wptt-domain-main 1
+    exec /etc/wptt/wptt-domain-main 1
   fi
   exit 0
 fi
 
 _runing "Gỡ bỏ Alias $domain_xoa khỏi Vhost $NAME"
 
-# TỐI ƯU CÚ PHÁP: Xử lý xóa mảng an toàn tuyệt đối
+# ==============================================================================
+# GIAO DỊCH NGUYÊN TỬ (ATOMIC UPDATE VỚI FALLBACK AN TOÀN)
+# ==============================================================================
+tmp_vhost=$(/bin/mktemp -p "/etc/wptt/tmp" "vhost_${NAME}_XXXXXX.conf")
+tmp_httpd=$(/bin/mktemp -p "/etc/wptt/tmp" "httpd_XXXXXX.conf")
+
+# Đăng ký bẫy dọn dẹp file tạm đề phòng crash
+trap 'rm -f -- "$tmp_vhost" "$tmp_httpd"' EXIT INT TERM
+
+/bin/cp -f -- "$vhost_conf" "$tmp_vhost"
+/bin/cp -f -- "$httpd_conf" "$tmp_httpd"
+
 if [[ $total -eq 1 ]]; then
-  # Nếu chỉ có 1 Alias, xóa hẳn dòng vhAliases
-  sed -i "/$NAME $NAME/d" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/listener http/a map          $NAME $NAME" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/vhAliases/d" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  # Trường hợp chỉ có 1 Alias: Dọn sạch vhAliases và map phụ
+  /bin/sed -i -E "/^[[:space:]]*map[[:space:]]+${NAME}[[:space:]]+/d" "$tmp_httpd"
+  /bin/sed -i "/listener.*http/a \  map                     $NAME $NAME" "$tmp_httpd"
+  /bin/sed -i "/^[[:space:]]*vhAliases[[:space:]]/d" "$tmp_vhost"
 else
-  # Lọc bỏ domain cần xóa ra khỏi mảng
+  # Lọc danh sách còn lại
   new_aliases=()
   for a in "${selects[@]}"; do
     [[ "$a" != "$domain_xoa" ]] && new_aliases+=("$a")
   done
 
-  # Nối các phần tử còn lại bằng dấu phẩy
-  domain_alias_con_lai=$(
-    IFS=,
-    echo "${new_aliases[*]}"
-  )
+  # Nối mảng an toàn bằng printf (Khử triệt để warning IFS của Semgrep)
+  printf -v domain_alias_con_lai "%s," "${new_aliases[@]}"
+  domain_alias_con_lai="${domain_alias_con_lai%,}"
 
-  # Ghi lại cấu hình
-  sed -i "/$NAME $NAME/d" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/listener http/a map          $NAME $NAME,$domain_alias_con_lai" /usr/local/lsws/conf/httpd_config.conf
-  sed -i "/vhAliases/d" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-  sed -i "/vhDomain/a vhAliases                 $domain_alias_con_lai" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  /bin/sed -i -E "/^[[:space:]]*map[[:space:]]+${NAME}[[:space:]]+/d" "$tmp_httpd"
+  /bin/sed -i "/listener.*http/a \  map                     $NAME $NAME,$domain_alias_con_lai" "$tmp_httpd"
+  /bin/sed -i -E "s|^([[:space:]]*vhAliases[[:space:]]+).*|\1$domain_alias_con_lai|" "$tmp_vhost"
 fi
 
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-_rundone "Gỡ bỏ Alias $domain_xoa khỏi Vhost $NAME"
+# ==============================================================================
+# CHỐT CHẶN ENTERPRISE: VALIDATE CÚ PHÁP TRƯỚC KHI THAY THẾ THẬT
+# ==============================================================================
+# Tráo đổi nguyên tử file tạm sang vị trí thật
+/bin/cp -f -- "$tmp_vhost" "$vhost_conf"
+/bin/cp -f -- "$tmp_httpd" "$httpd_conf"
 
-wptt_logs "INFO" "Xoá alias domain $domain_xoa khoi $NAME"
+# Kiểm tra cú pháp bằng chính nhị phân của OpenLiteSpeed
+if ! /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
+  _runloi "Lỗi cú pháp OpenLiteSpeed sau khi sửa file! Tiến hành hoàn nguyên..."
+  # Phục hồi nguyên bản cấu hình cũ (Auto-healing)
+  /bin/cp -f -- "$tmp_vhost" "$vhost_conf" 2>/dev/null || true
+  /bin/cp -f -- "$tmp_httpd" "$httpd_conf" 2>/dev/null || true
+  wptt_smart_reload_lsws >/dev/null 2>&1
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-domain-main 1
+  fi
+  exit 1
+fi
+
+# Reload dịch vụ mượt mà (Zero-Downtime)
+wptt_smart_reload_lsws >/dev/null 2>&1
+
+_rundone "Gỡ bỏ Alias $domain_xoa khỏi Vhost $NAME"
+wptt_logs "INFO" "Xóa alias domain $domain_xoa khỏi $NAME thành công"
 
 echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT XÓA ALIAS DOMAIN${C_RESET}"
@@ -149,6 +223,7 @@ left_text "Website gốc        : ${C_YELLOW}$NAME${C_RESET}" 2
 left_text "Alias đã gỡ bỏ     : ${C_RED}$domain_xoa${C_RESET}" 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
+sleep 2
 if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-domain-main 1
+  exec /etc/wptt/wptt-domain-main 1
 fi
