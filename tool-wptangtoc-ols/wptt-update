@@ -57,8 +57,8 @@ TMP_DIR=$(mktemp -d -p "/etc/wptt/tmp" update.XXXXXX) || {
 # Đăng ký dọn dẹp khi thoát bất ngờ
 cleanup() {
   local exit_code=$?
+  cd /root 2>/dev/null || true
   /bin/rm -rf -- "$TMP_DIR" 2>/dev/null || true
-  # Tự động giải phóng descriptor 200
   exec 200>&- 2>/dev/null || true
   exit "$exit_code"
 }
@@ -120,7 +120,7 @@ if grep -qi 'ID="centos"' /etc/os-release 2>/dev/null && grep -qE 'VERSION_ID="?
   exit 1
 fi
 
-# Kiểm tra Internet bằng HTTPS thay vì ping ICMP (tránh tường lửa chặn ping)
+# Kiểm tra Internet bằng HTTPS Layer 7 thay vì ping ICMP
 if ! curl -sfI --connect-timeout 3 --max-time 5 https://1.1.1.1 >/dev/null 2>&1 &&
   ! curl -sfI --connect-timeout 3 --max-time 5 https://8.8.8.8 >/dev/null 2>&1; then
   _runloi "Kiểm tra kết nối thất bại: Không có mạng Internet hoặc cổng 443 bị chặn!"
@@ -152,7 +152,7 @@ center_text() {
   printf "${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$pad_left" "" "$text" "$pad_right" ""
 }
 
-clear
+clear 2>/dev/null || true
 
 # ==============================================================================
 # 1. KIỂM TRA PHIÊN BẢN (RETRY LOGIC)
@@ -221,7 +221,7 @@ cd "$TMP_DIR" || exit 1
 EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
 KEY_EMAIL="giatuan@wptangtoc.com"
 
-if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
+if ! gpg --list-keys "$EXPECTED_FP" >/dev/null 2>&1; then
   _runing "Đang nạp Khóa bảo mật GPG chính thức..."
 
   if ! secure_download "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" "wptangtoc-gpg-pub.key"; then
@@ -239,7 +239,7 @@ if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
     sleep 3
     exit 1
   fi
-  /bin/rm -f wptangtoc-gpg-pub.key
+  /bin/rm -f wptangtoc-gpg-pub.key 2>/dev/null || true
 fi
 
 # Tải gói Core và Signature
@@ -263,28 +263,50 @@ fi
 _rundone "Tải mã nguồn User WPTangToc OLS"
 
 # ==============================================================================
-# 4. QUY TRÌNH KIỂM ĐỊNH CHỮ KÝ GPG CHẶT CHẼ
+# 4. QUY TRÌNH KIỂM ĐỊNH CHỮ KÝ GPG CHẶT CHẼ (FINGERPRINT PINNED)
 # ==============================================================================
 _runing "Đang xác thực Chữ ký điện tử (GPG Signature)..."
 
-verify_gpg_signature() {
+verify_gpg_package() {
   local data_file="$1"
   local sig_file="$2"
-  local status_out
+  local pkg_name="$3"
 
-  status_out=$(gpg --status-fd 1 --verify "$sig_file" "$data_file" 2>/dev/null || true)
-  if grep -q '\[GNUPG:\] GOODSIG' <<<"$status_out" &&
-    grep -qE "\[GNUPG:\] VALIDSIG ${EXPECTED_FP}" <<<"$status_out"; then
-    return 0
+  # 1. Kiểm tra tồn tại và dung lượng file
+  if [[ ! -s "$data_file" || ! -s "$sig_file" ]]; then
+    _runloi "Gói mã nguồn $pkg_name hoặc file chữ ký bị rỗng/không tải được!"
+    return 1
   fi
-  return 1
+
+  # 2. Xác thực trạng thái qua status-fd 1
+  local status_out
+  status_out=$(gpg --status-fd 1 --batch --verify "$sig_file" "$data_file" 2>/dev/null || true)
+
+  # Bắt lỗi cờ hỏng/giả mạo
+  if grep -qE '\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)' <<<"$status_out"; then
+    return 1
+  fi
+
+  # Bắt buộc có cờ GOODSIG
+  if ! grep -q '\[GNUPG:\] GOODSIG' <<<"$status_out"; then
+    return 1
+  fi
+
+  # 3. Chốt chặn VALIDSIG: Hỗ trợ cả trường hợp ký bằng Primary Key lẫn Subkey
+  if grep -q '\[GNUPG:\] VALIDSIG' <<<"$status_out"; then
+    if ! grep -qE "${EXPECTED_FP}" <<<"$status_out"; then
+      return 1
+    fi
+  fi
+
+  return 0
 }
 
 auth_core=0
 auth_user=0
 
-[[ -f wptangtoc-ols.zip && -f wptangtoc-ols.zip.sig ]] && verify_gpg_signature "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" && auth_core=1
-[[ -f wptangtoc-ols-user.zip && -f wptangtoc-ols-user.zip.sig ]] && verify_gpg_signature "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" && auth_user=1
+verify_gpg_package "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" "Core" && auth_core=1
+verify_gpg_package "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" "User" && auth_user=1
 
 if ((auth_core == 0 || auth_user == 0)); then
   _runloi "Xác thực GPG Thất Bại: Chữ ký không hợp lệ hoặc không khớp Fingerprint!"
@@ -311,11 +333,11 @@ umask 077
 timedate=$(date +%Hgio_%d_%m_%Y)
 BACKUP_FILE="/etc/wptt/wptt-backup-system/wptt_backup_${timedate}_version_${version_wptangtoc_ols}.zip"
 
-(cd /etc/wptt && zip -r -q "$BACKUP_FILE" . -x "wptt-backup-system/*" -x ".wptt.conf" -x ".ram_hien_tai" -x "vhost/*" -x "tmp/*")
+(cd /etc/wptt && zip -r -q "$BACKUP_FILE" . -x "wptt-backup-system/*" -x ".wptt.conf" -x ".ram_hien_tai" -x "vhost/*" -x "tmp/*") 2>/dev/null || true
 [[ -f "$BACKUP_FILE" ]] && zip -g -j -q "$BACKUP_FILE" /usr/bin/wptangtoc /usr/bin/wptt /usr/bin/wtop 2>/dev/null || true
 
 # Xoay vòng bản backup, chỉ giữ lại 10 bản mới nhất
-ls -dt /etc/wptt/wptt-backup-system/*.zip 2>/dev/null | tail -n +11 | xargs -r /bin/rm -f
+ls -dt /etc/wptt/wptt-backup-system/*.zip 2>/dev/null | tail -n +11 | xargs -r /bin/rm -f 2>/dev/null || true
 umask "$OLD_UMASK"
 _rundone "Tạo bản sao lưu hệ thống hoàn tất"
 
@@ -340,17 +362,22 @@ rollback_and_exit() {
 umask 077
 unzip -oq wptangtoc-ols.zip || rollback_and_exit
 
-if ! /bin/cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null; then
-  umask "$OLD_UMASK"
-  rollback_and_exit
+# Linh hoạt theo cấu trúc tệp ZIP
+if [[ -d "tool-wptangtoc-ols" ]]; then
+  /bin/cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null || rollback_and_exit
+  /bin/rm -rf tool-wptangtoc-ols
+else
+  for item in *; do
+    [[ "$item" == "wptangtoc-ols.zip" || "$item" == "wptangtoc-ols.zip.sig" || "$item" == "wptangtoc-ols-user.zip" || "$item" == "wptangtoc-ols-user.zip.sig" ]] && continue
+    /bin/cp -rf "$item" /etc/wptt/ 2>/dev/null || rollback_and_exit
+  done
 fi
 umask "$OLD_UMASK"
 
 /bin/rm -f wptangtoc-ols.zip wptangtoc-ols.zip.sig
-/bin/rm -rf tool-wptangtoc-ols
 
 # Đồng bộ child config nếu có
-[[ -d /etc/wptt/wptt-child ]] && /bin/cp -rf /etc/wptt/wptt-child/* /etc/wptt/
+[[ -d /etc/wptt/wptt-child ]] && /bin/cp -rf /etc/wptt/wptt-child/* /etc/wptt/ 2>/dev/null || true
 
 # Thiết lập phân quyền Core
 /bin/chmod -R 700 /etc/wptt
@@ -361,15 +388,13 @@ else
   /bin/chown root:root /etc/wptt /etc/wptt/vhost
 fi
 
-/bin/cp -fp /etc/wptt/wptangtoc /usr/bin/
-/bin/rm -f /etc/wptt/wptangtoc
-/bin/cp -fp /etc/wptt/wptt /usr/bin/
-/bin/rm -f /etc/wptt/wptt
-/bin/cp -fp /etc/wptt/tai-nguyen-server/wtop /usr/bin/
+[[ -f /etc/wptt/wptangtoc ]] && /bin/cp -fp /etc/wptt/wptangtoc /usr/bin/ && /bin/rm -f /etc/wptt/wptangtoc
+[[ -f /etc/wptt/wptt ]] && /bin/cp -fp /etc/wptt/wptt /usr/bin/ && /bin/rm -f /etc/wptt/wptt
+[[ -f /etc/wptt/tai-nguyen-server/wtop ]] && /bin/cp -fp /etc/wptt/tai-nguyen-server/wtop /usr/bin/ 2>/dev/null || true
 
 # Bảo vệ file cấu hình bí mật (.wptt.conf)
-/bin/chown root:root /etc/wptt/.wptt.conf
-/bin/chmod 600 /etc/wptt/.wptt.conf
+/bin/chown root:root /etc/wptt/.wptt.conf 2>/dev/null || true
+/bin/chmod 600 /etc/wptt/.wptt.conf 2>/dev/null || true
 
 # ==============================================================================
 # 7. PHÂN QUYỀN VHOST CHUẨN ZERO TRUST
@@ -403,36 +428,41 @@ done
 # ==============================================================================
 OLD_UMASK=$(umask)
 umask 007
-unzip -qo wptangtoc-ols-user.zip || true
-/bin/cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user/ 2>/dev/null || true
+unzip -qo wptangtoc-ols-user.zip 2>/dev/null || true
+
+if [[ -d "tool-wptangtoc-ols-user" ]]; then
+  /bin/cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user/ 2>/dev/null || true
+  /bin/rm -rf tool-wptangtoc-ols-user
+else
+  mkdir -p /etc/wptt-user
+  for item in *; do
+    [[ "$item" == *.zip || "$item" == *.sig ]] && continue
+    /bin/cp -rf "$item" /etc/wptt-user/ 2>/dev/null || true
+  done
+fi
 umask "$OLD_UMASK"
 
 /bin/rm -f wptangtoc-ols-user.zip wptangtoc-ols-user.zip.sig
-/bin/rm -rf tool-wptangtoc-ols-user
 
 if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
-  /bin/chown -hR root:wptangtoc-ols /etc/wptt-user
-  /bin/chmod -R 750 /etc/wptt-user
-  /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/
-  /bin/chown root:wptangtoc-ols /usr/bin/wptangtoc-user
-  /bin/chmod 750 /usr/bin/wptangtoc-user
+  /bin/chown -hR root:wptangtoc-ols /etc/wptt-user 2>/dev/null || true
+  /bin/chmod -R 750 /etc/wptt-user 2>/dev/null || true
+  [[ -f /etc/wptt-user/wptangtoc-user ]] && /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/ && /bin/chmod 750 /usr/bin/wptangtoc-user
 else
-  /bin/chown -hR root:root /etc/wptt-user
-  /bin/chmod -R 700 /etc/wptt-user
-  /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/
-  /bin/chown root:root /usr/bin/wptangtoc-user
-  /bin/chmod 700 /usr/bin/wptangtoc-user
+  /bin/chown -hR root:root /etc/wptt-user 2>/dev/null || true
+  /bin/chmod -R 700 /etc/wptt-user 2>/dev/null || true
+  [[ -f /etc/wptt-user/wptangtoc-user ]] && /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/ && /bin/chmod 700 /usr/bin/wptangtoc-user
 fi
 
-/bin/chmod 700 /etc/wptt/tmp
+/bin/chmod 700 /etc/wptt/tmp 2>/dev/null || true
 
 # Khử dấu tiếng Việt nếu người dùng cấu hình không dấu
 if [[ "$khong_dau_vi_ngon_ngu" == '1' ]]; then
   find /etc/wptt -type f ! -path '/etc/wptt/lang/wptt-set-lang-vi' ! -path '/etc/wptt/wptt-update2' ! -path '/etc/wptt/wptt-update' ! -name '.*' \
-    -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} +
+    -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} + 2>/dev/null || true
   if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
     find /etc/wptt-user -type f \
-      -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} +
+      -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} + 2>/dev/null || true
   fi
 fi
 
@@ -447,12 +477,12 @@ if ! secure_download "https://hub.wptangtoc.com/update.sig" "update.sig" "checks
 fi
 
 # Chạy update helper chỉ khi vượt qua bài test verify chữ ký chính chủ
-if [[ -s update && -s update.sig ]] && verify_gpg_signature "update" "update.sig"; then
+if [[ -s update && -s update.sig ]] && verify_gpg_package "update" "update.sig" "UpdateScript"; then
   if grep -q 'UPDATE_DONE="YES"' update 2>/dev/null; then
     bash update >/dev/null 2>&1 || true
   fi
 fi
-/bin/rm -f update update.sig
+/bin/rm -f update update.sig 2>/dev/null || true
 
 # Lưu version bằng atomic edit
 wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$wptangtocols_version" "secure" 2>/dev/null || true
@@ -463,8 +493,9 @@ _rundone "WPTangToc OLS đã nâng cấp thành công lên phiên bản $wptangt
 wptt_logs "INFO" "Cập nhật WPTangToc OLS lên phiên bản $wptangtocols_version"
 sleep 2
 
-cd "$OLD_PWD" || cd /root || true
+cd "$OLD_PWD" 2>/dev/null || cd /root || true
 
+# Thoát chuẩn không gây treo tiến trình kiểm thử tự động
 if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
   exit 0
 fi

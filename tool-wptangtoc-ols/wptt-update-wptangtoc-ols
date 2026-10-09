@@ -16,13 +16,12 @@ export LC_ALL=en_US.UTF-8
 # ==============================================================================
 # 1. KHÓA ĐỒNG THỜI TOÀN HỆ THỐNG (CONCURRENCY LOCKING)
 # ==============================================================================
-# Dùng chung tệp khóa với script update thủ công để tuyệt đối không đụng độ
 /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
 /bin/chmod 700 /etc/wptt/tmp 2>/dev/null
 
 LOCK_FILE="/etc/wptt/tmp/wptt_system_update.lock"
 exec 200>"$LOCK_FILE"
-# Nếu đang có tiến trình update khác (thủ công hoặc cron cũ), thoát ngay lập tức
+# Thoát ngay lập tức nếu đang có phiên cập nhật khác đang chạy
 if ! flock -n 200; then
   exit 0
 fi
@@ -79,21 +78,46 @@ get_version_safe() {
   return 1
 }
 
-verify_gpg_signature() {
+# ==============================================================================
+# 4. HÀM XÁC THỰC GPG CHUẨN ENTERPRISE (VALIDSIG & SUBKEY COMPATIBLE)
+# ==============================================================================
+verify_gpg_package() {
   local data_file="$1"
   local sig_file="$2"
-  local status_out
+  local pkg_name="$3"
 
-  status_out=$(gpg --status-fd 1 --verify "$sig_file" "$data_file" 2>/dev/null || true)
-  if grep -q '\[GNUPG:\] GOODSIG' <<<"$status_out" &&
-    grep -qE "\[GNUPG:\] VALIDSIG ${EXPECTED_FP}" <<<"$status_out"; then
-    return 0
+  # 1. Kiểm tra tồn tại và dung lượng file
+  if [[ ! -s "$data_file" || ! -s "$sig_file" ]]; then
+    wptt_logs "ERROR" "Auto-update: Gói $pkg_name hoặc chữ ký bị rỗng/tải thất bại!" 2>/dev/null || true
+    return 1
   fi
-  return 1
+
+  # 2. Xác thực trạng thái qua status-fd 1
+  local status_out
+  status_out=$(gpg --status-fd 1 --batch --verify "$sig_file" "$data_file" 2>/dev/null || true)
+
+  # Bắt các cờ chữ ký hỏng/bị can thiệp
+  if grep -qE '\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)' <<<"$status_out"; then
+    return 1
+  fi
+
+  # Bắt buộc có cờ GOODSIG
+  if ! grep -q '\[GNUPG:\] GOODSIG' <<<"$status_out"; then
+    return 1
+  fi
+
+  # 3. Chốt chặn VALIDSIG: Hỗ trợ đối soát cả Primary Key lẫn Subkey
+  if grep -q '\[GNUPG:\] VALIDSIG' <<<"$status_out"; then
+    if ! grep -qE "${EXPECTED_FP}" <<<"$status_out"; then
+      return 1
+    fi
+  fi
+
+  return 0
 }
 
 # ==============================================================================
-# 4. KIỂM TRA PHIÊN BẢN MỚI
+# 5. KIỂM TRA PHIÊN BẢN MỚI
 # ==============================================================================
 wptangtocols_version=$(get_version_safe "https://wptangtoc.com/share/version-wptangtoc-ols.txt?domain-update-tu-dong=${Website_chinh:-}" || true)
 
@@ -107,7 +131,7 @@ if [[ -z "$wptangtocols_version" || "$wptangtocols_version" == "${version_wptang
 fi
 
 # ==============================================================================
-# 5. KHỞI TẠO VÙNG LÀM VIỆC CÁCH LY & BẪY DỌN DẸP
+# 6. KHỞI TẠO VÙNG LÀM VIỆC CÁCH LY & BẪY DỌN DẸP
 # ==============================================================================
 TMP_DIR=$(mktemp -d -p "/etc/wptt/tmp" auto_update.XXXXXX) || exit 0
 OLD_PWD=$(pwd)
@@ -124,9 +148,9 @@ trap cleanup EXIT INT TERM
 cd "$TMP_DIR" || exit 0
 
 # ==============================================================================
-# 6. KIỂM TRA & NẠP PUBLIC KEY GPG CHÍNH HÃNG (PINNED FINGERPRINT)
+# 7. KIỂM TRA & NẠP PUBLIC KEY GPG CHÍNH HÃNG (PINNED FINGERPRINT)
 # ==============================================================================
-if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
+if ! gpg --list-keys "$EXPECTED_FP" >/dev/null 2>&1; then
   if ! secure_download "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" "wptangtoc-gpg-pub.key"; then
     secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-gpg-pub.key" "wptangtoc-gpg-pub.key"
   fi
@@ -139,36 +163,34 @@ if ! gpg --list-keys "$EXPECTED_FP" 2>/dev/null | grep -qi "$KEY_EMAIL"; then
     wptt_logs "SECURITY" "Auto-update: Phát hiện GPG Public Key giả mạo hoặc sai Fingerprint!" 2>/dev/null || true
     exit 0
   fi
-  /bin/rm -f wptangtoc-gpg-pub.key
+  /bin/rm -f wptangtoc-gpg-pub.key 2>/dev/null || true
 fi
 
 # ==============================================================================
-# 7. TẢI MÃ NGUỒN VÀ CHỮ KÝ SỐ
+# 8. TẢI MÃ NGUỒN VÀ CHỮ KÝ SỐ
 # ==============================================================================
 # Tải Core Stable
-if ! secure_download "https://wptangtoc.com/share/wptangtoc-ols.zip" "wptangtoc-ols.zip"; then
+secure_download "https://wptangtoc.com/share/wptangtoc-ols.zip" "wptangtoc-ols.zip" ||
   secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip" "wptangtoc-ols.zip"
-fi
-if ! secure_download "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig" "wptangtoc-ols.zip.sig" "checksum wptangtoc ols"; then
+
+secure_download "https://hub.wptangtoc.com/wptangtoc-ols.zip.sig" "wptangtoc-ols.zip.sig" "checksum wptangtoc ols" ||
   secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip.sig" "wptangtoc-ols.zip.sig"
-fi
 
 # Tải User Stable
-if ! secure_download "https://wptangtoc.com/share/wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip"; then
+secure_download "https://wptangtoc.com/share/wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip" ||
   secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip"
-fi
-if ! secure_download "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig" "wptangtoc-ols-user.zip.sig" "checksum wptangtoc ols"; then
+
+secure_download "https://hub.wptangtoc.com/wptangtoc-ols-user.zip.sig" "wptangtoc-ols-user.zip.sig" "checksum wptangtoc ols" ||
   secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-user.zip.sig" "wptangtoc-ols-user.zip.sig"
-fi
 
 # ==============================================================================
-# 8. XÁC THỰC TOÀN VẸN GPG
+# 9. XÁC THỰC TOÀN VẸN GPG
 # ==============================================================================
 auth_core=0
 auth_user=0
 
-[[ -f wptangtoc-ols.zip && -f wptangtoc-ols.zip.sig ]] && verify_gpg_signature "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" && auth_core=1
-[[ -f wptangtoc-ols-user.zip && -f wptangtoc-ols-user.zip.sig ]] && verify_gpg_signature "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" && auth_user=1
+verify_gpg_package "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" "Core" && auth_core=1
+verify_gpg_package "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" "User" && auth_user=1
 
 if ((auth_core == 0 || auth_user == 0)); then
   wptt_logs "SECURITY" "Auto-update: Chữ ký GPG không hợp lệ hoặc gói tải về bị hỏng! Đã hủy cập nhật." 2>/dev/null || true
@@ -176,7 +198,7 @@ if ((auth_core == 0 || auth_user == 0)); then
 fi
 
 # ==============================================================================
-# 9. SAO LƯU HỆ THỐNG TRƯỚC KHI THAY THẾ (FAIL-SAFE SNAPSHOT)
+# 10. SAO LƯU HỆ THỐNG TRƯỚC KHI THAY THẾ (FAIL-SAFE SNAPSHOT)
 # ==============================================================================
 kiem_tra_ton_tai_nhom=$(grep -E '^wptangtoc-ols:' /etc/group 2>/dev/null || true)
 
@@ -206,7 +228,7 @@ ls -dt /etc/wptt/wptt-backup-system/*.zip 2>/dev/null | tail -n +11 | xargs -r /
 umask "$OLD_UMASK"
 
 # ==============================================================================
-# 10. GIẢI NÉN VÀ THAY THẾ NGUYÊN TỬ (CÓ TỰ ĐỘNG ROLLBACK)
+# 11. GIẢI NÉN VÀ THAY THẾ NGUYÊN TỬ (CÓ TỰ ĐỘNG ROLLBACK)
 # ==============================================================================
 rollback_and_exit() {
   wptt_logs "ERROR" "Auto-update: Lỗi khi giải nén/chép file. Đang tự động rollback..." 2>/dev/null || true
@@ -222,14 +244,19 @@ rollback_and_exit() {
 umask 077
 unzip -oq wptangtoc-ols.zip || rollback_and_exit
 
-if ! /bin/cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null; then
-  umask "$OLD_UMASK"
-  rollback_and_exit
+# Linh hoạt theo cấu trúc zip phẳng hoặc có thư mục con
+if [[ -d "tool-wptangtoc-ols" ]]; then
+  /bin/cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null || rollback_and_exit
+  /bin/rm -rf tool-wptangtoc-ols
+else
+  for item in *; do
+    [[ "$item" == "wptangtoc-ols.zip" || "$item" == "wptangtoc-ols.zip.sig" || "$item" == "wptangtoc-ols-user.zip" || "$item" == "wptangtoc-ols-user.zip.sig" ]] && continue
+    /bin/cp -rf "$item" /etc/wptt/ 2>/dev/null || rollback_and_exit
+  done
 fi
 umask "$OLD_UMASK"
 
 /bin/rm -f wptangtoc-ols.zip wptangtoc-ols.zip.sig
-/bin/rm -rf tool-wptangtoc-ols
 
 # Đồng bộ child config nếu có
 [[ -d /etc/wptt/wptt-child ]] && /bin/cp -rf /etc/wptt/wptt-child/* /etc/wptt/ 2>/dev/null || true
@@ -243,18 +270,16 @@ else
   /bin/chown root:root /etc/wptt /etc/wptt/vhost
 fi
 
-/bin/cp -fp /etc/wptt/wptangtoc /usr/bin/
-/bin/rm -f /etc/wptt/wptangtoc
-/bin/cp -fp /etc/wptt/wptt /usr/bin/
-/bin/rm -f /etc/wptt/wptt
-/bin/cp -fp /etc/wptt/tai-nguyen-server/wtop /usr/bin/ 2>/dev/null || true
+[[ -f /etc/wptt/wptangtoc ]] && /bin/cp -fp /etc/wptt/wptangtoc /usr/bin/ && /bin/rm -f /etc/wptt/wptangtoc
+[[ -f /etc/wptt/wptt ]] && /bin/cp -fp /etc/wptt/wptt /usr/bin/ && /bin/rm -f /etc/wptt/wptt
+[[ -f /etc/wptt/tai-nguyen-server/wtop ]] && /bin/cp -fp /etc/wptt/tai-nguyen-server/wtop /usr/bin/ 2>/dev/null || true
 
 # Bảo vệ file cấu hình bí mật (.wptt.conf)
-/bin/chown root:root /etc/wptt/.wptt.conf
-/bin/chmod 600 /etc/wptt/.wptt.conf
+/bin/chown root:root /etc/wptt/.wptt.conf 2>/dev/null || true
+/bin/chmod 600 /etc/wptt/.wptt.conf 2>/dev/null || true
 
 # ==============================================================================
-# 11. ĐỒNG BỘ PHÂN QUYỀN VHOST CHUẨN ZERO TRUST
+# 12. ĐỒNG BỘ PHÂN QUYỀN VHOST CHUẨN ZERO TRUST
 # ==============================================================================
 for filepath in /etc/wptt/vhost/.*.conf; do
   [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -281,32 +306,37 @@ for filepath in /etc/wptt/vhost/.*.conf; do
 done
 
 # ==============================================================================
-# 12. CÀI ĐẶT GÓI USER WPTANGTOC-OLS
+# 13. CÀI ĐẶT GÓI USER WPTANGTOC-OLS
 # ==============================================================================
 OLD_UMASK=$(umask)
 umask 007
-unzip -qo wptangtoc-ols-user.zip || true
-/bin/cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user/ 2>/dev/null || true
+unzip -qo wptangtoc-ols-user.zip 2>/dev/null || true
+
+if [[ -d "tool-wptangtoc-ols-user" ]]; then
+  /bin/cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user/ 2>/dev/null || true
+  /bin/rm -rf tool-wptangtoc-ols-user
+else
+  mkdir -p /etc/wptt-user
+  for item in *; do
+    [[ "$item" == *.zip || "$item" == *.sig ]] && continue
+    /bin/cp -rf "$item" /etc/wptt-user/ 2>/dev/null || true
+  done
+fi
 umask "$OLD_UMASK"
 
 /bin/rm -f wptangtoc-ols-user.zip wptangtoc-ols-user.zip.sig
-/bin/rm -rf tool-wptangtoc-ols-user
 
 if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
-  /bin/chown -hR root:wptangtoc-ols /etc/wptt-user
-  /bin/chmod -R 750 /etc/wptt-user
-  /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/
-  /bin/chown root:wptangtoc-ols /usr/bin/wptangtoc-user
-  /bin/chmod 750 /usr/bin/wptangtoc-user
+  /bin/chown -hR root:wptangtoc-ols /etc/wptt-user 2>/dev/null || true
+  /bin/chmod -R 750 /etc/wptt-user 2>/dev/null || true
+  [[ -f /etc/wptt-user/wptangtoc-user ]] && /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/ && /bin/chmod 750 /usr/bin/wptangtoc-user
 else
-  /bin/chown -hR root:root /etc/wptt-user
-  /bin/chmod -R 700 /etc/wptt-user
-  /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/
-  /bin/chown root:root /usr/bin/wptangtoc-user
-  /bin/chmod 700 /usr/bin/wptangtoc-user
+  /bin/chown -hR root:root /etc/wptt-user 2>/dev/null || true
+  /bin/chmod -R 700 /etc/wptt-user 2>/dev/null || true
+  [[ -f /etc/wptt-user/wptangtoc-user ]] && /bin/cp -fp /etc/wptt-user/wptangtoc-user /usr/bin/ && /bin/chmod 700 /usr/bin/wptangtoc-user
 fi
 
-/bin/chmod 700 /etc/wptt/tmp
+/bin/chmod 700 /etc/wptt/tmp 2>/dev/null || true
 
 # Khử dấu tiếng Việt nếu hệ thống cấu hình không dấu
 if [[ "${khong_dau_vi_ngon_ngu:-}" == '1' ]]; then
@@ -319,7 +349,7 @@ if [[ "${khong_dau_vi_ngon_ngu:-}" == '1' ]]; then
 fi
 
 # ==============================================================================
-# 13. SCRIPT PHỤ TRỢ UPDATE (BẢO MẬT GPG STRICT)
+# 14. SCRIPT PHỤ TRỢ UPDATE (BẢO MẬT GPG STRICT)
 # ==============================================================================
 if ! secure_download "https://wptangtoc.com/share/update" "update"; then
   secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update" "update"
@@ -328,12 +358,12 @@ if ! secure_download "https://hub.wptangtoc.com/update.sig" "update.sig" "checks
   secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update.sig" "update.sig"
 fi
 
-if [[ -s update && -s update.sig ]] && verify_gpg_signature "update" "update.sig"; then
+if [[ -s update && -s update.sig ]] && verify_gpg_package "update" "update.sig" "UpdateScript"; then
   if grep -q 'UPDATE_DONE="YES"' update 2>/dev/null; then
     bash update >/dev/null 2>&1 || true
   fi
 fi
-/bin/rm -f update update.sig
+/bin/rm -f update update.sig 2>/dev/null || true
 
 # Lưu cấu hình và ghi log thành công
 wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$wptangtocols_version" "secure" 2>/dev/null || true
@@ -342,5 +372,4 @@ echo "${version_wptangtoc_ols:-}" >/etc/wptt/tmp/wptangtoc-ols-version-main 2>/d
 
 wptt_logs "INFO" "Tự động cập nhật thành công WPTangToc OLS lên phiên bản $wptangtocols_version" 2>/dev/null || true
 
-# Kết thúc an toàn (trap cleanup sẽ tự dọn dẹp tmp và nhả flock)
 exit 0

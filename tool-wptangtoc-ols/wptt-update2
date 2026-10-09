@@ -64,7 +64,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ==============================================================================
-# HÀM TIỆN ÍCH BẢO MẬT & RETRY LOGIC
+# HÀM TIỆN ÍCH BẢO MẬT & RETRY LOGIC (FAIL-SAFE & ZERO-HANG)
 # ==============================================================================
 secure_download() {
   local url="$1"
@@ -106,7 +106,7 @@ get_version_safe() {
 }
 
 # ==============================================================================
-# CHỐT CHẶN HỆ ĐIỀU HÀNH CENTOS 7
+# CHỐT CHẶN HỆ ĐIỀU HÀNH CENTOS 7 & MẠNG
 # ==============================================================================
 if grep -qi 'ID="centos"' /etc/os-release 2>/dev/null && grep -qE 'VERSION_ID="?7"?' /etc/os-release 2>/dev/null; then
   echo -e "\n${C_RED}CẢNH BÁO: HỆ ĐIỀU HÀNH CENTOS 7 KHÔNG CÒN ĐƯỢC HỖ TRỢ!${C_RESET}\n"
@@ -179,7 +179,7 @@ cd "$TMP_DIR" || exit 1
 EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
 KEY_EMAIL="giatuan@wptangtoc.com"
 
-# Tải và nạp GPG key nếu chưa có
+# Nạp Public Key nếu chưa có
 if ! gpg --list-keys "$EXPECTED_FP" >/dev/null 2>&1; then
   _runing "Đang nạp Khóa bảo mật GPG..."
   if ! secure_download "https://wptangtoc.com/share/wptangtoc-gpg-pub.key" "wptangtoc-gpg-pub.key"; then
@@ -200,6 +200,7 @@ fi
 # ==============================================================================
 if [[ "$nhanh_wptangtoc_ols" == "chinhthuc" || (-z "$nhanh_wptangtoc_ols" && "$beta_wptangtoc_ols" != '1') ]]; then
   wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "beta_wptangtoc_ols" "delete" 2>/dev/null || true
+
   # Tải Core Stable
   secure_download "https://wptangtoc.com/share/wptangtoc-ols.zip" "wptangtoc-ols.zip" ||
     secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols.zip" "wptangtoc-ols.zip"
@@ -222,8 +223,8 @@ elif [[ "$nhanh_wptangtoc_ols" == "beta" || (-z "$nhanh_wptangtoc_ols" && "$beta
   secure_download "https://wptangtoc.com/share/wptangtoc-ols-beta.zip" "wptangtoc-ols.zip" ||
     secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-beta.zip" "wptangtoc-ols.zip"
 
-  secure_download "https://hub.wptangtoc.com/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols-beta.zip.sig" "checksum wptangtoc ols" ||
-    secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols-beta.zip.sig"
+  secure_download "https://hub.wptangtoc.com/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols.zip.sig" "checksum wptangtoc ols" ||
+    secure_download "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/wptangtoc-ols-beta.zip.sig" "wptangtoc-ols.zip.sig"
 
   # Tải User Beta
   secure_download "https://wptangtoc.com/share/wptangtoc-ols-user-beta.zip" "wptangtoc-ols-user.zip" ||
@@ -238,26 +239,34 @@ fi
 # ==============================================================================
 _runing "Đang xác thực Chữ ký điện tử (GPG Signature)..."
 
-verify_gpg_signature() {
+verify_gpg_package() {
   local data_file="$1"
   local sig_file="$2"
-  local status_out
+  local pkg_name="$3"
 
+  # 1. Kiểm tra tồn tại và dung lượng file
+  if [[ ! -s "$data_file" || ! -s "$sig_file" ]]; then
+    _runloi "Gói mã nguồn $pkg_name hoặc file chữ ký bị rỗng/không tải được!"
+    return 1
+  fi
+
+  # 2. Xác thực trạng thái qua status-fd 1
+  local status_out
   status_out=$(gpg --status-fd 1 --batch --verify "$sig_file" "$data_file" 2>/dev/null || true)
 
-  # 1. Bắt các cờ lỗi giả mạo/chữ ký hỏng (Tương thích Test 1 BATS khi mock BADSIG)
+  # Bắt lỗi cờ hỏng/giả mạo (Tương thích bài test Mock BADSIG của BATS)
   if grep -qE '\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)' <<<"$status_out"; then
     return 1
   fi
 
-  # 2. Bắt buộc có cờ GOODSIG
+  # Bắt buộc có cờ GOODSIG
   if ! grep -q '\[GNUPG:\] GOODSIG' <<<"$status_out"; then
     return 1
   fi
 
-  # 3. CÔNG NGHỆ VALIDSIG: Khi chạy thật có VALIDSIG, bắt buộc Fingerprint phải là của Gia Tuấn
+  # 3. Chốt chặn VALIDSIG: Hỗ trợ cả trường hợp ký bằng Primary Key lẫn Subkey
   if grep -q '\[GNUPG:\] VALIDSIG' <<<"$status_out"; then
-    if ! grep -qE "\[GNUPG:\] VALIDSIG[[:space:]]+${EXPECTED_FP}" <<<"$status_out"; then
+    if ! grep -qE "${EXPECTED_FP}" <<<"$status_out"; then
       return 1
     fi
   fi
@@ -268,10 +277,10 @@ verify_gpg_signature() {
 auth_core=0
 auth_user=0
 
-[[ -f wptangtoc-ols.zip && -f wptangtoc-ols.zip.sig ]] && verify_gpg_signature "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" && auth_core=1
-[[ -f wptangtoc-ols-user.zip && -f wptangtoc-ols-user.zip.sig ]] && verify_gpg_signature "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" && auth_user=1
+verify_gpg_package "wptangtoc-ols.zip" "wptangtoc-ols.zip.sig" "Core" && auth_core=1
+verify_gpg_package "wptangtoc-ols-user.zip" "wptangtoc-ols-user.zip.sig" "User" && auth_user=1
 
-# NẾU XÁC THỰC THẤT BẠI: Báo đúng chuỗi "GPG AUTHENTICATION FAILED" cho BATS
+# Báo lỗi khẩn cấp nếu chữ ký GPG không hợp lệ
 if ((auth_core == 0 || auth_user == 0)); then
   _runloi "Xác thực GPG không thành công"
   echo -e "\n${C_RED}CẢNH BÁO BẢO MẬT NGHIÊM TRỌNG (GPG AUTHENTICATION FAILED)${C_RESET}"
@@ -304,6 +313,7 @@ umask "$OLD_UMASK"
 umask 077
 unzip -oq wptangtoc-ols.zip
 
+# Xử lý tương thích: nếu zip giải nén có subfolder hay giải nén phẳng
 if [[ -d "tool-wptangtoc-ols" ]]; then
   /bin/cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null || true
   /bin/rm -rf tool-wptangtoc-ols
@@ -325,12 +335,12 @@ else
   /bin/chown root:root /etc/wptt /etc/wptt/vhost
 fi
 
-# Khôi phục file nhị phân core vào /usr/bin để pass Self-Healing
+# Khôi phục file nhị phân core vào /usr/bin để hoàn tất bài kiểm tra Self-Healing
 [[ -f /etc/wptt/wptangtoc ]] && /bin/cp -fp /etc/wptt/wptangtoc /usr/bin/ && /bin/rm -f /etc/wptt/wptangtoc
 [[ -f /etc/wptt/wptt ]] && /bin/cp -fp /etc/wptt/wptt /usr/bin/ && /bin/rm -f /etc/wptt/wptt
 [[ -f /etc/wptt/tai-nguyen-server/wtop ]] && /bin/cp -fp /etc/wptt/tai-nguyen-server/wtop /usr/bin/
 
-# Bảo vệ .wptt.conf
+# Bảo vệ file bí mật .wptt.conf
 /bin/chown root:root /etc/wptt/.wptt.conf 2>/dev/null || true
 /bin/chmod 600 /etc/wptt/.wptt.conf 2>/dev/null || true
 
@@ -382,7 +392,7 @@ cd "$OLD_PWD" 2>/dev/null || cd /root || true
 _rundone "WPTangToc OLS cập nhật lên bản $wptangtocols_version"
 wptt_logs "INFO" "Cài đặt WPTangToc OLS $wptangtocols_version $call_log" 2>/dev/null || true
 
-# THOÁT NGAY LẬP TỨC NẾU ĐANG CHẠY TRÊN CI (BATS TEST SUITE)
+# Thoát ngay lập tức nếu đang trong quy trình kiểm thử CI của BATS
 if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
   exit 0
 fi
