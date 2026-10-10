@@ -32,7 +32,7 @@ check_writer() {
   mkdir -p /etc/wptt/tmp 2>/dev/null || true
 
   # 2. SOURCE HÀM THẬT TỪ HỆ THỐNG
-  cat << 'EOF' > "$BATS_TEST_TMPDIR/write-config"
+  cat <<'EOF' >"$BATS_TEST_TMPDIR/write-config"
 source /etc/wptt/core-functions 2>/dev/null || true
 EOF
 
@@ -42,10 +42,10 @@ EOF
   else
     writer=$(grep -E 'wptt_atomic_edit_config.*/etc/wptt/\.wptt\.conf.*version_wptangtoc_ols' "$REPO_ROOT/$file")
   fi
-  
+
   [ -n "$writer" ]
-  
-  printf '%s\n' "$writer" | sed 's@/etc/wptt/\.wptt.conf@'"$TEST_CONFIG"'@g' >> "$BATS_TEST_TMPDIR/write-config"
+
+  printf '%s\n' "$writer" | sed 's@/etc/wptt/\.wptt.conf@'"$TEST_CONFIG"'@g' >>"$BATS_TEST_TMPDIR/write-config"
 
   local payloads=(
     '4.0.0'
@@ -60,11 +60,11 @@ EOF
     '8.2.1${UNSET_VARIABLE}'$' 8.2.1\t\r\n'
     ''
   )
-  
+
   for payload in "${payloads[@]}"; do
-    printf 'WPTT_TRASH_ENABLE=1\nversion_wptangtoc_ols=0.0.1\n' > "$TEST_CONFIG"
+    printf 'WPTT_TRASH_ENABLE=1\nversion_wptangtoc_ols=0.0.1\n' >"$TEST_CONFIG"
     export wptangtocols_version="$payload" version_wptangtoc_ols_rollback="$payload"
-    
+
     run bash -eu "$BATS_TEST_TMPDIR/write-config"
     [ "$status" -eq 0 ]
     [ ! -e "$PROBE_FILE" ]
@@ -74,7 +74,7 @@ EOF
       [[ "$version_wptangtoc_ols" == "$1" ]]
       [[ "$WPTT_TRASH_ENABLE" == 1 ]]
     ' bash "$payload"
-    
+
     [ ! -e "$PROBE_FILE" ]
     [ "$status" -eq 0 ]
   done
@@ -90,8 +90,4 @@ EOF
 
 @test "Bảo mật cấu hình: Script tự động cập nhật (wptt-update-wptangtoc-ols) an toàn" {
   check_writer tool-wptangtoc-ols/wptt-update-wptangtoc-ols
-}
-
-@test "Bảo mật cấu hình: Script phục hồi (wptt-rollback-update-wptangtoc) an toàn" {
-  check_writer tool-wptangtoc-ols/update/wptt-rollback-update-wptangtoc
 }

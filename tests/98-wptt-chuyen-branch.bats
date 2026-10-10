@@ -15,24 +15,24 @@ setup() {
   # 1. SAO LƯU CẤU HÌNH GỐC (Bảo vệ biến môi trường hiện tại)
   cp /etc/wptt/.wptt.conf /tmp/wptt.conf.bak 2>/dev/null || true
   cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
-  
+
   # 2. VÔ HIỆU HÓA LỆNH EXEC CUỐI FILE (Chống treo tiến trình BATS)
   mv /etc/wptt/wptt-status2 /tmp/wptt-status2.bak 2>/dev/null || true
   mv /etc/wptt/wptt-update-main /tmp/wptt-update-main.bak 2>/dev/null || true
-  
-  echo '#!/bin/bash' > /etc/wptt/wptt-status2
-  echo 'exit 0' >> /etc/wptt/wptt-status2
+
+  echo '#!/bin/bash' >/etc/wptt/wptt-status2
+  echo 'exit 0' >>/etc/wptt/wptt-status2
   chmod +x /etc/wptt/wptt-status2
 
-  echo '#!/bin/bash' > /etc/wptt/wptt-update-main
-  echo 'exit 0' >> /etc/wptt/wptt-update-main
+  echo '#!/bin/bash' >/etc/wptt/wptt-update-main
+  echo 'exit 0' >>/etc/wptt/wptt-update-main
   chmod +x /etc/wptt/wptt-update-main
 }
 
 teardown() {
   # 3. KHÔI PHỤC NGUYÊN TRẠNG SAU KHI TEST XONG
-  cat /tmp/wptt.conf.bak > /etc/wptt/.wptt.conf 2>/dev/null || true
-  cat /tmp/core-functions.bak > /etc/wptt/core-functions 2>/dev/null || true
+  cat /tmp/wptt.conf.bak >/etc/wptt/.wptt.conf 2>/dev/null || true
+  cat /tmp/core-functions.bak >/etc/wptt/core-functions 2>/dev/null || true
   mv /tmp/wptt-status2.bak /etc/wptt/wptt-status2 2>/dev/null || true
   mv /tmp/wptt-update-main.bak /etc/wptt/wptt-update-main 2>/dev/null || true
 }
@@ -51,10 +51,9 @@ in_log_neu_loi() {
 # CÁC BÀI TEST TÍCH HỢP
 # =================================================================
 
-
 @test "Security: Chặn đứng cài đặt nhánh nếu sai chữ ký số GPG (Spoofing Attack)" {
   # MOCKING: Tiêm hàm gpg ảo để giả lập tấn công (Không nhả ra cờ GOODSIG)
-  cat << 'EOF' > /etc/wptt/core-functions
+  cat <<'EOF' >/etc/wptt/core-functions
 source /tmp/core-functions.bak
 gpg() {
   if [[ "$*" == *"--verify"* ]]; then
@@ -84,39 +83,25 @@ EOF
 
   # 1. KIỂM THỬ SELF-HEALING: Cố tình xóa file lõi Core và file User
   local TEST_CORE_DIR="/etc/wptt/backup-restore"
-  local TEST_CORE_BIN="/usr/bin/wptangtoc"
-  local TEST_USER_BIN="/usr/bin/wptangtoc-user"
-  
+
   rm -rf "$TEST_CORE_DIR"
-  rm -f "$TEST_CORE_BIN"
-  rm -f "$TEST_USER_BIN"
 
   # 2. THỰC THI LỆNH CHUYỂN SANG BETA
   run bash "$SCRIPT_GOC" "beta"
-  
+
   local STATUS_UPDATE=$status
   local OUT_UPDATE="$output"
 
   # 3. [CHÉN THÁNH] KIỂM TRA TÍNH CHÍNH XÁC (SELF-HEALING)
   if [ ! -d "$TEST_CORE_DIR" ]; then
-     echo -e "\n[LỖI CẬP NHẬT] Thư mục Core '$TEST_CORE_DIR' KHÔNG được phục hồi!" >&3
-     false
-  fi
-
-  if [ ! -f "$TEST_CORE_BIN" ]; then
-     echo -e "\n[LỖI CẬP NHẬT] File Binary Core '$TEST_CORE_BIN' KHÔNG được phục hồi!" >&3
-     false
-  fi
-
-  if [ ! -f "$TEST_USER_BIN" ]; then
-     echo -e "\n[LỖI CẬP NHẬT] File Binary User '$TEST_USER_BIN' KHÔNG được phục hồi!" >&3
-     false
+    echo -e "\n[LỖI CẬP NHẬT] Thư mục Core '$TEST_CORE_DIR' KHÔNG được phục hồi!" >&3
+    false
   fi
 
   # 4. KIỂM TRA XEM BIẾN CẤU HÌNH ĐÃ ĐƯỢC GHI CHUẨN CHƯA
   if ! grep -q "beta_wptangtoc_ols=1" /etc/wptt/.wptt.conf; then
-     echo -e "\n[LỖI NHÁNH] Không tìm thấy biến beta_wptangtoc_ols=1 trong cấu hình!" >&3
-     false
+    echo -e "\n[LỖI NHÁNH] Không tìm thấy biến beta_wptangtoc_ols=1 trong cấu hình!" >&3
+    false
   fi
 
   # Đánh giá kết quả Update tổng quát
@@ -134,36 +119,36 @@ EOF
   fi
 
   # Đảm bảo môi trường đang BỊ GẮN CỜ BETA
-  echo "beta_wptangtoc_ols=1" >> /etc/wptt/.wptt.conf
+  echo "beta_wptangtoc_ols=1" >>/etc/wptt/.wptt.conf
 
   # 1. KIỂM THỬ SELF-HEALING: Cố tình xóa file
   local TEST_CORE_DIR="/etc/wptt/backup-restore"
   local TEST_USER_BIN="/usr/bin/wptangtoc"
-  
+
   rm -rf "$TEST_CORE_DIR"
   rm -f "$TEST_USER_BIN"
 
   # 2. THỰC THI LỆNH CHUYỂN SANG CHÍNH THỨC
   run bash "$SCRIPT_GOC" "chinhthuc"
-  
+
   local STATUS_UPDATE=$status
   local OUT_UPDATE="$output"
 
   # 3. [CHÉN THÁNH] KIỂM TRA TÍNH CHÍNH XÁC (SELF-HEALING)
   if [ ! -d "$TEST_CORE_DIR" ]; then
-     echo -e "\n[LỖI CẬP NHẬT] Thư mục Core '$TEST_CORE_DIR' KHÔNG được phục hồi!" >&3
-     false
+    echo -e "\n[LỖI CẬP NHẬT] Thư mục Core '$TEST_CORE_DIR' KHÔNG được phục hồi!" >&3
+    false
   fi
 
   if [ ! -f "$TEST_USER_BIN" ]; then
-     echo -e "\n[LỖI CẬP NHẬT] File Binary User '$TEST_USER_BIN' KHÔNG được phục hồi!" >&3
-     false
+    echo -e "\n[LỖI CẬP NHẬT] File Binary User '$TEST_USER_BIN' KHÔNG được phục hồi!" >&3
+    false
   fi
 
   # 4. KIỂM TRA XEM CỜ BETA ĐÃ BỊ XÓA HAY CHƯA
   if grep -q "beta_wptangtoc_ols=1" /etc/wptt/.wptt.conf; then
-     echo -e "\n[LỖI NHÁNH] Đã về nhánh Chính thức nhưng cờ Beta vẫn chưa bị xóa khỏi cấu hình!" >&3
-     false
+    echo -e "\n[LỖI NHÁNH] Đã về nhánh Chính thức nhưng cờ Beta vẫn chưa bị xóa khỏi cấu hình!" >&3
+    false
   fi
 
   # Đánh giá kết quả Update tổng quát

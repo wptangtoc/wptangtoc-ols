@@ -23,7 +23,7 @@
     <li>🤖 <b>Tự động hóa thông minh:</b> Mọi thao tác cấu hình phức tạp, tối ưu Database, hay quản lý Firewall đều được giải quyết tự động chỉ bằng phím bấm.</li>
     <li>☁️ <b>Bảo vệ dữ liệu toàn diện:</b> Hệ thống sao lưu thông minh vận hành hoàn toàn tự động đóng gói và đẩy thẳng dữ liệu của bạn lên đa nền tảng Cloud (Amazon S3, Google Drive, OneDrive, Telegram, Cloudflare R2...). Giải phóng bạn khỏi nỗi lo rủi ro phần cứng, hỏng ổ cứng... Đảm bảo website luôn có sẵn phương án khôi phục thần tốc trước mọi sự cố hay thảm họa không lường trước.</li>
     <li>⚡<b>Triết lý thiết kế tối giản và nhẹ:</b> Code hoàn toàn hướng tới việc tối ưu trên môi trường CLI (dòng lệnh), không mang theo gánh nặng giao diện (GUI bloatware). Điều này giúp WPTangToc OLS tiêu tốn cực kỳ ít tài nguyên máy chủ, đồng thời thu hẹp bề mặt tấn công bảo mật so với các control panel truyền thống.</li>
-    <li>✅ <b>An tâm tuyệt đối (DevSecOps):</b> Quét bảo mật tự động (Trivy, Gitleaks, ShellCheck) và kiểm thử khắt khe qua BATS trên đa nền tảng máy ảo CI của GitHub Actions (x86_64 & ARM64), đảm bảo sự ổn định tuyệt đối trước khi đến tay bạn.</li>
+    <li>✅ <b>An tâm tuyệt đối (DevSecOps):</b> Quét bảo mật tự động (Trivy, Gitleaks, ShellCheck, Semgrep) và kiểm thử khắt khe qua BATS trên đa nền tảng máy ảo CI của GitHub Actions (x86_64 & ARM64), đảm bảo sự ổn định tuyệt đối trước khi đến tay bạn.</li>
 </ul>
 
 <hr>
@@ -119,7 +119,8 @@
     <a href="https://perishablepress.com/8g-firewall/">8G Firewall</a> |
     <a href="https://aquasecurity.github.io/trivy/">Aqua Trivy (Bảo mật)</a> |
     <a href="https://github.com/gitleaks/gitleaks">Gitleaks</a> |
-    <a href="https://www.shellcheck.net/">ShellCheck</a>
+    <a href="https://www.shellcheck.net/">ShellCheck</a> |
+<a href="https://semgrep.dev/">Semgrep (SAST)</a>
 </p>
 
 <hr>
