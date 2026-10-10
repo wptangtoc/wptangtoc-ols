@@ -411,7 +411,7 @@ EOF
   umount -l /usr/sbin/sshd 2>/dev/null || true
 
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Lỗi cú pháp bị phát hiện trên file tạm"* ]]
+  [[ "$output" == *"Lỗi cú pháp SSHD phát hiện trên bản tạm"* ]]
 
   run grep -E "^Port 22$" "$SSHD_CONFIG"
   [ "$status" -eq 0 ]
