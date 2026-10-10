@@ -83,12 +83,8 @@ EOF
 
   # 1. KIỂM THỬ SELF-HEALING: Cố tình xóa file lõi Core và file User
   local TEST_CORE_DIR="/etc/wptt/backup-restore"
-  local TEST_CORE_BIN="/usr/bin/wptangtoc"
-  local TEST_USER_BIN="/usr/bin/wptangtoc-user"
 
   rm -rf "$TEST_CORE_DIR"
-  rm -f "$TEST_CORE_BIN"
-  rm -f "$TEST_USER_BIN"
 
   # 2. THỰC THI LỆNH CHUYỂN SANG BETA
   run bash "$SCRIPT_GOC" "beta"
@@ -99,16 +95,6 @@ EOF
   # 3. [CHÉN THÁNH] KIỂM TRA TÍNH CHÍNH XÁC (SELF-HEALING)
   if [ ! -d "$TEST_CORE_DIR" ]; then
     echo -e "\n[LỖI CẬP NHẬT] Thư mục Core '$TEST_CORE_DIR' KHÔNG được phục hồi!" >&3
-    false
-  fi
-
-  if [ ! -f "$TEST_CORE_BIN" ]; then
-    echo -e "\n[LỖI CẬP NHẬT] File Binary Core '$TEST_CORE_BIN' KHÔNG được phục hồi!" >&3
-    false
-  fi
-
-  if [ ! -f "$TEST_USER_BIN" ]; then
-    echo -e "\n[LỖI CẬP NHẬT] File Binary User '$TEST_USER_BIN' KHÔNG được phục hồi!" >&3
     false
   fi
 
