@@ -48,12 +48,14 @@ TMP_WORKSPACE=$(mktemp -d -p "/etc/wptt/tmp" ssh_port.XXXXXX) || {
 }
 trap '/bin/rm -rf -- "$TMP_WORKSPACE"' EXIT INT TERM
 
-clear
+# Khử lỗi terminal trên môi trường CI
+clear 2>/dev/null || true
+
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}QUẢN LÝ SSH ➜ ${thay_doi_port_ssh:-Thay đổi Port SSH}${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-# Kiểm tra quyền ghi và trạng thái dịch vụ SSH
+# Kiểm tra quyền ghi file cấu hình
 if [[ ! -w /etc/ssh/sshd_config ]]; then
   echo -e "${C_RED}❌ Lỗi: File /etc/ssh/sshd_config không có quyền ghi!${C_RESET}"
   if [[ "${1:-}" == "98" ]]; then
@@ -62,17 +64,26 @@ if [[ ! -w /etc/ssh/sshd_config ]]; then
   return 1 2>/dev/null || exit 1
 fi
 
+# ==============================================================================
+# NHẬN DIỆN DỊCH VỤ SSH (TƯƠNG THÍCH CẢ RHEL/ALMA LẪN DEBIAN/UBUNTU 24.04)
+# ==============================================================================
 SSH_SERVICE="sshd"
-if ! systemctl is-active --quiet sshd; then
-  if systemctl is-active --quiet ssh; then
-    SSH_SERVICE="ssh"
-  else
-    echo -e "\n${C_RED}❌ Lỗi: Dịch vụ SSH (sshd/ssh) đang không hoạt động trên hệ thống!${C_RESET}"
-    if [[ "${1:-}" == "98" ]]; then
-      exec /etc/wptt/wptt-ssh-main 1
-    fi
-    return 1 2>/dev/null || exit 1
+if systemctl list-unit-files ssh.service 2>/dev/null | grep -q "^ssh\.service"; then
+  SSH_SERVICE="ssh"
+fi
+
+# Kiểm tra xem SSH đang chạy (hỗ trợ cả daemon truyền thống lẫn socket activation)
+ssh_dang_chay=0
+if systemctl is-active --quiet "$SSH_SERVICE" 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null || systemctl is-active --quiet ssh.socket 2>/dev/null; then
+  ssh_dang_chay=1
+fi
+
+if ((ssh_dang_chay == 0)); then
+  echo -e "\n${C_RED}❌ Lỗi: Dịch vụ SSH (sshd/ssh/ssh.socket) đang không hoạt động trên hệ thống!${C_RESET}"
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-ssh-main 1
   fi
+  return 1 2>/dev/null || exit 1
 fi
 
 # ==============================================================================
@@ -163,7 +174,7 @@ if [[ -f "$duong_dan_cau_hinh_mariadb" ]]; then
 fi
 
 # ==============================================================================
-# CÁC HÀM HELPER XỬ LÝ CSF CHUẨN XÁC THEO TOKEN
+# CÁC HÀM HELPER XỬ LÝ CSF
 # ==============================================================================
 csf_has_port() {
   local var_name="$1"
@@ -235,19 +246,25 @@ thuc_hien_rollback_toan_dien() {
     firewall-cmd --reload >/dev/null 2>&1 || true
   fi
 
-  # 4. Hoàn nguyên CSF: Trả lại bản snapshot gốc
+  # 4. Hoàn nguyên UFW
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw delete allow "${port}/tcp" >/dev/null 2>&1 || true
+    ufw allow "${port_checkssh}/tcp" >/dev/null 2>&1 || true
+  fi
+
+  # 5. Hoàn nguyên CSF: Trả lại bản snapshot gốc
   if [[ -f "$TMP_WORKSPACE/csf.conf.bak" ]]; then
     /bin/cp -fp -- "$TMP_WORKSPACE/csf.conf.bak" /etc/csf/csf.conf
     csf -r >/dev/null 2>&1 || true
   fi
 
-  # 5. Hoàn nguyên NFTables
+  # 6. Hoàn nguyên NFTables
   if [[ -n "$path_nftables_config" && -f "$TMP_WORKSPACE/nftables.conf.bak" ]]; then
     /bin/cp -fp -- "$TMP_WORKSPACE/nftables.conf.bak" "$path_nftables_config"
     systemctl reload nftables >/dev/null 2>&1 || systemctl restart nftables >/dev/null 2>&1 || true
   fi
 
-  # 6. Hoàn nguyên Fail2ban
+  # 7. Hoàn nguyên Fail2ban
   if [[ -f "$TMP_WORKSPACE/fail2ban_sshd.local.bak" ]]; then
     /bin/cp -fp -- "$TMP_WORKSPACE/fail2ban_sshd.local.bak" /etc/fail2ban/jail.d/sshd.local
   else
@@ -263,11 +280,13 @@ EOF
   fi
   fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
 
-  # 7. Restart dịch vụ SSH về cổng cũ
-  systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || true
+  # 8. Restart dịch vụ SSH về cổng cũ (Bảo đảm tiến trình chạy ở chế độ standalone)
   if systemctl is-active --quiet ssh.socket 2>/dev/null; then
-    systemctl restart ssh.socket >/dev/null 2>&1 || true
+    systemctl stop ssh.socket >/dev/null 2>&1 || true
+    systemctl disable ssh.socket >/dev/null 2>&1 || true
+    systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
   fi
+  systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
 
   echo -e "\n${C_GREEN}✔ ĐÃ HOÀN TẤT ROLLBACK AN TOÀN:${C_RESET}"
   echo -e "  - Cổng SSH được duy trì nguyên vẹn ở: ${C_YELLOW}$port_checkssh${C_RESET}"
@@ -348,21 +367,22 @@ if systemctl is-active --quiet firewalld 2>/dev/null; then
   fi
 fi
 
-# 2.3. CSF: Phẫu thuật chính xác TCP_IN & TCP6_IN theo Token
+# 2.3. UFW: Mở cổng mới nếu UFW đang chạy
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+fi
+
+# 2.4. CSF: Phẫu thuật chính xác TCP_IN & TCP6_IN theo Token
 if [[ -f /etc/csf/csf.conf ]]; then
   /bin/cp -fp /etc/csf/csf.conf "$TMP_WORKSPACE/csf.conf.bak"
   TMP_CSF="$TMP_WORKSPACE/csf.conf"
   /bin/cp -fp /etc/csf/csf.conf "$TMP_CSF"
 
-  # Bổ sung cổng mới vào TCP_IN
   csf_add_port "TCP_IN" "$port" "$TMP_CSF"
-
-  # Bổ sung vào TCP6_IN nếu file có cấu hình IPv6
   if grep -qE '^TCP6_IN[[:space:]]*=' "$TMP_CSF"; then
     csf_add_port "TCP6_IN" "$port" "$TMP_CSF"
   fi
 
-  # Xác minh token port mới chắc chắn đã nằm trong TCP_IN
   if ! csf_has_port "TCP_IN" "$port" "$TMP_CSF"; then
     thuc_hien_rollback_toan_dien "Không thể nạp port $port vào danh sách TCP_IN của CSF"
   fi
@@ -373,7 +393,7 @@ if [[ -f /etc/csf/csf.conf ]]; then
   fi
 fi
 
-# 2.4. NFTables: Thêm rule chấp nhận cổng mới
+# 2.5. NFTables: Thêm rule chấp nhận cổng mới
 if [[ -n "$path_nftables_config" && -f "$path_nftables_config" ]]; then
   /bin/cp -fp "$path_nftables_config" "$TMP_WORKSPACE/nftables.conf.bak"
   TMP_NFT="$TMP_WORKSPACE/nftables.conf"
@@ -387,7 +407,7 @@ if [[ -n "$path_nftables_config" && -f "$path_nftables_config" ]]; then
   fi
 fi
 
-# 2.5. Snapshot cấu hình Fail2ban
+# 2.6. Snapshot cấu hình Fail2ban
 if [[ -f /etc/fail2ban/jail.d/sshd.local ]]; then
   /bin/cp -fp /etc/fail2ban/jail.d/sshd.local "$TMP_WORKSPACE/fail2ban_sshd.local.bak"
 fi
@@ -402,13 +422,16 @@ _runing "Áp dụng cấu hình SSHD và xác thực Socket Listener"
 # Tráo đổi cấu hình sshd_config nguyên tử
 /bin/cp -fp "$TMP_SSHD_CONF" /etc/ssh/sshd_config
 
-# Khởi động lại dịch vụ SSH
-if ! systemctl restart "$SSH_SERVICE" >/dev/null 2>&1; then
-  thuc_hien_rollback_toan_dien "Dịch vụ $SSH_SERVICE không thể khởi động với port mới!"
+# XỬ LÝ ĐẶC THÙ UBUNTU: Tắt ssh.socket để chuyển sang ssh.service độc lập
+if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+  systemctl stop ssh.socket >/dev/null 2>&1 || true
+  systemctl disable ssh.socket >/dev/null 2>&1 || true
+  systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
 fi
 
-if systemctl is-active --quiet ssh.socket 2>/dev/null; then
-  systemctl restart ssh.socket >/dev/null 2>&1 || true
+# Khởi động lại dịch vụ SSH
+if ! (systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1); then
+  thuc_hien_rollback_toan_dien "Dịch vụ $SSH_SERVICE không thể khởi động với port mới!"
 fi
 
 # HEALTH CHECK: Xác minh cổng thực sự ở trạng thái LISTEN (chờ tối đa 5 giây)
@@ -438,7 +461,12 @@ if systemctl is-active --quiet firewalld 2>/dev/null; then
   firewall-cmd --reload >/dev/null 2>&1 || true
 fi
 
-# 4.2. Gỡ cổng cũ khỏi TCP_IN & TCP6_IN trong CSF
+# 4.2. Gỡ cổng cũ trên UFW
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  ufw delete allow "${port_checkssh}/tcp" >/dev/null 2>&1 || true
+fi
+
+# 4.3. Gỡ cổng cũ khỏi TCP_IN & TCP6_IN trong CSF
 if [[ -f /etc/csf/csf.conf ]]; then
   TMP_CSF="$TMP_WORKSPACE/csf_clean.conf"
   /bin/cp -fp /etc/csf/csf.conf "$TMP_CSF"
@@ -452,7 +480,7 @@ if [[ -f /etc/csf/csf.conf ]]; then
   csf -r >/dev/null 2>&1 || true
 fi
 
-# 4.3. Dọn dẹp rule cũ trong NFTables
+# 4.4. Dọn dẹp rule cũ trong NFTables
 if [[ -n "$path_nftables_config" && -f "$path_nftables_config" ]]; then
   TMP_NFT="$TMP_WORKSPACE/nft_clean.conf"
   /bin/cp -fp "$path_nftables_config" "$TMP_NFT"
@@ -464,7 +492,7 @@ if [[ -n "$path_nftables_config" && -f "$path_nftables_config" ]]; then
   systemctl reload nftables >/dev/null 2>&1 || systemctl restart nftables >/dev/null 2>&1 || true
 fi
 
-# 4.4. Cập nhật Fail2ban bảo vệ cổng mới
+# 4.5. Cập nhật Fail2ban bảo vệ cổng mới
 cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
 [sshd]
 enabled = true
