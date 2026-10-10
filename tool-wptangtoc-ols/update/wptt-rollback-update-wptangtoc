@@ -1,18 +1,10 @@
 #!/bin/bash
-# @author: Gia Tuấn
-# @website: https://wptangtoc.com
-# @email: giatuan@wptangtoc.com
-# @since: 2026
-
-PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
 
 function huong_dan() {
-  cat <<'EOF'
- Rollback System: Cỗ máy thời gian cho WPTangToc OLS. Cho phép bạn quay lại phiên bản cũ ngay lập tức nếu bản cập nhật mới gặp lỗi hoặc không ưng ý.
+    cat << 'EOF'
+  Rollback System: Cỗ máy thời gian cho WPTangToc OLS. Cho phép bạn quay lại phiên bản cũ ngay lập tức nếu bản cập nhật mới gặp lỗi hoặc không ưng ý.
 
- An tâm tuyệt đối khi cập nhật! Tính năng Rollback sẽ tự động sao lưu hệ thống trước khi nâng cấp. Bạn có thể khôi phục lại phiên bản ổn định trước đó bất cứ lúc nào chỉ với một phím bấm.
+  An tâm tuyệt đối khi cập nhật! Tính năng Rollback sẽ tự động sao lưu hệ thống trước khi nâng cấp. Bạn có thể khôi phục lại phiên bản ổn định trước đó bất cứ lúc nào chỉ với một phím bấm.
 EOF
 }
 
@@ -20,41 +12,7 @@ EOF
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null
-
-# ==============================================================================
-# 1. KHÓA ĐỒNG THỜI TOÀN HỆ THỐNG (CONCURRENCY LOCKING)
-# ==============================================================================
-/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
-/bin/chmod 700 /etc/wptt/tmp 2>/dev/null
-
-LOCK_FILE="/etc/wptt/tmp/wptt_system_update.lock"
-exec 200>"$LOCK_FILE"
-if ! flock -n 200; then
-  echo -e "\n${C_RED}❌ LỖI KHÓA TIẾN TRÌNH:${C_RESET}"
-  echo -e "Hệ thống đang có một tiến trình Cập nhật hoặc Rollback khác đang chạy ngầm."
-  echo -e "Vui lòng đợi vài phút rồi thử lại để đảm bảo an toàn toàn vẹn dữ liệu!\n"
-  sleep 3
-
-  if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-update-main 1
-  fi
-
-  exit 1
-fi
-
-TMP_STAGING=$(mktemp -d -p "/etc/wptt/tmp" rollback_staging.XXXXXX) || {
-  _runloi "Không thể khởi tạo vùng đệm an toàn!"
-  exit 1
-}
-
-cleanup() {
-  local exit_code=$?
-  /bin/rm -rf -- "$TMP_STAGING" 2>/dev/null || true
-  exec 200>&- 2>/dev/null || true
-  exit "$exit_code"
-}
-trap cleanup EXIT INT TERM
+. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -67,226 +25,124 @@ if [[ "${1:-}" == '98' ]]; then
 fi
 
 # ==============================================================================
-# 2. KIỂM TRA FILE BACKUP TỒN TẠI VÀ ĐỌC DANH SÁCH AN TOÀN
+# KIỂM TRA FILE BACKUP TỒN TẠI
 # ==============================================================================
-backup_dir="/etc/wptt/wptt-backup-system"
-if [[ ! -d "$backup_dir" ]]; then
-  /bin/mkdir -p "$backup_dir"
-fi
-
-# Lấy danh sách file zip chuẩn không dùng subshell nguy hiểm
-backup_files=()
-while IFS= read -r f; do
-  [[ -n "$f" && -f "$backup_dir/$f" ]] && backup_files+=("$f")
-done < <(ls -At "$backup_dir" 2>/dev/null | grep -E '^wptt_.*backup_.*\.zip$')
+backup_files=($(ls -At /etc/wptt/wptt-backup-system/ 2>/dev/null | grep '\.zip$' | grep '^wptt_backup_'))
 
 if [[ ${#backup_files[@]} -eq 0 ]]; then
   echo -e "${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}LỖI: KHÔNG TÌM THẤY BẢN SAO LƯU NÀO${C_RESET}"
   echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Hệ thống chưa có tệp sao lưu (.zip) nào trong thư mục lưu trữ." 2
-  left_text "Bản sao lưu sẽ được hệ thống tự động tạo ra trước mỗi lần Cập nhật." 2
+  left_text "Hệ thống chưa có file Backup (.zip) nào để thực hiện Rollback." 2
+  left_text "File Backup sẽ được tự động tạo ra mỗi khi bạn Update." 2
   echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-update-main 1
+  exec /etc/wptt/wptt-update-main 1
   exit 1
 fi
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}DANH SÁCH BẢN SAO LƯU (BACKUP) CÓ THỂ KHÔI PHỤC${C_RESET}"
+center_text "${C_YELLOW}DANH SÁCH BẢN SAO LƯU (BACKUP) CÓ SẴN${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-
-# Hàm bóc tách metadata từ tên file backup chuẩn xác
-parse_backup_meta() {
-  local filename="$1"
-  local ver="N/A"
-  local time_str="N/A"
-
-  # Bóc tách phiên bản (hỗ trợ cả format version:X và version_X)
-  if [[ "$filename" =~ version[:_]([^.]+.*)\.zip ]]; then
-    ver="${BASH_REMATCH[1]}"
-  fi
-
-  # Bóc tách thời gian: ...backup_14_15_04_2026_version...
-  if [[ "$filename" =~ backup_([0-9]{1,2})_([0-9]{1,2})_([0-9]{1,2})_([0-9]{4})_ ]]; then
-    time_str="Lúc ${BASH_REMATCH[1]}h, ngày ${BASH_REMATCH[2]}/${BASH_REMATCH[3]}/${BASH_REMATCH[4]}"
-  elif [[ "$filename" =~ backup_([0-9]{1,2}gio_[0-9]{1,2}_[0-9]{1,2}_[0-9]{4})_ ]]; then
-    time_str="${BASH_REMATCH[1]//_/ }"
-  fi
-
-  echo "$ver|$time_str"
-}
 
 i=1
 for file in "${backup_files[@]}"; do
-  meta_info=$(parse_backup_meta "$file")
-  ver="${meta_info%%|*}"
-  time_info="${meta_info##*|}"
+  # Bóc tách Phiên bản và Thời gian từ tên file
+  # VD: wptt_backup_14_15_04_2026_version:7.1.1.5.zip
+  ver=$(echo "$file" | cut -f2 -d ':' | sed 's/\.zip//g')
+  time_raw=$(echo "$file" | sed 's/wptt_backup_//g' | cut -f1 -d ':' | sed 's/_version//g')
 
-  left_text "  ${C_CYAN}$i)${C_RESET} ${C_BOLD_WHITE}Phiên bản ${C_GREEN}$ver${C_RESET} ($time_info)" 2
-  i=$((i + 1))
+  # Dùng IFS để cắt chuỗi 14_15_04_2026 thành các biến an toàn
+  IFS='_' read -r gio ngay thang nam <<<"$time_raw"
+
+  left_text "  ${C_CYAN}$i)${C_RESET} ${C_BOLD_WHITE}Phiên bản $ver${C_RESET} (Sao lưu lúc ${gio}h, ngày $ngay/$thang/$nam)" 2
+  ((i++))
 done
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-# Vòng lặp lấy input từ người dùng
+# Vòng lặp lấy Input
 while true; do
-  echo -en "\n${C_CYAN}Nhập số thứ tự bản sao lưu muốn Rollback (1-${#backup_files[@]}) [0=Thoát]: ${C_RESET}"
+  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-${#backup_files[@]}) [0=Thoát]: ${C_RESET}"
   read -r REPLY
 
-  if [[ "$REPLY" == "0" || -z "$REPLY" ]]; then
-    echo -e "\n${C_YELLOW}Đã hủy thao tác khôi phục.${C_RESET}"
-    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-update-main 1
+  [[ "$REPLY" == "0" || -z "$REPLY" ]] && {
+    echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+    if [[ "${1:-}" == "98" ]]; then
+        exec /etc/wptt/wptt-update-main 1
+    fi
     exit 0
-  fi
+  }
 
-  if [[ "$REPLY" =~ ^[0-9]+$ ]] && ((REPLY >= 1 && REPLY <= ${#backup_files[@]})); then
+  if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#backup_files[@]} ]; then
     file_chon="${backup_files[$((REPLY - 1))]}"
     break
   else
-    echo -e "${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng nhập số từ 1 đến ${#backup_files[@]}.${C_RESET}"
+    echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
   fi
 done
 
 # ==============================================================================
-# 3. XÁC THỰC TÍNH TOÀN VẸN CỦA FILE BACKUP TRƯỚC KHI THỰC THI
+# XÁC NHẬN VÀ TIẾN HÀNH KHÔI PHỤC (ROLLBACK)
 # ==============================================================================
-duong_dan_backup="$backup_dir/$file_chon"
-meta_selected=$(parse_backup_meta "$file_chon")
-ver_selected="${meta_selected%%|*}"
-time_selected="${meta_selected##*|}"
+duong_dan_thu_muc_backup_system="/etc/wptt/wptt-backup-system/$file_chon"
+version_wptangtoc_ols_rollback=$(echo "$file_chon" | cut -f2 -d ':' | sed 's/\.zip//g')
 
 echo ""
-if ! wptt_xac_nhan "XÁC NHẬN ROLLBACK HỆ THỐNG WPTANGTOC OLS?" \
-  "Phiên bản khôi phục: ${C_YELLOW}$ver_selected${C_RESET}" \
-  "Thời điểm sao lưu  : ${C_GREEN}$time_selected${C_RESET}" \
-  "Đồng ý Khôi phục" "Hủy thao tác"; then
-  echo -e "\n${C_YELLOW}Đã hủy thao tác Rollback.${C_RESET}\n"
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-update-main 1
+if ! wptt_xac_nhan "CẢNH BÁO: Hệ thống sẽ lùi về phiên bản $version_wptangtoc_ols_rollback" "Bạn có chắc chắn muốn tiến hành Rollback không?" "" "Đồng ý Khôi phục" "Hủy thao tác"; then
+  echo -e "${C_YELLOW}Đã hủy thao tác Rollback.${C_RESET}\n"
+  if [[ "${1:-}" == "98" ]]; then
+      exec /etc/wptt/wptt-update-main 1
+  fi
   exit 0
 fi
 
 echo ""
-_runing "Đang kiểm tra tính toàn vẹn cấu trúc file ZIP sao lưu..."
-# Kiểm tra checksum file zip bằng chính zip integrity test (-t)
-if ! unzip -tq "$duong_dan_backup" >/dev/null 2>&1; then
-  _runloi "Tệp sao lưu bị hỏng (Corrupted Archive)! Quá trình Rollback bị hủy để bảo vệ an toàn!"
-  sleep 3
-  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-update-main 1
-  exit 1
-fi
-_rundone "Tệp sao lưu toàn vẹn 100%"
+_runing "Đang giải nén bản sao lưu và nạp đè vào hệ thống (Silent Mode)..."
+# Thêm cờ -q (quiet) để ẩn hàng đống log xả nén rối mắt
+unzip -q -o "$duong_dan_thu_muc_backup_system" -d /etc/wptt
+_rundone "Xả nén tệp tin Core hoàn tất"
 
-# ==============================================================================
-# 4. GIAO DỊCH STAGING VÀ ĐỒNG BỘ NGUYÊN TỬ (TRANSACTIONAL SWAP)
-# ==============================================================================
-_runing "Đang giải nén vào vùng đệm an toàn (Staging)..."
+_runing "Đang thiết lập lại Phân quyền và Lệnh môi trường (Binaries)..."
+\cp -f /etc/wptt/wptangtoc /usr/bin >/dev/null 2>&1
+rm -f /etc/wptt/wptangtoc
+\cp -f /etc/wptt/wptt /usr/bin >/dev/null 2>&1
+rm -f /etc/wptt/wptt
+chmod -R 700 /etc/wptt
 
-OLD_UMASK=$(umask)
-umask 077
-
-if ! unzip -qo "$duong_dan_backup" -d "$TMP_STAGING"; then
-  umask "$OLD_UMASK"
-  _runloi "Không thể giải nén file backup vào vùng đệm an toàn!"
-  sleep 2
-  exit 1
-fi
-umask "$OLD_UMASK"
-_rundone "Giải nén vào vùng đệm an toàn hoàn tất"
-
-# Kiểm định cấu trúc file core trong bản backup
-if [[ ! -f "$TMP_STAGING/core-functions" && ! -f "$TMP_STAGING/echo-color" ]]; then
-  # Nếu backup được nén theo dạng thư mục con tool-wptangtoc-ols
-  if [[ -d "$TMP_STAGING/tool-wptangtoc-ols" ]]; then
-    STAGING_SOURCE="$TMP_STAGING/tool-wptangtoc-ols"
-  else
-    _runloi "Bản sao lưu thiếu các tệp thư viện cốt lõi! Đã hủy khôi phục để tránh làm hỏng hệ thống."
-    sleep 3
-    exit 1
-  fi
-else
-  STAGING_SOURCE="$TMP_STAGING"
-fi
-
-_runing "Đang nạp đè mã nguồn Core và đồng bộ nhị phân hệ thống..."
-
-# 1. Đồng bộ thư viện /etc/wptt (bỏ qua các thư mục dữ liệu sống của khách hàng)
-/bin/cp -rf "$STAGING_SOURCE"/* /etc/wptt/ 2>/dev/null || true
-
-# 2. Khôi phục bộ ba nhị phân cốt lõi vào /usr/bin/ với thuộc tính nguyên vẹn (-fp)
-for bin_name in wptangtoc wptt wtop; do
-  if [[ -f "/etc/wptt/$bin_name" ]]; then
-    /bin/cp -fp "/etc/wptt/$bin_name" /usr/bin/ 2>/dev/null || true
-    /bin/rm -f "/etc/wptt/$bin_name" 2>/dev/null || true
-  elif [[ -f "/etc/wptt/tai-nguyen-server/$bin_name" ]]; then
-    /bin/cp -fp "/etc/wptt/tai-nguyen-server/$bin_name" /usr/bin/ 2>/dev/null || true
-  fi
-  chmod 755 "/usr/bin/$bin_name" 2>/dev/null || true
-done
-
-_rundone "Nạp mã nguồn và bộ điều hành nhị phân hoàn tất"
-
-# ==============================================================================
-# 5. THIẾT LẬP PHÂN QUYỀN HỆ THỐNG CHUẨN ZERO TRUST
-# ==============================================================================
-_runing "Đang tái thiết lập phân quyền bảo mật Zero Trust..."
-
-/bin/chmod -R 700 /etc/wptt
-
-kiem_tra_ton_tai_nhom=$(grep -E '^wptangtoc-ols:' /etc/group 2>/dev/null || true)
+# Cấp quyền theo nhóm
+kiem_tra_ton_tai_nhom=$(grep '^wptangtoc-ols:' /etc/group)
 if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
-  /bin/chown root:wptangtoc-ols /etc/wptt /etc/wptt/vhost
-  /bin/chmod 750 /etc/wptt /etc/wptt/vhost
+  chown root:wptangtoc-ols /etc/wptt
+  chown root:wptangtoc-ols /etc/wptt/vhost
+  chmod 750 /etc/wptt
+  chmod 750 /etc/wptt/vhost
 else
-  /bin/chown root:root /etc/wptt /etc/wptt/vhost
-  /bin/chmod 700 /etc/wptt /etc/wptt/vhost
+  chown root:root /etc/wptt
+  chown root:root /etc/wptt/vhost
+  chmod 700 /etc/wptt
+  chmod 700 /etc/wptt/vhost
 fi
+_rundone "Thiết lập phân quyền hệ thống thành công"
 
-# Bảo vệ tệp cấu hình tuyệt mật
-/bin/chown root:root /etc/wptt/.wptt.conf 2>/dev/null || true
-/bin/chmod 600 /etc/wptt/.wptt.conf 2>/dev/null || true
+_runing "Đang cập nhật lại biến môi trường Version..."
+wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$version_wptangtoc_ols_rollback" "secure"
 
-# Đồng bộ phân quyền vhost an toàn
-for filepath in /etc/wptt/vhost/.*.conf; do
-  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-  /bin/chown root:root "$filepath" 2>/dev/null || true
-  /bin/chmod 600 "$filepath" 2>/dev/null || true
+_rundone "Hạ cấp WPTangToc OLS về phiên bản: $version_wptangtoc_ols_rollback"
 
-  if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
-    domain="${filepath##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
-    path_site="/usr/local/lsws/$domain"
-    if [[ -d "$path_site" && -d "$path_site/etc" ]]; then
-      check_user=$(grep -E '^User_name_vhost=' "$filepath" 2>/dev/null | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-      if [[ -n "$check_user" ]] && grep -q "^wptangtoc-ols:.*$check_user" /etc/group 2>/dev/null; then
-        /bin/chown root:wptangtoc-ols "$filepath" 2>/dev/null || true
-        /bin/chmod 640 "$filepath" 2>/dev/null || true
-      fi
-    fi
-  fi
-done
+wptt_logs "INFO" "Rollback hệ thống phiên bản: $version_wptangtoc_ols_rollback"
 
-_rundone "Phân quyền hệ thống đạt chuẩn bảo mật"
-
-# ==============================================================================
-# 6. CẬP NHẬT METADATA & GHI NHẬT KÝ HOÀN TẤT
-# ==============================================================================
-wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$ver_selected" "secure" 2>/dev/null || true
-echo "$ver_selected" >/etc/wptt/tmp/wptangtoc-ols-version 2>/dev/null || true
-
-wptt_logs "INFO" "Khôi phục hệ thống (Rollback) thành công về phiên bản: $ver_selected (Bản sao lưu: $file_chon)" 2>/dev/null || true
+# Phân tích lại thời gian để in ra bảng
+time_raw=$(echo "$file_chon" | sed 's/wptt_backup_//g' | cut -f1 -d ':' | sed 's/_version//g')
+IFS='_' read -r gio ngay thang nam <<<"$time_raw"
 
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT KHÔI PHỤC HỆ THỐNG${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "Hệ thống WPTangToc OLS đã được Rollback (lùi về) thành công!" 2
-left_text "Phiên bản hiện tại : ${C_YELLOW}$ver_selected${C_RESET}" 2
-left_text "Mốc sao lưu        : ${C_YELLOW}$time_selected${C_RESET}" 2
-left_text "Toàn bộ dịch vụ và tệp điều hành đã được phục hồi nguyên trạng." 2
+left_text "Phiên bản hiện tại : ${C_YELLOW}$version_wptangtoc_ols_rollback${C_RESET}" 2
+left_text "Mốc sao lưu        : ${C_YELLOW}Lúc ${gio}h, ngày $ngay/$thang/$nam${C_RESET}" 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-sleep 2
 if [[ "${1:-}" == "98" ]]; then
-  exec /etc/wptt/wptt-update-main 1
+    exec /etc/wptt/wptt-update-main 1
 fi
-exit 0
