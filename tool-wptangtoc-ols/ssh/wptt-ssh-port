@@ -48,8 +48,10 @@ TMP_WORKSPACE=$(mktemp -d -p "/etc/wptt/tmp" ssh_port.XXXXXX) || {
 }
 trap '/bin/rm -rf -- "$TMP_WORKSPACE"' EXIT INT TERM
 
-# Khử lỗi terminal trên môi trường CI
-clear 2>/dev/null || true
+# Khử lỗi terminal 'unknown' trên môi trường CI Runner
+if [[ -t 1 ]] && [[ "${TERM:-unknown}" != "unknown" && "${TERM:-}" != "dumb" ]]; then
+  clear 2>/dev/null || true
+fi
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}QUẢN LÝ SSH ➜ ${thay_doi_port_ssh:-Thay đổi Port SSH}${C_RESET}"
@@ -72,9 +74,12 @@ if systemctl list-unit-files ssh.service 2>/dev/null | grep -q "^ssh\.service"; 
   SSH_SERVICE="ssh"
 fi
 
-# Kiểm tra xem SSH đang chạy (hỗ trợ cả daemon truyền thống lẫn socket activation)
+# Kiểm tra xem SSH đang chạy (hỗ trợ cả standalone daemon lẫn socket activation)
 ssh_dang_chay=0
-if systemctl is-active --quiet "$SSH_SERVICE" 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null || systemctl is-active --quiet ssh.socket 2>/dev/null; then
+if systemctl is-active --quiet "$SSH_SERVICE" 2>/dev/null ||
+  systemctl is-active --quiet sshd 2>/dev/null ||
+  systemctl is-active --quiet ssh 2>/dev/null ||
+  systemctl is-active --quiet ssh.socket 2>/dev/null; then
   ssh_dang_chay=1
 fi
 
@@ -91,6 +96,7 @@ fi
 # ==============================================================================
 port_checkssh=$(grep -E '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n 1)
 port_checkssh=${port_checkssh:-22}
+port_checkssh="${port_checkssh//[[:space:]]/}"
 
 port="${1:-}"
 [[ "$port" == '98' ]] && port=''
@@ -111,7 +117,6 @@ if [[ -z "$port" ]]; then
   fi
 fi
 
-# Làm sạch input chống ký tự lạ
 port="${port//[[:space:]]/}"
 
 # ==============================================================================
@@ -172,6 +177,40 @@ if [[ -f "$duong_dan_cau_hinh_mariadb" ]]; then
     return 1 2>/dev/null || exit 1
   fi
 fi
+
+# ==============================================================================
+# HÀM KIỂM TRA PORT LISTEN & TỰ ĐỘNG CÀI ĐẶT SS
+# ==============================================================================
+check_port_listen() {
+  local target_port="$1"
+
+  # 1. Tự động cài đặt iproute2 nếu hệ thống thiếu lệnh ss
+  if ! command -v ss >/dev/null 2>&1; then
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y -q iproute >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -q iproute2 >/dev/null 2>&1 || true
+    fi
+  fi
+
+  # 2. Kiểm tra bằng ss
+  if command -v ss >/dev/null 2>&1; then
+    if ss -tln 2>/dev/null | grep -qE ":${target_port}\b"; then
+      return 0
+    fi
+    return 1
+  fi
+
+  # 3. Fallback đọc trực tiếp từ kernel /proc/net/tcp và tcp6 (Mã Hex)
+  local hex_port
+  hex_port=$(printf '%04X' "$target_port")
+  if grep -qE ":${hex_port}[[:space:]]+[0-9A-Fa-f:]+:0000[[:space:]]+0A\b" /proc/net/tcp 2>/dev/null ||
+    grep -qE ":${hex_port}[[:space:]]+[0-9A-Fa-f:]+:0000[[:space:]]+0A\b" /proc/net/tcp6 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
 
 # ==============================================================================
 # CÁC HÀM HELPER XỬ LÝ CSF
@@ -281,12 +320,14 @@ EOF
   fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
 
   # 8. Restart dịch vụ SSH về cổng cũ (Bảo đảm tiến trình chạy ở chế độ standalone)
-  if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+  /bin/mkdir -p /run/sshd 2>/dev/null || true
+  if systemctl list-unit-files ssh.socket 2>/dev/null | grep -q 'ssh\.socket'; then
     systemctl stop ssh.socket >/dev/null 2>&1 || true
     systemctl disable ssh.socket >/dev/null 2>&1 || true
-    systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
   fi
-  systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
+  systemctl unmask "$SSH_SERVICE" >/dev/null 2>&1 || true
+  systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
+  systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1 || true
 
   echo -e "\n${C_GREEN}✔ ĐÃ HOÀN TẤT ROLLBACK AN TOÀN:${C_RESET}"
   echo -e "  - Cổng SSH được duy trì nguyên vẹn ở: ${C_YELLOW}$port_checkssh${C_RESET}"
@@ -422,22 +463,28 @@ _runing "Áp dụng cấu hình SSHD và xác thực Socket Listener"
 # Tráo đổi cấu hình sshd_config nguyên tử
 /bin/cp -fp "$TMP_SSHD_CONF" /etc/ssh/sshd_config
 
-# XỬ LÝ ĐẶC THÙ UBUNTU: Tắt ssh.socket để chuyển sang ssh.service độc lập
-if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+# Bảo đảm thư mục phân tách đặc quyền tồn tại trên Ubuntu/Debian
+/bin/mkdir -p /run/sshd 2>/dev/null || true
+
+# XỬ LÝ ĐẶC THÙ UBUNTU 22.10+/24.04:
+# Tắt ssh.socket để chuyển sang standalone daemon, nhận cấu hình Port từ sshd_config
+if systemctl list-unit-files ssh.socket 2>/dev/null | grep -q 'ssh\.socket'; then
   systemctl stop ssh.socket >/dev/null 2>&1 || true
   systemctl disable ssh.socket >/dev/null 2>&1 || true
-  systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
 fi
 
-# Khởi động lại dịch vụ SSH
-if ! (systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1); then
+# Bật và khởi động service SSH độc lập
+systemctl unmask "$SSH_SERVICE" >/dev/null 2>&1 || true
+systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
+
+if ! (systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1); then
   thuc_hien_rollback_toan_dien "Dịch vụ $SSH_SERVICE không thể khởi động với port mới!"
 fi
 
 # HEALTH CHECK: Xác minh cổng thực sự ở trạng thái LISTEN (chờ tối đa 5 giây)
 is_listening=0
 for ((i = 1; i <= 10; i++)); do
-  if ss -tlnH "sport = :$port" 2>/dev/null | grep -q ":$port\b"; then
+  if check_port_listen "$port"; then
     is_listening=1
     break
   fi
