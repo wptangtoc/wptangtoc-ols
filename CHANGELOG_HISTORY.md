@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.2.2.1
+
+🛠️ Tối ưu hệ thống
+- Tối ưu hóa cơ chế chứng chỉ SSL dự phòng trên cổng 443 với thời hạn 10 năm, giúp đảm bảo kết nối ổn định và liền mạch cho máy chủ trong trường hợp chưa cấu hình SSL chính thức.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.2.1.9
 
 ### 🛠️ Tối ưu hệ thống
