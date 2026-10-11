@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.2.2.2
+
+🛠️ Tối ưu hệ thống:
+- Nâng cấp cơ chế ghi file cấu hình theo phương thức atomic, giúp bảo vệ dữ liệu an toàn và ngăn ngừa triệt để tình trạng hỏng file khi máy chủ gặp sự cố đột ngột (như mất điện) trong quá trình chỉnh sửa.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.2.1
 
 🛠️ Tối ưu hệ thống
