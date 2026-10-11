@@ -1,73 +1,196 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2026
+# @since: 2026 - Object Cache Auto-Tuner
 
-TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-# 1. Tính toán mốc RAM dành riêng cho Object Cache
-if [ "$TOTAL_RAM_MB" -le 1200 ]; then
-  OBJ_CACHE_MEM="64" # VPS 1GB: 64MB là quá đủ cho các query cơ bản
-elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
-  OBJ_CACHE_MEM="128" # VPS 2GB: 128MB
-elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
-  OBJ_CACHE_MEM="256" # VPS 4GB: 256MB
-elif [ "$TOTAL_RAM_MB" -le 8500 ]; then
-  OBJ_CACHE_MEM="512" # VPS 8GB: 512MB
+. /etc/wptt/core-functions 2>/dev/null
+
+TOTAL_RAM_MB=0
+while read -r name value _; do
+  if [[ "$name" == "MemTotal:" ]]; then
+    TOTAL_RAM_MB=$((value / 1024))
+    break
+  fi
+done < /proc/meminfo
+
+# BẢNG PHÂN BỔ BỘ NHỚ CHO OBJECT CACHE
+if (( TOTAL_RAM_MB <= 1200 )); then
+  OBJ_CACHE_MEM="64"   # VPS 1GB: 64MB cho query cơ bản
+elif (( TOTAL_RAM_MB <= 2500 )); then
+  OBJ_CACHE_MEM="128"  # VPS 2GB: 128MB
+elif (( TOTAL_RAM_MB <= 4500 )); then
+  OBJ_CACHE_MEM="256"  # VPS 4GB: 256MB
+elif (( TOTAL_RAM_MB <= 8500 )); then
+  OBJ_CACHE_MEM="512"  # VPS 8GB: 512MB
 else
-  OBJ_CACHE_MEM="1024" # Mức trần: 1GB (Kể cả máy 32GB cũng không nên set quá 1GB cho WP)
+  OBJ_CACHE_MEM="1024" # Mức trần: 1GB cho WordPress
 fi
 
-# ------------------------------------------
-# A. XỬ LÝ MEMCACHED
-# ------------------------------------------
-if systemctl is-active --quiet memcached 2>/dev/null || [[ -f /etc/memcached.conf ]] || [[ -f /etc/sysconfig/memcached ]]; then
+# ==============================================================================
+# 2. XỬ LÝ MEMCACHED (ATOMIC & ROLLBACK)
+# ==============================================================================
+tune_memcached() {
+  local conf_file=""
+  local is_rhel=0
 
-  # Dành cho Ubuntu/Debian
   if [[ -f /etc/memcached.conf ]]; then
-    sed -i -E "s/^-m .*/-m $OBJ_CACHE_MEM/" /etc/memcached.conf
+    conf_file="/etc/memcached.conf"         # Debian/Ubuntu
+  elif [[ -f /etc/sysconfig/memcached ]]; then
+    conf_file="/etc/sysconfig/memcached"     # RHEL/AlmaLinux/Rocky
+    is_rhel=1
   fi
 
-  # Dành cho RHEL/CentOS/AlmaLinux
-  if [[ -f /etc/sysconfig/memcached ]]; then
-    sed -i -E "s/^CACHESIZE=.*/CACHESIZE=\"$OBJ_CACHE_MEM\"/" /etc/sysconfig/memcached
+  [[ -z "$conf_file" ]] && return 0
+
+  local was_active=0
+  if systemctl is-active --quiet memcached 2>/dev/null; then
+    was_active=1
   fi
 
-  systemctl restart memcached >/dev/null 2>&1
-  wptt_logs "INFO" "Đã Tune Memcached: Giới hạn ${OBJ_CACHE_MEM}MB"
-fi
+  # 1. Tạo bản sao lưu dự phòng phục vụ Rollback
+  local bak_file="${conf_file}.wptt_bak"
+  /bin/cp -fp "$conf_file" "$bak_file" 2>/dev/null || true
 
-# ------------------------------------------
-# B. XỬ LÝ NHÓM REDIS, VALKEY, KEYDB
-# ------------------------------------------
-# Cấu trúc của 3 phần mềm này giống hệt nhau về tham số cấu hình lõi
+  # 2. Khởi tạo file nháp nguyên tử
+  local tmp_conf
+  tmp_conf=$(wptt_atomic_begin "$conf_file") || {
+    /bin/rm -f -- "$bak_file" 2>/dev/null || true
+    return 1
+  }
+
+  # 3. Sửa cấu hình lũy đẳng trên file nháp
+  if (( is_rhel == 1 )); then
+    if grep -qE '^[[:space:]]*CACHESIZE=' "$tmp_conf"; then
+      sed -i -E "s/^[[:space:]]*CACHESIZE=.*/CACHESIZE=\"$OBJ_CACHE_MEM\"/" "$tmp_conf"
+    else
+      printf '\nCACHESIZE="%s"\n' "$OBJ_CACHE_MEM" >> "$tmp_conf"
+    fi
+  else
+    if grep -qE '^[[:space:]]*-m[[:space:]]+' "$tmp_conf"; then
+      sed -i -E "s/^[[:space:]]*-m[[:space:]]+.*/-m $OBJ_CACHE_MEM/" "$tmp_conf"
+    else
+      printf '\n-m %s\n' "$OBJ_CACHE_MEM" >> "$tmp_conf"
+    fi
+  fi
+
+  # 4. Commit nguyên tử & Kiểm tra sức khỏe dịch vụ
+  if wptt_atomic_commit "$tmp_conf" "$conf_file"; then
+    if (( was_active == 1 )); then
+      systemctl restart memcached >/dev/null 2>&1
+
+      if ! systemctl is-active --quiet memcached 2>/dev/null; then
+        # ROLLBACK: Khôi phục ngay nếu daemon khởi động thất bại
+        /bin/cp -fp "$bak_file" "$conf_file" 2>/dev/null || true
+        systemctl restart memcached >/dev/null 2>&1
+        wptt_logs "ERROR" "Memcached sập sau khi tune. Đã rollback cấu hình cũ!" 2>/dev/null || true
+      else
+        wptt_logs "INFO" "Đã Tune Memcached: Giới hạn ${OBJ_CACHE_MEM}MB" 2>/dev/null || true
+      fi
+    else
+      wptt_logs "INFO" "Đã Tune cấu hình Memcached: Giới hạn ${OBJ_CACHE_MEM}MB (Dịch vụ chưa bật)" 2>/dev/null || true
+    fi
+  fi
+
+  /bin/rm -f -- "$bak_file" 2>/dev/null || true
+}
+
+tune_memcached
+
+# ==============================================================================
+# 3. XỬ LÝ NHÓM REDIS, VALKEY, KEYDB (ATOMIC & ROLLBACK)
+# ==============================================================================
 DANH_SACH_CONFIG_REDIS=(
-  "/etc/redis/redis.conf"
-  "/etc/redis.conf"
   "/etc/valkey/valkey.conf"
   "/etc/valkey.conf"
   "/etc/keydb/keydb.conf"
   "/etc/keydb.conf"
+  "/etc/redis/redis.conf"
+  "/etc/redis.conf"
 )
 
+# Hàm tìm chính xác tên service đang chạy cho từng cấu hình
+get_service_name() {
+  local conf="$1"
+  case "$conf" in
+    *valkey*)
+      for s in valkey valkey-server; do
+        systemctl is-active --quiet "$s" 2>/dev/null && echo "$s" && return 0
+      done
+      for s in valkey valkey-server; do
+        systemctl list-unit-files "$s.service" &>/dev/null && echo "$s" && return 0
+      done
+      ;;
+    *keydb*)
+      for s in keydb keydb-server; do
+        systemctl is-active --quiet "$s" 2>/dev/null && echo "$s" && return 0
+      done
+      for s in keydb keydb-server; do
+        systemctl list-unit-files "$s.service" &>/dev/null && echo "$s" && return 0
+      done
+      ;;
+    *redis*)
+      for s in redis redis-server; do
+        systemctl is-active --quiet "$s" 2>/dev/null && echo "$s" && return 0
+      done
+      for s in redis redis-server; do
+        systemctl list-unit-files "$s.service" &>/dev/null && echo "$s" && return 0
+      done
+      ;;
+  esac
+  return 1
+}
+
+PROCESSED_INODES=()
+
 for conf_file in "${DANH_SACH_CONFIG_REDIS[@]}"; do
-  if [[ -f "$conf_file" ]]; then
-    # 1. Dọn dẹp rác cấu hình cũ (Chặn thêm khoảng trắng ở đầu dòng cho an toàn tuyệt đối)
-    sed -i '/^[[:space:]]*maxmemory /d' "$conf_file"
-    sed -i '/^[[:space:]]*maxmemory-policy /d' "$conf_file"
+  [[ ! -f "$conf_file" ]] && continue
 
-    # 2. Bơm cấu hình mới xuống cuối file (Có \n để chống lỗi dính dòng trên Ubuntu)
-    echo -e "\nmaxmemory ${OBJ_CACHE_MEM}mb\nmaxmemory-policy allkeys-lfu" >>"$conf_file"
+  # Lấy Inode thực tế để tránh sửa 2 lần nếu file bị symlink
+  inode=$(stat -c '%d:%i' "$conf_file" 2>/dev/null)
+	if [[ " ${PROCESSED_INODES[*]} " == *" ${inode} "* ]]; then
+		continue
+	fi
+  PROCESSED_INODES+=("$inode")
 
-    # 3. Khởi động lại dịch vụ tương ứng (Bao trùm toàn bộ họ Service của RHEL và Ubuntu)
-    if [[ "$conf_file" == *"valkey"* ]]; then
-      systemctl restart valkey >/dev/null 2>&1 || systemctl restart valkey-server >/dev/null 2>&1
-    elif [[ "$conf_file" == *"keydb"* ]]; then
-      systemctl restart keydb >/dev/null 2>&1 || systemctl restart keydb-server >/dev/null 2>&1
-    else
-      systemctl restart redis >/dev/null 2>&1 || systemctl restart redis-server >/dev/null 2>&1
-    fi
+  svc_name=$(get_service_name "$conf_file" || true)
 
-    wptt_logs "INFO" "Đã Tune $(basename "$conf_file"): Giới hạn ${OBJ_CACHE_MEM}MB"
+  was_active=0
+  if [[ -n "$svc_name" ]] && systemctl is-active --quiet "$svc_name" 2>/dev/null; then
+    was_active=1
   fi
+
+  # 1. Tạo bản sao lưu dự phòng trước khi can thiệp
+  bak_file="${conf_file}.wptt_bak"
+  /bin/cp -fp "$conf_file" "$bak_file" 2>/dev/null || true
+
+  # 2. Khởi tạo file nháp nguyên tử
+  tmp_conf=$(wptt_atomic_begin "$conf_file") || {
+    /bin/rm -f -- "$bak_file" 2>/dev/null || true
+    continue
+  }
+
+  # 3. Dọn dẹp chỉ thị cũ và bơm cấu hình tối ưu mới
+  sed -i -E '/^[[:space:]]*(maxmemory|maxmemory-policy)[[:space:]]+/d' "$tmp_conf"
+  printf '\nmaxmemory %smb\nmaxmemory-policy allkeys-lfu\n' "$OBJ_CACHE_MEM" >> "$tmp_conf"
+
+  # 4. Hoán đổi Inode nguyên tử (mv -fT)
+  if wptt_atomic_commit "$tmp_conf" "$conf_file"; then
+    if [[ -n "$svc_name" && "$was_active" -eq 1 ]]; then
+      systemctl restart "$svc_name" >/dev/null 2>&1
+
+      # KIỂM CHỨNG TRẠNG THÁI SAU KHI RESTART
+      if ! systemctl is-active --quiet "$svc_name" 2>/dev/null; then
+        # CƠ CHẾ ROLLBACK TỰ ĐỘNG
+        /bin/cp -fp "$bak_file" "$conf_file" 2>/dev/null || true
+        systemctl restart "$svc_name" >/dev/null 2>&1
+        wptt_logs "ERROR" "Dịch vụ $svc_name sập sau khi tune. Đã rollback cấu hình cũ!" 2>/dev/null || true
+      else
+        wptt_logs "INFO" "Đã Tune $(basename "$conf_file") [$svc_name]: Giới hạn ${OBJ_CACHE_MEM}MB" 2>/dev/null || true
+      fi
+    else
+      wptt_logs "INFO" "Đã Tune $(basename "$conf_file"): Giới hạn ${OBJ_CACHE_MEM}MB" 2>/dev/null || true
+    fi
+  fi
+
+  /bin/rm -f -- "$bak_file" 2>/dev/null || true
 done

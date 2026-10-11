@@ -101,13 +101,21 @@ EOF
   # ---------------------------------------------------------
 
   #Dấu hoa thị * (Wildcard) kết hợp với Filesystem ảo của Kernel. rất dễ copy mount làm đẩy ổ cứng trong 1 số tình huống đặc biệt
-  cp -f /usr/local/lsws/conf/httpd_config.conf "$TEMP_OLS_config_DIR/" 2>/dev/null
+  cp -fp /usr/local/lsws/conf/httpd_config.conf "$TEMP_OLS_config_DIR/" 2>/dev/null
   cp -rf /usr/local/lsws/conf/vhosts "$TEMP_OLS_config_DIR/" 2>/dev/null
 
   # ==========================================
   # C. CẤU HÌNH OPENLITESPEED (OLS)
   # ==========================================
+
+	#chuẩn bị thay đổi cấu hình phương án atomic sed -i
   OLS_CONF='/usr/local/lsws/conf/httpd_config.conf'
+
+	tmp_httpd_OLS=$(wptt_atomic_begin "$OLS_CONF") || {
+		_runloi "Không thể khởi tạo file nháp OpenLiteSpeed"
+			exit 1
+	}
+
 
   if [ "$TOTAL_RAM" -le 1200 ]; then
     BUFFER_SIZE="60M"
@@ -131,17 +139,18 @@ EOF
     KA_REQS="10000"
   fi
 
-  sed -i -E "s/^[[:blank:]]*keepAliveTimeout.*/keepAliveTimeout         $KA_TIMEOUT/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*maxKeepAliveReq.*/maxKeepAliveReq          $KA_REQS/g" "$OLS_CONF"
-  sed -i -E "s/^\s*inMemBufSize\s+.*/inMemBufSize          ${BUFFER_SIZE}/" "$OLS_CONF"
-  sed -i -E "s/^\s*totalInMemCacheSize\s+.*/totalInMemCacheSize    ${MMAP_CACHE_SIZE}/" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers             $cpucore/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity              $cpucore/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections             $max_client_max/g" "$OLS_CONF"
-  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections          $max_client_max/g" "$OLS_CONF"
+  sed -i -E "s/^[[:blank:]]*keepAliveTimeout.*/keepAliveTimeout         $KA_TIMEOUT/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*maxKeepAliveReq.*/maxKeepAliveReq          $KA_REQS/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^\s*inMemBufSize\s+.*/inMemBufSize          ${BUFFER_SIZE}/" "$tmp_httpd_OLS"
+  sed -i -E "s/^\s*totalInMemCacheSize\s+.*/totalInMemCacheSize    ${MMAP_CACHE_SIZE}/" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers             $cpucore/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity              $cpucore/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections             $max_client_max/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections          $max_client_max/g" "$tmp_httpd_OLS"
 
-  sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
-  sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$OLS_CONF"
+  sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$tmp_httpd_OLS"
+  sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$tmp_httpd_OLS"
+  wptt_atomic_commit "$tmp_httpd_OLS" "$OLS_CONF"
 
   # ==========================================
   # D. CẤU HÌNH VHOSTS TỪNG TÊN MIỀN
@@ -155,17 +164,23 @@ EOF
     VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
 
     if [[ -n "$domain" && "$domain" != "conf" && -f "$VHOST_CONF" ]]; then
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
+			unset tmp_httpd_vhost_ols
+			tmp_httpd_vhost_ols=$(wptt_atomic_begin "$VHOST_CONF") || {
+						continue
+				}
+
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/" "$tmp_httpd_vhost_ols"
       if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -qi "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then
         ngu_dong_core_tien_lsphp_child="2"
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$ngu_dong_core_tien_lsphp_child/" "$VHOST_CONF"
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$ngu_dong_core_tien_lsphp_child/" "$tmp_httpd_vhost_ols"
       else
-        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/" "$VHOST_CONF"
+        sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/" "$tmp_httpd_vhost_ols"
       fi
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$VHOST_CONF"
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
-      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$VHOST_CONF"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memSoftLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$tmp_httpd_vhost_ols"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$tmp_httpd_vhost_ols"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$tmp_httpd_vhost_ols"
+      sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$tmp_httpd_vhost_ols"
+		  wptt_atomic_commit "$tmp_httpd_vhost_ols" "$VHOST_CONF"
     fi
   done
   shopt -u nullglob
@@ -204,7 +219,7 @@ EOF
     # ---------------------------------------------------------
     # RESTORE OLS AN TOÀN (KHÔNG DÙNG LỆNH XÓA RM -RF *)
     # ---------------------------------------------------------
-    cp -f "$TEMP_OLS_config_DIR/httpd_config.conf" /usr/local/lsws/conf/ 2>/dev/null
+    cp -fp "$TEMP_OLS_config_DIR/httpd_config.conf" /usr/local/lsws/conf/ 2>/dev/null
     cp -rf "$TEMP_OLS_config_DIR/vhosts" /usr/local/lsws/conf/ 2>/dev/null
 
     if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
@@ -213,7 +228,7 @@ EOF
       tuong_thich_nhom_litespeed="nobody"
     fi
 
-    chown -hR lsadm:$tuong_thich_nhom_litespeed /usr/local/lsws/conf
+    chown -hR lsadm:"$tuong_thich_nhom_litespeed" /usr/local/lsws/conf
     chmod -R 750 /usr/local/lsws/conf
     rm -rf "${TEMP_OLS_config_DIR:?}"
     wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - Lỗi cú pháp OLS Auto-Tuning! Đã khôi phục an toàn."

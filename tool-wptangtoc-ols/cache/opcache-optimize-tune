@@ -1,45 +1,51 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @since: 2026
+# @since: 2026 - Enterprise OPcache & JIT Auto-Tuner
 
 . /etc/wptt/core-functions 2>/dev/null
 
-# 1. Lấy tổng RAM (Tối ưu Zero-forking đọc thẳng từ /proc/meminfo)
-while read -r name value unit; do
+# ==============================================================================
+# 1. ĐỌC THÔNG SỐ RAM HỆ THỐNG (ZERO-FORK TỪ /proc/meminfo)
+# ==============================================================================
+TOTAL_RAM_MB=0
+while read -r name value _; do
   if [[ "$name" == "MemTotal:" ]]; then
     TOTAL_RAM_MB=$((value / 1024))
     break
   fi
-done </proc/meminfo
+done < /proc/meminfo
 
-# BẢNG PHÂN BỔ TÀI NGUYÊN (Ưu tiên hiệu suất tối đa)
-if [ "$TOTAL_RAM_MB" -le 1200 ]; then
+# BẢNG PHÂN BỔ TÀI NGUYÊN THEO PHẦN CỨNG THỰC TẾ
+if (( TOTAL_RAM_MB <= 1200 )); then
   OPCACHE_MEM="64"
-  JIT_BUFFER="0M" # BẮT BUỘC TẮT JIT cho máy siêu yếu (1GB) để giữ mạng sống cho Database
+  JIT_BUFFER="0M"     # VPS <= 1GB: Ép tắt JIT để bảo vệ tài nguyên MariaDB
   REALPATH_SIZE="512K"
-elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
+elif (( TOTAL_RAM_MB <= 2500 )); then
   OPCACHE_MEM="128"
-  JIT_BUFFER="64M" # VPS 2GB: Bật JIT 64MB
+  JIT_BUFFER="64M"    # VPS 2GB: Bật JIT 64MB
   REALPATH_SIZE="1024K"
-elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
+elif (( TOTAL_RAM_MB <= 4500 )); then
   OPCACHE_MEM="256"
-  JIT_BUFFER="128M" # VPS 4GB: Bật JIT 128MB
+  JIT_BUFFER="128M"   # VPS 4GB: Bật JIT 128MB
   REALPATH_SIZE="2048K"
 else
   OPCACHE_MEM="512"
-  JIT_BUFFER="256M" # VPS >= 8GB: Bật JIT 256MB (Max Speed)
+  JIT_BUFFER="256M"   # VPS >= 8GB: Bật JIT 256MB tối đa
   REALPATH_SIZE="2048K"
 fi
 
-# 2. KIỂM TRA OS MỘT LẦN DUY NHẤT
+# ==============================================================================
+# 2. XÁC ĐỊNH HỆ ĐIỀU HÀNH
+# ==============================================================================
+OS_UBUNTU=0
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
   OS_UBUNTU=1
-else
-  OS_UBUNTU=0
 fi
 
-# 3. QUÉT VÀ BƠM CẤU HÌNH
+# ==============================================================================
+# 3. QUÉT VÀ CẤU HÌNH TỪNG PHIÊN BẢN LSPHP (ATOMIC & ROLLBACK)
+# ==============================================================================
 shopt -s nullglob
 for dir in /usr/local/lsws/lsphp*/; do
   [[ ! -d "$dir" ]] && continue
@@ -47,78 +53,105 @@ for dir in /usr/local/lsws/lsphp*/; do
   php_dir="${dir%/}"
   php_dir="${php_dir##*/}"
   version_num="${php_dir#lsphp}"
+
+  # Bỏ qua nếu thư mục không chứa số phiên bản hợp lệ
+  [[ ! "$version_num" =~ ^[0-9]+$ ]] && continue
+
   ver_len=${#version_num}
   phien_ban_php_co_cham="${version_num:0:$ver_len-1}.${version_num: -1}"
 
-  if [[ "$OS_UBUNTU" == 1 ]]; then
-    php_ini_path="/usr/local/lsws/$php_dir/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
+  # Đường dẫn file php.ini theo chuẩn distro
+  if (( OS_UBUNTU == 1 )); then
+    php_ini_path="/usr/local/lsws/${php_dir}/etc/php/${phien_ban_php_co_cham}/litespeed/php.ini"
   else
-    php_ini_path="/usr/local/lsws/$php_dir/etc/php.ini"
+    php_ini_path="/usr/local/lsws/${php_dir}/etc/php.ini"
   fi
 
-  if [[ -f "$php_ini_path" ]]; then
+  # Định vị binary PHP CLI để kiểm định cú pháp
+  php_bin="${dir}bin/php"
+  [[ ! -x "$php_bin" ]] && php_bin="${dir}bin/lsphp"
+  [[ ! -x "$php_bin" || ! -f "$php_ini_path" ]] && continue
 
-    # ==============================================================
-    # TRẠM KIỂM SOÁT QUYỀN PHỦ QUYẾT (USER & IONCUBE)
-    # ==============================================================
-    USER_DISABLED_JIT=0
-    # Quét xem khách có DÙNG MENU wptt-jit ép JIT về 0 không?
-    if grep -qE '^opcache\.jit_buffer_size[ \t]*=[ \t]*0' "$php_ini_path" 2>/dev/null; then
-      USER_DISABLED_JIT=1
-    fi
+  # --- A. Kiểm tra quyền phủ quyết của người dùng & ionCube ---
+  USER_DISABLED_JIT=0
+  if grep -qE '^[[:space:]]*opcache\.jit_buffer_size[[:space:]]*=[[:space:]]*0' "$php_ini_path" 2>/dev/null; then
+    USER_DISABLED_JIT=1
+  fi
 
-    # Quét xem phiên bản PHP này có đang cõng ionCube không?
-    HAS_IONCUBE=0
-    if "${dir}bin/php" -v 2>/dev/null | grep -qi "ionCube"; then
-      HAS_IONCUBE=1
-    fi
+  HAS_IONCUBE=0
+  if "$php_bin" -v 2>/dev/null | grep -qi "ionCube"; then
+    HAS_IONCUBE=1
+  fi
 
-    # Dọn dẹp cấu hình rác cũ bằng 1 đường kiếm
-    sed -i -E '/^(opcache\.memory_consumption|opcache\.interned_strings_buffer|opcache\.max_accelerated_files|realpath_cache_size|realpath_cache_ttl|opcache\.jit|opcache\.jit_buffer_size)=/d' "$php_ini_path"
-
-    # Lõi cấu hình "Bê tông cốt thép"
-    CONFIG_BLOCK="opcache.memory_consumption=$OPCACHE_MEM
+  # --- B. Xây dựng khối cấu hình tối ưu ---
+  CONFIG_BLOCK="opcache.memory_consumption=$OPCACHE_MEM
 opcache.interned_strings_buffer=16
 opcache.max_accelerated_files=16229
 realpath_cache_size=${REALPATH_SIZE}
 realpath_cache_ttl=7200"
 
-    # XỬ LÝ JIT COMPILER (Từ PHP 8.0 trở lên)
-    if ((version_num >= 80)); then
-      if [[ "$HAS_IONCUBE" == "1" ]]; then
-        # ƯU TIÊN 1: IONCUBE (Bắt buộc khóa JIT để chống lỗi PHP Warning)
-        CONFIG_BLOCK="$CONFIG_BLOCK
-opcache.jit_buffer_size=0"
-        wptt_logs "INFO" "Đã Tune OPcache=${OPCACHE_MEM}M (Ép TẮT JIT vì xung đột ionCube) cho $php_dir"
-
-      elif [[ "$USER_DISABLED_JIT" == "1" ]]; then
-        # ƯU TIÊN 2: KHÁCH GHÉT JIT (Tôn trọng quyền của khách)
-        CONFIG_BLOCK="$CONFIG_BLOCK
-opcache.jit_buffer_size=0"
-        wptt_logs "INFO" "Đã Tune OPcache=${OPCACHE_MEM}M (Tôn trọng User: Giữ TẮT JIT) cho $php_dir"
-
-      elif [[ "$JIT_BUFFER" != "0M" ]]; then
-        # ƯU TIÊN 3: BẬT MẶC ĐỊNH (DEFAULT ON) - Đẩy max tốc độ
-        CONFIG_BLOCK="$CONFIG_BLOCK
-opcache.jit=tracing
-opcache.jit_buffer_size=$JIT_BUFFER"
-        wptt_logs "INFO" "Đã Tune OPcache=${OPCACHE_MEM}M & JIT=${JIT_BUFFER} (Mặc định BẬT) cho $php_dir"
-
-      else
-        # ƯU TIÊN 4: VPS 1GB (Bất khả kháng, phải tắt để bảo vệ Server)
-        CONFIG_BLOCK="$CONFIG_BLOCK
-opcache.jit_buffer_size=0"
-        wptt_logs "INFO" "Đã Tune OPcache=${OPCACHE_MEM}M (Ép tắt JIT vì VPS <= 1GB RAM) cho $php_dir"
-      fi
+  # Xử lý JIT cho PHP 8.0+
+  if (( version_num >= 80 )); then
+    if (( HAS_IONCUBE == 1 )); then
+      CONFIG_BLOCK+=$'\n'"opcache.jit_buffer_size=0"
+      wptt_logs "INFO" "Tune OPcache=${OPCACHE_MEM}M (Tắt JIT vì xung đột ionCube) cho $php_dir" 2>/dev/null || true
+    elif (( USER_DISABLED_JIT == 1 )); then
+      CONFIG_BLOCK+=$'\n'"opcache.jit_buffer_size=0"
+      wptt_logs "INFO" "Tune OPcache=${OPCACHE_MEM}M (Giữ tắt JIT theo User) cho $php_dir" 2>/dev/null || true
+    elif [[ "$JIT_BUFFER" != "0M" ]]; then
+      CONFIG_BLOCK+=$'\n'"opcache.jit=tracing"$'\n'"opcache.jit_buffer_size=$JIT_BUFFER"
+      wptt_logs "INFO" "Tune OPcache=${OPCACHE_MEM}M & JIT=${JIT_BUFFER} (Mặc định Bật) cho $php_dir" 2>/dev/null || true
     else
-      # PHP 7.x
-      wptt_logs "INFO" "Đã Tune OPcache=${OPCACHE_MEM}M (Bỏ qua JIT do PHP cũ) cho $php_dir"
+      CONFIG_BLOCK+=$'\n'"opcache.jit_buffer_size=0"
+      wptt_logs "INFO" "Tune OPcache=${OPCACHE_MEM}M (Tắt JIT vì RAM <= 1.2GB) cho $php_dir" 2>/dev/null || true
     fi
-
-    # Ghi toàn bộ vào file
-    echo "$CONFIG_BLOCK" >>"$php_ini_path"
+  else
+    wptt_logs "INFO" "Tune OPcache=${OPCACHE_MEM}M (PHP cũ không hỗ trợ JIT) cho $php_dir" 2>/dev/null || true
   fi
+
+  # --- C. GIAO DỊCH NGUYÊN TỬ VÀ KIỂM ĐỊNH (PRE-VALIDATION) ---
+  # 1. Tạo bản sao lưu dự phòng phục vụ Rollback nếu có sự cố
+  backup_file="${php_ini_path}.wptt_bak"
+  /bin/cp -fp "$php_ini_path" "$backup_file" 2>/dev/null || true
+
+  # 2. Khởi tạo file nháp cô lập trong /etc/wptt/tmp/
+  tmp_ini=$(wptt_atomic_begin "$php_ini_path") || {
+    /bin/rm -f -- "$backup_file" 2>/dev/null || true
+    continue
+  }
+
+  # 3. Dọn dẹp cấu hình cũ và bơm cấu hình mới trên file nháp
+  sed -i -E '/^[[:space:]]*(opcache\.memory_consumption|opcache\.interned_strings_buffer|opcache\.max_accelerated_files|realpath_cache_size|realpath_cache_ttl|opcache\.jit|opcache\.jit_buffer_size)[[:space:]]*=/d' "$tmp_ini"
+  printf '\n%s\n' "$CONFIG_BLOCK" >> "$tmp_ini"
+
+  # 4. CHỐT CHẶN 1: Kiểm thử cú pháp PHP trên bản nháp TRƯỚC KHI COMMIT
+  kiem_tra_php=$("$php_bin" -c "$tmp_ini" -v 2>&1 | grep -iE "warning|error|exception|fatal" || true)
+
+  if [[ -n "$kiem_tra_php" ]]; then
+    # Phát hiện lỗi cú pháp hoặc xung đột module -> HỦY THAO TÁC NGAY
+    /bin/rm -f -- "$tmp_ini" "$backup_file" 2>/dev/null || true
+    wptt_logs "WARN" "Phát hiện cảnh báo/lỗi PHP tại $php_dir: $kiem_tra_php. Đã giữ nguyên cấu hình cũ!" 2>/dev/null || true
+    continue
+  fi
+
+  # --- D. COMMIT VÀ CHỐT CHẶN 2 (POST-COMMIT ROLLBACK) ---
+  # Hoán đổi Inode nguyên tử bằng mv -fT
+  if wptt_atomic_commit "$tmp_ini" "$php_ini_path"; then
+    # Thẩm định lại một lần nữa trên file sống sau khi commit
+    live_check=$("$php_bin" -c "$php_ini_path" -v 2>&1 | grep -iE "warning|error|exception|fatal" || true)
+
+    if [[ -n "$live_check" && -s "$backup_file" ]]; then
+      # CƠ CHẾ ROLLBACK TỰ ĐỘNG: Khôi phục ngay từ bản backup nếu phát sinh lỗi ngầm
+      /bin/cp -fp "$backup_file" "$php_ini_path" 2>/dev/null || true
+      wptt_logs "ERROR" "Lỗi phát sinh sau commit trên $php_dir. Đã rollback về bản gốc!" 2>/dev/null || true
+    fi
+  fi
+
+  # Dọn dẹp bản backup dự phòng sau khi phiên làm việc an toàn
+  /bin/rm -f -- "$backup_file" 2>/dev/null || true
+
 done
 shopt -u nullglob
 
+# Tải lại dịch vụ OpenLiteSpeed nhẹ nhàng (Zero-Downtime)
 wptt_smart_reload_lsws >/dev/null 2>&1
