@@ -178,37 +178,114 @@ gioi_han_tien_trinh_bao_loi_503=$((max_client / 8))
 core_tien_lsphp_child=$((cpucore * 2))
 [[ -z "$rong_ram_mb" ]] && rong_ram_mb="2048"
 
-# Tạo User Linux độc lập (Giới hạn 32 ký tự)
-check_ky_tu=${#USER} #đeêmếm kyý tuự uúuseẻ name
-if ((check_ky_tu > 32)); then USER=$(echo "$USER" | cut -c 1-30); fi
+wptt_heal_user_locks() {
+  local lock_files=(
+    "/etc/passwd.lock"
+    "/etc/shadow.lock"
+    "/etc/group.lock"
+    "/etc/gshadow.lock"
+    "/etc/subuid.lock"
+    "/etc/subgid.lock"
+  )
 
-# Tạo User nhưng KHÔNG cấp mật khẩu (Tài khoản bị khóa đăng nhập mặc định)
-if ! useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
-  # Nếu tạo lần 1 thất bại, chuyển sang cơ chế dự phòng với hậu tố ngẫu nhiên (4 ký tự hệ Hex)
+  # 1. Kiểm tra nhanh: Nếu hệ thống hoàn toàn không có lock nào thì thoát ngay (0ms)
+  local has_any_lock=0
+  for lock in "${lock_files[@]}"; do
+    if [[ -f "$lock" ]]; then
+      has_any_lock=1
+      break
+    fi
+  done
+  ((has_any_lock == 0)) && return 0
+
+  # Nhóm các tiến trình quản lý user của Linux
+  local proc_regex="^(useradd|usermod|userdel|groupadd|groupdel|chage|passwd|vipw|pwck)$"
+  local btime=0
+  btime=$(awk '/^btime/ {print $2}' /proc/stat 2>/dev/null || echo 0)
+
+  for lock in "${lock_files[@]}"; do
+    [[ -f "$lock" ]] || continue
+
+    local lock_mtime=0
+    lock_mtime=$(stat -c %Y "$lock" 2>/dev/null || echo 0)
+
+    # TRƯỜNG HỢP 1: Lock sinh ra TRƯỚC khi máy chủ bật (Chắc chắn do sập nguồn/mất điện)
+    if ((btime > 0 && lock_mtime < btime)); then
+      /bin/rm -f -- "$lock" 2>/dev/null || true
+      wptt_logs "WARN" "Đã dọn lock mồ côi do sập nguồn: $lock" 2>/dev/null || true
+      continue
+    fi
+
+    # TRƯỜNG HỢP 2: Có file lock trong phiên làm việc hiện tại
+    if pgrep -x "$proc_regex" >/dev/null 2>&1; then
+      # CÓ TIẾN TRÌNH ĐANG CHẠY (Terminal khác đang tạo user song song):
+      # Tuyệt đối KHÔNG xóa! Nhường quyền và chờ tối đa 3 giây (mỗi nhịp 0.2s)
+      local wait_count=0
+      while pgrep -x "$proc_regex" >/dev/null 2>&1 && [[ -f "$lock" ]] && ((wait_count < 15)); do
+        sleep 0.2
+        ((wait_count++))
+      done
+
+      # Sau khi chờ: nếu tiến trình kia chết ngang mà để sót lại lock (ví dụ vừa bị ngắt kết nối SSH)
+      if ! pgrep -x "$proc_regex" >/dev/null 2>&1 && [[ -f "$lock" ]]; then
+        /bin/rm -f -- "$lock" 2>/dev/null || true
+        wptt_logs "WARN" "Đã dọn lock mồ côi sau khi tiến trình terminal kia bị ngắt: $lock" 2>/dev/null || true
+      fi
+    else
+      # KHÔNG CÓ TIẾN TRÌNH NÀO SỞ HỮU (Lock mồ côi do tắt SSH trước đó):
+      # Kiểm tra xác nhận 2 nhịp (đệm 0.3s) để loại trừ race condition
+      sleep 0.3
+      if ! pgrep -x "$proc_regex" >/dev/null 2>&1 && [[ -f "$lock" ]]; then
+        /bin/rm -f -- "$lock" 2>/dev/null || true
+        wptt_logs "WARN" "Đã dọn lock mồ côi: $lock (Không có tiến trình chạy)" 2>/dev/null || true
+      fi
+    fi
+  done
+
+  return 0
+}
+
+# Giới hạn tên user chuẩn Linux (Max 32 ký tự)
+check_ky_tu=${#USER}
+if ((check_ky_tu > 32)); then USER="${USER:0:30}"; fi
+
+user_created=0
+
+# Thử tối đa 3 lần để tự nhường nhịp cho Terminal khác
+for attempt in 1 2 3; do
+  # 1. Dọn lock mồ côi hoặc chờ Terminal kia tạo xong
+  wptt_heal_user_locks
+
+  # 2. Thực thi tạo User
+  if useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
+    user_created=1
+    break
+  fi
+
+  # 3. Nếu thất bại ở lần 1 (do trùng tên user hoặc đụng đúng mili-giây với Terminal kia):
+  # Tái tạo tên user với hậu tố ngẫu nhiên để tránh xung đột định danh
   random_suffix=$(openssl rand -hex 2)
-
-  # Vệ sinh Tên miền: Biến chữ thường, xóa sạch dấu chấm/gạch ngang
   base_name=$(echo "$NAME" | tr -d '[-._]' | tr '[:upper:]' '[:lower:]')
-
-  # Cắt chuỗi chuẩn Linux: Giới hạn gốc 27 ký tự + "_" + 4 ký tự random = Max 32 ký tự
   USER="${base_name:0:27}_${random_suffix}"
 
-  # Thử tạo user lại lần 2
-  if ! useradd -m -d "/usr/local/lsws/$NAME" -s /sbin/nologin "$USER" >/dev/null 2>&1; then
-    _runloi "${them:-Thêm} domain $NAME ${vao_he_thong:-vào hệ thống}"
-    echo -e "\n${C_RED}Lỗi: Hệ điều hành không thể tạo user mới!${C_RESET}"
-    wptt_logs "ERROR" "Không thể khởi tạo username khi thêm website $NAME"
-    # Thoát an toàn chuẩn CI/CD (Tuyệt kỹ triệt tiêu vòng lặp vô tận)
-    [[ "${1:-}" == "98" ]] && {
-      echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
-      read -r _
-      exec /etc/wptt/wptt-domain-main 1
-    }
-    return 1 2>/dev/null || exit 1
-  fi
+  sleep 0.3
+done
+
+# Chốt chặn kiểm định cuối cùng
+if ((user_created == 0)); then
+  _runloi "${them:-Thêm} domain $NAME ${vao_he_thong:-vào hệ thống}"
+  echo -e "\n${C_RED}Lỗi: Hệ điều hành không thể tạo user mới sau 3 lần thử!${C_RESET}"
+  wptt_logs "ERROR" "Không thể khởi tạo user cho website $NAME (Đã xử lý lock đa terminal)" 2>/dev/null || true
+
+  [[ "${1:-}" == "98" ]] && {
+    echo -en "${C_GREEN}➜ Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
+    read -r _
+    exec /etc/wptt/wptt-domain-main 1
+  }
+  return 1 2>/dev/null || exit 1
 fi
 
-# Chốt chặn bảo mật bổ sung: Khóa hẳn password (L) để vô hiệu hóa hoàn toàn mọi nỗ lực login
+# Khóa password để vô hiệu hóa login trực tiếp qua SSH
 usermod -L "$USER" >/dev/null 2>&1
 
 # Tối ưu KeepAlive dựa trên RAM
