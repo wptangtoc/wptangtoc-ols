@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.2.2.3
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cấp hàng đợi thêm tài khoản thông minh (Smart Username Queue):** Bổ sung cơ chế tự động xử lý và phục hồi an toàn khi xảy ra sự cố mất điện đột ngột hoặc ngắt kết nối giữa chừng, đảm bảo toàn vẹn dữ liệu và nâng cao độ ổn định cho hệ thống máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.2.2.2
 
 🛠️ Tối ưu hệ thống:
@@ -82,14 +90,6 @@
 
 ### 🛠️ Tối ưu hệ thống
 - **Nâng cấp và tinh gọn tường lửa ModSecurity (WAF):** Cập nhật bộ quy tắc bảo mật ứng dụng web mới nhất, đồng thời tối ưu hóa cơ chế nạp luật bằng cách loại bỏ các quy tắc không cần thiết ngoài môi trường Linux/PHP. Giúp gia tăng sức mạnh phòng thủ trước các cuộc tấn công web phổ biến (SQL Injection, XSS...) mà vẫn đảm bảo website tải nhanh, tiết kiệm tài nguyên CPU và RAM.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.1.3
-
-### 🛠️ Tối ưu hệ thống
-- **Tối ưu tốc độ cài đặt WordPress với Local Cache:** Tích hợp cơ chế lưu bộ nhớ đệm cục bộ (local cache) cho gói mã nguồn tải từ WordPress.org kèm tính năng tự động xác thực toàn vẹn dữ liệu. Giúp rút ngắn tối đa thời gian khởi tạo website mới, tiết kiệm băng thông máy chủ và đảm bảo quá trình cài đặt luôn diễn ra liền mạch ngay cả khi đường truyền quốc tế gặp sự cố.
 
 
 ---
