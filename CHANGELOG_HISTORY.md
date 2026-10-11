@@ -1,3 +1,14 @@
+## WPTangToc OLS 8.2.2.4
+
+### 🚀 Tính năng mới
+- **Cải tiến quản lý Alias Domain:** Nâng cấp cơ chế xử lý và nhận diện tên miền phụ (alias domain), giúp hệ thống liên kết và quản lý đa tên miền linh hoạt, chính xác hơn.
+
+### 🛠️ Tối ưu hệ thống
+- **Tối ưu cơ chế xử lý biểu thức chính quy (Regex):** Cải tiến phương thức thay thế và ánh xạ cấu hình bằng regex an toàn tuyệt đối, giúp ngăn chặn triệt để rủi ro xung đột chuỗi hoặc ghi nhầm dữ liệu trong quá trình vận hành tự động.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.2.3
 
 ### 🛠️ Tối ưu hệ thống
@@ -79,17 +90,6 @@
 
 ### 🛠️ Tối ưu hệ thống
 - **Nâng cao độ tin cậy khi chuyển đổi nhánh cập nhật:** Hoàn thiện quy chuẩn kiểm thử tự động cho cơ chế chuyển đổi qua lại giữa các nhánh phiên bản (chính thức, thử nghiệm), đảm bảo tiến trình nâng cấp và chuyển nhánh luôn diễn ra an toàn, mượt mà và duy trì tính toàn vẹn dữ liệu máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.1.4
-
-### 🚀 Tính năng mới
-- **Hỗ trợ kiến trúc ARM trên Rocky Linux 10:** Bổ sung khả năng tương thích toàn diện cho nền tảng vi xử lý ARM (aarch64) chạy hệ điều hành Rocky Linux 10, mang lại sự linh hoạt tối đa cho quản trị viên khi triển khai máy chủ thế hệ mới với hiệu năng cao và chi phí vận hành tối ưu.
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cấp và tinh gọn tường lửa ModSecurity (WAF):** Cập nhật bộ quy tắc bảo mật ứng dụng web mới nhất, đồng thời tối ưu hóa cơ chế nạp luật bằng cách loại bỏ các quy tắc không cần thiết ngoài môi trường Linux/PHP. Giúp gia tăng sức mạnh phòng thủ trước các cuộc tấn công web phổ biến (SQL Injection, XSS...) mà vẫn đảm bảo website tải nhanh, tiết kiệm tài nguyên CPU và RAM.
 
 
 ---
