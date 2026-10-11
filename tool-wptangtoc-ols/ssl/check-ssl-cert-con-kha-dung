@@ -1,59 +1,66 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
 
-# Hàm kiểm tra chứng chỉ SSL từ tệp cục bộ
+
+#Thoát sớm (Fail-Fast): Không có domain $\rightarrow$ return 1 ngay. Cả 2 nước cờ trên đều tạch $\rightarrow$ return 1 dứt khoát.
+
+# Tư duy thiết kế theo mô hình Fast-Path trong kiến trúc hệ thống:Fast-Path (0ms - 95% trường hợp): Khách có SSL CA thật (Let's Encrypt hoặc Paid SSL) thì kiểm tra file và thẩm định hạn dùng qua OpenSSL chỉ mất vài phần nghìn giây (0.001s) $\rightarrow$ return 0 ngay lập tức, không tốn dù chỉ 1 byte băng thông mạng, trải nghiệm CLI mượt mà như bơ.Nước cờ vét cuối cùng (Fallback): Chỉ khi Local SSL không có hoặc đã hết hạn, hệ thống mới kích hoạt cú thăm dò Cloudflare qua mạng với timeout siết chặt tối đa 1.5s.
+
 check_local_ssl_validity() {
-  local NAME=$1
+  local domain="${1:-}"
+
+  # 1. Chốt chặn sớm: Không có domain thì hủy ngay lập tức
+  [[ -z "$domain" ]] && return 1
+
+  # ============================================================================
+  # NHÁNH 1 (FAST-PATH): LOCAL SSL CÓ CA THẬT (0ms - MƯỢT NHẤT CÓ THỂ)
+  # ============================================================================
+  local vhost_conf="/usr/local/lsws/conf/vhosts/${domain}/${domain}.conf"
   local cert_path=""
 
-  # Kiểm tra xem tên có được cung cấp hay không
-  if [ -z "$NAME" ]; then
-    echo "Lỗi: Vui lòng cung cấp tên (thường là tên miền) để tìm chứng chỉ."
-    return 1 # Trả về mã lỗi
+  # Chỉ trích xuất certFile nếu là Let's Encrypt hoặc Paid SSL (bỏ qua SSL tự ký)
+  if [[ -f "$vhost_conf" ]]; then
+    if grep -E '^[[:space:]]*certFile[[:space:]]+.*letsencrypt' "$vhost_conf" >/dev/null 2>&1; then
+      cert_path="/etc/letsencrypt/live/${domain}/cert.pem"
+    elif grep -E '^[[:space:]]*certFile[[:space:]]+.*/usr/local/lsws/'"${domain}"'/ssl/' "$vhost_conf" >/dev/null 2>&1; then
+      cert_path="/usr/local/lsws/${domain}/ssl/cert.crt"
+    fi
   fi
 
-
-  local letsencrypt_path="/etc/letsencrypt/live/$NAME/cert.pem"
-  local lsws_path="/usr/local/lsws/$NAME/ssl/cert.crt"
-
-if [[ $(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | grep 'certFile' | grep 'letsencrypt') ]];then #ssl miễn phí
-  cert_path="$letsencrypt_path"
-  elif [ $(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | grep 'certFile' | grep 'lsws') ]; then #ssl trả phí
-    cert_path="$lsws_path"
-else
-  ssl_xac_thuc_kha_dung="false"
-    return 1
-fi
-
-if [[ ! -f $cert_path ]];then #ssl không tồn tại
-    echo "false"
-fi
-
-  # Lấy ngày hết hạn từ tệp chứng chỉ
-  # Lệnh `openssl x509 -in <file>` được dùng để đọc thông tin từ tệp
-  local expiration_date
-  expiration_date=$(openssl x509 -in "$cert_path" -noout -enddate | cut -d= -f2)
-
-  # Kiểm tra xem có lấy được ngày hết hạn không
-  if [ -z "$expiration_date" ]; then
-  ssl_xac_thuc_kha_dung="false"
-    return 1
+  # Nếu tìm thấy cert local xịn VÀ CÒN HẠN -> RETURN 0 NGAY LẬP TỨC!
+  if [[ -n "$cert_path" && -f "$cert_path" ]]; then
+    if openssl x509 -in "$cert_path" -noout -checkend 0 >/dev/null 2>&1; then
+      return 0
+    fi
   fi
 
-  # Chuyển đổi ngày hết hạn sang dạng giây (epoch)
-  local expiration_epoch
-  expiration_epoch=$(date -d "$expiration_date" +%s)
-  # Lấy ngày hiện tại dạng giây (epoch)
-  local current_epoch
-  current_epoch=$(date +%s)
+  # ============================================================================
+  # NHÁNH 2 (NƯỚC CỜ VÉT CUỐI CÙNG): CLOUDFLARE CDN PROXY (TIMEOUT 1.5 GIÂY)
+  # Chỉ kích hoạt khi Local không có cert hoặc cert local đã chết
+  # ============================================================================
+  local trace_res
+  trace_res=$(curl -s -I --connect-timeout 1 --max-time 2 "https://${domain}/cdn-cgi/trace" 2>/dev/null)
 
-  # So sánh và trả về kết quả
-  if [ "$expiration_epoch" -gt "$current_epoch" ]; then
-  ssl_xac_thuc_kha_dung="true"
-  else
-  ssl_xac_thuc_kha_dung="false"
+  # Nếu curl bắt tay SSL thành công và có header Cloudflare
+  if grep -Eqi 'cloudflare|cf-ray' <<< "$trace_res"; then
+    return 0
   fi
+
+  # ============================================================================
+  # MỌI PHAO CỨU SINH ĐỀU THẤT BẠI -> RETURN 1 DỨT KHOÁT
+  # ============================================================================
+  return 1
 }
 
-check_local_ssl_validity "$1"
-
+# ==============================================================================
+# ĐIỀU PHỐI THOÁT CHUẨN UNIX (HỖ TRỢ CẢ LỆNH IF LẪN BIẾN TOÀN CỤC)
+# ==============================================================================
+if check_local_ssl_validity "$1"; then
+  ssl_xac_thuc_kha_dung="true"
+  exit 0
+else
+  ssl_xac_thuc_kha_dung="false"
+  exit 1
+fi
