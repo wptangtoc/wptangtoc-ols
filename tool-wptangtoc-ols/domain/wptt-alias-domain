@@ -2,16 +2,16 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-
+# shellcheck disable=SC1090,SC1091
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Alias domain [hay còn gọi là Parked Domain, Tên miền bí danh] là một tên miền bổ sung được sử dụng để trỏ về một tên miền chính [domain chính]. Khi người dùng truy cập vào Parked domain, họ sẽ tự động được chuyển hướng đến tên miền chính. Nói một cách đơn giản: Tên miền chính: Giống như địa chỉ nhà chính của bạn.
 EOF
 }
 
 . /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 
@@ -20,41 +20,45 @@ print_border_top "$C_CYAN"
 center_text "${C_YELLOW}QUẢN LÝ DOMAIN ➜ THIẾT LẬP PARKED / ALIAS DOMAIN${C_RESET}" "$C_CYAN"
 print_border_bot "$C_CYAN"
 
-. /etc/wptt/tenmien
-lua_chon_NAME "Gốc muốn gán Alias vào"
-domain="$NAME"
-path_conf="/etc/wptt/vhost/.$domain.conf"
+. /etc/wptt/tenmien 2>/dev/null || true
+if declare -f lua_chon_NAME >/dev/null 2>&1; then
+  lua_chon_NAME "Gốc muốn gán Alias vào"
+fi
+
+domain="${NAME:-}"
+path_conf="/etc/wptt/vhost/.${domain}.conf"
 
 [[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wptt-domain-main 1
 
-if [[ ! -f "$path_conf" ]];then
-  echo -e "\n${C_RED}❌ Lỗi: Website không tồn tại trên hệ thống hoặc sếp chưa chọn.${C_RESET}"
+if [[ ! -f "$path_conf" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Website không tồn tại trên hệ thống hoặc chưa được chọn.${C_RESET}"
   sleep 2
-  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-  exit
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 1
 fi
 
-vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+vhost_conf="/usr/local/lsws/conf/vhosts/${domain}/${domain}.conf"
 if [[ ! -f "$vhost_conf" ]]; then
   echo -e "\n${C_RED}❌ Lỗi: File cấu hình Virtual Host của $domain không tồn tại!${C_RESET}"
   sleep 2
-  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-  exit
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 1
 fi
 
 # ==============================================================================
-# 2. HIỂN THỊ DANH SÁCH ALIAS HIỆN TẠI (NẾU CÓ)
+# 2. TRÍCH XUẤT VÀ HIỂN THỊ DANH SÁCH ALIAS HIỆN TẠI
 # ==============================================================================
-current_aliases=$(grep -E "^[[:space:]]*vhAliases" "$vhost_conf" | awk '{$1=""; print $0}' | sed 's/^[[:space:]]*//' | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$')
+# Trích xuất danh sách alias dạng mảng sạch sẽ (bỏ khoảng trắng và dấu phẩy thừa)
+raw_aliases=$(grep -E "^[[:space:]]*vhAliases[[:space:]]+" "$vhost_conf" | sed -E 's/^[[:space:]]*vhAliases[[:space:]]+//' | tr ',' '\n' | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' | grep -v '^$' || true)
 
 echo ""
-if [[ -n "$current_aliases" ]]; then
+if [[ -n "$raw_aliases" ]]; then
   print_border_top "$C_YELLOW"
   center_text "${C_BOLD_WHITE}CÁC ALIAS ĐANG HOẠT ĐỘNG TRÊN: $domain${C_RESET}" "$C_YELLOW"
   print_border_mid "$C_YELLOW"
   while read -r alias_name; do
     left_text "➜ ${C_CYAN}$alias_name${C_RESET}" 4 "$C_YELLOW"
-  done <<<"$current_aliases"
+  done <<<"$raw_aliases"
   print_border_bot "$C_YELLOW"
 else
   print_border_top "$C_YELLOW"
@@ -63,70 +67,61 @@ else
 fi
 
 # ==============================================================================
-# 3. NHẬP VÀ KIỂM TRA DOMAIN ALIAS MỚI (CHỐNG RỦI RO)
+# 3. NHẬP VÀ KIỂM TRA ĐỊNH DẠNG TÊN MIỀN ALIAS MỚI
 # ==============================================================================
-echo -e "\n${C_CYAN}➜ Nhập tên miền sếp muốn gán làm Alias (Ví dụ: alias.com):${C_RESET}"
+echo -e "\n${C_CYAN}➜ Nhập tên miền muốn gán làm Alias (Ví dụ: alias.com):${C_RESET}"
 read -rp " Lựa chọn [0 = thoát]: " NAME2
 
-if [[ "$NAME2" == "0" || -z "$NAME2" ]]; then
+[[ "$NAME2" == "0" || -z "$NAME2" ]] && {
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
   sleep 1.5
-  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-  exit
-fi
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 0
+}
 
-# Chuyển về chữ thường và xóa khoảng trắng thừa
-NAME2=$(echo "$NAME2" | tr '[:upper:]' '[:lower:]' | xargs)
-NAME2="${NAME2//$'\r'/}"       # Lọc tận gốc ký tự CRLF (Windows)
-NAME2="${NAME2// /}"           # Xóa toàn bộ khoảng trắng thừa
-NAME2="${NAME2//[[:space:]]/}" # Tự động loại bỏ toàn bộ khoảng trắng (space/tab) nếu người dùng lỡ tay nhập thừa
+# Vệ sinh biến đầu vào
+NAME2="${NAME2//$'\r'/}"
+NAME2="${NAME2// /}"
+NAME2="${NAME2//[[:space:]]/}"
+NAME2="${NAME2,,}"
+[[ "$NAME2" == *"://"* ]] && NAME2="${NAME2#*://}"
+[[ "$NAME2" == */* ]] && NAME2="${NAME2%%/*}"
+[[ "$NAME2" == www.* ]] && NAME2="${NAME2#www.}"
 
-
-# Rủi ro 1: Sai định dạng domain
-if [[ "$NAME2" != *.* || "$NAME2" == *" "* ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Tên miền '$NAME2' không hợp lệ (sai định dạng hoặc chứa khoảng trắng).${C_RESET}"
+if [[ "$NAME2" != *.* ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền '$NAME2' không hợp lệ (thiếu dấu chấm).${C_RESET}"
   sleep 2
-  exec "$0" "$1"
+  exec "$0" "${1:-}"
 fi
 
-# Rủi ro 2: Trùng với Domain gốc
 if [[ "$NAME2" == "$domain" ]]; then
   echo -e "\n${C_RED}❌ Lỗi: Tên miền Alias không được trùng với tên miền gốc ($domain)!${C_RESET}"
   sleep 2
-  exec "$0" "$1"
+  exec "$0" "${1:-}"
 fi
 
-# Rủi ro 3: Trùng với Alias đã có trên chính domain này
-if echo "$current_aliases" | grep -qw "$NAME2"; then
-  echo -e "\n${C_RED}❌ Lỗi: Tên miền '$NAME2' ĐÃ TỒN TẠI trong danh sách Alias của $domain rồi!${C_RESET}"
-  sleep 2
-  exec "$0" "$1"
-fi
-
-# Rủi ro 4: Domain Alias đã được cài như một Website độc lập (Main Domain)
-if [[ -f "/etc/wptt/vhost/.$NAME2.conf" || -d "/usr/local/lsws/conf/vhosts/$NAME2" ]]; then
+# Kiểm tra nếu trùng với Website độc lập khác trên hệ thống
+if [[ -f "/etc/wptt/vhost/.${NAME2}.conf" ]]; then
   echo ""
   print_border_top "$C_RED"
   center_text "${C_BOLD_WHITE}XUNG ĐỘT HỆ THỐNG${C_RESET}" "$C_RED"
   print_border_mid "$C_RED"
   left_text "${C_YELLOW}Tên miền ${C_BOLD_WHITE}$NAME2${C_RESET}${C_YELLOW} đã tồn tại như một Website độc lập.${C_RESET}" 2 "$C_RED"
-  left_text "Không thể gán một website chính làm Alias cho website khác." 2 "$C_RED"
-  left_text "➜ Hướng giải quyết: Vui lòng xóa website '$NAME2' trước." 2 "$C_RED"
+  left_text "Không thể gán website chính làm Alias cho website khác." 2 "$C_RED"
   print_border_bot "$C_RED"
   sleep 3
-  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-  exit
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 1
 fi
 
-# Rủi ro 5: Domain Alias đang bị gán (ăn cắp) cho một Website khác trên Server
+# Kiểm tra xung đột nếu Alias đã bị Vhost khác chiếm dụng
 _runing "Đang kiểm tra xung đột Alias trên toàn bộ Server..."
 conflict_domain=""
 for vh_file in /usr/local/lsws/conf/vhosts/*/*.conf; do
-  if [[ -f "$vh_file" && "$vh_file" != "$vhost_conf" ]]; then
-    if grep -E "^[[:space:]]*vhAliases" "$vh_file" | grep -qw "$NAME2"; then
-      conflict_domain=$(basename $(dirname "$vh_file"))
-      break
-    fi
+  [[ ! -f "$vh_file" || "$vh_file" == "$vhost_conf" ]] && continue
+  if grep -E "^[[:space:]]*vhAliases[[:space:]]+" "$vh_file" | grep -qw "$NAME2"; then
+    conflict_domain=$(basename "$(dirname "$vh_file")")
+    break
   fi
 done
 _rundone "Đang kiểm tra xung đột Alias trên toàn bộ Server..."
@@ -137,41 +132,69 @@ if [[ -n "$conflict_domain" ]]; then
   center_text "${C_BOLD_WHITE}XUNG ĐỘT ALIAS XUYÊN VHOST${C_RESET}" "$C_RED"
   print_border_mid "$C_RED"
   left_text "${C_YELLOW}Tên miền ${C_BOLD_WHITE}$NAME2${C_RESET}${C_YELLOW} đang là Alias của website: ${C_BOLD_WHITE}$conflict_domain${C_RESET}" 2 "$C_RED"
-  left_text "Một Alias không thể phục vụ cùng lúc 2 ông chủ (2 website)." 2 "$C_RED"
-  left_text "➜ Hướng giải quyết: Hãy xóa Alias này bên website '$conflict_domain' trước." 2 "$C_RED"
+  left_text "➜ Vui lòng xóa Alias này bên website '$conflict_domain' trước." 2 "$C_RED"
   print_border_bot "$C_RED"
-  sleep 4
-  [[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-  exit
+  sleep 3
+  [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+  exit 1
 fi
 
 # ==============================================================================
-# 4. XỬ LÝ SSL (SỬ DỤNG UI XÁC NHẬN)
+# 4. THUẬT TOÁN HỢP NHẤT VÀ LÀM SẠCH DANH SÁCH (SET DEDUPLICATION)
+# ==============================================================================
+# Đưa danh sách cũ và domain mới vào một mảng duy nhất, loại bỏ trùng lặp
+declare -A alias_map=()
+new_alias_list=()
+
+# Nạp các alias cũ
+while read -r a_item; do
+  [[ -z "$a_item" || "$a_item" == "$domain" ]] && continue
+  if [[ -z "${alias_map["$a_item"]:-}" ]]; then
+    alias_map["$a_item"]=1
+    new_alias_list+=("$a_item")
+  fi
+done <<<"$raw_aliases"
+
+is_already_exist=0
+if [[ -n "${alias_map["$NAME2"]:-}" ]]; then
+  is_already_exist=1
+else
+  alias_map["$NAME2"]=1
+  new_alias_list+=("$NAME2")
+fi
+
+# Chuỗi định dạng cho vhAliases: "alias1.com, alias2.com"
+vh_aliases_str=$(
+  IFS=", "
+  echo "${new_alias_list[*]}"
+)
+
+# ==============================================================================
+# 5. XỬ LÝ SSL & KIỂM TRA DNS
 # ==============================================================================
 xacnhan_da_tro_dns='0'
-if [[ -f "/etc/letsencrypt/live/$domain/cert.pem" ]]; then
+if [[ -f "/etc/letsencrypt/live/${domain}/cert.pem" ]]; then
   echo ""
-  if wptt_xac_nhan "Sếp có muốn tự động cài đặt SSL cho Alias Domain này không?" "Website gốc đã có SSL." "Sếp cần trỏ IP bản ghi A cho Alias trước khi thực hiện." "Có, cài đặt luôn" "Không, để sau"; then
+  # Nếu alias đã có từ trước (Self-healing), hỏi cấp lại SSL cho nó
+  prompt_text="Sếp có muốn cấp đặt SSL cho Alias Domain này không?"
+  ((is_already_exist == 1)) && prompt_text="Alias này đã có trong VHost. Sếp có muốn cấp lại/mở rộng SSL cho nó không?"
 
-    # Kiểm tra IP
-    checkdns=$(host "$NAME2" | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-    [[ -z "$checkdns" ]] && checkdns=$(nslookup "$NAME2" 2>/dev/null | grep Address | tail -n1 | awk '{print $2}')
+  if wptt_xac_nhan "$prompt_text" "Website gốc đã có SSL Let's Encrypt." "Yêu cầu bản ghi A của Alias đã trỏ về IP máy chủ." "Cài đặt SSL ngay" "Bỏ qua, cài sau"; then
 
-	ip_vps=$(curl -s --connect-timeout 5 ipv4.icanhazip.com || curl -s --connect-timeout 5 ifconfig.me)
+    checkdns=$(host "$NAME2" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
+    [[ -z "$checkdns" ]] && checkdns=$(nslookup "$NAME2" 2>/dev/null | awk '/Address: / {print $2}' | tail -n 1)
+    ip_vps=$(curl -sf --connect-timeout 2 --max-time 4 https://ipv4.icanhazip.com 2>/dev/null || curl -sf --connect-timeout 2 --max-time 4 https://checkip.amazonaws.com 2>/dev/null || true)
 
-    if [[ "$checkdns" != "$ip_vps" ]]; then
+    if [[ -n "$ip_vps" && "$checkdns" != "$ip_vps" ]]; then
       echo ""
       print_border_top "$C_RED"
       center_text "${C_BOLD_WHITE}DNS CHƯA TRỎ VỀ VPS${C_RESET}" "$C_RED"
       print_border_mid "$C_RED"
       left_text "Alias mới     : ${C_YELLOW}$NAME2${C_RESET}" 2 "$C_RED"
-      left_text "IP Hiện tại   : ${C_RED}${checkdns:-Không xác định}${C_RESET}" 2 "$C_RED"
-      left_text "IP Yêu cầu    : ${C_GREEN}$ip_vps${C_RESET} (IP của VPS này)" 2 "$C_RED"
-      print_border_mid "$C_RED"
-      left_text "${C_YELLOW}Cài đặt SSL sẽ bị bỏ qua. Sếp có thể chạy lại lệnh SSL sau${C_RESET}" 2 "$C_RED"
-      left_text "${C_YELLOW}khi đã trỏ DNS thành công.${C_RESET}" 2 "$C_RED"
+      left_text "IP Hiện tại   : ${C_RED}${checkdns:-Chưa trỏ}${C_RESET}" 2 "$C_RED"
+      left_text "IP Yêu cầu    : ${C_GREEN}$ip_vps${C_RESET} (IP máy chủ này)" 2 "$C_RED"
       print_border_bot "$C_RED"
-      sleep 4
+      sleep 2
     else
       xacnhan_da_tro_dns='1'
     fi
@@ -179,67 +202,79 @@ if [[ -f "/etc/letsencrypt/live/$domain/cert.pem" ]]; then
 fi
 
 # ==============================================================================
-# 5. THỰC THI CẤU HÌNH OPENLITESPEED
+# 6. THỰC THI CẤU HÌNH LŨY ĐẲNG NGUYÊN TỬ (ATOMIC & IDEMPOTENT)
 # ==============================================================================
 echo ""
 _runing "Đang cấu hình Alias Domain $NAME2 trỏ về $domain..."
 
-# 1. Cấu hình Listener toàn cục (An toàn hóa bằng regex map đúng tên miền)
-# Thay vì thay thế bừa bãi, ta chỉ tiêm Alias vào dòng chứa đúng Domain gốc
-sed -i -E "s/(map[[:space:]]+${domain}[[:space:]]+${domain})/\1, ${NAME2:?}/g" /usr/local/lsws/conf/httpd_config.conf
+# --- A. CẬP NHẬT FILE VHOST ($vhost_conf) ---
+tmp_vhost=$(wptt_atomic_begin "$vhost_conf") || exit 1
 
-# 2. Cấu hình Virtual Host
-if grep -E -q "^[[:space:]]*vhAliases" "$vhost_conf"; then
-  # Nếu đã có dòng vhAliases thì append thêm vào cuối
-  sed -i -E "/^[[:space:]]*vhAliases/ s/$/, $NAME2/" "$vhost_conf"
-else
-  # Nếu chưa có thì tạo mới ngay dưới vhDomain
-  sed -i "/vhDomain/a vhAliases                     $NAME2" "$vhost_conf"
+# 1. Xóa sạch dòng vhAliases cũ (dù có bao nhiêu dòng hay khoảng trắng)
+sed -i -E '/^[[:space:]]*vhAliases[[:space:]]+/d' "$tmp_vhost"
+
+# 2. Ghi lại 1 dòng vhAliases duy nhất chứa toàn bộ danh sách đã lọc trùng
+if [[ -n "$vh_aliases_str" ]]; then
+  sed -i -E "/^[[:space:]]*vhDomain[[:space:]]+/a \vhAliases                     $vh_aliases_str" "$tmp_vhost"
 fi
 
-# 4. Cài đặt SSL nếu DNS đã trỏ
+wptt_atomic_commit "$tmp_vhost" "$vhost_conf"
+
+# --- B. CẬP NHẬT LISTENER TOÀN CỤC (httpd_config.conf) ---
+ols_conf="/usr/local/lsws/conf/httpd_config.conf"
+tmp_ols=$(wptt_atomic_begin "$ols_conf") || exit 1
+
+# Xây dựng danh sách domain đầy đủ cho dòng map của Listener
+# Chuẩn: "map <domain_goc> <domain_goc>[, <all_aliases>]"
+listener_map_targets="$domain"
+[[ -n "$vh_aliases_str" ]] && listener_map_targets+=", $vh_aliases_str"
+
+domain_esc="${domain//./\\.}"
+
+# 1. XÓA SẠCH mọi dòng mapping cũ của VHost này trong toàn bộ Listener
+sed -i -E "/^[[:space:]]*map[[:space:]]+${domain_esc}[[:space:]]+/d" "$tmp_ols"
+
+# 2. BƠM LẠI dòng map mới nhất và duy nhất vào cả HTTP và HTTPS
+sed -i -E '/^[[:space:]]*listener[[:space:]]+(http|https|HTTP|HTTPS)[[:space:]]*\{/a \  map                     '"$domain $listener_map_targets" "$tmp_ols"
+
+wptt_atomic_commit "$tmp_ols" "$ols_conf"
+
+# --- C. CẤP PHÁT / MỞ RỘNG SSL CHO ALIAS ---
 if [[ "$xacnhan_da_tro_dns" == "1" ]]; then
-  # 3. Restart OLS để chuẩn bị cài ssl để xác thực
   wptt_smart_reload_lsws >/dev/null 2>&1
   sleep 1
 
-  domain_alias_list="$domain,"
-  domain_alias_list+=$(grep -E "^[[:space:]]*vhAliases" "$vhost_conf" | awk '{$1=""; print $0}' | sed 's/ //g')
+  # Danh sách domain gửi lên Let's Encrypt: "domain.com,alias1.com,alias2.com"
+  cert_domains_flag="$domain"
+  for al in "${new_alias_list[@]}"; do
+    cert_domains_flag+=",$al"
+  done
 
-  _runing "Đang tiến hành cấp chứng chỉ SSL mở rộng: $domain_alias_list"
-  docroot=$(grep 'docRoot' "$vhost_conf" | awk '{print $2}')
-  # Đưa Certbot vào lệnh if để bắt trạng thái
-  if certbot certonly --non-interactive --agree-tos --register-unsafely-without-email --webroot -w "${docroot}" --force-renewal --expand -d "$domain_alias_list" >/dev/null 2>&1; then
-      _rundone "Hoàn tất cài đặt SSL cho Alias Domain."
+  _runing "Đang cấp chứng chỉ SSL mở rộng: $cert_domains_flag"
+  docroot=$(awk '/^[[:space:]]*docRoot[[:space:]]+/ {print $2; exit}' "$vhost_conf")
+  [[ -z "$docroot" ]] && docroot="/usr/local/lsws/${domain}/html"
+
+  if certbot certonly --non-interactive --agree-tos --register-unsafely-without-email \
+    --webroot -w "${docroot}" --expand -d "$cert_domains_flag" >/dev/null 2>&1; then
+    _rundone "Hoàn tất cài đặt SSL mở rộng cho Alias Domain."
   else
-      echo -e "\n${C_RED}Cài đặt SSL thất bại! Hãy chắc chắn DNS đã trỏ đúng và thử lại sau.${C_RESET}"
+    _runloi "Cài đặt SSL thất bại! VHost vẫn hoạt động qua HTTP thông thường."
   fi
 fi
 
 wptt_smart_reload_lsws >/dev/null 2>&1
-_rundone "Đang cấu hình Alias Domain $NAME2 trỏ về $domain..."
+_rundone "Cấu hình Alias Domain hoàn tất."
 
 # ==============================================================================
-# 6. THÔNG BÁO KẾT QUẢ
+# 7. THÔNG BÁO HOÀN TẤT
 # ==============================================================================
 print_border_top "$C_GREEN"
 center_text "${C_BOLD_WHITE}THIẾT LẬP ALIAS HOÀN TẤT!${C_RESET}" "$C_GREEN"
 print_border_mid "$C_GREEN"
 left_text "Tên miền bí danh : ${C_YELLOW}$NAME2${C_RESET}" 2 "$C_GREEN"
 left_text "Website gốc      : ${C_GREEN}$domain${C_RESET}" 2 "$C_GREEN"
+left_text "Tổng số Alias    : ${C_CYAN}${#new_alias_list[@]}${C_RESET}" 2 "$C_GREEN"
 print_border_bot "$C_GREEN"
 
-# Kiểm tra lại DNS một lần nữa để nhắc nhở người dùng
-final_check=$(host "$NAME2" | grep -Eo -m 1 '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}')
-vps_ip=$(curl -s --connect-timeout 5 ipv4.icanhazip.com)
-
-if [[ "$final_check" != "$vps_ip" ]]; then
-  print_border_top "$C_YELLOW"
-  left_text "${C_BOLD_WHITE}Lưu ý: Domain $NAME2 hiện chưa trỏ đúng IP!${C_RESET}" 2 "$C_YELLOW"
-  left_text "Vui lòng đăng nhập vào trang quản lý DNS của tên miền," 2 "$C_YELLOW"
-  left_text "tạo bản ghi ${C_CYAN}A${C_RESET} trỏ về IP: ${C_BOLD_WHITE}$vps_ip${C_RESET} để website hoạt động." 2 "$C_YELLOW"
-  print_border_bot "$C_YELLOW"
-fi
-
-[[ $1 == "98" ]] && exec /etc/wptt/wptt-domain-main 1
-exit
+[[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-domain-main 1
+exit 0
