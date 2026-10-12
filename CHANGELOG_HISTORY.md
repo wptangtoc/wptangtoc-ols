@@ -1,3 +1,15 @@
+### 🐛 Sửa lỗi
+- Vá lỗi bảo mật liên quan đến tính năng quản lý tên miền phụ (`wptt-alias-domain`), nâng cao độ an toàn cho hệ thống.
+- Khắc phục triệt để lỗi tương thích của thư viện kiểm tra SSL, giúp quá trình xác thực chứng chỉ hoạt động ổn định và chính xác.
+
+### 🛠️ Tối ưu hệ thống
+- Tự động nhận diện và thích ứng linh hoạt với sự thay đổi cấu hình mạng IPv4/IPv6 (chuyển đổi giữa Dual-stack và Single-stack) từ template VPS của nhà cung cấp.
+- Nâng cấp cơ chế đồng bộ thời gian hệ thống thông qua dịch vụ Chrony, đảm bảo độ chính xác cao cho các tác vụ lập lịch và bảo mật.
+- Tối ưu hiệu năng bằng cách lược bỏ cơ chế khóa (locking) đối với các tác vụ thực thi ngắn, giúp giảm độ trễ và tối ưu tài nguyên máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.2.5
 
 🐛 Sửa lỗi
