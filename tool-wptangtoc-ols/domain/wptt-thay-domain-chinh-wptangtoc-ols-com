@@ -1,162 +1,190 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026 - Template First-Run
+# shellcheck disable=SC1090,SC1091
+
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
-stty iutf8 #từ latin1 sang utf8, nhiều khi anh em dùng bộ gõ tiếng việt: dùng à â nó thêm \xc3 hay \xa9 ... tương thích với bộ gõ tiếng việt telex khi nhập domain
+stty iutf8 2>/dev/null || true
 
-#update ghi đè
-. /etc/wptt/.wptt.conf
-. /etc/wptt/core-functions 2>/dev/null
+# Nạp cấu hình WPTT và các hàm tiện ích
+. /etc/wptt/.wptt.conf 2>/dev/null || true
+. /etc/wptt/core-functions 2>/dev/null || true
 
-if [[ $Website_chinh != 'wptangtoc-ols.com' ]]; then #chỉ hoạt động khi domain chính đang là wptangtoc ols
-  return 2>/dev/null || exit
+# Chỉ chạy khi domain chính vẫn đang ở trạng thái template mặc định
+if [[ "${Website_chinh:-}" != 'wptangtoc-ols.com' ]]; then
+  return 2>/dev/null || exit 0
 fi
 
-version_wptangtoc_ols=$(cat /etc/wptt/tmp/wptangtoc-ols-version-main)
-wptangtocols_version=$(curl --tlsv1.3 -s --connect-timeout 60 --max-time 60 https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.')
+# ==============================================================================
+# 1. ĐỒNG BỘ PHIÊN BẢN VÀ CẬP NHẬT GPG TỰ ĐỘNG
+# ==============================================================================
+version_wptangtoc_ols=$(cat /etc/wptt/tmp/wptangtoc-ols-version-main 2>/dev/null || echo "")
+wptangtocols_version=$(curl --tlsv1.3 -s --connect-timeout 10 --max-time 30 https://wptangtoc.com/share/version-wptangtoc-ols.txt 2>/dev/null | head -1 | grep '\.' || true)
 if [[ -z "$wptangtocols_version" ]]; then
-  wptangtocols_version=$(curl --tlsv1.2 -s --connect-timeout 60 --max-time 60 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
+  wptangtocols_version=$(curl --tlsv1.2 -s --connect-timeout 10 --max-time 30 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt 2>/dev/null | head -1 | grep '\.' || true)
 fi
 
-if [[ "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
-  . /etc/wptt/wptt-update2
+if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
+  . /etc/wptt/wptt-update2 2>/dev/null || true
+  echo "$wptangtocols_version" >/etc/wptt/tmp/wptangtoc-ols-version 2>/dev/null || true
 
-  echo "$wptangtocols_version" >/etc/wptt/tmp/wptangtoc-ols-version #đánh dấu phiên bản mới
+  curl --tlsv1.3 -sO https://wptangtoc.com/share/update --connect-timeout 10 --max-time 30 2>/dev/null || true
+  curl --tlsv1.3 -sO https://hub.wptangtoc.com/update.sig --connect-timeout 10 --max-time 30 -A "checksum wptangtoc ols" 2>/dev/null || true
 
-  curl --tlsv1.3 -sO https://wptangtoc.com/share/update --connect-timeout 10 --max-time 30
-  curl --tlsv1.3 -sO https://hub.wptangtoc.com/update.sig --connect-timeout 10 --max-time 30 -A "checksum wptangtoc ols"
-
-  # 2. Dự phòng nếu tải thất bại hoặc file trống
   if [[ ! -s update || ! -s update.sig ]]; then
-    curl --tlsv1.2 -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update --connect-timeout 10 --max-time 15
-    curl --tlsv1.2 -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update.sig --connect-timeout 10 --max-time 15
+    curl --tlsv1.2 -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update --connect-timeout 10 --max-time 15 2>/dev/null || true
+    curl --tlsv1.2 -sO https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/update.sig --connect-timeout 10 --max-time 15 2>/dev/null || true
   fi
 
-  # 3. Quét GPG và chỉ thực thi khi 100% chính chủ
-  if [[ -s update && -s update.sig ]] && gpg --verify update.sig update 2>/dev/null; then
+  if [[ -s update && -s update.sig ]] && gpg --verify update.sig update >/dev/null 2>&1; then
     if grep -q 'UPDATE_DONE="YES"' update 2>/dev/null; then
-      bash update >/dev/null 2>&1
+      bash update >/dev/null 2>&1 || true
     fi
   else
-    # Tùy chọn: Ghi log ngầm nếu phát hiện file bị can thiệp
-    wptt_logs "INFO" "Lỗi: Script 'update' sai chữ ký GPG hoặc rớt mạng - Bỏ qua thực thi ( $(date '+%d-%m-%Y %H:%M') )"
+    wptt_logs "INFO" "Lỗi: Script 'update' sai chữ ký GPG hoặc rớt mạng - Bỏ qua thực thi"
   fi
-
-  # 4. Dọn rác
   rm -f update update.sig
-
 fi
 
-#tối ưu namespace nếu tránh tình trạng hãng vps họ đóng bản template bằng ảo hóa ngon toàn phần nhưng người dùng lại dùng template cho ảo hóa giá rẻ 1 phần
-(/bin/bash /etc/wptt/tool-wptangtoc-ols/wptt-namespace-tuong-thich-ao-hoa-1-phan >/dev/null 2>&1)
+# Tối ưu hóa Namespace tương thích ảo hóa 1 phần
+if [[ -f /etc/wptt/wptt-namespace-tuong-thich-ao-hoa-1-phan ]]; then
+  /bin/bash /etc/wptt/wptt-namespace-tuong-thich-ao-hoa-1-phan >/dev/null 2>&1 || true
+fi
 
-. /etc/wptt/echo-color
+. /etc/wptt/echo-color 2>/dev/null || true
 clear 2>/dev/null || true
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}Chào mừng bạn đến với WPTangToc OLS${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+center_text "${C_BOLD_WHITE}CHÀO MỪNG BẠN ĐẾN VỚI WPTANGTOC OLS${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-echo ""
-
-RED='\033[1;31m'
-GREEN='\033[1;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-# 1. Hàm xử lý khi người dùng cố tình ấn Ctrl+C
-function block_ctrl_c() {
-  echo ""
-  echo -e "${RED}[!] BẮT BUỘC: Bạn phải nhập tên miền để cấu hình hệ thống.${NC}"
-  echo -e "${YELLOW}>> Không thể thoát bằng Ctrl+C. Vui lòng nhập domain hợp lệ.${NC}"
-  # In lại dấu nhắc nhập liệu (tùy chọn, để thẩm mỹ)
-  echo -ne "${GREEN}Nhập domain của bạn: ${NC}"
+# ==============================================================================
+# 2. BẪY CTRL+C VÀ XÁC THỰC TÊN MIỀN CHÍNH
+# ==============================================================================
+block_ctrl_c() {
+  echo -e "\n\n${C_RED}✖ BẮT BUỘC: Bạn phải nhập tên miền chính để khởi tạo máy chủ.${C_RESET}"
+  echo -e "${C_YELLOW}➜ Không thể hủy bỏ bằng Ctrl+C. Vui lòng nhập domain hợp lệ:${C_RESET} "
 }
-
-# 2. Kích hoạt bẫy tín hiệu (Trap)
 trap block_ctrl_c SIGINT
 
-if [[ $1 = 'github.wptangtoc.com' ]]; then
+if [[ "${1:-}" == 'github.wptangtoc.com' ]]; then
   NAME="$1"
 else
   unset NAME
 fi
 
-# 3. Vòng lặp vĩnh cửu bắt nhập Domain
 while true; do
-  if [[ -z "$NAME" ]]; then
-    echo -ne "${GREEN}Nhập domain hoặc subdomain (ví dụ: wptangtoc.com): ${NC}"
-    read NAME
+  if [[ -z "${NAME:-}" ]]; then
+    echo -en "${C_CYAN}➜ Nhập tên miền chính cho website (Ví dụ: wptangtoc.com): ${C_RESET}"
+    read -r NAME
   fi
 
-  # --- Xử lý & Làm sạch dữ liệu đầu vào ---
+  # Vệ sinh chuỗi đầu vào triệt để
+  NAME="${NAME//$'\r'/}"
+  NAME="${NAME// /}"
+  NAME="${NAME//[[:space:]]/}"
+  NAME="${NAME,,}"
+  [[ "$NAME" == *"://"* ]] && NAME="${NAME#*://}"
+  [[ "$NAME" == */* ]] && NAME="${NAME%%/*}"
+  [[ "$NAME" == www.* ]] && NAME="${NAME#www.}"
 
-  # Loại bỏ khoảng trắng và chuẩn hóa
-  # BỘ LỌC VỆ SINH BIẾN ĐẦU VÀO (CHỐNG LỖI WINDOWS CLIPBOARD)
-  NAME="${NAME//$'\r'/}"       # Lọc tận gốc ký tự CRLF (Windows)
-  NAME="${NAME// /}"           # Xóa toàn bộ khoảng trắng thừa
-  NAME="${NAME//[[:space:]]/}" # Tự động loại bỏ toàn bộ khoảng trắng (space/tab) nếu người dùng lỡ tay nhập thừa
-
-  # Chuyển thành chữ thường
-  NAME="${NAME,,}" # biến viết hoa thành viết thuờng
-  # NAME=$(echo "$NAME" | tr '[:upper:]' '[:lower:]')
-  # Loại bỏ http:// hoặc https://
-  NAME=$(echo "$NAME" | sed -E 's/^\s*.*:\/\///g')
-
-  NAME="${NAME,,}" # biến viết hoa thành viết thuờng
-
-  # Loại bỏ www. ở đầu
-  if [[ "$NAME" == www.* ]]; then
-    NAME="${NAME#www.}" #loại bỏ www. ở đầu
-  fi
-  # Loại bỏ khoảng trắng thừa đầu đuôi
-  NAME=$(echo "$NAME" | xargs)
-  # Loại bỏ ký tự / cuối cùng nếu có
-  NAME=${NAME%/}
-  # Tự động loại bỏ toàn bộ khoảng trắng (space/tab) nếu người dùng lỡ tay nhập thừa
-
-  # Check 1: Rỗng hoặc bằng 0
-  if [[ -z "$NAME" ]] || [[ "$NAME" == "0" ]]; then
-    echo -e "${RED}[Lỗi] Domain không được để trống. Vui lòng nhập lại.${NC}"
-    continue # Quay lại đầu vòng lặp
-  fi
-
-  # Check 2: Không có dấu chấm (không phải domain)
-  if [[ "$NAME" == "${NAME/./}" ]]; then
-    echo -e "${RED}[Lỗi] Domain không đúng định dạng (thiếu dấu chấm). Ví dụ: wptangtoc.com${NC}"
+  if [[ -z "$NAME" || "$NAME" == "0" ]]; then
+    echo -e "${C_RED}Domain không được để trống!${C_RESET}"
+    unset NAME
     continue
   fi
 
-  # Check 3: Có khoảng trắng ở giữa (VD: "wptangtoc com")
-  if [[ "$NAME" =~ [[:space:]] ]]; then
-    echo -e "${RED}[Lỗi] Domain không được chứa khoảng trắng.${NC}"
+  if [[ "$NAME" != *.* ]]; then
+    echo -e "${C_RED}Tên miền không hợp lệ (thiếu phần mở rộng, ví dụ: .com, .vn).${C_RESET}"
+    unset NAME
     continue
   fi
 
-  # Check 4: Ký tự đặc biệt (chỉ cho phép chữ, số, dấu chấm, dấu gạch ngang)
-  if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then #Regex này đã bao phủ tốt, nhưng để chuẩn xác 100% theo tiêu chuẩn tên miền quốc tế (RFC 1035 - tên miền không được bắt đầu hoặc kết thúc bằng dấu gạch ngang - hoặc dấu chấm .
-    echo -e "${RED}[Lỗi] Domain chứa ký tự không hợp lệ hoặc sai cấu trúc.${NC}"
+  if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then
+    echo -e "${C_RED}Tên miền chứa ký tự không hợp lệ hoặc sai định dạng RFC.${C_RESET}"
+    unset NAME
     continue
   fi
 
-  # Nếu vượt qua tất cả bài test -> Hợp lệ -> Thoát vòng lặp
-  echo -e "${GREEN}>> Domain hợp lệ: $NAME${NC}"
+  echo -e "${C_GREEN}✔ Đã xác nhận tên miền chính: ${C_BOLD_WHITE}$NAME${C_RESET}\n"
   break
 done
 
+trap - SIGINT
+
+# ==============================================================================
+# 3. DÒ QUÉT NETWORK STACK VÀ TỰ ĐỘNG THÍCH ỨNG OPENLITESPEED (IPV4 VS IPV6)
+# ==============================================================================
+
+# tình huống hãng vps đóng template lúc đầu máy chủ hỗ trợ ipv4 only họ đóng template nhưng khi đóng template người dùng gói đó họ có ipv4 và ipv6 thì sao hay ngược lại nếu lúc đóng template máy chủ lúc đầu họ hỗ trợ ipv4 và ipv6 nhưng người dùng họ tắt ipv6 đi chỉ only ipv4. giải quyết vấn đề này
+
+has_ipv6=0
+# Kiểm tra: Kernel có bật IPv6 và có gán địa chỉ Global IPv6 hợp lệ không
+if [[ -f /proc/net/if_inet6 ]] && [[ "$(cat /sys/module/ipv6/parameters/disable 2>/dev/null || echo 0)" != "1" ]]; then
+  server_ipv6=$(ip -6 addr show scope global 2>/dev/null | grep 'inet6' | awk '{print $2}' | sed '/fe80::/d' | head -n 1 || true)
+  if [[ -n "$server_ipv6" ]]; then
+    has_ipv6=1
+  fi
+fi
+
+if [[ "$has_ipv6" -eq 1 ]]; then
+  target_listen_http="[ANY]:80"
+  target_listen_https="[ANY]:443"
+else
+  target_listen_http="*:80"
+  target_listen_https="*:443"
+fi
+
+# ==============================================================================
+# 4. CẬP NHẬT ATOMIC FILE HTTPD_CONFIG.CONF (LISTENER)
+# ==============================================================================
 ols_conf="/usr/local/lsws/conf/httpd_config.conf"
-tmp_ols=$(wptt_atomic_begin "$ols_conf")
-sed -i "/keyFile/d" "$tmp_ols"
-sed -i "/certFile/d" "$tmp_ols"
-sed -i "/CACertFile/d" "$tmp_ols"
-sed -i "/https/a keyFile              \/etc\/wptt-ssl-tu-ky\/$NAME\/$NAME.key" "$tmp_ols"
-sed -i "/https/a certFile             \/etc\/wptt-ssl-tu-ky\/$NAME\/cert.crt" "$tmp_ols"
-sed -i -e '/^virtualhost wptangtoc-ols.com/,/^}$/d' "$tmp_ols"
-sed -i "/wptangtoc-ols.com wptangtoc-ols.com/d" "$tmp_ols"
+tmp_ols=$(wptt_atomic_begin "$ols_conf") || exit 1
+
+# 1. Tự động chuẩn hóa địa chỉ lắng nghe của Listener HTTP và HTTPS
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(http|HTTP)[[:space:]]*\{/,/^[[:space:]]*\}/ s/^[[:space:]]*address[[:space:]]+.*/  address                 $target_listen_http/" "$tmp_ols"
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*\{/,/^[[:space:]]*\}/ s/^[[:space:]]*address[[:space:]]+.*/  address                 $target_listen_https/" "$tmp_ols"
+
+# 2. Cập nhật đường dẫn chứng chỉ tự ký sang tên miền mới cho Listener HTTPS
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*\{/,/^[[:space:]]*\}/ {
+  s|([[:space:]]*keyFile[[:space:]]+).*/.*\.key|\1/etc/wptt-ssl-tu-ky/$NAME/$NAME.key|
+  s|([[:space:]]*certFile[[:space:]]+).*/.*\.crt|\1/etc/wptt-ssl-tu-ky/$NAME/cert.crt|
+  /CACertFile/d
+}" "$tmp_ols"
+
+# 3. Xóa VirtualHost mặc định của template
+sed -i -e '/^[[:space:]]*virtualhost[[:space:]]+wptangtoc-ols\.com[[:space:]]*\{/,/^[[:space:]]*\}/d' "$tmp_ols"
+
+# 4. Xóa sạch mọi mapping cũ của template trên tất cả Listener
+sed -i -E '/^[[:space:]]*map[[:space:]]+wptangtoc-ols\.com([[:space:]]+|$)/d' "$tmp_ols"
 
 wptt_atomic_commit "$tmp_ols" "$ols_conf"
-wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "Website_chinh=$NAME"
-database_admin_password=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32)
 
+# ==============================================================================
+# 5. TÁI TẠO BỘ KHÓA BẢO MẬT (LOCAL AES VAULT) & MẬT KHẨU MARIADB
+# ==============================================================================
+# Mỗi VPS triển khai từ template bắt buộc phải có salt ngẫu nhiên mới để chống dùng chung key
+WPTT_AES_DIR="/etc/wptt-aes"
+WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
+
+mkdir -p "$WPTT_AES_DIR"
+chmod 700 "$WPTT_AES_DIR"
+rm -f "$WPTT_KEY_FILE"
+
+old_umask=$(umask)
+umask 077
+openssl rand -base64 48 >"$WPTT_KEY_FILE"
+umask "$old_umask"
+
+wptt_ma_hoa_local() {
+  local plaintext="$1"
+  echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null || true
+}
+
+# Tạo mật khẩu quản trị MariaDB ngẫu nhiên mới
+database_admin_password=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32)
 mariadb <<EOF
 use mysql;
 CREATE USER IF NOT EXISTS 'wordpressadmin'@'localhost' IDENTIFIED BY '$database_admin_password';
@@ -166,73 +194,70 @@ DROP USER IF EXISTS 'root'@'localhost';
 FLUSH PRIVILEGES;
 EOF
 
-#tạo key mới hoàn toàn xoá key cũ để Reinstall key
-#key mã hoá dữ liệu local bảo mật các thông tin tài khoản Local Key VaultLocal Key Vault
-# tránh tình trạng rủi ro bảo mật nhân bản 1 template mà mỗi template lại trùng key rất rủi ro bảo mật, có nhân bản template thì sẽ auto thay key để nâng cao bảo mật
-WPTT_AES_DIR="/etc/wptt-aes"
-WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
+password_database_root_ma_hoa=$(wptt_ma_hoa_local "$database_admin_password" | tr -d '\n\r')
 
-# 1. Xây boong-ke và khóa cửa (Chỉ Root được vào)
-if [[ -f "$WPTT_AES_DIR/.wptt_salt.bin" ]]; then
-  rm -f "$WPTT_AES_DIR"/.wptt_salt.bin
+wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "Website_chinh=$NAME"
+wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "database_admin_password='${password_database_root_ma_hoa}'"
+
+# ==============================================================================
+# 6. KHỞI TẠO WEBSITE MỚI VÀ DỌN DẸP TEMPLATE CŨ
+# ==============================================================================
+# Xóa lệnh gọi script này trong .bashrc để lần sau đăng nhập không bị hỏi lại
+sed -i '/wptt-thay-domain-chinh-wptangtoc-ols-com/d' /root/.bashrc
+
+# Tạo Website thật của người dùng
+echo -e "${C_CYAN}➜ Đang khởi tạo VHost và Database cho website $NAME...${C_RESET}"
+(/etc/wptt/domain/wptt-themwebsite "$NAME")
+
+# --- DỌN DẸP USER VÀ TÀI NGUYÊN TEMPLATE CŨ ---
+old_user=$(awk -F: '$6 ~ /\/wptangtoc-ols\.com/ {print $1; exit}' /etc/passwd || true)
+
+if [[ -n "$old_user" ]] && id -u "$old_user" >/dev/null 2>&1; then
+  # 1. Diệt tiến trình đang chạy
+  usermod -L -s /sbin/nologin "$old_user" >/dev/null 2>&1 || true
+  pkill -9 -u "$old_user" >/dev/null 2>&1 || true
+
+  # 2. Xóa file tạm TRƯỚC khi xóa user
+  find /tmp /dev/shm /var/tmp -user "$old_user" -delete 2>/dev/null || true
+
+  # 3. Thu hồi user khỏi hệ điều hành
+  userdel -f "$old_user" >/dev/null 2>&1 || true
 fi
 
-mkdir -p "$WPTT_AES_DIR"
-chmod 700 "$WPTT_AES_DIR"
-openssl rand -base64 48 >"$WPTT_KEY_FILE"
-chmod 600 "$WPTT_KEY_FILE"
-#end key mã hoá dữ liệu local bảo mật các thông tin tài khoản
-
-wptt_ma_hoa() {
-  local WPTT_KEY_FILE="/etc/wptt-aes/.wptt_salt.bin"
-  local plaintext="$1"
-  echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null
-}
-
-password_database_root_ma_hoa_luu_tru=$(wptt_ma_hoa "$database_admin_password" | tr -d '\n\r')
-
-wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "database_admin_password='${password_database_root_ma_hoa_luu_tru}'"
-
-sed -i '/wptt-thay-domain-chinh-wptangtoc-ols-com/d' /root/.bashrc
-# source /root/.bashrc
-# clear
-(/etc/wptt/domain/wptt-themwebsite "$NAME") #đóng () để không bị chèn biến
-
-rm -rf /usr/local/lsws/conf/vhosts/wptangtoc-ols.com >/dev/null 2>&1
-rm -rf /usr/local/lsws/wptangtoc-ols.com >/dev/null 2>&1
-rm -rf /etc/wptt-ssl-tu-ky/wptangtoc-ols.com >/dev/null 2>&1
-rm -f /etc/wptt/vhost/.wptangtoc-ols.com.conf
-pkill -u wptangtocwpolswpcom >/dev/null 2>&1
-
-#-f la force băt buộc
-
+# Xóa cấu hình Jail SSH của template cũ
 sed -i -e "/^#begin-WPTT_JAIL_wptangtocwpolswpcom/,/^#end-WPTT_JAIL_wptangtocwpolswpcom$/d" /etc/ssh/sshd_config 2>/dev/null || true
-systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
+systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
 
-#xác định username template web delete
-username=$(cat /etc/passwd | grep '/wptangtoc-ols.com' | cut -f1 -d ':')
-userdel -f "$username" >/dev/null 2>&1
-rm -rf "${username:?}" >/dev/null 2>&1
-rm -rf /home/wptangtoc-ols.com >/dev/null 2>&1
-rm -rf /usr/local/backup-website/wptangtoc-ols.com >/dev/null 2>&1
-rm -rf /wptangtoc-ols/wptangtoc-ols.com >/dev/null 2>&1
+# Xóa các thư mục vật lý của website template cũ
+/bin/rm -rf /usr/local/lsws/conf/vhosts/wptangtoc-ols.com \
+  /usr/local/lsws/wptangtoc-ols.com \
+  /etc/wptt-ssl-tu-ky/wptangtoc-ols.com \
+  /etc/wptt/vhost/.wptangtoc-ols.com.conf \
+  /home/wptangtoc-ols.com \
+  /usr/local/backup-website/wptangtoc-ols.com \
+  /wptangtoc-ols/wptangtoc-ols.com >/dev/null 2>&1 || true
 
-echo '100' >/etc/wptt/.ram_hien_tai #để ép thực thi wptt-auto-tune
-/bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1
+# ==============================================================================
+# 7. TỰ ĐỘNG TỐI ƯU HỆ THỐNG THEO PHẦN CỨNG MỚI (RAM / CPU AUTO-TUNE)
+# ==============================================================================
+# Ép wptt-auto-tune tính toán lại cấu hình OLS, MariaDB và LSPHP dựa trên RAM thật của VPS này
+echo '100' >/etc/wptt/.ram_hien_tai
+/bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1 || true
 
-echo '' >/var/log/wptangtoc-ols.log
-#Làm mới sạch sẽ (Clean Refresh): Nó hủy bỏ phiên làm việc hiện tại và tải lại .bashrc từ đầu. Các biến môi trường cũ, hàm cũ, alias cũ sẽ bị xóa sạch.
-if [[ $NAME = 'github.wptangtoc.com' ]]; then #thực thi để là action github test bats
+# Reload OpenLiteSpeed để áp dụng Listener và VHost mới
+wptt_smart_reload_lsws >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+
+# Dọn log cài đặt cũ
+: >/var/log/wptangtoc-ols.log
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}KHỞI TẠO HỆ THỐNG THÀNH CÔNG!${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text " WPTangToc OLS phát triển bởi : ${C_YELLOW}Gia Tuấn${C_RESET}" 2
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+sleep 3
+if [[ "${NAME:-}" == 'github.wptangtoc.com' ]]; then
   sudo sh -c 'echo "" > /root/.bashrc'
 else
   exec bash
 fi
-
-# source /root/.bashrc
-# . /etc/wptt/wptt-status2 #trả về wptt status
-# echo "-------------------------------------------------------------------------"
-# echo "Chào mừng bạn đến với WPTangToc OLS"
-# echo "Phần mềm phát triển bởi Gia Tuấn (wptangtoc.com)"
-# echo '-------------------------------------------------------------------------'
-# echo "Nhập lệnh phím 1 để vào menu quản trị"
-# echo '-------------------------------------------------------------------------'
