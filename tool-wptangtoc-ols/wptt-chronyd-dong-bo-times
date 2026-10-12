@@ -1,0 +1,85 @@
+#!/bin/bash
+
+. /etc/wptt/echo-color
+. /etc/wptt/core-functions
+#loại bỏ những ảo hóa 1 phần vì không thể dùng được tính năng này
+if systemd-detect-virt --container --quiet 2>/dev/null; then
+  _runing "Đồng bộ thời gian hệ thống"
+  _rundone "Đồng bộ thời gian hệ thống (Kế thừa từ Host Container)"
+else
+  os_id=""
+  os_id_like=""
+  chrony_svc=""
+
+  if [[ -r /etc/os-release ]]; then
+    # shellcheck source=/dev/null
+    . /etc/os-release
+    os_id="${ID:-}"
+    os_id_like="${ID_LIKE:-}"
+  fi
+
+  # 1. Xác định tên service tương ứng theo OS
+  if [[ "$os_id" =~ ^(ubuntu|debian)$ || "$os_id_like" =~ (ubuntu|debian) ]]; then
+    chrony_svc="chrony"
+  elif [[ "$os_id" =~ ^(almalinux|rocky|rhel|centos|fedora)$ || "$os_id_like" =~ (rhel|centos|fedora) ]]; then
+    chrony_svc="chronyd"
+  fi
+
+  if [[ -z "$chrony_svc" ]]; then
+    _runing "Cấu hình đồng bộ thời gian hệ thống (Chrony)"
+    _runloi "Cấu hình đồng bộ thời gian hệ thống (Chrony) - Không hỗ trợ OS"
+  else
+    # CHỐT CHẶN LŨY ĐẲNG TỐI CAO:
+    # Nếu dịch vụ đã cài, đang chạy (active) và đã bật khởi động cùng OS (enabled)
+    # -> Bỏ qua toàn bộ tiến trình phía dưới, phản hồi tức thì (0ms overhead)
+    if systemctl is-active --quiet "$chrony_svc" 2>/dev/null && systemctl is-enabled --quiet "$chrony_svc" 2>/dev/null; then
+      _runing "Cấu hình đồng bộ thời gian hệ thống (Chrony)"
+      _rundone "Cấu hình đồng bộ thời gian hệ thống (Chrony)"
+    else
+      _runing "Cấu hình đồng bộ thời gian hệ thống (Chrony)"
+
+      # 2. Xử lý cài đặt và xung đột theo từng họ OS
+      if [[ "$chrony_svc" == "chrony" ]]; then
+        # Chỉ tắt các service xung đột nếu chúng thực sự đang chạy hoặc được bật
+        for conflict_svc in systemd-timesyncd ntp openntpd; do
+          if systemctl is-active --quiet "$conflict_svc" 2>/dev/null || systemctl is-enabled --quiet "$conflict_svc" 2>/dev/null; then
+            systemctl disable --now "$conflict_svc" >/dev/null 2>&1 || true
+          fi
+        done
+
+        # Chỉ purge nếu gói ntp/openntpd thực sự tồn tại trong cơ sở dữ liệu dpkg
+        if dpkg -s ntp >/dev/null 2>&1 || dpkg -s openntpd >/dev/null 2>&1; then
+          DEBIAN_FRONTEND=noninteractive apt-get purge -y ntp openntpd >/dev/null 2>&1 || true
+        fi
+
+        # Chỉ tải gói khi nhị phân chronyd chưa hề xuất hiện trên máy
+        if ! command -v chronyd >/dev/null 2>&1 && [[ ! -x /usr/sbin/chronyd ]]; then
+          DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends chrony >/dev/null 2>&1 || true
+        fi
+
+      elif [[ "$chrony_svc" == "chronyd" ]]; then
+        # Chỉ gọi dnf/yum khi chưa có nhị phân chronyd
+        if ! command -v chronyd >/dev/null 2>&1 && [[ ! -x /usr/sbin/chronyd ]]; then
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y chrony >/dev/null 2>&1 || true
+          else
+            yum install -y chrony >/dev/null 2>&1 || true
+          fi
+        fi
+      fi
+
+      # 3. Kích hoạt service nếu chưa bật hoặc chưa chạy
+      if ! systemctl is-enabled --quiet "$chrony_svc" 2>/dev/null || ! systemctl is-active --quiet "$chrony_svc" 2>/dev/null; then
+        systemctl enable --now "$chrony_svc" >/dev/null 2>&1 || true
+      fi
+
+      # 4. Xác nhận trạng thái cuối cùng
+      if systemctl is-active --quiet "$chrony_svc" 2>/dev/null; then
+        _rundone "Cấu hình đồng bộ thời gian hệ thống (Chrony)"
+      else
+        _runloi "Cấu hình đồng bộ thời gian hệ thống (Chrony)"
+      fi
+    fi
+  fi
+fi
