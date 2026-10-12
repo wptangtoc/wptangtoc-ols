@@ -6,19 +6,21 @@
 
 export LC_ALL=en_US.UTF-8
 export LANG=en_US.UTF-8
-stty iutf8 2>/dev/null || true
 
-# Nạp cấu hình WPTT và các hàm tiện ích
+# Khắc phục lỗi "Inappropriate ioctl for device" trên CI/CD github
+[[ -t 0 ]] && stty iutf8 2>/dev/null || true
+
+# Nạp cấu hình hệ thống WPTT
 . /etc/wptt/.wptt.conf 2>/dev/null || true
 . /etc/wptt/core-functions 2>/dev/null || true
 
-# Chỉ chạy khi domain chính vẫn đang ở trạng thái template mặc định
+# Chỉ thực thi khi domain chính vẫn đang ở trạng thái template mặc định
 if [[ "${Website_chinh:-}" != 'wptangtoc-ols.com' ]]; then
-  return 2>/dev/null || exit 0
+  return 1 2>/dev/null || exit 1
 fi
 
 # ==============================================================================
-# 1. ĐỒNG BỘ PHIÊN BẢN VÀ CẬP NHẬT GPG TỰ ĐỘNG
+# 1. ĐỒNG BỘ PHIÊN BẢN & XÁC THỰC CHỮ KÝ GPG TỰ ĐỘNG
 # ==============================================================================
 version_wptangtoc_ols=$(cat /etc/wptt/tmp/wptangtoc-ols-version-main 2>/dev/null || echo "")
 wptangtocols_version=$(curl --tlsv1.3 -s --connect-timeout 10 --max-time 30 https://wptangtoc.com/share/version-wptangtoc-ols.txt 2>/dev/null | head -1 | grep '\.' || true)
@@ -48,9 +50,11 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "$version_wptangt
   rm -f update update.sig
 fi
 
-# Tối ưu hóa Namespace tương thích ảo hóa 1 phần
+# Tối ưu hóa Namespace tương thích ảo hóa 1 phần (LXC/OpenVZ)
 if [[ -f /etc/wptt/wptt-namespace-tuong-thich-ao-hoa-1-phan ]]; then
   /bin/bash /etc/wptt/wptt-namespace-tuong-thich-ao-hoa-1-phan >/dev/null 2>&1 || true
+elif [[ -f /etc/wptt/tool-wptangtoc-ols/wptt-namespace-tuong-thich-ao-hoa-1-phan ]]; then
+  /bin/bash /etc/wptt/tool-wptangtoc-ols/wptt-namespace-tuong-thich-ao-hoa-1-phan >/dev/null 2>&1 || true
 fi
 
 . /etc/wptt/echo-color 2>/dev/null || true
@@ -58,18 +62,20 @@ clear 2>/dev/null || true
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}CHÀO MỪNG BẠN ĐẾN VỚI WPTANGTOC OLS${C_RESET}"
+center_text "${C_YELLOW}Khởi tạo cấu hình cho Máy chủ mới từ Template${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
 # ==============================================================================
-# 2. BẪY CTRL+C VÀ XÁC THỰC TÊN MIỀN CHÍNH
+# 2. BẪY CTRL+C & TIẾP NHẬN / VALIDATE TÊN MIỀN
 # ==============================================================================
 block_ctrl_c() {
   echo -e "\n\n${C_RED}✖ BẮT BUỘC: Bạn phải nhập tên miền chính để khởi tạo máy chủ.${C_RESET}"
-  echo -e "${C_YELLOW}➜ Không thể hủy bỏ bằng Ctrl+C. Vui lòng nhập domain hợp lệ:${C_RESET} "
+  echo -en "${C_YELLOW}➜ Vui lòng nhập domain hợp lệ: ${C_RESET}"
 }
 trap block_ctrl_c SIGINT
 
-if [[ "${1:-}" == 'github.wptangtoc.com' ]]; then
+# Nhận diện tham số chạy tự động hoặc test từ GitHub Actions CI
+if [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
   NAME="$1"
 else
   unset NAME
@@ -91,19 +97,19 @@ while true; do
   [[ "$NAME" == www.* ]] && NAME="${NAME#www.}"
 
   if [[ -z "$NAME" || "$NAME" == "0" ]]; then
-    echo -e "${C_RED}Domain không được để trống!${C_RESET}"
+    echo -e "${C_RED}❌ Domain không được để trống!${C_RESET}"
     unset NAME
     continue
   fi
 
   if [[ "$NAME" != *.* ]]; then
-    echo -e "${C_RED}Tên miền không hợp lệ (thiếu phần mở rộng, ví dụ: .com, .vn).${C_RESET}"
+    echo -e "${C_RED}❌ Tên miền không hợp lệ (thiếu dấu chấm phần mở rộng).${C_RESET}"
     unset NAME
     continue
   fi
 
   if [[ ! "$NAME" =~ ^[a-z0-9]+([a-z0-9.-]*[a-z0-9]+)?\.[a-z]{2,}$ ]]; then
-    echo -e "${C_RED}Tên miền chứa ký tự không hợp lệ hoặc sai định dạng RFC.${C_RESET}"
+    echo -e "${C_RED}❌ Tên miền chứa ký tự không hợp lệ hoặc sai định dạng RFC.${C_RESET}"
     unset NAME
     continue
   fi
@@ -115,13 +121,9 @@ done
 trap - SIGINT
 
 # ==============================================================================
-# 3. DÒ QUÉT NETWORK STACK VÀ TỰ ĐỘNG THÍCH ỨNG OPENLITESPEED (IPV4 VS IPV6)
+# 3. DÒ QUÉT NETWORK STACK (IPV4 VS IPV6 DUAL-STACK)
 # ==============================================================================
-
-# tình huống hãng vps đóng template lúc đầu máy chủ hỗ trợ ipv4 only họ đóng template nhưng khi đóng template người dùng gói đó họ có ipv4 và ipv6 thì sao hay ngược lại nếu lúc đóng template máy chủ lúc đầu họ hỗ trợ ipv4 và ipv6 nhưng người dùng họ tắt ipv6 đi chỉ only ipv4. giải quyết vấn đề này
-
 has_ipv6=0
-# Kiểm tra: Kernel có bật IPv6 và có gán địa chỉ Global IPv6 hợp lệ không
 if [[ -f /proc/net/if_inet6 ]] && [[ "$(cat /sys/module/ipv6/parameters/disable 2>/dev/null || echo 0)" != "1" ]]; then
   server_ipv6=$(ip -6 addr show scope global 2>/dev/null | grep 'inet6' | awk '{print $2}' | sed '/fe80::/d' | head -n 1 || true)
   if [[ -n "$server_ipv6" ]]; then
@@ -138,34 +140,33 @@ else
 fi
 
 # ==============================================================================
-# 4. CẬP NHẬT ATOMIC FILE HTTPD_CONFIG.CONF (LISTENER)
+# 4. CẬP NHẬT ATOMIC FILE HTTPD_CONFIG.CONF
 # ==============================================================================
 ols_conf="/usr/local/lsws/conf/httpd_config.conf"
 tmp_ols=$(wptt_atomic_begin "$ols_conf") || exit 1
 
-# 1. Tự động chuẩn hóa địa chỉ lắng nghe của Listener HTTP và HTTPS
-sed -i -E "/^[[:space:]]*listener[[:space:]]+(http|HTTP)[[:space:]]*\{/,/^[[:space:]]*\}/ s/^[[:space:]]*address[[:space:]]+.*/  address                 $target_listen_http/" "$tmp_ols"
-sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*\{/,/^[[:space:]]*\}/ s/^[[:space:]]*address[[:space:]]+.*/  address                 $target_listen_https/" "$tmp_ols"
+# 1. Chuẩn hóa địa chỉ lắng nghe của Listener HTTP và HTTPS
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(http|HTTP)[[:space:]]*[{]/,/^[[:space:]]*[}]/ s/^[[:space:]]*address[[:space:]]+.*/  address                 $target_listen_http/" "$tmp_ols"
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*[{]/,/^[[:space:]]*[}]/ s/^[[:space:]]*address[[:space:]]+.*/  address                 $target_listen_https/" "$tmp_ols"
 
-# 2. Cập nhật đường dẫn chứng chỉ tự ký sang tên miền mới cho Listener HTTPS
-sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*\{/,/^[[:space:]]*\}/ {
-  s|([[:space:]]*keyFile[[:space:]]+).*/.*\.key|\1/etc/wptt-ssl-tu-ky/$NAME/$NAME.key|
-  s|([[:space:]]*certFile[[:space:]]+).*/.*\.crt|\1/etc/wptt-ssl-tu-ky/$NAME/cert.crt|
-  /CACertFile/d
+# 2. Xóa sạch cấu hình SSL cũ trong listener https và bơm lại SSL tự ký cho domain mới
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*[{]/,/^[[:space:]]*[}]/ {
+  /^[[:space:]]*(keyFile|certFile|CACertFile)[[:space:]]+/d
 }" "$tmp_ols"
 
-# 3. Xóa VirtualHost mặc định của template
-sed -i -e '/^[[:space:]]*virtualhost[[:space:]]+wptangtoc-ols\.com[[:space:]]*\{/,/^[[:space:]]*\}/d' "$tmp_ols"
+sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*[{]/a \  keyFile                 /etc/wptt-ssl-tu-ky/$NAME/$NAME.key\n  certFile                /etc/wptt-ssl-tu-ky/$NAME/cert.crt" "$tmp_ols"
 
-# 4. Xóa sạch mọi mapping cũ của template trên tất cả Listener
+# 3. Xóa VirtualHost mặc định của template (Dùng -E và [{] / [}] triệt tiêu lỗi regex char 70)
+sed -i -E '/^[[:space:]]*virtualhost[[:space:]]+wptangtoc-ols\.com[[:space:]]*[{]/,/^[[:space:]]*[}]/d' "$tmp_ols"
+
+# 4. Xóa map template cũ
 sed -i -E '/^[[:space:]]*map[[:space:]]+wptangtoc-ols\.com([[:space:]]+|$)/d' "$tmp_ols"
 
 wptt_atomic_commit "$tmp_ols" "$ols_conf"
 
 # ==============================================================================
-# 5. TÁI TẠO BỘ KHÓA BẢO MẬT (LOCAL AES VAULT) & MẬT KHẨU MARIADB
+# 5. TÁI TẠO BỘ KHÓA BẢO MẬT (LOCAL AES VAULT) & MẬT KHẨU MARIADB MỚI
 # ==============================================================================
-# Mỗi VPS triển khai từ template bắt buộc phải có salt ngẫu nhiên mới để chống dùng chung key
 WPTT_AES_DIR="/etc/wptt-aes"
 WPTT_KEY_FILE="$WPTT_AES_DIR/.wptt_salt.bin"
 
@@ -183,7 +184,6 @@ wptt_ma_hoa_local() {
   echo -n "$plaintext" | openssl enc -aes-256-cbc -pbkdf2 -a -A -salt -pass file:"$WPTT_KEY_FILE" 2>/dev/null || true
 }
 
-# Tạo mật khẩu quản trị MariaDB ngẫu nhiên mới
 database_admin_password=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 32)
 mariadb <<EOF
 use mysql;
@@ -202,33 +202,29 @@ wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "database_admin_password='${passw
 # ==============================================================================
 # 6. KHỞI TẠO WEBSITE MỚI VÀ DỌN DẸP TEMPLATE CŨ
 # ==============================================================================
-# Xóa lệnh gọi script này trong .bashrc để lần sau đăng nhập không bị hỏi lại
+# Gỡ bỏ lệnh gọi script này khỏi .bashrc
 sed -i '/wptt-thay-domain-chinh-wptangtoc-ols-com/d' /root/.bashrc
 
-# Tạo Website thật của người dùng
+# Tạo website thật đầu tiên cho máy chủ
 echo -e "${C_CYAN}➜ Đang khởi tạo VHost và Database cho website $NAME...${C_RESET}"
 (/etc/wptt/domain/wptt-themwebsite "$NAME")
 
-# --- DỌN DẸP USER VÀ TÀI NGUYÊN TEMPLATE CŨ ---
+# Xóa tiến trình và dọn file tạm trước khi thu hồi user template cũ
 old_user=$(awk -F: '$6 ~ /\/wptangtoc-ols\.com/ {print $1; exit}' /etc/passwd || true)
 
 if [[ -n "$old_user" ]] && id -u "$old_user" >/dev/null 2>&1; then
-  # 1. Diệt tiến trình đang chạy
   usermod -L -s /sbin/nologin "$old_user" >/dev/null 2>&1 || true
   pkill -9 -u "$old_user" >/dev/null 2>&1 || true
-
-  # 2. Xóa file tạm TRƯỚC khi xóa user
   find /tmp /dev/shm /var/tmp -user "$old_user" -delete 2>/dev/null || true
-
-  # 3. Thu hồi user khỏi hệ điều hành
+  crontab -r -u "$old_user" >/dev/null 2>&1 || true
   userdel -f "$old_user" >/dev/null 2>&1 || true
 fi
 
-# Xóa cấu hình Jail SSH của template cũ
+# Dọn dẹp Jail SSH của template cũ
 sed -i -e "/^#begin-WPTT_JAIL_wptangtocwpolswpcom/,/^#end-WPTT_JAIL_wptangtocwpolswpcom$/d" /etc/ssh/sshd_config 2>/dev/null || true
 systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
 
-# Xóa các thư mục vật lý của website template cũ
+# Xóa các thư mục tĩnh của template cũ an toàn
 /bin/rm -rf /usr/local/lsws/conf/vhosts/wptangtoc-ols.com \
   /usr/local/lsws/wptangtoc-ols.com \
   /etc/wptt-ssl-tu-ky/wptangtoc-ols.com \
@@ -238,16 +234,15 @@ systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
   /wptangtoc-ols/wptangtoc-ols.com >/dev/null 2>&1 || true
 
 # ==============================================================================
-# 7. TỰ ĐỘNG TỐI ƯU HỆ THỐNG THEO PHẦN CỨNG MỚI (RAM / CPU AUTO-TUNE)
+# 7. TỰ ĐỘNG TỐI ƯU HỆ THỐNG THEO RAM/CPU MỚI (AUTO-TUNE)
 # ==============================================================================
-# Ép wptt-auto-tune tính toán lại cấu hình OLS, MariaDB và LSPHP dựa trên RAM thật của VPS này
 echo '100' >/etc/wptt/.ram_hien_tai
 /bin/bash /etc/wptt/cau-hinh/wptt-auto-tune >/dev/null 2>&1 || true
 
-# Reload OpenLiteSpeed để áp dụng Listener và VHost mới
+# Nạp lại cấu hình OpenLiteSpeed
 wptt_smart_reload_lsws >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
 
-# Dọn log cài đặt cũ
+# Dọn log cài đặt
 : >/var/log/wptangtoc-ols.log
 
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -255,9 +250,11 @@ center_text "${C_BOLD_WHITE}KHỞI TẠO HỆ THỐNG THÀNH CÔNG!${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text " WPTangToc OLS phát triển bởi : ${C_YELLOW}Gia Tuấn${C_RESET}" 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-sleep 3
+
+# Thoát sạch sẽ cho runner CI/CD, chỉ reload shell tương tác khi người dùng gõ trực tiếp
 if [[ "${NAME:-}" == 'github.wptangtoc.com' ]]; then
   sudo sh -c 'echo "" > /root/.bashrc'
+  exit 0
 else
   exec bash
 fi
