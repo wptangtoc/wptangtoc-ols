@@ -4,7 +4,7 @@
 # @since: 2026
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   1. Tính Năng Cài Đặt [Install Object Cache]
   Cài đặt Valkey/KeyDB/Redis là quá trình thiết lập và chạy phần mềm máy chủ trên hệ thống để các ứng dụng có thể kết nối và sử dụng nó.
 
@@ -13,6 +13,39 @@ function huong_dan() {
 EOF
 }
 
+TOTAL_RAM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
+# 1. HARD BLOCK (Chặn tuyệt đối) với VPS siêu nhỏ (512MB)
+if ((TOTAL_RAM_MB <= 600)); then
+  _runloi "Cài đặt Object Cache"
+  echo -e "${C_RED}CẢNH BÁO: VPS của bạn chỉ có ${TOTAL_RAM_MB}MB RAM!${C_RESET}"
+  echo -e "Việc cài đặt Object Cache trên VPS < 1GB RAM chắc chắn sẽ gây tràn bộ nhớ (OOM) và sập Database."
+  if [[ "${1:-}" == "98" ]]; then
+    echo -en "\n${C_GREEN}➜ nhấn [enter] để quay lại menu...${C_RESET}"
+    read -r _
+    exec /etc/wptt/wptt-cache-main 1
+  fi
+  return 1
+fi
+
+# 2. SOFT WARNING (Cảnh báo mềm) với VPS 1GB
+if ((TOTAL_RAM_MB > 600 && TOTAL_RAM_MB <= 1200)); then
+  echo -e "\n${C_YELLOW}CẢNH BÁO TÀI NGUYÊN (VPS ~ 1GB RAM):${C_RESET}"
+  echo -e "Hệ thống nhận thấy VPS của bạn có khoảng ${TOTAL_RAM_MB}MB RAM."
+  echo -e "Ở mức RAM này, bạn ${C_GREEN}CÓ THỂ${C_RESET} cài Object Cache, nhưng hệ thống sẽ phải ép giới hạn dung lượng Redis/Valkey rất nhỏ (khoảng 64MB) để chống sập."
+  echo -e "Lưu ý: Nếu web của bạn là WooCommerce nặng, 1GB RAM vẫn là không đủ dù có cài Object Cache.\n"
+
+  if ! wptt_xac_nhan "Bạn có chắc chắn muốn tiếp tục cài đặt Object Cache không?" "Gợi ý: Chọn [Không]." "n" "Vẫn Cài Đặt" "Hủy Bỏ"; then
+    if [[ "${1:-}" == "98" ]]; then
+      echo -en "\n${C_GREEN}➜ nhấn [enter] để quay lại menu...${C_RESET}"
+      read -r _
+      exec /etc/wptt/wptt-cache-main 1
+    fi
+    return 1
+  fi
+fi
+
+# Nếu qua được các chốt chặn này (VPS >= 1.5GB hoặc người dùng 1GB vẫn cố cài)
+# -> Tiếp tục chạy code cài đặt Redis/Valkey...
 . /etc/wptt/.wptt.conf 2>/dev/null
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
@@ -58,63 +91,69 @@ function in_thong_tin_acl_cho_khach() {
     local domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
-    
+
     unset redis_acl_user redis_acl_pass redis_db_id User_name_vhost
     source "$filepath" 2>/dev/null
     local pass_show=""
 
     # 1. TẠO TÀI KHOẢN MỚI HOẶC BỔ SUNG DB_ID NẾU CHƯA CÓ
     if [[ -z "$redis_acl_user" || -z "$redis_acl_pass" ]]; then
-        local redis_acl_user=$(openssl rand -hex 12)
-        local raw_pass=$(openssl rand -hex 16)
-        redis_acl_pass=$(wptt_ma_hoa "$raw_pass")
-        
+      local redis_acl_user=$(openssl rand -hex 12)
+      local raw_pass=$(openssl rand -hex 16)
+      redis_acl_pass=$(wptt_ma_hoa "$raw_pass")
+
+      # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
+      local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
+      redis_db_id=1
+      while echo "$used_ids" | grep -qw "$redis_db_id"; do
+        ((redis_db_id++))
+        if [[ $redis_db_id -gt 999 ]]; then
+          redis_db_id=999
+          break
+        fi
+      done
+      # ------------------------------------------------
+
+      echo "redis_acl_user='$redis_acl_user'" >>"$filepath"
+      echo "redis_acl_pass='$redis_acl_pass'" >>"$filepath"
+      echo "redis_db_id='$redis_db_id'" >>"$filepath"
+
+      # Mở khóa +flushdb cho plugin
+      if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
+        # [BẢN VÁ]: Đã xóa -client ra khỏi list để LSCache không bị Failed
+        ACL_RULES_COMMON=(+@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
+        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
+
+        # Khóa cứng User xuống ổ cứng (Chống mất Cache khi Restart)
+        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
+      fi
+      pass_show="$raw_pass"
+    else
+      pass_show=$(wptt_giai_ma "$redis_acl_pass")
+
+      # Cập nhật DB ID cho các website cũ chưa được chia lô
+      if [[ -z "$redis_db_id" ]]; then
         # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
         local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
         redis_db_id=1
         while echo "$used_ids" | grep -qw "$redis_db_id"; do
-            ((redis_db_id++))
-            if [[ $redis_db_id -gt 999 ]]; then redis_db_id=999; break; fi
+          ((redis_db_id++))
+          if [[ $redis_db_id -gt 999 ]]; then
+            redis_db_id=999
+            break
+          fi
         done
         # ------------------------------------------------
-        
-        echo "redis_acl_user='$redis_acl_user'" >> "$filepath"
-        echo "redis_acl_pass='$redis_acl_pass'" >> "$filepath"
-        echo "redis_db_id='$redis_db_id'" >> "$filepath"
-        
-        # Mở khóa +flushdb cho plugin
-        if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
-          # [BẢN VÁ]: Đã xóa -client ra khỏi list để LSCache không bị Failed
-          ACL_RULES_COMMON=( +@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb )
-          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
-          
-          # Khóa cứng User xuống ổ cứng (Chống mất Cache khi Restart)
-          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
-        fi
-        pass_show="$raw_pass"
-    else
-        pass_show=$(wptt_giai_ma "$redis_acl_pass")
-        
-        # Cập nhật DB ID cho các website cũ chưa được chia lô
-        if [[ -z "$redis_db_id" ]]; then
-            # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
-            local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
-            redis_db_id=1
-            while echo "$used_ids" | grep -qw "$redis_db_id"; do
-                ((redis_db_id++))
-                if [[ $redis_db_id -gt 999 ]]; then redis_db_id=999; break; fi
-            done
-            # ------------------------------------------------
-            echo "redis_db_id='$redis_db_id'" >> "$filepath"
-        fi
+        echo "redis_db_id='$redis_db_id'" >>"$filepath"
+      fi
 
-        # Cập nhật lại quyền +flushdb
-        if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
-          ACL_RULES_COMMON=( +@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb )
-          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$pass_show" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
-          
-          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
-        fi
+      # Cập nhật lại quyền +flushdb
+      if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
+        ACL_RULES_COMMON=(+@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
+        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$pass_show" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
+
+        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
+      fi
     fi
 
     if [[ -n "$redis_acl_user" && -n "$pass_show" ]]; then
@@ -126,12 +165,12 @@ function in_thong_tin_acl_cho_khach() {
       found=1
     fi
   done
-  
+
   if [[ $found -eq 0 ]]; then
     left_text "  Không tìm thấy Website nào trên hệ thống." 2
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   else
-    echo -en "\033[1A\033[2K\r" 
+    echo -en "\033[1A\033[2K\r"
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
     echo -e "\n${C_GREEN}HƯỚNG DẪN ĐIỀN VÀO LITESPEED CACHE / WP-REDIS:${C_RESET}"
     echo -e "1. Bật Object Cache: ${C_YELLOW}ON${C_RESET} | Method: ${C_YELLOW}Redis${C_RESET}"
@@ -172,9 +211,19 @@ echo -e "${C_CYAN}╰───────────────────�
 
 active_cache="Chưa cài đặt"
 socket_path="Không có"
-if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then active_cache="valkey"; active_name_display="Valkey"; socket_path="/var/run/valkey/valkey.sock";
-elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then active_cache="keydb"; active_name_display="KeyDB"; socket_path="/var/run/keydb/keydb.sock";
-elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then active_cache="redis"; active_name_display="Redis"; socket_path="/var/run/redis/redis.sock"; fi
+if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
+  active_cache="valkey"
+  active_name_display="Valkey"
+  socket_path="/var/run/valkey/valkey.sock"
+elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
+  active_cache="keydb"
+  active_name_display="KeyDB"
+  socket_path="/var/run/keydb/keydb.sock"
+elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+  active_cache="redis"
+  active_name_display="Redis"
+  socket_path="/var/run/redis/redis.sock"
+fi
 
 box_inner_width=${box_inner_width:-71}
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -190,7 +239,8 @@ center_text "${C_YELLOW}VUI LÒNG CHỌN ENGINE BẠN MUỐN QUẢN LÝ / CÀI �
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
 OUTPUT=$(cat /etc/*release)
-is_alma_10=false; if echo "$OUTPUT" | grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise Linux 10\|Oracle Linux Server 10"; then is_alma_10=true; fi
+is_alma_10=false
+if echo "$OUTPUT" | grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise Linux 10\|Oracle Linux Server 10"; then is_alma_10=true; fi
 
 left_text "  ${C_CYAN}1)${C_RESET} ${C_BOLD_WHITE}Valkey${C_RESET} (Khuyên dùng - Nhanh, nhẹ, ổn định nhất)" 2
 left_text "  ${C_CYAN}2)${C_RESET} ${C_BOLD_WHITE}KeyDB${C_RESET}  (Tối ưu ép xung Đa luồng cho VPS nhiều Core)" 2
@@ -202,11 +252,27 @@ echo -e "${C_CYAN}╰───────────────────�
 while true; do
   if $is_alma_10; then echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-2, 4] [0=Thoát]: ${C_RESET}"; else echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-4] [0=Thoát]: ${C_RESET}"; fi
   read -r cache_choice
-  if [[ "$cache_choice" == "0" ]]; then echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"; [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1; exit 0; fi
+  if [[ "$cache_choice" == "0" ]]; then
+    echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+    [[ "${1:-}" == "98" ]] && exec /etc/wptt/wptt-cache-main 1
+    exit 0
+  fi
   case "$cache_choice" in
-  1) name_service="valkey"; display_name="Valkey"; break ;;
-  2) name_service="keydb"; display_name="KeyDB"; break ;;
-  3) if ! $is_alma_10; then name_service="redis"; display_name="Redis"; break; else echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"; fi ;;
+  1)
+    name_service="valkey"
+    display_name="Valkey"
+    break
+    ;;
+  2)
+    name_service="keydb"
+    display_name="KeyDB"
+    break
+    ;;
+  3) if ! $is_alma_10; then
+    name_service="redis"
+    display_name="Redis"
+    break
+  else echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"; fi ;;
   4) hien_thi_tai_khoan_acl ;;
   *) echo -e "${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}" ;;
   esac
@@ -265,10 +331,10 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     # TẠO VÀ LƯU MASTER PASSWORD VÀO FILE .wptt.conf GỐC (MÃ HÓA)
     . /etc/wptt/.wptt.conf 2>/dev/null
     if [[ -z "$REDIS_MASTER_PASS" ]]; then
-        raw_master=$(openssl rand -hex 24)
-        master_pass_encrypted=$(wptt_ma_hoa "$raw_master")
-        echo "REDIS_MASTER_PASS='$master_pass_encrypted'" >> /etc/wptt/.wptt.conf
-        REDIS_MASTER_PASS="$master_pass_encrypted"
+      raw_master=$(openssl rand -hex 24)
+      master_pass_encrypted=$(wptt_ma_hoa "$raw_master")
+      echo "REDIS_MASTER_PASS='$master_pass_encrypted'" >>/etc/wptt/.wptt.conf
+      REDIS_MASTER_PASS="$master_pass_encrypted"
     fi
     dec_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
 
@@ -277,7 +343,7 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     touch "/etc/$name_service/users.acl"
     chown -hR "$name_service":"$name_service" "/etc/$name_service/users.acl" 2>/dev/null
     chmod 600 "/etc/$name_service/users.acl"
-    
+
     # [TỐI ƯU CÔ LẬP]: Bơm databases 1000 để mở rộng quỹ đất lưu trữ riêng biệt
     echo -e "\n# WPTangToc Optimize
 port 0
@@ -300,7 +366,7 @@ tcp-keepalive 60" >>"$duong_dan_config_redis"
     mkdir -p /var/run/"$name_service" /var/lib/"$name_service" /var/log/"$name_service"
     chmod 755 /var/run/"$name_service"
     chmod 700 /var/lib/"$name_service"
-    
+
     chown -hR "$name_service":"$name_service" /var/run/"$name_service" /var/log/"$name_service" /var/lib/"$name_service" 2>/dev/null
     chown "$name_service":"$name_service" "$duong_dan_config_redis" 2>/dev/null
     chmod 600 "$duong_dan_config_redis"
@@ -315,11 +381,11 @@ tcp-keepalive 60" >>"$duong_dan_config_redis"
     (/etc/wptt/cache/object-cache-optimize-tune >/dev/null 2>&1)
 
     _rundone "Cấu hình bảo mật Unix Socket + Requirepass"
-    
+
     # FIX LỖI: Cập nhật lại 2 biến trạng thái để hàm in_thong_tin_acl_cho_khach chạy mượt mà
     active_cache="$name_service"
     socket_path="/var/run/$name_service/$name_service.sock"
-    
+
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT CÀI ĐẶT OBJECT CACHE${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -327,7 +393,7 @@ tcp-keepalive 60" >>"$duong_dan_config_redis"
     left_text "Chế độ        : ${C_GREEN}Unix Socket + Admin ACL Master${C_RESET}" 2
     left_text "Cô lập Dữ liệu: ${C_GREEN}Đã kích hoạt Database ID độc lập${C_RESET}" 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-    
+
     in_thong_tin_acl_cho_khach
     echo -en "\nNhấn phím ${C_GREEN}Enter${C_RESET} để tiếp tục..."
     read -r
@@ -357,11 +423,11 @@ else
     # DỌN DẸP SẠCH SẼ BIẾN TRONG .wptt.conf VÀ VHOST
     sed -i '/^REDIS_MASTER_PASS=/d' /etc/wptt/.wptt.conf 2>/dev/null
     for vhost_file in /etc/wptt/vhost/.*.conf; do
-        if [[ -f "$vhost_file" ]]; then
-            sed -i '/^redis_acl_user=/d' "$vhost_file"
-            sed -i '/^redis_acl_pass=/d' "$vhost_file"
-            sed -i '/^redis_db_id=/d' "$vhost_file"
-        fi
+      if [[ -f "$vhost_file" ]]; then
+        sed -i '/^redis_acl_user=/d' "$vhost_file"
+        sed -i '/^redis_acl_pass=/d' "$vhost_file"
+        sed -i '/^redis_db_id=/d' "$vhost_file"
+      fi
     done
 
     _rundone "Gỡ bỏ hoàn toàn $display_name và dọn dẹp hệ thống..."
@@ -376,5 +442,5 @@ else
 fi
 
 if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-cache-main 1
+  exec /etc/wptt/wptt-cache-main 1
 fi
