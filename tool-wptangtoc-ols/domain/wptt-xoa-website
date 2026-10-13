@@ -168,12 +168,29 @@ $(tput setab 0)-//-${nhap_lua_chon_cua_ban:-Nhập lựa chọn} [0=${exit_thoat
   # sed -i "/certFile/d" "$tmp_ols"
   # sed -i "/CACertFile/d" "$tmp_ols"
 
-  if [[ ! -f /etc/wptt-ssl-tu-ky/${NAMEPHU}/${NAMEPHU}.key ]]; then #tính toán tình huống dự phòng giả sử người dùng xóa mất ssl tự ký đi thì không thể có port đại diện được
-    mkdir -p "/etc/wptt-ssl-tu-ky/$NAMEPHU"
-    cd "/etc/wptt-ssl-tu-ky/$NAMEPHU" || exit 1
-    openssl req -new -newkey rsa:2048 -nodes -keyout "$NAMEPHU.key" -out "NAMEPHU.csr" -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$NAME/emailAddress=admin@example.com" >/dev/null 2>&1
-    openssl x509 -req -in "$NAMEPHU.csr" -signkey "$NAMEPHU.key" -out cert.crt -days 3650 >/dev/null 2>&1
-    cd -
+  #Khi có đủ cả 2 file (và cả 2 đều > 0 byte): Điều kiện trả về false $\rightarrow$ Bỏ qua, không chạy (hệ thống an toàn).Khi thiếu file key (hoặc key 0 byte): Điều kiện nhánh trái true $\rightarrow$ Chạy ngay để tạo lại cả cặp.Khi thiếu file cert (hoặc cert 0 byte): Điều kiện nhánh phải true $\rightarrow$ Chạy ngay để tạo lại cả cặp.Khi thiếu cả 2 file: Cả hai nhánh đều true $\rightarrow$ Chạy ngay để tạo mới.
+
+  #lập trình phòng thủ vì thường thêm website nó cũng tạo ssl tự ký sẵn, nhưng mình cứ chắc cốp kiểm tra xem ssl tự ký có tồn tại không, sợ tình huống người dùng xóa đi mất mà đổi không có ssl fallback thì port 443 đóng là rụng cả dàn website trong hệ thống
+  if [[ ! -s "/etc/wptt-ssl-tu-ky/$NAMEPHU/$NAMEPHU.key" || ! -s "/etc/wptt-ssl-tu-ky/$NAMEPHU/cert.crt" ]]; then
+    ssl_dir="/etc/wptt-ssl-tu-ky/$NAMEPHU"
+    key_file="$ssl_dir/$NAMEPHU.key"
+    crt_file="$ssl_dir/cert.crt"
+    mkdir -p "$ssl_dir"
+    if /usr/bin/openssl req -x509 -nodes -days 3650 \
+      -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+      -keyout "$key_file" \
+      -out "$crt_file" \
+      -subj "/C=VN/ST=Hanoi/L=Hanoi/O=WPTT/CN=$NAMEPHU" \
+      >/dev/null 2>&1; then
+
+      /bin/chmod 600 -- "$key_file"
+      /bin/chmod 644 -- "$crt_file"
+    else
+      _runloi "Khởi tạo SSL tự ký ECDSA cho $NAMEPHU"
+      echo "Không thể khởi tạo ssl tự ký để fallback port 443"
+      echo "Quà trình này phải tạm ngừng nếu không port 443 sẽ bị đóng vì không có ssl fallback thay thế"
+      return 1 2>/dev/null || exit 1
+    fi
   fi
 
   #phương án chỉ cần ssl tự ký là đủ an tâm để đại diện port 443 được rồi
@@ -181,7 +198,7 @@ $(tput setab 0)-//-${nhap_lua_chon_cua_ban:-Nhập lựa chọn} [0=${exit_thoat
   wptt_atomic_commit "$tmp_ols" "$ols_conf"
 
   # ATOMIC TRANSACTION: Cập nhật biến Website_chinh vào .wptt.conf
-	wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "Website_chinh=$NAMEPHU"
+  wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "Website_chinh=$NAMEPHU"
 
   # Chuyển giao phpMyAdmin sang website chính mới
   if [[ -n "${id_dang_nhap_phpmyadmin:-}" && -d "/usr/local/lsws/${CLEAN}/html/phpmyadmin" ]]; then

@@ -1,0 +1,59 @@
+#!/bin/bash
+. /etc/wptt/core-functions
+ssl_base_dir="/etc/wptt-ssl-tu-ky"
+
+if [[ -d "$ssl_base_dir" ]]; then
+  /bin/rm -rf -- "${ssl_base_dir:?}"
+fi
+/bin/mkdir -p -- "$ssl_base_dir"
+
+# 2. Quét danh sách vhost bằng Glob thuần túy (0ms overhead, không dùng ls | awk | sed | grep)
+shopt -s nullglob
+vhost_files=(/etc/wptt/vhost/.*.conf)
+shopt -u nullglob
+
+if ((${#vhost_files[@]} > 0)); then
+  for filepath in "${vhost_files[@]}"; do
+    # Bỏ qua nếu không phải file hoặc là file rác hệ thống (..conf)
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+    # Tách chuỗi bằng Bash Parameter Expansion (Không gọi tiến trình ngoài)
+    domain="${filepath##*/}" # .wptangtoc.com.conf -> .wptangtoc.com.conf
+    domain="${domain%.conf}" # .wptangtoc.com.conf -> .wptangtoc.com
+    domain="${domain#.}"     # .wptangtoc.com      -> wptangtoc.com
+
+    # Validate chặt chẽ: Bắt buộc có dấu chấm và nằm trong whitelist ký tự an toàn
+    if [[ "$domain" != ?*.?* || ! "$domain" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+      continue
+    fi
+
+    path="/usr/local/lsws/$domain"
+
+    # Chỉ tạo SSL nếu thư mục Virtual Host thực sự tồn tại
+    if [[ -d "$path" ]]; then
+      domain_ssl_dir="$ssl_base_dir/$domain"
+      key_file="$domain_ssl_dir/$domain.key"
+      crt_file="$domain_ssl_dir/cert.crt"
+
+      /bin/mkdir -p -- "$domain_ssl_dir" || continue
+
+      # 3. Tạo thẳng ECDSA Key và Certificate (cert.crt) trong 1 bước duy nhất
+      # - Không tạo file CSR rác
+      # - Không dùng 'cd' gây sai lệch thư mục làm việc của tiến trình cha
+      # - Tốc độ thực thi: ~5ms/domain
+      if /usr/bin/openssl req -x509 -nodes -days 3650 \
+        -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+        -keyout "$key_file" \
+        -out "$crt_file" \
+        -subj "/C=VN/ST=Hanoi/L=Hanoi/O=wptangtoc ols/OU=IT Department/CN=$domain/emailAddress=admin@example.com" \
+        >/dev/null 2>&1; then
+
+        # 4. Phân quyền tối thiểu (Least Privilege)
+        /bin/chmod 600 -- "$key_file"
+        /bin/chmod 644 -- "$crt_file"
+      fi
+    fi
+  done
+fi
+
+wptt_smart_reload_lsws >/dev/null 2>&1
