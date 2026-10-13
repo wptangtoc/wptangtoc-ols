@@ -614,6 +614,7 @@ _success "LSPHP biên dịch hoàn tất"
 systemctl enable --now lsws >>"$LOG_FILE" 2>&1 || true
 
 _step "Khởi tạo tài khoản quản trị Admin Console"
+touch /usr/local/lsws/conf/disablewebconsole #tắt luôn webadmin theo mặc định cho an toàn bảo mật
 Webadmin_Pass=$(openssl rand -base64 48 | tr -dc 'a-zA-Z0-9' | head -c 36)
 id_ols_admin=$(openssl rand -base64 32 | tr -dc 'a-zA-Z0-9' | head -c 24)
 Encrypt_string=$(/usr/local/lsws/admin/fcgi-bin/admin_php -q /usr/local/lsws/admin/misc/htpasswd.php "${Webadmin_Pass}" || true)
@@ -895,6 +896,33 @@ vhTemplate EasyRailsWithSuEXEC {
 }
 EOF
 
+# Mặc định OLS sẽ dùng Namespace 2 (Cách ly an toàn nhất) cho máy vật lý / KVM
+lsapi_namespace="2"
+
+# 1. Kiểm tra ảo hóa AN TOÀN (Nuốt lỗi bằng || true)
+# Không gán thẳng biến từ subshell nếu có khả năng lệnh trong subshell văng exit code > 0
+virt_type="unknown"
+if command -v systemd-detect-virt >/dev/null 2>&1; then
+  # Nếu lệnh thất bại (chạy trên máy vật lý), gán "none" thay vì báo lỗi
+  virt_type=$(systemd-detect-virt 2>/dev/null || echo "none")
+fi
+
+# 2. Xử lý Logic chuyển đổi an toàn (Dùng case esac thay vì [[ ... =~ ]] phức tạp)
+case "${virt_type}" in
+lxc | lxd | openvz | docker | container | wsl)
+  lsapi_namespace="1"
+  ;;
+*)
+  # Nếu không bắt được bằng systemd, kiểm tra fallback bằng file hoặc biến môi trường
+  if [[ -f /proc/user_beancounters ]] ||
+    [[ "${GITHUB_ACTIONS:-}" == "true" ]] ||
+    [[ "${CI:-}" == "true" ]]; then
+    lsapi_namespace="1"
+  fi
+  ;;
+esac
+#anh em ảo hóa giá rẻ 1 phần không hỗ trợ namespace
+
 mkdir -p /usr/local/lsws/conf/vhosts/"$NAME"/
 NAMEPHP=${NAME//[-._]/}
 cat >/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf <<EOF
@@ -921,6 +949,8 @@ lsrecaptcha  {
   enabled                 1
   type                    0
 }
+
+namespace                 ${lsapi_namespace:-2}
 
 extprocessor $NAMEPHP {
   type                    lsapi
