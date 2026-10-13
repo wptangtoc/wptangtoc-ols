@@ -1,3 +1,17 @@
+## WPTangToc OLS v8.2.3
+
+🚀 **Tính năng mới**
+- Chuyển đổi thuật toán mã hóa SSL sang **ECDSA**, giúp tăng tốc độ bắt tay kết nối (handshake) bảo mật, tiết kiệm tài nguyên CPU và tối ưu hóa trải nghiệm truy cập.
+
+🛠️ **Tối ưu hệ thống**
+- Cải tiến hiệu suất chuyển hướng HTTP sang HTTPS, giảm thiểu đáng kể I/O và tải CPU, giúp máy chủ trả về phản hồi `301 Redirect` nhanh chóng hơn.
+
+🐛 **Sửa lỗi**
+- Bổ sung cơ chế kiểm tra phòng thủ khi cài đặt SSL nhằm ngăn chặn lỗi phát sinh trong trường hợp danh sách tên miền trống hoặc không hợp lệ qua bộ lọc, giúp hệ thống vận hành ổn định và an toàn hơn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ### 🐛 Sửa lỗi
 - Vá lỗi bảo mật liên quan đến tính năng quản lý tên miền phụ (`wptt-alias-domain`), nâng cao độ an toàn cho hệ thống.
 - Khắc phục triệt để lỗi tương thích của thư viện kiểm tra SSL, giúp quá trình xác thực chứng chỉ hoạt động ổn định và chính xác.
