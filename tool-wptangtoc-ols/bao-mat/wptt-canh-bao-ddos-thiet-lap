@@ -4,7 +4,7 @@
 # @since: 2026
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Tính năng Chống DDoS [WPTangToc OLS] sử dụng Fail2ban:
   🛡️ Mục đích:
   Tự động phát hiện và chặn các địa chỉ IP có dấu hiệu truy cập bất thường, đặc biệt là nhắm vào các nội dung động [dynamic content] - những nội dung tốn nhiều tài nguyên xử lý của máy chủ [như PHP, cơ sở dữ liệu].
@@ -53,7 +53,7 @@ function lua_chon_NAME() {
     if [[ "$domain" == ?*.?* ]]; then
       local domain_fail2ban="${domain//[-._]/wp}"
       local filter_path="/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf"
-      
+
       local status_text=""
       local status_color=""
 
@@ -78,7 +78,7 @@ function lua_chon_NAME() {
   mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
 
   local num_domains=${#selects[@]}
-  
+
   # THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
   if [[ $num_domains -ge 2 ]]; then
     selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
@@ -128,7 +128,7 @@ function lua_chon_NAME() {
   local fzf_installed=false
   command -v fzf &>/dev/null && fzf_installed=true
   local max_opt=${#selects[@]}
-  
+
   local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Tìm Nhanh | 0=Thoát]: "
 
   while true; do
@@ -171,9 +171,27 @@ function lua_chon_NAME() {
   done
 }
 
-# Nếu gọi script kèm tên domain từ command line
-if [[ -n "$1" && "$1" != "98" ]]; then
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
   NAME="$1"
+  if [[ "${2:-}" == "on" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
 else
   lua_chon_NAME
 fi
@@ -227,22 +245,27 @@ function process_ddos() {
 
     # Kiểm tra Cloudflare CDN (Chống khóa nhầm IP Cloudflare)
     local TRACE_OUTPUT=$(curl -Is --connect-timeout 5 --max-time 10 "https://$target_domain/cdn-cgi/trace" 2>/dev/null)
-	if grep -Eqi 'cloudflare|cf-ray' <<< "$TRACE_OUTPUT"; then #check xem có đang sử dụng CDN cloudflare không
-		if ! grep -q '103.21.244.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
-			echo -en "\033[1A\033[2K\r" #xoá dùng runing ở trên
-			echo -e "\n\033[1;31m[CẢNH BÁO] Phát hiện $target_domain dùng Cloudflare CDN nhưng chưa bật Real IP!\033[0m"
-			echo "Vui lòng bật tính năng Hiện thị IP Log Real bypass Cloudflare CDN trước khi dùng chức năng này để tránh chặn nhầm IP."
-			if ! wptt_xac_nhan "Bạn có muốn kích hoạt tính năng Cloudflare Real IP không?" "Tính năng này để xác định đúng địa chi ip client" "Khi dùng cloudflare cdn" "Đồng ý kích hoạt" "Hủy thao tác"; then
-				[[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
-				exit 0
-			else
-				_runing "Kích hoạt Cloudflare show real IP"
-				. /etc/wptt/cloudflare-cdn-ip-show-real >/dev/null 2>&1
-				_rundone "Kích hoạt Cloudflare show real IP"
-			    _runing "$UI_STRING"
-			fi
-		fi
-	fi
+    if grep -Eqi 'cloudflare|cf-ray' <<<"$TRACE_OUTPUT"; then
+      if ! grep -q '103.21.244.0' /usr/local/lsws/conf/httpd_config.conf 2>/dev/null; then
+        echo -en "\033[1A\033[2K\r"
+        echo -e "\n\033[1;31m[CẢNH BÁO] Phát hiện $target_domain dùng Cloudflare CDN nhưng chưa bật Real IP!\033[0m"
+        echo "Vui lòng bật tính năng Hiện thị IP Log Real bypass Cloudflare CDN trước khi dùng chức năng này để tránh chặn nhầm IP."
+        if ! wptt_xac_nhan "Bạn có muốn kích hoạt tính năng Cloudflare Real IP không?" "Tính năng này để xác định đúng địa chi ip client" "Khi dùng cloudflare cdn" "Đồng ý kích hoạt" "Hủy thao tác"; then
+          [[ ${1:-} == "98" ]] && exec /etc/wptt/wptt-bao-mat-main 1
+          exit 0
+        else
+          TASK_CF="Kích hoạt Cloudflare show real IP"
+          _runing "$TASK_CF"
+          # GỌI TIẾN TRÌNH ĐỘC LẬP THAY VÌ DÙNG SOURCE (Chống bẫy cướp luồng)
+          if bash /etc/wptt/cloudflare-cdn-ip-show-real >/dev/null 2>&1; then
+            _rundone "$TASK_CF"
+          else
+            _runloi "$TASK_CF"
+          fi
+          _runing "$UI_STRING"
+        fi
+      fi
+    fi
 
     # Tách log cho Vhost
     if ! grep -q 'accesslog' "$vhost_conf" 2>/dev/null; then
@@ -342,39 +365,48 @@ ignoreregex = \.(?i)(robots\.txt|favicon\.ico|jpg|png|webp|css|js|jpeg|woff2|avi
 # ==============================================================================
 # XỬ LÝ LÔGIC RẼ NHÁNH VÀ XÁC NHẬN BẰNG BOX UI
 # ==============================================================================
-echo ""
+DOMAIN_LIST=()
+mass_action=""
 
-if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" ]]; then
-  
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH CHỐNG DDOS${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "  Bạn đang thao tác cấu hình Fail2ban cho toàn bộ hệ thống." 2
-  left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  
-  str_opt1="  1) BẬT ĐỒNG LOẠT (Bật chống DDoS cho tất cả website)"
-  pad_opt1=$((box_inner_width - ${#str_opt1}))
-  [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-  echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT ĐỒNG LOẠT${C_RESET} (Bật chống DDoS cho tất cả website)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
-  
-  str_opt2="  2) TẮT ĐỒNG LOẠT (Tắt chống DDoS trên tất cả website)"
-  pad_opt2=$((box_inner_width - ${#str_opt2}))
-  [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
-  echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT ĐỒNG LOẠT${C_RESET} (Tắt chống DDoS trên tất cả website)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
-  
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-  echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
-  read -r mass_choice
-  
-  mass_action=""
-  if [[ "$mass_choice" == "1" ]]; then
+echo ""
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
     mass_action="bat"
-  elif [[ "$mass_choice" == "2" ]]; then
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
     mass_action="tat"
   else
-    echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
-    exec /etc/wptt/wptt-bao-mat-main 1
+    # NẾU CHỌN TỪ MENU UI -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: CẤU HÌNH CHỐNG DDOS${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình Fail2ban cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    str_opt1="  1) BẬT ĐỒNG LOẠT (Bật chống DDoS cho tất cả website)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT ĐỒNG LOẠT${C_RESET} (Bật chống DDoS cho tất cả website)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+    str_opt2="  2) TẮT ĐỒNG LOẠT (Tắt chống DDoS trên tất cả website)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT ĐỒNG LOẠT${C_RESET} (Tắt chống DDoS trên tất cả website)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      mass_action="bat"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      mass_action="tat"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
   fi
 
   [[ "$mass_action" == "bat" ]] && install_dependencies
@@ -398,59 +430,64 @@ else
   }
 
   domain_fail2ban="${NAME//[-._]/wp}"
-  
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH CHỐNG DDOS (FAIL2BAN)${C_RESET}"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  
-  if [[ -f "/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf" ]]; then
-    left_text "  Website ${NAME} hiện ĐANG BẬT chế độ chống DDoS." 2
-    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    
-    str_opt1="  1) TẮT CHỐNG DDOS (Hủy theo dõi log và xóa quy tắc chặn)"
-    pad_opt1=$((box_inner_width - ${#str_opt1}))
-    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT CHỐNG DDOS${C_RESET} (Hủy theo dõi log và xóa quy tắc chặn)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
-    
-    str_opt2="  2) Không làm gì cả (Giữ nguyên cấu hình)"
-    pad_opt2=$((box_inner_width - ${#str_opt2}))
-    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên cấu hình)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
-    
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
-    read -r single_choice
-    
-    if [[ "$single_choice" == "1" ]]; then
-      process_ddos "$NAME" "tat"
-    else
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
-      exec /etc/wptt/wptt-bao-mat-main 1
-    fi
-  else
-    left_text "  Website ${NAME} hiện ĐANG TẮT chế độ chống DDoS." 2
-    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    
-    str_opt1="  1) BẬT CHỐNG DDOS (Chặn IP có dấu hiệu spam, truy cập ảo)"
-    pad_opt1=$((box_inner_width - ${#str_opt1}))
-    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT CHỐNG DDOS${C_RESET} (Chặn IP có dấu hiệu spam, truy cập ảo)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
-    
-    str_opt2="  2) Không làm gì cả (Hủy thao tác)"
-    pad_opt2=$((box_inner_width - ${#str_opt2}))
-    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
-    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
-    
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
-    read -r single_choice
-    
-    if [[ "$single_choice" == "1" ]]; then
+
+  if [[ $CLI_MODE -eq 1 ]]; then
+    if [[ "$CLI_ACTION" == "bat" ]]; then
       install_dependencies
-      process_ddos "$NAME" "bat"
+    fi
+    process_ddos "$NAME" "$CLI_ACTION"
+  else
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH CHỐNG DDOS (FAIL2BAN)${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if [[ -f "/etc/fail2ban/filter.d/ddos-$domain_fail2ban.conf" ]]; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT chế độ chống DDoS." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      str_opt1="  1) TẮT CHỐNG DDOS (Hủy theo dõi log và xóa quy tắc chặn)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT CHỐNG DDOS${C_RESET} (Hủy theo dõi log và xóa quy tắc chặn)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+      str_opt2="  2) Không làm gì cả (Giữ nguyên cấu hình)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên cấu hình)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+
+      if [[ "$single_choice" == "1" ]]; then
+        process_ddos "$NAME" "tat"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
     else
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
-      exec /etc/wptt/wptt-bao-mat-main 1
+      left_text "  Website ${NAME} hiện ĐANG TẮT chế độ chống DDoS." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      str_opt1="  1) BẬT CHỐNG DDOS (Chặn IP có dấu hiệu spam, truy cập ảo)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT CHỐNG DDOS${C_RESET} (Chặn IP có dấu hiệu spam, truy cập ảo)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+
+      if [[ "$single_choice" == "1" ]]; then
+        install_dependencies
+        process_ddos "$NAME" "bat"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
     fi
   fi
 fi
