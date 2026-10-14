@@ -1,3 +1,14 @@
+## WPTangToc OLS 8.2.3.3
+
+🐛 **Sửa lỗi**
+- Khắc phục các lỗi phát sinh trên hệ thống, nâng cao độ ổn định và an toàn khi vận hành máy chủ.
+
+🛠️ **Tối ưu hệ thống**
+- Cải tiến và chuẩn hóa biểu thức chính quy (regex) xử lý phần mở rộng tệp tin, giúp hệ thống hoạt động hiệu quả hơn và dễ dàng bảo trì, mở rộng trong tương lai.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.3.2
 
 🛠️ **Tối ưu hệ thống**
