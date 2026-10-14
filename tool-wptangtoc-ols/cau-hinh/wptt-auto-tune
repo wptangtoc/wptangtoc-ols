@@ -26,7 +26,7 @@ if [[ "$DIFF" -gt 500 ]]; then
   wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - Phát hiện đổi phần cứng: RAM từ ${OLD_RAM}MB sang ${TOTAL_RAM}MB. Đang Auto-Tune..."
 
   # ==========================================
-  # A. TÍNH TOÁN THÔNG SỐ 
+  # A. TÍNH TOÁN THÔNG SỐ
   # ==========================================
   work_cpucore=1024
   cpucore=$(nproc)
@@ -41,19 +41,42 @@ if [[ "$DIFF" -gt 500 ]]; then
   gioi_han_tien_trinh_bao_loi_503=$((max_client / 8))
   core_tien_lsphp_child=$((cpucore * 2))
 
-  tong_ram_mb_db=$((rong_ram_mb / 4))
-  [[ "$tong_ram_mb_db" -eq 0 ]] && tong_ram_mb_db=2048
-
   tong_ram_gb=$((rong_ram_mb / 1024))
   [[ "$tong_ram_gb" -eq 0 ]] && tong_ram_gb=1
 
-  db_table_size=$((tong_ram_gb * 64))
-  buffer_db=$((rong_ram_mb / 6))
-  max_conect_db=$((max_client / 8))
-  max_connections=$((64 * tong_ram_gb))
+  # ---------------------------------------------------------
+  # PHÂN TẦNG INNODB BUFFER POOL & KẾT NỐI (ĐẶC TRỊ VPS < 2GB)
+  # (Không can thiệp innodb_log_buffer_size theo yêu cầu)
+  # ---------------------------------------------------------
+  if ((rong_ram_mb <= 650)); then
+    # Tầng 512MB RAM: Khóa cứng chống OOM tuyệt đối
+    tong_ram_mb_db=32
+    buffer_db=8
+    max_connections=30
+    db_table_size=16
+  elif ((rong_ram_mb <= 1150)); then
+    # Tầng 1GB RAM
+    tong_ram_mb_db=128
+    buffer_db=16
+    max_connections=50
+    db_table_size=32
+  elif ((rong_ram_mb <= 1850)); then
+    # Tầng 1.5GB RAM
+    tong_ram_mb_db=256
+    buffer_db=32
+    max_connections=80
+    db_table_size=64
+  else
+    # Tầng >= 2GB RAM: Áp dụng công thức 40% RAM (làm tròn block 128MB)
+    tong_ram_mb_db=$(((rong_ram_mb * 40 / 100 / 128) * 128))
+    ((tong_ram_mb_db == 0)) && tong_ram_mb_db=512
+    buffer_db=$((rong_ram_mb / 8))
+    max_connections=$((64 * tong_ram_gb))
+    db_table_size=$((tong_ram_gb * 64))
+  fi
 
   # ==========================================
-  # B. CẤU HÌNH MARIADB
+  # B. CẤU HÌNH MARIADB (CHUẨN ATOMIC)
   # ==========================================
   HAS_SQLITE=0
   shopt -s nullglob
@@ -70,9 +93,9 @@ if [[ "$DIFF" -gt 500 ]]; then
   done
   shopt -u nullglob
 
-  # TEMP_mariadb_config=$(mktemp)
-  TEMP_mariadb_config=$(mktemp -p "/etc/wptt/tmp" mariadb_db_config_cnf_XXXXXX.cnf)
-  TEMP_OLS_config_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX)
+  mkdir -p /etc/wptt/tmp
+  TEMP_mariadb_config=$(mktemp -p "/etc/wptt/tmp" mariadb_db_config_cnf_XXXXXX.cnf 2>/dev/null || mktemp)
+  TEMP_OLS_config_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX 2>/dev/null || mktemp -d)
 
   if [[ "$HAS_SQLITE" -eq 0 ]]; then
     if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
@@ -81,10 +104,18 @@ if [[ "$DIFF" -gt 500 ]]; then
       duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
     fi
 
-    cp -f "$duong_dan_cau_hinh_mariadb" "$TEMP_mariadb_config"
-    sed -i '/key_buffer_size/d; /innodb_buffer_pool_size/d; /max_connections/d; /tmp_table_size/d; /max_heap_table_size/d; /max_allowed_packet/d; /table_cache/d; /thread_cache_size/d' "$duong_dan_cau_hinh_mariadb"
+    # Lưu bản backup dự phòng trước khi thay đổi
+    cp -fp "$duong_dan_cau_hinh_mariadb" "$TEMP_mariadb_config" 2>/dev/null
 
-    cat <<EOF >>"$duong_dan_cau_hinh_mariadb"
+    # Khởi tạo bản nháp Atomic từ hàm core-functions
+    tmp_mariadb=$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb") || {
+      wptt_logs "ERROR" "Không thể khởi tạo file nháp MariaDB"
+    }
+
+    if [[ -n "$tmp_mariadb" && -f "$tmp_mariadb" ]]; then
+      sed -i '/key_buffer_size/d; /innodb_buffer_pool_size/d; /max_connections/d; /tmp_table_size/d; /max_heap_table_size/d; /max_allowed_packet/d; /table_cache/d; /thread_cache_size/d' "$tmp_mariadb"
+
+      cat <<EOF >>"$tmp_mariadb"
 table_cache = 2000
 thread_cache_size = 81
 key_buffer_size = ${buffer_db}M
@@ -94,30 +125,33 @@ tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 max_allowed_packet = 64M
 EOF
+      # Ghi đè an toàn (Atomic commit)
+      wptt_atomic_commit "$tmp_mariadb" "$duong_dan_cau_hinh_mariadb"
+    fi
   fi
 
   # ---------------------------------------------------------
   # BACKUP OLS CHỌN LỌC (CHỐNG LỖI MÙ QUÁNG COPY Wildcard)
   # ---------------------------------------------------------
-
-  #Dấu hoa thị * (Wildcard) kết hợp với Filesystem ảo của Kernel. rất dễ copy mount làm đẩy ổ cứng trong 1 số tình huống đặc biệt
   cp -fp /usr/local/lsws/conf/httpd_config.conf "$TEMP_OLS_config_DIR/" 2>/dev/null
   cp -rf /usr/local/lsws/conf/vhosts "$TEMP_OLS_config_DIR/" 2>/dev/null
 
   # ==========================================
   # C. CẤU HÌNH OPENLITESPEED (OLS)
   # ==========================================
-
-	#chuẩn bị thay đổi cấu hình phương án atomic sed -i
   OLS_CONF='/usr/local/lsws/conf/httpd_config.conf'
 
-	tmp_httpd_OLS=$(wptt_atomic_begin "$OLS_CONF") || {
-		_runloi "Không thể khởi tạo file nháp OpenLiteSpeed"
-			exit 1
-	}
+  tmp_httpd_OLS=$(wptt_atomic_begin "$OLS_CONF") || {
+    _runloi "Không thể khởi tạo file nháp OpenLiteSpeed"
+    exit 1
+  }
 
-
-  if [ "$TOTAL_RAM" -le 1200 ]; then
+  if [ "$TOTAL_RAM" -le 650 ]; then
+    BUFFER_SIZE="32M"
+    MMAP_CACHE_SIZE="16M"
+    KA_TIMEOUT="10"
+    KA_REQS="500"
+  elif [ "$TOTAL_RAM" -le 1200 ]; then
     BUFFER_SIZE="60M"
     MMAP_CACHE_SIZE="20M"
     KA_TIMEOUT="15"
@@ -164,10 +198,10 @@ EOF
     VHOST_CONF="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
 
     if [[ -n "$domain" && "$domain" != "conf" && -f "$VHOST_CONF" ]]; then
-			unset tmp_httpd_vhost_ols
-			tmp_httpd_vhost_ols=$(wptt_atomic_begin "$VHOST_CONF") || {
-						continue
-				}
+      unset tmp_httpd_vhost_ols
+      tmp_httpd_vhost_ols=$(wptt_atomic_begin "$VHOST_CONF") || {
+        continue
+      }
 
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/" "$tmp_httpd_vhost_ols"
       if [[ -f "/usr/local/lsws/$domain/html/wp-content/db.php" ]] && grep -qi "sqlite" "/usr/local/lsws/$domain/html/wp-content/db.php"; then
@@ -180,7 +214,7 @@ EOF
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*memHardLimit[[:blank:]]+).*/\1${rong_ram_mb}M/" "$tmp_httpd_vhost_ols"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procSoftLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$tmp_httpd_vhost_ols"
       sed -i -E "/extprocessor/,/\}/ s/^([[:blank:]]*procHardLimit[[:blank:]]+).*/\1$gioi_han_tien_trinh_bao_loi_503/" "$tmp_httpd_vhost_ols"
-		  wptt_atomic_commit "$tmp_httpd_vhost_ols" "$VHOST_CONF"
+      wptt_atomic_commit "$tmp_httpd_vhost_ols" "$VHOST_CONF"
     fi
   done
   shopt -u nullglob
@@ -196,17 +230,27 @@ EOF
   # ==========================================
   echo "$TOTAL_RAM" >"$FILE_CACHE"
 
-  # Restart MariaDB
+  # Restart MariaDB & Kiểm tra cú pháp
   if [[ "$HAS_SQLITE" -eq 0 ]]; then
     if mariadbd --help --verbose >/dev/null 2>&1; then
       systemctl restart mariadb
-      rm -f "${TEMP_mariadb_config:?}"
+      rm -f "${TEMP_mariadb_config:?}" 2>/dev/null
       wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning Thành công!"
     else
-      cp -f "$TEMP_mariadb_config" "$duong_dan_cau_hinh_mariadb"
-      chmod 644 "$duong_dan_cau_hinh_mariadb"
-      chown root:root "$duong_dan_cau_hinh_mariadb"
-      wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại! Đã khôi phục."
+      # Rollback Atomic an toàn nếu cú pháp bị lỗi
+      if [[ -f "$TEMP_mariadb_config" ]]; then
+        tmp_restore_mariadb=$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb")
+        if [[ -n "$tmp_restore_mariadb" ]]; then
+          cp -f "$TEMP_mariadb_config" "$tmp_restore_mariadb"
+          wptt_atomic_commit "$tmp_restore_mariadb" "$duong_dan_cau_hinh_mariadb"
+        else
+          cp -f "$TEMP_mariadb_config" "$duong_dan_cau_hinh_mariadb"
+        fi
+        chmod 644 "$duong_dan_cau_hinh_mariadb"
+        chown root:root "$duong_dan_cau_hinh_mariadb"
+        rm -f "${TEMP_mariadb_config:?}" 2>/dev/null
+      fi
+      wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - MariaDB Auto-Tuning thất bại! Đã khôi phục an toàn."
     fi
   fi
 
@@ -216,9 +260,7 @@ EOF
     rm -rf "${TEMP_OLS_config_DIR:?}"
     wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning Thành công!"
   else
-    # ---------------------------------------------------------
-    # RESTORE OLS AN TOÀN (KHÔNG DÙNG LỆNH XÓA RM -RF *)
-    # ---------------------------------------------------------
+    # Restore OLS an toàn
     cp -fp "$TEMP_OLS_config_DIR/httpd_config.conf" /usr/local/lsws/conf/ 2>/dev/null
     cp -rf "$TEMP_OLS_config_DIR/vhosts" /usr/local/lsws/conf/ 2>/dev/null
 
