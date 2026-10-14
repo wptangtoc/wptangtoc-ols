@@ -1,3 +1,12 @@
+## WPTangToc OLS 8.2.3.1
+
+🛠️ Tối ưu hệ thống:
+- Tinh chỉnh và tối ưu hóa hiệu năng, giúp vận hành mượt mà và ổn định trên các máy chủ ảo (VPS) có dung lượng RAM nhỏ (512MB).
+- Bổ sung cơ chế tự động chuyển đổi dự phòng sang cổng 443, đảm bảo kết nối luôn thông suốt và không bị gián đoạn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.3.0
 
 🚀 **Tính năng mới**
