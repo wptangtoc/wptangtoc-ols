@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
@@ -8,6 +9,7 @@ PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/b
 
 # 1. Đọc tổng RAM hiện tại của VPS (MB)
 TOTAL_RAM=$(free -m | awk '/^Mem:/{print $2}')
+[[ -z "$TOTAL_RAM" || ! "$TOTAL_RAM" =~ ^[0-9]+$ ]] && TOTAL_RAM=2048
 FILE_CACHE="/etc/wptt/.ram_hien_tai"
 
 if [[ ! -f "$FILE_CACHE" ]]; then
@@ -15,38 +17,41 @@ if [[ ! -f "$FILE_CACHE" ]]; then
   return 2>/dev/null || exit 0
 fi
 
-OLD_RAM=$(cat "$FILE_CACHE")
+OLD_RAM=$(awk 'NR==1{print $1}' "$FILE_CACHE" 2>/dev/null)
+[[ -z "$OLD_RAM" || ! "$OLD_RAM" =~ ^[0-9]+$ ]] && OLD_RAM="$TOTAL_RAM"
 
 # 2. Tính toán độ chênh lệch
 DIFF=$((TOTAL_RAM - OLD_RAM))
-[[ "$DIFF" -lt 0 ]] && DIFF=$((-DIFF))
+((DIFF < 0)) && DIFF=$((-DIFF))
 
 # 3. NẾU ĐỔI PHẦN CỨNG TRÊN 500MB -> KÍCH HOẠT AUTO-TUNING
-if [[ "$DIFF" -gt 500 ]]; then
+if ((DIFF > 500)); then
   wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - Phát hiện đổi phần cứng: RAM từ ${OLD_RAM}MB sang ${TOTAL_RAM}MB. Đang Auto-Tune..."
 
   # ==========================================
-  # A. TÍNH TOÁN THÔNG SỐ
+  # A. TÍNH TOÁN THÔNG SỐ THEO PHẦN CỨNG
   # ==========================================
   work_cpucore=1024
-  cpucore=$(nproc)
+  cpucore=$(nproc 2>/dev/null || echo 1)
+  ((cpucore <= 0)) && cpucore=1
 
   max_client=$((work_cpucore * cpucore * 2))
   max_client_max=$((work_cpucore * cpucore * 3))
-  max_client_php=$((work_cpucore * cpucore / 8))
 
   rong_ram_mb=$TOTAL_RAM
-  [[ -z "$rong_ram_mb" || "$rong_ram_mb" -eq 0 ]] && rong_ram_mb=2048
+  ((rong_ram_mb <= 0)) && rong_ram_mb=2048
 
   gioi_han_tien_trinh_bao_loi_503=$((max_client / 8))
   core_tien_lsphp_child=$((cpucore * 2))
 
   tong_ram_gb=$((rong_ram_mb / 1024))
-  [[ "$tong_ram_gb" -eq 0 ]] && tong_ram_gb=1
+  ((tong_ram_gb == 0)) && tong_ram_gb=1
+
+  # Luôn tắt performance_schema để giải phóng RAM và giảm CPU overhead tối đa
+  perf_schema_val="OFF"
 
   # ---------------------------------------------------------
   # PHÂN TẦNG INNODB BUFFER POOL & KẾT NỐI (ĐẶC TRỊ VPS < 2GB)
-  # (Không can thiệp innodb_log_buffer_size theo yêu cầu)
   # ---------------------------------------------------------
   if ((rong_ram_mb <= 650)); then
     # Tầng 512MB RAM: Khóa cứng chống OOM tuyệt đối
@@ -54,18 +59,24 @@ if [[ "$DIFF" -gt 500 ]]; then
     buffer_db=8
     max_connections=30
     db_table_size=16
+    table_cache_val=400
+    thread_cache_val=16
   elif ((rong_ram_mb <= 1150)); then
     # Tầng 1GB RAM
     tong_ram_mb_db=128
     buffer_db=16
     max_connections=50
     db_table_size=32
+    table_cache_val=800
+    thread_cache_val=32
   elif ((rong_ram_mb <= 1850)); then
     # Tầng 1.5GB RAM
     tong_ram_mb_db=256
     buffer_db=32
     max_connections=80
     db_table_size=64
+    table_cache_val=1200
+    thread_cache_val=48
   else
     # Tầng >= 2GB RAM: Áp dụng công thức 40% RAM (làm tròn block 128MB)
     tong_ram_mb_db=$(((rong_ram_mb * 40 / 100 / 128) * 128))
@@ -73,7 +84,20 @@ if [[ "$DIFF" -gt 500 ]]; then
     buffer_db=$((rong_ram_mb / 8))
     max_connections=$((64 * tong_ram_gb))
     db_table_size=$((tong_ram_gb * 64))
+    table_cache_val=2000
+    thread_cache_val=81
   fi
+
+  mkdir -p /etc/wptt/tmp
+  TEMP_mariadb_config=$(mktemp -p "/etc/wptt/tmp" mariadb_db_config_cnf_XXXXXX.cnf 2>/dev/null || mktemp)
+  TEMP_OLS_config_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX 2>/dev/null || mktemp -d)
+
+  # Đảm bảo không bao giờ để sót file tạm trong /etc/wptt/tmp dù thoát giữa chừng
+  _wptt_autotune_cleanup() {
+    rm -f "${TEMP_mariadb_config:-}" 2>/dev/null || true
+    rm -rf "${TEMP_OLS_config_DIR:-}" 2>/dev/null || true
+  }
+  trap _wptt_autotune_cleanup EXIT
 
   # ==========================================
   # B. CẤU HÌNH MARIADB (CHUẨN ATOMIC)
@@ -93,10 +117,6 @@ if [[ "$DIFF" -gt 500 ]]; then
   done
   shopt -u nullglob
 
-  mkdir -p /etc/wptt/tmp
-  TEMP_mariadb_config=$(mktemp -p "/etc/wptt/tmp" mariadb_db_config_cnf_XXXXXX.cnf 2>/dev/null || mktemp)
-  TEMP_OLS_config_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX 2>/dev/null || mktemp -d)
-
   if [[ "$HAS_SQLITE" -eq 0 ]]; then
     if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
       duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
@@ -104,20 +124,28 @@ if [[ "$DIFF" -gt 500 ]]; then
       duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
     fi
 
-    # Lưu bản backup dự phòng trước khi thay đổi
-    cp -fp "$duong_dan_cau_hinh_mariadb" "$TEMP_mariadb_config" 2>/dev/null
+    if [[ -f "$duong_dan_cau_hinh_mariadb" ]]; then
+      cp -fp "$duong_dan_cau_hinh_mariadb" "$TEMP_mariadb_config" 2>/dev/null
 
-    # Khởi tạo bản nháp Atomic từ hàm core-functions
-    tmp_mariadb=$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb") || {
-      wptt_logs "ERROR" "Không thể khởi tạo file nháp MariaDB"
-    }
+      tmp_mariadb=$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb") || {
+        wptt_logs "ERROR" "Không thể khởi tạo file nháp MariaDB"
+      }
 
-    if [[ -n "$tmp_mariadb" && -f "$tmp_mariadb" ]]; then
-      sed -i '/key_buffer_size/d; /innodb_buffer_pool_size/d; /max_connections/d; /tmp_table_size/d; /max_heap_table_size/d; /max_allowed_packet/d; /table_cache/d; /thread_cache_size/d' "$tmp_mariadb"
+      if [[ -n "$tmp_mariadb" && -f "$tmp_mariadb" ]]; then
+        sed -i '/^[[:blank:]]*# WPTT AUTO-TUNE MARIADB/d; /^[[:blank:]]*key_buffer_size/d; /^[[:blank:]]*innodb_buffer_pool_size/d; /^[[:blank:]]*max_connections/d; /^[[:blank:]]*tmp_table_size/d; /^[[:blank:]]*max_heap_table_size/d; /^[[:blank:]]*max_allowed_packet/d; /^[[:blank:]]*table_cache/d; /^[[:blank:]]*thread_cache_size/d; /^[[:blank:]]*performance_schema/d' "$tmp_mariadb"
 
-      cat <<EOF >>"$tmp_mariadb"
-table_cache = 2000
-thread_cache_size = 81
+        # Luôn đảm bảo các biến nằm đúng trong ngữ cảnh [mysqld]
+        if ! grep -qi '^[[:blank:]]*\[mysqld\]' "$tmp_mariadb"; then
+          printf "\n[mysqld]\n" >>"$tmp_mariadb"
+        elif [[ "$(grep -iE '^[[:blank:]]*\[.*\]' "$tmp_mariadb" | tail -n 1 | tr -d '[:blank:]' | tr '[:upper:]' '[:lower:]')" != "[mysqld]" ]]; then
+          printf "\n[mysqld]\n" >>"$tmp_mariadb"
+        fi
+
+        cat <<EOF >>"$tmp_mariadb"
+# WPTT AUTO-TUNE MARIADB
+performance_schema = $perf_schema_val
+table_cache = $table_cache_val
+thread_cache_size = $thread_cache_val
 key_buffer_size = ${buffer_db}M
 innodb_buffer_pool_size = ${tong_ram_mb_db}M
 max_connections = $max_connections
@@ -125,8 +153,8 @@ tmp_table_size = ${db_table_size}M
 max_heap_table_size = ${db_table_size}M
 max_allowed_packet = 64M
 EOF
-      # Ghi đè an toàn (Atomic commit)
-      wptt_atomic_commit "$tmp_mariadb" "$duong_dan_cau_hinh_mariadb"
+        wptt_atomic_commit "$tmp_mariadb" "$duong_dan_cau_hinh_mariadb"
+      fi
     fi
   fi
 
@@ -146,22 +174,22 @@ EOF
     exit 1
   }
 
-  if [ "$TOTAL_RAM" -le 650 ]; then
+  if ((TOTAL_RAM <= 650)); then
     BUFFER_SIZE="32M"
     MMAP_CACHE_SIZE="16M"
     KA_TIMEOUT="10"
     KA_REQS="500"
-  elif [ "$TOTAL_RAM" -le 1200 ]; then
+  elif ((TOTAL_RAM <= 1200)); then
     BUFFER_SIZE="60M"
     MMAP_CACHE_SIZE="20M"
     KA_TIMEOUT="15"
     KA_REQS="1000"
-  elif [ "$TOTAL_RAM" -le 2500 ]; then
+  elif ((TOTAL_RAM <= 2500)); then
     BUFFER_SIZE="120M"
     MMAP_CACHE_SIZE="40M"
     KA_TIMEOUT="30"
     KA_REQS="3000"
-  elif [ "$TOTAL_RAM" -le 4500 ]; then
+  elif ((TOTAL_RAM <= 4500)); then
     BUFFER_SIZE="180M"
     MMAP_CACHE_SIZE="80M"
     KA_TIMEOUT="45"
@@ -175,12 +203,12 @@ EOF
 
   sed -i -E "s/^[[:blank:]]*keepAliveTimeout.*/keepAliveTimeout         $KA_TIMEOUT/g" "$tmp_httpd_OLS"
   sed -i -E "s/^[[:blank:]]*maxKeepAliveReq.*/maxKeepAliveReq          $KA_REQS/g" "$tmp_httpd_OLS"
-  sed -i -E "s/^\s*inMemBufSize\s+.*/inMemBufSize          ${BUFFER_SIZE}/" "$tmp_httpd_OLS"
-  sed -i -E "s/^\s*totalInMemCacheSize\s+.*/totalInMemCacheSize    ${MMAP_CACHE_SIZE}/" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*inMemBufSize[[:blank:]]+.*/inMemBufSize             ${BUFFER_SIZE}/" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*totalInMemCacheSize[[:blank:]]+.*/totalInMemCacheSize      ${MMAP_CACHE_SIZE}/" "$tmp_httpd_OLS"
   sed -i -E "s/^[[:blank:]]*httpdWorkers.*/httpdWorkers             $cpucore/g" "$tmp_httpd_OLS"
   sed -i -E "s/^[[:blank:]]*cpuAffinity.*/cpuAffinity              $cpucore/g" "$tmp_httpd_OLS"
-  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections             $max_client_max/g" "$tmp_httpd_OLS"
-  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections          $max_client_max/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*maxConnections.*/maxConnections           $max_client_max/g" "$tmp_httpd_OLS"
+  sed -i -E "s/^[[:blank:]]*maxSSLConnections.*/maxSSLConnections        $max_client_max/g" "$tmp_httpd_OLS"
 
   sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*maxConns[[:blank:]]+).*/\1$core_tien_lsphp_child/g" "$tmp_httpd_OLS"
   sed -i -E "/extprocessor.*lsphp/,/\}/ s/^([[:blank:]]*env[[:blank:]]+PHP_LSAPI_CHILDREN=).*/\1$core_tien_lsphp_child/g" "$tmp_httpd_OLS"
@@ -220,18 +248,52 @@ EOF
   shopt -u nullglob
 
   # ==========================================
-  # E. CHẠY SCRIPT TỐI ƯU CACHE
+  # E. CHẠY SCRIPT TỐI ƯU CACHE & FAIL2BAN
   # ==========================================
   [[ -x "/etc/wptt/cache/opcache-optimize-tune" ]] && /etc/wptt/cache/opcache-optimize-tune
   [[ -x "/etc/wptt/cache/object-cache-optimize-tune" ]] && /etc/wptt/cache/object-cache-optimize-tune
 
+  # Auto-Tune Fail2Ban (Giảm 75% RAM Thread Stack & chống nghẽn Disk SQLite trên VPS nhỏ)
+  if [[ -d "/etc/fail2ban" ]] && command -v fail2ban-client >/dev/null 2>&1; then
+    mkdir -p /etc/systemd/system/fail2ban.service.d /etc/fail2ban/fail2ban.d
+    if ((TOTAL_RAM <= 1200)); then
+      F2B_MEM_HIGH="48M"
+      F2B_MEM_MAX="96M"
+      F2B_DBFILE=":memory:"
+      F2B_MAXMATCHES="20"
+    else
+      F2B_MEM_HIGH="128M"
+      F2B_MEM_MAX="256M"
+      F2B_DBFILE="/var/lib/fail2ban/fail2ban.sqlite3"
+      F2B_MAXMATCHES="50"
+    fi
+
+    cat <<EOF >/etc/systemd/system/fail2ban.service.d/wptt-autotune.conf
+[Service]
+LimitSTACK=512K
+MemoryHigh=$F2B_MEM_HIGH
+MemoryMax=$F2B_MEM_MAX
+EOF
+
+    cat <<EOF >/etc/fail2ban/fail2ban.d/wptt-autotune.local
+[Definition]
+dbfile = $F2B_DBFILE
+dbpurgeage = 86400
+dbmaxmatches = $F2B_MAXMATCHES
+EOF
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl is-active --quiet fail2ban 2>/dev/null; then
+      systemctl restart fail2ban >/dev/null 2>&1 || true
+    fi
+    wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - Fail2Ban Auto-Tuned: Stack 512K, DB=${F2B_DBFILE}"
+  fi
+
   # ==========================================
   # F. LƯU TRẠNG THÁI VÀ KHỞI ĐỘNG LẠI
   # ==========================================
-  echo "$TOTAL_RAM" >"$FILE_CACHE"
-
   # Restart MariaDB & Kiểm tra cú pháp
-  if [[ "$HAS_SQLITE" -eq 0 ]]; then
+  if [[ "$HAS_SQLITE" -eq 0 && -f "$duong_dan_cau_hinh_mariadb" ]]; then
     if mariadbd --help --verbose >/dev/null 2>&1; then
       systemctl restart mariadb
       rm -f "${TEMP_mariadb_config:?}" 2>/dev/null
@@ -330,5 +392,6 @@ EOF
     wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - ZRAM Auto-Tuned: ${ZRAM_SIZE_MB}MB với ${BEST_ALGO}"
   fi
 
+  echo "$TOTAL_RAM" >"$FILE_CACHE"
   wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - Auto-Tuning hoàn tất toàn diện!"
 fi
