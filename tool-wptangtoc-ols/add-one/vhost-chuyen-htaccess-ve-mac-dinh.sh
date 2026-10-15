@@ -29,4 +29,3 @@ done
 
 # 3. Reload lại Watcher
 (/etc/wptt/cau-hinh/htaccess-apply)
-systemctl restart wptt-htaccess >/dev/null 2>&1
