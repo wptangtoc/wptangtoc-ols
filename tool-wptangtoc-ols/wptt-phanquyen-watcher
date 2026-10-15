@@ -1,86 +1,155 @@
 #!/bin/bash
-# @author: Gia Tuấn 
-# @website: https://wptangtoc.com 
-# @description: Realtime Auto Chmod/Chown Watcher Engine
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Realtime Auto Chmod/Chown Watcher Engine (Enterprise Edition)
+# @since: 2026
 
-. /etc/wptt/core-functions
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+mkdir -p /etc/wptt/tmp
+# Dọn dẹp toàn bộ lock tồn đọng từ phiên trước (chống kẹt lock khi restart dịch vụ)
+/bin/rm -f -- /etc/wptt/tmp/lock_chmod_watcher_*.active 2>/dev/null || true
 
 shopt -s nullglob
 WATCH_DIRS=()
-declare -A DOMAIN_USERS
+declare -A DOMAIN_USERS=()
 
-# 1. NẠP DANH SÁCH USER VÀ THƯ MỤC CẦN GIÁM SÁT VÀO RAM (AN TOÀN BỘ NHỚ)
+# 1. Theo dõi thêm /etc/wptt/vhost để tự động nạp lại khi Thêm/Xóa web, Đổi User hoặc Bật/Tắt Lockdown
+[[ -d "/etc/wptt/vhost" && ! -L "/etc/wptt/vhost" ]] && WATCH_DIRS+=("/etc/wptt/vhost")
+
+# 2. NẠP DANH SÁCH USER VÀ THƯ MỤC CẦN GIÁM SÁT VÀO RAM (THUẦN BASH - 0 SUBSHELL)
 for conf in /etc/wptt/vhost/.*.conf; do
-    domain="${conf##*/}"
-    domain="${domain%.conf}"
-    domain="${domain#.}"
-    
-    [[ "$domain" != ?*.?* ]] && continue
-    
-    html_dir="/usr/local/lsws/$domain/html"
-    
-    # LỚP KHIÊN 1: Loại trừ tuyệt đối Symlink để tránh bị lừa quét nhầm vùng hệ thống
-    if [[ -d "$html_dir" && ! -L "$html_dir" ]]; then
-        user=$(grep '^User_name_vhost=' "$conf" 2>/dev/null | cut -d'=' -f2 | tr -d '"'"'")
-        lock=$(grep '^lock_down=' "$conf" 2>/dev/null | cut -d'=' -f2 | tr -d '"'"'")
-        
-        # Chỉ tự động sửa quyền cho các domain KHÔNG bật lock_down
-        if [[ -n "$user" && -z "$lock" ]]; then
-            DOMAIN_USERS["$domain"]="$user"
-            WATCH_DIRS+=("$html_dir")
-        fi
-    fi
-done
+  [[ -f "$conf" ]] || continue
+  domain="${conf##*/}"
+  domain="${domain%.conf}"
+  domain="${domain#.}"
 
-if [[ ${#WATCH_DIRS[@]} -eq 0 ]]; then
-    sleep 60
-    exit 0
+  [[ "$domain" != ?*.?* || "$domain" == *..* ]] && continue
+
+  html_dir="/usr/local/lsws/$domain/html"
+
+  # LỚP KHIÊN 1: Loại trừ tuyệt đối Symlink để tránh bị lừa quét nhầm vùng hệ thống
+  if [[ -d "$html_dir" && ! -L "$html_dir" ]]; then
+    user=""
+    lock=""
+    while IFS='=' read -r key val; do
+      val="${val//\"/}"
+      val="${val//\'/}"
+      val="${val%%[[:space:]]*}"
+      case "$key" in
+        User_name_vhost) user="$val" ;;
+        lock_down) lock="$val" ;;
+      esac
+    done < "$conf"
+
+    # Chỉ tự động sửa quyền cho các domain có User hợp lệ và KHÔNG bật lock_down
+    if [[ -n "$user" && -z "$lock" ]]; then
+      DOMAIN_USERS["$domain"]="$user"
+      WATCH_DIRS+=("$html_dir")
+
+      # Theo dõi chọn lọc các thư mục trọng yếu (Không đệ quy vào lscache/uploads con để tiết kiệm watches)
+      for sub_dir in "wp-content" "wp-content/plugins" "wp-content/themes" "wp-content/mu-plugins"; do
+        if [[ -d "$html_dir/$sub_dir" && ! -L "$html_dir/$sub_dir" ]]; then
+          WATCH_DIRS+=("$html_dir/$sub_dir")
+        fi
+      done
+    fi
+  fi
+done
+shopt -u nullglob
+
+# Nếu chưa có website nào cần giám sát, nghỉ chờ để không tốn CPU
+if (( ${#DOMAIN_USERS[@]} == 0 )); then
+  sleep 60
+  exit 0
 fi
 
-mkdir -p /etc/wptt/tmp
+# Đảm bảo dọn sạch tiến trình inotifywait và lock khi dịch vụ dừng
+INOTIFY_PID=""
+cleanup_watcher() {
+  [[ -n "$INOTIFY_PID" ]] && kill -TERM "$INOTIFY_PID" 2>/dev/null || true
+  /bin/rm -f -- /etc/wptt/tmp/lock_chmod_watcher_*.active 2>/dev/null || true
+}
+trap cleanup_watcher EXIT INT TERM HUP
 
-# 2. LẮNG NGHE SỰ KIỆN QUA KERNEL INOTIFYWAIT
-inotifywait -m -e create,moved_to "${WATCH_DIRS[@]}" --format "%w%f" | while read -r raw_filepath; do
-    
-    # LỚP KHIÊN 2: Lọc rác siêu tốc bằng Parameter Expansion (Tiết kiệm CPU)
-    [[ "$raw_filepath" != *".php" && "$raw_filepath" != *".txt" && "$raw_filepath" != *".htaccess" ]] && continue
-    [[ "$raw_filepath" == *"/phpmyadmin"* ]] && continue
-    
-    # LỚP KHIÊN 3: Realpath để bóc trần sự thật đường dẫn (Chống Symlink/Path Traversal)
-    filepath=$(realpath -q "$raw_filepath" 2>/dev/null)
-    [[ -z "$filepath" ]] && filepath="$raw_filepath"
-    
-    # LỚP KHIÊN 4: Dùng [--] để chống Argument Injection nếu tên file bắt đầu bằng dấu trừ (-)
+# 3. LẮNG NGHE SỰ KIỆN QUA KERNEL INOTIFYWAIT (Dùng FD 3 tránh lỗi Subshell Pipe)
+exec 3< <(inotifywait -m -e create,moved_to,close_write,delete "${WATCH_DIRS[@]}" --format "%e|%w%f" 2>/dev/null)
+INOTIFY_PID=$!
+
+while IFS='|' read -r -u 3 event_type raw_filepath; do
+
+  # Tự động nạp lại cấu hình nếu có sự thay đổi Vhost (Thêm/xóa web, đổi User, bật/tắt Lockdown)
+  if [[ "$raw_filepath" == /etc/wptt/vhost/.*.conf ]]; then
+    sleep 1
+    exit 0
+  fi
+
+  # Bỏ qua sự kiện DELETE đối với file trong thư mục web
+  [[ "$event_type" == *"DELETE"* ]] && continue
+
+  # Nếu thư mục trọng yếu (wp-content, plugins, themes) vừa mới được tạo -> Nạp lại WATCH_DIRS
+  base_name="${raw_filepath##*/}"
+  if [[ "$event_type" == *"ISDIR"* ]] && [[ "$base_name" == "wp-content" || "$base_name" == "plugins" || "$base_name" == "themes" ]]; then
+    sleep 2
+    exit 0
+  fi
+
+  # LỚP KHIÊN 2: Lọc rác siêu tốc bằng Parameter Expansion (Bắt cả thư mục mới giải nén & file quan trọng)
+  if [[ "$event_type" != *"ISDIR"* ]]; then
+    case "$base_name" in
+      *.php|*.txt|*.htaccess|*.html|*.js|*.css|*.zip) ;;
+      *) continue ;;
+    esac
+  fi
+  [[ "$raw_filepath" == *"/phpmyadmin"* ]] && continue
+
+  # LỚP KHIÊN 3: Tách nhanh Domain và kiểm tra Lock TRƯỚC khi gọi lệnh ngoài (realpath/stat)
+  if [[ "$raw_filepath" =~ ^/usr/local/lsws/([a-zA-Z0-9.-]+)/html/ ]]; then
+    quick_domain="${BASH_REMATCH[1]}"
+    LOCK_FILE="/etc/wptt/tmp/lock_chmod_watcher_${quick_domain}.active"
+
+    # Nếu domain này đã nằm trong hàng đợi chờ phân quyền (5s), bỏ qua ngay trong RAM (0% CPU)
+    if [[ -f "$LOCK_FILE" ]]; then
+      # Phòng vệ chống kẹt lock nếu tiến trình con bị treo quá 300 giây
+      lock_mtime=$(stat -c %Y -- "$LOCK_FILE" 2>/dev/null || echo 0)
+      printf -v now_ts '%(%s)T' -1
+      if (( now_ts - lock_mtime < 300 )); then
+        continue
+      fi
+      /bin/rm -f -- "$LOCK_FILE" 2>/dev/null || true
+    fi
+  fi
+
+  # LỚP KHIÊN 4: Realpath để bóc trần sự thật đường dẫn (Chống Symlink/Path Traversal)
+  filepath=$(realpath -q -- "$raw_filepath" 2>/dev/null)
+  [[ -z "$filepath" ]] && filepath="$raw_filepath"
+
+  # LỚP KHIÊN 5: Strict Domain Validation sau khi đã giải mã Realpath
+  if [[ "$filepath" =~ ^/usr/local/lsws/([a-zA-Z0-9.-]+)/html/ ]]; then
+    domain="${BASH_REMATCH[1]}"
+    expected_user="${DOMAIN_USERS["$domain"]:-}"
+    [[ -z "$expected_user" ]] && continue
+
+    # LỚP KHIÊN 6: Dùng [--] chống Argument Injection và kiểm tra chủ sở hữu (Owner)
     file_owner=$(stat -c %U -- "$filepath" 2>/dev/null)
     [[ -z "$file_owner" ]] && continue
-    
-    # LỚP KHIÊN 5: Strict Domain Validation bằng Regex (Thay thế hoàn toàn awk)
-    if [[ "$filepath" =~ ^/usr/local/lsws/([a-zA-Z0-9.-]+)/html/ ]]; then
-        domain="${BASH_REMATCH[1]}"
-        expected_user="${DOMAIN_USERS["$domain"]}"
-        
-        # LỚP KHIÊN 6: Kiểm chứng chéo - Nếu User/Domain hợp lệ và Owner bị sai
-        if [[ -n "$expected_user" && "$file_owner" != "$expected_user" ]]; then
-            
-            LOCK_FILE="/etc/wptt/tmp/lock_chmod_watcher_${domain}.active"
-            
-            if [[ ! -f "$LOCK_FILE" ]]; then
-                touch "$LOCK_FILE" 2>/dev/null
-                
-                # Bắn tiến trình dọn dẹp xuống Background để Inotify không bị khựng
-                (
-                    sleep 5 
-                    # Set quyền ưu tiên I/O thấp nhất để Website không bị lag khi phân quyền
-                    ionice -c 3 nice -n 19 /etc/wptt/wptt-phanquyen "$domain" >/dev/null 2>&1
-                    
-                    # Dùng cờ -- bảo vệ đường dẫn biến động
-                    rm -f -- "$LOCK_FILE"
-                ) &
-            fi
-            
-            # LỚP KHIÊN 7: Debounce nâng cao - Rút sạch rác trong ống dẫn (Pipe)
-            sleep 1
-            while read -r -t 0.1 discard; do :; done
-        fi
+
+    # LỚP KHIÊN 7: Nếu phát hiện sai Owner -> Đưa vào hàng đợi trễ 5s (Gom toàn bộ đợt giải nén/upload)
+    if [[ "$file_owner" != "$expected_user" ]]; then
+      LOCK_FILE="/etc/wptt/tmp/lock_chmod_watcher_${domain}.active"
+
+      if [[ ! -f "$LOCK_FILE" ]]; then
+        touch -- "$LOCK_FILE" 2>/dev/null
+
+        # Bắn tiến trình phân quyền xuống Background để Inotify không bị khựng
+        (
+          sleep 5
+          # Đặt ưu tiên CPU và Disk I/O thấp nhất để Website không bị lag khi phân quyền
+          ionice -c 3 nice -n 19 /bin/bash /etc/wptt/wptt-phanquyen "$domain" >/dev/null 2>&1
+          /bin/rm -f -- "$LOCK_FILE" 2>/dev/null || true
+        ) &
+      fi
     fi
+  fi
 done
