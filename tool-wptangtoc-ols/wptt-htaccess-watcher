@@ -4,52 +4,117 @@
 # @description: Realtime OpenLiteSpeed .htaccess Watcher
 # @since: 2026
 
-. /etc/wptt/core-functions
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
 
 shopt -s nullglob
 WATCH_DIRS=()
 
-# 1. Quét thư mục an toàn (Bỏ qua Symlink để chống Path Traversal)
-for html_dir in /usr/local/lsws/*/html; do
-    if [[ -d "$html_dir" && ! -L "$html_dir" ]]; then
-        WATCH_DIRS+=("$html_dir")
-        [[ -d "$html_dir/wp-content" && ! -L "$html_dir/wp-content" ]] && WATCH_DIRS+=("$html_dir/wp-content")
-    fi
-done
+# 1. Theo dõi thêm thư mục /etc/wptt/vhost để tự động nhận diện khi thêm/xóa Website mới
+[[ -d "/etc/wptt/vhost" && ! -L "/etc/wptt/vhost" ]] && WATCH_DIRS+=("/etc/wptt/vhost")
 
-if [[ ${#WATCH_DIRS[@]} -eq 0 ]]; then
-    sleep 60
-    exit 0
+# 2. Quét thư mục an toàn (Bỏ qua Symlink để chống Path Traversal)
+for html_dir in /usr/local/lsws/*/html; do
+  if [[ -d "$html_dir" && ! -L "$html_dir" ]]; then
+    WATCH_DIRS+=("$html_dir")
+    if [[ -d "$html_dir/wp-content" && ! -L "$html_dir/wp-content" ]]; then
+      WATCH_DIRS+=("$html_dir/wp-content")
+    fi
+    if [[ -d "$html_dir/wp-content/uploads" && ! -L "$html_dir/wp-content/uploads" ]]; then
+      WATCH_DIRS+=("$html_dir/wp-content/uploads")
+    fi
+  fi
+done
+shopt -u nullglob
+
+# Nếu chưa có website nào trên máy chủ, nghỉ chờ để không tốn CPU
+if (( ${#WATCH_DIRS[@]} <= 1 )); then
+  sleep 60
+  exit 0
 fi
 
-# 2. Lắng nghe sự kiện (Bỏ -q để có thể debug nếu chạy service status)
-inotifywait -m -e close_write,moved_to,create,delete "${WATCH_DIRS[@]}" --format "%w%f" | while read -r raw_filepath; do
-    if [[ "$raw_filepath" == *".htaccess" ]]; then
-        
-        # LỚP KHIÊN 1: Realpath để bóc trần sự thật của đường dẫn (Chống Symlink ảo)
-        filepath=$(realpath -q "$raw_filepath" 2>/dev/null)
-        # Fallback nếu file vừa bị delete (realpath sẽ rỗng)
-        [[ -z "$filepath" ]] && filepath="$raw_filepath" 
+# Đảm bảo dọn sạch tiến trình con inotifywait khi Systemd dừng hoặc khởi động lại dịch vụ
+INOTIFY_PID=""
+cleanup_watcher() {
+  [[ -n "$INOTIFY_PID" ]] && kill -TERM "$INOTIFY_PID" 2>/dev/null || true
+}
+trap cleanup_watcher EXIT INT TERM HUP
 
-        # LỚP KHIÊN 2: Strict Domain Validation bằng Regex (Tuyệt đối không dùng awk -F'/')
-        if [[ "$filepath" =~ ^/usr/local/lsws/([a-zA-Z0-9.-]+)/html/ ]]; then
-            domain="${BASH_REMATCH[1]}"
-            
-            # LỚP KHIÊN 3: Domain ↔ Vhost Mapping (Xác thực domain có tồn tại thật trên WPTangToc)
-            if [[ -n "$domain" && -f "/etc/wptt/vhost/.$domain.conf" ]]; then
-                
-                if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
-                    # LỚP KHIÊN 4: Không Source (.). Ép chạy tiến trình con (Sub-process)
-                    /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$domain" >/dev/null 2>&1
-                else 
-                    wptt_smart_reload_lsws >/dev/null 2>&1
-                fi
-            fi
-        fi
+declare -A PENDING_DOMAINS=()
 
-        # LỚP KHIÊN 5:
-        # Nếu người dùng lưu file liên tục 10 lần trong 1 giây, chỉ xử lý 1 lần.
-        sleep 2
-        while read -r -t 0.1 discard; do :; done
+# Hàm kiểm tra xem có Vhost mới hoặc thư mục wp-content/uploads mới xuất hiện không
+_check_topology_change() {
+  local path="$1"
+  local evt="$2"
+  local base_name="${path##*/}"
+
+  # Nếu thêm/xóa file cấu hình Vhost
+  if [[ "$path" == /etc/wptt/vhost/.*.conf ]]; then
+    sleep 1
+    exit 0
+  fi
+
+  # Nếu thư mục wp-content hoặc uploads vừa được tạo mới (khi cài WP hoặc giải nén code)
+  if [[ "$evt" == *"ISDIR"* ]] && [[ "$base_name" == "wp-content" || "$base_name" == "uploads" ]]; then
+    sleep 1
+    exit 0
+  fi
+}
+
+# Hàm xác thực 3 lớp khiên và đưa domain vào hàng đợi xử lý
+_queue_htaccess_event() {
+  local raw_path="$1"
+  local evt="$2"
+  local resolved_path domain
+
+  # Bỏ qua sự kiện CREATE đối với file .htaccess (chờ đến khi CLOSE_WRITE ghi xong 100%)
+  [[ "$evt" == "CREATE" ]] && return 0
+  [[ "${raw_path##*/}" == ".htaccess" ]] || return 0
+
+  # LỚP KHIÊN 1: Realpath bóc trần đường dẫn thật (Chống Symlink ảo)
+  resolved_path=$(realpath -q "$raw_path" 2>/dev/null)
+  [[ -z "$resolved_path" ]] && resolved_path="$raw_path"
+
+  # LỚP KHIÊN 2: Strict Domain Validation bằng Regex thuần Bash
+  if [[ "$resolved_path" =~ ^/usr/local/lsws/([a-zA-Z0-9.-]+)/html/ ]]; then
+    domain="${BASH_REMATCH[1]}"
+
+    # LỚP KHIÊN 3: Domain ↔ Vhost Mapping (Xác thực domain tồn tại thật)
+    if [[ -n "$domain" && "$domain" != *..* && -f "/etc/wptt/vhost/.${domain}.conf" ]]; then
+      PENDING_DOMAINS["$domain"]=1
     fi
+  fi
+}
+
+# 3. Lắng nghe sự kiện (Định dạng: EVENT|PATH)
+exec 3< <(inotifywait -m -e close_write,moved_to,delete,create "${WATCH_DIRS[@]}" --format "%e|%w%f" 2>/dev/null)
+INOTIFY_PID=$!
+
+while IFS='|' read -r -u 3 event_type raw_filepath; do
+  _check_topology_change "$raw_filepath" "$event_type"
+
+  if [[ "${raw_filepath##*/}" == ".htaccess" && "$event_type" != "CREATE" ]]; then
+    PENDING_DOMAINS=()
+    _queue_htaccess_event "$raw_filepath" "$event_type"
+
+    # LỚP KHIÊN 5 (DEBOUNCE COALESCING CHUẨN):
+    # Chờ 0.5s để gom toàn bộ chuỗi ghi liên tiếp
+    while IFS='|' read -r -u 3 -t 0.5 next_event next_filepath; do
+      _check_topology_change "$next_filepath" "$next_event"
+      _queue_htaccess_event "$next_filepath" "$next_event"
+    done
+
+    # Thực thi sau khi cơn bão ghi file đã hoàn tất 100%
+    if (( ${#PENDING_DOMAINS[@]} > 0 )); then
+      if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
+        # LỚP KHIÊN 4: Chạy tiến trình con cho từng domain duy nhất trong đợt thay đổi
+        for target_domain in "${!PENDING_DOMAINS[@]}"; do
+          /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$target_domain" >/dev/null 2>&1
+        done
+      else
+        # Chỉ gọi Reload OpenLiteSpeed đúng 1 lần duy nhất cho cả đợt thay đổi
+        wptt_smart_reload_lsws >/dev/null 2>&1
+      fi
+    fi
+  fi
 done

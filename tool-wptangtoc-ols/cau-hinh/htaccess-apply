@@ -4,42 +4,103 @@
 # @description: Setup Realtime OpenLiteSpeed .htaccess Watcher
 # @since: 2026
 
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 
-# 1. DỌN DẸP HỆ THỐNG CRONJOB CŨ
-_runing "Đang dọn dẹp cấu hình Cronjob cũ..."
-cat <(crontab -l 2>/dev/null | grep -v 'wptt_smart_reload_lsws') | crontab -
-cat <(crontab -l 2>/dev/null | grep -v '/usr/local/lsws/cgid') | crontab -
+WATCHER_BIN="/etc/wptt/wptt-htaccess-watcher"
+SERVICE_FILE="/etc/systemd/system/wptt-htaccess.service"
+OLD_CRON_FILE="/etc/cron.d/optimize-htaccess-wptangtoc-ols-premium_cron"
 
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-    rm -f /etc/cron.d/optimize-htaccess-wptangtoc-ols-premium_cron 2>/dev/null
-    systemctl restart cron.service
-else
-    systemctl restart crond.service
+# 1. DỌN DẸP HỆ THỐNG CRONJOB CŨ (CHỈ TÁC ĐỘNG KHI CÓ TÀN DƯ CŨ)
+TASK_CRON="Dọn dẹp cấu hình Cronjob cũ"
+_runing "$TASK_CRON"
+
+if crontab -l 2>/dev/null | grep -qE 'wptt_smart_reload_lsws|/usr/local/lsws/cgid'; then
+  (crontab -l 2>/dev/null | grep -vE 'wptt_smart_reload_lsws|/usr/local/lsws/cgid' || true) | crontab - 2>/dev/null
 fi
-_rundone "Dọn dẹp cấu hình Cronjob cũ"
+
+if [[ -f "$OLD_CRON_FILE" ]]; then
+  rm -f -- "$OLD_CRON_FILE" 2>/dev/null
+  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+    systemctl reload-or-restart cron.service >/dev/null 2>&1 || true
+  else
+    systemctl reload-or-restart crond.service >/dev/null 2>&1 || true
+  fi
+fi
+_rundone "$TASK_CRON"
 
 # 2. CÀI ĐẶT THƯ VIỆN GIAO TIẾP KERNEL (INOTIFY-TOOLS)
-_runing "Đang kiểm tra và cài đặt thư viện inotify-tools..."
+TASK_INOTIFY="Kiểm tra và cài đặt thư viện inotify-tools"
+_runing "$TASK_INOTIFY"
 if ! command -v inotifywait &>/dev/null; then
-    if [ -f /etc/redhat-release ]; then
-        dnf install inotify-tools -y -q >/dev/null 2>&1 || yum install inotify-tools -y -q >/dev/null 2>&1
-    elif [ -f /etc/debian_version ]; then
-        apt-get update -q >/dev/null 2>&1 && apt-get install inotify-tools -y -q >/dev/null 2>&1
-    fi
+  if [[ -f /etc/redhat-release ]]; then
+    dnf install inotify-tools -y -q >/dev/null 2>&1 || yum install inotify-tools -y -q >/dev/null 2>&1
+  elif [[ -f /etc/debian_version ]]; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null 2>&1 && \
+      DEBIAN_FRONTEND=noninteractive apt-get install inotify-tools -y -q >/dev/null 2>&1
+  fi
 fi
-_rundone "Cài đặt thư viện Kernel hoàn tất"
 
-# Đảm bảo file tĩnh engine có quyền thực thi
-chmod 700 /etc/wptt/wptt-htaccess-watcher 2>/dev/null
+if command -v inotifywait &>/dev/null && [[ -f "$WATCHER_BIN" ]]; then
+  _rundone "$TASK_INOTIFY"
+else
+  _runloi "$TASK_INOTIFY"
+  if [[ "${1:-}" == "98" ]]; then
+    exec /etc/wptt/wptt-add-one-main 1
+  fi
+  exit 1
+fi
 
-# 3. TẠO VÀ KÍCH HOẠT DỊCH VỤ SYSTEMD CHẠY NGẦM VĨNH VIỄN
-_runing "Thiết lập Dịch vụ Systemd Daemon..."
-cat << 'EOF' > /etc/systemd/system/wptt-htaccess.service
+chmod 700 "$WATCHER_BIN" 2>/dev/null
+
+# 3. TỰ ĐỘNG CO GIÃN THÔNG SỐ (AUTO-SCALE) THEO CẤU HÌNH PHẦN CỨNG VPS
+TASK_SYSTEMD="Thiết lập Dịch vụ Systemd Daemon"
+_runing "$TASK_SYSTEMD"
+
+RAM_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 1048576)
+RAM_MB=$(( RAM_KB / 1024 ))
+CPU_CORES=$(nproc 2>/dev/null || echo 1)
+(( CPU_CORES <= 0 )) && CPU_CORES=1
+
+if (( RAM_MB <= 2048 )); then
+  # Tầng VPS nhỏ (512MB - 2GB RAM): Bảo vệ chống tràn RAM nhưng vẫn đủ chạy wptt_smart_reload_lsws
+  TARGET_WATCHES=131072
+  TARGET_QUEUE=65536
+  MEM_HIGH="24M"
+  MEM_MAX="64M"
+  CPU_QUOTA="35%"
+else
+  # Tầng VPS cấu hình khỏe (> 2GB RAM): Phản hồi tức thì cho hàng trăm Vhost
+  TARGET_WATCHES=524288
+  TARGET_QUEUE=131072
+  MEM_HIGH="64M"
+  MEM_MAX="256M"
+  CPU_QUOTA="$(( CPU_CORES * 50 ))%"
+fi
+
+if [[ -w /proc/sys/fs/inotify/max_user_watches ]]; then
+  CUR_WATCHES=$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 8192)
+  if (( CUR_WATCHES < TARGET_WATCHES )); then
+    sysctl -w "fs.inotify.max_user_watches=${TARGET_WATCHES}" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ -w /proc/sys/fs/inotify/max_queued_events ]]; then
+  CUR_QUEUE=$(cat /proc/sys/fs/inotify/max_queued_events 2>/dev/null || echo 16384)
+  if (( CUR_QUEUE < TARGET_QUEUE )); then
+    sysctl -w "fs.inotify.max_queued_events=${TARGET_QUEUE}" >/dev/null 2>&1 || true
+  fi
+fi
+
+# 4. TẠO VÀ KÍCH HOẠT DỊCH VỤ SYSTEMD CHẠY NGẦM VĨNH VIỄN
+cat << EOF > "$SERVICE_FILE"
 [Unit]
 Description=WPTangToc OLS Realtime .htaccess Watcher
 After=network.target
@@ -49,17 +110,23 @@ Type=simple
 ExecStart=/bin/bash /etc/wptt/wptt-htaccess-watcher
 Restart=always
 RestartSec=5
-# Đặt giới hạn bộ nhớ nhỏ gọn để chống rò rỉ RAM (Memory Leak)
-MemoryMax=50M
+# Tối ưu bộ nhớ và CPU co giãn động theo phần cứng VPS
+LimitSTACK=512K
+MemoryHigh=$MEM_HIGH
+MemoryMax=$MEM_MAX
+CPUQuota=$CPU_QUOTA
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
+systemctl daemon-reload >/dev/null 2>&1
 systemctl enable wptt-htaccess >/dev/null 2>&1
-systemctl restart wptt-htaccess
-_rundone "Kích hoạt Dịch vụ Systemd thành công"
+if systemctl restart wptt-htaccess >/dev/null 2>&1 && systemctl is-active --quiet wptt-htaccess; then
+  _rundone "$TASK_SYSTEMD"
+else
+  _runloi "$TASK_SYSTEMD"
+fi
 
 echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}CẤU HÌNH .HTACCESS REALTIME HOÀN TẤT${C_RESET}"
@@ -68,5 +135,5 @@ left_text "Reload OLS tức thì (0.001s) ngay khi ấn Save file .htaccess"
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-add-one-main 1
+  exec /etc/wptt/wptt-add-one-main 1
 fi
