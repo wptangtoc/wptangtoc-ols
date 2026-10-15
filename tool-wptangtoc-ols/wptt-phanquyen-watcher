@@ -65,16 +65,20 @@ if (( ${#DOMAIN_USERS[@]} == 0 )); then
   exit 0
 fi
 
-# Đảm bảo dọn sạch tiến trình inotifywait và lock khi dịch vụ dừng
+# Đảm bảo dọn sạch tiến trình inotifywait, đóng FD 3 và bảo toàn mã thoát khi dịch vụ dừng
 INOTIFY_PID=""
 cleanup_watcher() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  exec 3<&- 2>/dev/null || true
   [[ -n "$INOTIFY_PID" ]] && kill -TERM "$INOTIFY_PID" 2>/dev/null || true
   /bin/rm -f -- /etc/wptt/tmp/lock_chmod_watcher_*.active 2>/dev/null || true
+  exit "$rc"
 }
 trap cleanup_watcher EXIT INT TERM HUP
 
-# 3. LẮNG NGHE SỰ KIỆN QUA KERNEL INOTIFYWAIT (Dùng FD 3 tránh lỗi Subshell Pipe)
-exec 3< <(inotifywait -m -e create,moved_to,close_write,delete "${WATCH_DIRS[@]}" --format "%e|%w%f" 2>/dev/null)
+# 3. LẮNG NGHE SỰ KIỆN QUA KERNEL INOTIFYWAIT (Dùng -q để tắt log rác nhưng vẫn in lỗi thật ra stderr)
+exec 3< <(inotifywait -q -m -e create,moved_to,close_write,delete "${WATCH_DIRS[@]}" --format "%e|%w%f")
 INOTIFY_PID=$!
 
 while IFS='|' read -r -u 3 event_type raw_filepath; do
@@ -153,3 +157,11 @@ while IFS='|' read -r -u 3 event_type raw_filepath; do
     fi
   fi
 done
+
+# Thu hồi và trả về đúng mã thoát của inotifywait nếu luồng lắng nghe bị đứt gãy bất thường
+if wait "$INOTIFY_PID"; then
+  exit 0
+else
+  inotify_status=$?
+  exit "$inotify_status"
+fi
