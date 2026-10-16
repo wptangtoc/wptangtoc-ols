@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.2.3.6
+
+🛠️ **Tối ưu hệ thống**
+- Cải tiến và tối ưu hóa hiệu năng bảng điều khiển (Dashboard) WPTangToc OLS, giúp các thao tác quản trị diễn ra nhanh chóng, mượt mà và tối ưu hóa trải nghiệm quản lý máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.3.5
 
 🛠️ **Tối ưu hệ thống**
