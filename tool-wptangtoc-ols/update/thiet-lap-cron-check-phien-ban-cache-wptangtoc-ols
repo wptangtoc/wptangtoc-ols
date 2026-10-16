@@ -1,0 +1,84 @@
+#!/bin/bash
+CRON_FILE="/etc/cron.d/check-version-wptangtoc-ols.cron"
+UBUNTU_CRON_LINK="/etc/cron.d/check-version-wptangtoc-ols_cron"
+TMP_DIR="/etc/wptt/tmp"
+CHECK_CMD="/etc/wptt/update/wptt-check-cron-version-update"
+# Lấy số ngẫu nhiên trong khoảng [min, max].
+# Ưu tiên shuf, dự phòng /dev/urandom, cuối cùng dùng giá trị mặc định.
+random_range() {
+    local min="$1"
+    local max="$2"
+    local value
+    if command -v shuf >/dev/null 2>&1; then
+        value=$(shuf -i "${min}-${max}" -n 1 2>/dev/null) || value=""
+        if [[ "$value" =~ ^[0-9]+$ ]] &&
+           (( value >= min && value <= max )); then
+            printf '%s\n' "$value"
+            return 0
+        fi
+    fi
+    if [[ -r /dev/urandom ]] &&
+       command -v od >/dev/null 2>&1 &&
+       command -v tr >/dev/null 2>&1; then
+        value=$(
+            od -An -N4 -tu4 /dev/urandom 2>/dev/null |
+                tr -d '[:space:]'
+        ) || value=""
+        if [[ "$value" =~ ^[0-9]+$ ]]; then
+            # Chỉ dùng để phân tán thời gian chạy, không dùng cho mật mã.
+            printf '%s\n' "$((min + value % (max - min + 1)))"
+            return 0
+        fi
+    fi
+    # Fallback xác định, đảm bảo lịch vẫn được tạo.
+    printf '%s\n' "$min"
+}
+# Kiểm tra quyền root
+if (( EUID != 0 )); then
+    echo "ERROR: Phải chạy bằng root." >&2
+    exit 1
+fi
+# Kiểm tra chương trình đích
+if [[ ! -x "$CHECK_CMD" ]]; then
+    echo "ERROR: Không tìm thấy chương trình thực thi: $CHECK_CMD" >&2
+    exit 1
+fi
+# Tạo thư mục tạm riêng
+if ! install -d -o root -g root -m 0700 "$TMP_DIR"; then
+    echo "ERROR: Không thể tạo thư mục tạm: $TMP_DIR" >&2
+    exit 1
+fi
+phut=$(random_range 0 59) || exit 1
+gio1=$(random_range 0 5) || exit 1
+gio2=$((gio1 + 6))
+gio3=$((gio1 + 12))
+gio4=$((gio1 + 18))
+tmp_file=$(mktemp "$TMP_DIR/.wptt-cron.XXXXXX") || {
+    echo "ERROR: Không tạo được file tạm trong $TMP_DIR." >&2
+    exit 1
+}
+cleanup() {
+    rm -f -- "$tmp_file"
+}
+trap cleanup EXIT
+if ! printf '%s %s,%s,%s,%s * * * root %s\n' \
+    "$phut" "$gio1" "$gio2" "$gio3" "$gio4" "$CHECK_CMD" > "$tmp_file"; then
+    echo "ERROR: Không thể ghi nội dung cron." >&2
+    exit 1
+fi
+if ! chown root:root "$tmp_file" ||
+   ! chmod 0644 "$tmp_file" ||
+   ! mv -f -- "$tmp_file" "$CRON_FILE"; then
+    echo "ERROR: Không thể cài đặt cron." >&2
+    exit 1
+fi
+# Ubuntu yêu cầu ánh xạ tên file cron không có dấu chấm ở phần mở rộng.
+if [[ -r /etc/os-release ]] &&
+   grep -qE '^[[:space:]]*ID=ubuntu([[:space:]]|$)' /etc/os-release; then
+    if ! ln -sfn -- "$CRON_FILE" "$UBUNTU_CRON_LINK"; then
+        echo "ERROR: Không thể tạo symlink cron cho Ubuntu." >&2
+        exit 1
+    fi
+    chown -h root:root "$UBUNTU_CRON_LINK" 2>/dev/null || true
+fi
+trap - EXIT
