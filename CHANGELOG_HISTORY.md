@@ -107,19 +107,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.2.3
-
-### 🛠️ Tối ưu hệ thống
-- **Nâng cấp hàng đợi thêm tài khoản thông minh (Smart Username Queue):** Bổ sung cơ chế tự động xử lý và phục hồi an toàn khi xảy ra sự cố mất điện đột ngột hoặc ngắt kết nối giữa chừng, đảm bảo toàn vẹn dữ liệu và nâng cao độ ổn định cho hệ thống máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.2.2.2
-
-🛠️ Tối ưu hệ thống:
-- Nâng cấp cơ chế ghi file cấu hình theo phương thức atomic, giúp bảo vệ dữ liệu an toàn và ngăn ngừa triệt để tình trạng hỏng file khi máy chủ gặp sự cố đột ngột (như mất điện) trong quá trình chỉnh sửa.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
