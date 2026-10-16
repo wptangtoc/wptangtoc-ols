@@ -7,6 +7,7 @@
 
 # Chỉ nạp thư viện nếu tiến trình cha chưa nạp
 if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
+  # shellcheck source=/dev/null
   . /etc/wptt/core-functions 2>/dev/null
 fi
 
@@ -83,24 +84,28 @@ _expand_vars_safe() {
     s="${s%\'}"
   fi
 
-  # Giải mã giá trị biến an toàn bằng tham chiếu gián tiếp
-  local var_name var_val
-  if [[ "$s" =~ ^\$([a-zA-Z_][a-zA-Z0-9_]*)$ ]]; then
-    var_name="${BASH_REMATCH[1]}"
-    s="${!var_name:-$s}"
-  elif [[ "$s" =~ \$\{([a-zA-Z_][a-zA-Z0-9_]*):-([^}]*)\} ]]; then
-    var_name="${BASH_REMATCH[1]}"
-    local def_val="${BASH_REMATCH[2]}"
-    s="${!var_name:-$def_val}"
-  elif [[ "$s" =~ \$\{([a-zA-Z_][a-zA-Z0-9_]*)\} ]]; then
-    var_name="${BASH_REMATCH[1]}"
-    s="${!var_name:-$s}"
-  fi
-
-  # Nếu chuỗi bị dính hiện tượng lặp (ví dụ lặp từ do lỗi mảng), tự động cắt bỏ phần lặp thừa
-  if [[ "$s" =~ (.+)(\ [[:space:]]*\1)+ ]]; then
-    s="${BASH_REMATCH[1]}"
-  fi
+  # Thay biến đúng 1 lượt, từ trái sang phải.
+  # KHÔNG thay lại phần giá trị vừa chèn vào => không thể lặp vô hạn.
+  local re='\$\{([a-zA-Z_][a-zA-Z0-9_]*):-([^}]*)\}|\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)'
+  local out="" rest="$s" full prefix var_name def_val var_val
+  while [[ "$rest" =~ $re ]]; do
+    full="${BASH_REMATCH[0]}"
+    if [[ -n "${BASH_REMATCH[1]}" ]]; then
+      var_name="${BASH_REMATCH[1]}"
+      def_val="${BASH_REMATCH[2]}"
+      var_val="${!var_name:-$def_val}"
+    elif [[ -n "${BASH_REMATCH[3]}" ]]; then
+      var_name="${BASH_REMATCH[3]}"
+      var_val="${!var_name:-}"
+    else
+      var_name="${BASH_REMATCH[4]}"
+      var_val="${!var_name:-}"
+    fi
+    prefix="${rest%%"$full"*}"
+    out+="${prefix}${var_val}"
+    rest="${rest#*"$full"}"
+  done
+  s="${out}${rest}"
 
   printf -v s '%b' "$s"
   s="${s//$'\x1B'\[*([0-9;])[a-zA-Z]/}"
