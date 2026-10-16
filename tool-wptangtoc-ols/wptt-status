@@ -1,378 +1,585 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
 
-export LANG=en_US.UTF-8 2>/dev/null
-export LC_ALL=en_US.UTF-8 2>/dev/null
+# Chỉ nạp thư viện nếu tiến trình cha chưa nạp
+if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/core-functions 2>/dev/null
+fi
 
-# Nạp cấu hình, ngôn ngữ và thư viện màu siêu cấp
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
+
+# shellcheck source=/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+if ! declare -F _runing &>/dev/null; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/echo-color 2>/dev/null
+fi
+
+# Bẫy tín hiệu bảo vệ con trỏ chuột (tput cnorm) trong mọi trường hợp thoát hoặc ấn Ctrl+C
+_wptt_status_cleanup() {
+  tput cnorm 2>/dev/null || printf '\033[?25h'
+  stty sane 2>/dev/null || true
+}
+_wptt_status_ctrl_c() {
+  trap - SIGINT SIGTERM SIGQUIT EXIT
+	 # TUYỆT KỸ DIỆT ALARM: Mượn lệnh read ảo ép Linux hủy đồng hồ cũ ngay lập tức
+  read -r -t 1 < /dev/null 2>/dev/null || true
+  _wptt_status_cleanup
+
+  if [[ ! -t 0 || ! -t 1 || "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    exit 130
+  fi
+  clear
+  echo -e "Đã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu."
+  export WPTT_BYPASS=1
+  exec bash --login
+}
+trap '_wptt_status_cleanup' EXIT
+trap '_wptt_status_ctrl_c' SIGINT SIGTERM SIGQUIT
 
 clear
+
 # ==============================================================================
-# 1. CẤU HÌNH BACKGROUND ALERTS & UPDATE
+# 1. CẤU HÌNH BACKGROUND ALERTS & UPDATE (KHÔNG BLOCK MÀN HÌNH ĐĂNG NHẬP)
 # ==============================================================================
-if [[ "$thong_bao_login_ssh" = "1" ]]; then
+if [[ "${thong_bao_login_ssh:-}" == "1" && -n "${SSH_CLIENT:-}" && -z "${_WPTT_SSH_ALERT_SENT:-}" ]]; then
+  export _WPTT_SSH_ALERT_SENT=1
   (
-    client_ip=$(echo "$SSH_CLIENT" | awk '{ print $1}')
-    
-    # [TỐI ƯU] Đếm số phiên làm việc (sessions) đang mở từ IP Client này
-    active_sessions=$(who | grep -F "($client_ip)" | wc -l)
-    
-    # Nếu lớn hơn 1, nghĩa là IP này đã có Terminal khác đang kết nối -> Bỏ qua
-	if [[ "$active_sessions" -gt 1 ]]; then
-		return 2>/dev/null;exit 0
-	fi
+    client_ip="${SSH_CLIENT%% *}"
+    [[ -z "$client_ip" ]] && exit 0
 
-	vps_ip=$(curl -skf --connect-timeout 5 "https://ipv4.icanhazip.com" || curl -skf --connect-timeout 5 "https://checkip.amazonaws.com")
-	[[ -z "$vps_ip" ]] && vps_ip=$(curl -sk --connect-timeout 5 "https://ipv6.icanhazip.com")
+    active_sessions=$(who 2>/dev/null | grep -Fc "($client_ip)" || true)
+    if (( active_sessions > 1 )); then
+      exit 0
+    fi
 
-    date="$(date "+%d-%m-%Y %H:%M")"
+    vps_ip=$(curl -skf --connect-timeout 3 --max-time 5 "https://ipv4.icanhazip.com" || curl -skf --connect-timeout 3 --max-time 5 "https://checkip.amazonaws.com" || true)
+    [[ -z "$vps_ip" ]] && vps_ip=$(curl -sk --connect-timeout 3 --max-time 5 "https://ipv6.icanhazip.com" || true)
 
-    read -r -d '' text <<EOF
+    printf -v current_date '%(%d-%m-%Y %H:%M)T' -1
+
+    read -r -d '' text <<EOF || true
 🚨 <b>CẢNH BÁO ĐĂNG NHẬP SSH</b> 🚨
 ━━━━━━━━━━━━━━━━━━━━━━
 🖥 <b>Máy chủ:</b> <code>${vps_ip}</code>
 🕵️ <b>IP Client:</b> <code>${client_ip}</code>
-⏰ <b>Thời gian:</b> <code>${date}</code>
+⏰ <b>Thời gian:</b> <code>${current_date}</code>
 ━━━━━━━━━━━━━━━━━━━━━━
 <i>WPTangToc OLS</i>
 EOF
- 
-telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null); telegram_api="${telegram_tmp_api:-$telegram_api}"
-telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null); telegram_id="${telegram_tmp_id:-$telegram_id}"
-    TG_BASE_URL="https://api.telegram.org"
-    if ! curl -s -m 3 -X POST "${TG_BASE_URL}/bot${telegram_api}/sendMessage" \
+
+    telegram_tmp_api=$(wptt_giai_ma "${telegram_api:-}" 2>/dev/null || true)
+    telegram_api="${telegram_tmp_api:-${telegram_api:-}}"
+    telegram_tmp_id=$(wptt_giai_ma "${telegram_id:-}" 2>/dev/null || true)
+    telegram_id="${telegram_tmp_id:-${telegram_id:-}}"
+
+    if [[ -n "$telegram_api" && -n "$telegram_id" ]]; then
+      TG_BASE_URL="https://api.telegram.org"
+      if ! curl -s -m 3 -X POST "${TG_BASE_URL}/bot${telegram_api}/sendMessage" \
         -d "chat_id=$telegram_id" \
         -d "parse_mode=HTML" \
-        --data-urlencode "text=${text}" >/dev/null; then
-        
-	    API_PROXY=$(curl --tlsv1.3 -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
-        [[ "$API_PROXY" == *"workers.dev"* ]] && \
-        curl -s -m 5 -X POST "https://$API_PROXY/bot${telegram_api}/sendMessage" \
+        --data-urlencode "text=${text}" >/dev/null 2>&1; then
+
+        API_PROXY=$(curl --tlsv1.3 -sL -m 8 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" 2>/dev/null || true)
+        API_PROXY="${API_PROXY//[$'\r\n\t ']/}"
+        if [[ "$API_PROXY" == *"workers.dev"* ]]; then
+          curl -s -m 5 -X POST "https://$API_PROXY/bot${telegram_api}/sendMessage" \
             -d "chat_id=$telegram_id" \
             -d "parse_mode=HTML" \
-            --data-urlencode "text=${text}" >/dev/null
+            --data-urlencode "text=${text}" >/dev/null 2>&1 || true
+        fi
+      fi
     fi
   ) &
-  disown
+  disown 2>/dev/null || true
 fi
 
-# --- KIỂM TRA CẬP NHẬT ---
+# --- KIỂM TRA CẬP NHẬT SIÊU TỐC (ĐỌC CACHE RAM & CẬP NHẬT NGẦM) ---
 SHOW_UPDATE=0
 NEW_VERSION=""
-[[ -f /etc/wptt/tmp/wptangtoc-ols-version ]] && wptangtocols_version=$(cat /etc/wptt/tmp/wptangtoc-ols-version)
-if [[ -z "$wptangtocols_version" ]]; then
-  wptangtocols_version=$(curl --tlsv1.3 -sf --connect-timeout 2 --max-time 5 https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -1 | grep '\.' || curl --tlsv1.2 -sf --connect-timeout 2 --max-time 5 https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt)
+wptangtocols_version=""
+VERSION_CACHE_FILE="/etc/wptt/tmp/wptangtoc-ols-version"
+
+if [[ -s "$VERSION_CACHE_FILE" ]]; then
+  wptangtocols_version=$(< "$VERSION_CACHE_FILE")
+  wptangtocols_version="${wptangtocols_version//[$'\r\n\t ']/}"
 fi
-wptangtocols_version=$(echo "$wptangtocols_version" | tr -d '\r\n ')
-if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "$version_wptangtoc_ols" ]]; then
+
+(
+  mkdir -p /etc/wptt/tmp 2>/dev/null || true
+  need_fetch=0
+  if [[ ! -s "$VERSION_CACHE_FILE" ]]; then
+    need_fetch=1
+  else
+    file_mtime=$(stat -c %Y "$VERSION_CACHE_FILE" 2>/dev/null || echo 0)
+    printf -v now_ts '%(%s)T' -1
+    (( now_ts - file_mtime > 21600 )) && need_fetch=1
+  fi
+
+  if (( need_fetch == 1 )); then
+    remote_ver=$(curl --tlsv1.3 -sf --connect-timeout 2 --max-time 4 "https://wptangtoc.com/share/version-wptangtoc-ols.txt" 2>/dev/null | head -n 1 || curl --tlsv1.2 -sf --connect-timeout 2 --max-time 4 "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt" 2>/dev/null | head -n 1 || true)
+    remote_ver="${remote_ver//[$'\r\n\t ']/}"
+    if [[ "$remote_ver" == *.* ]]; then
+      printf '%s\n' "$remote_ver" > "${VERSION_CACHE_FILE}.tmp" && mv -f "${VERSION_CACHE_FILE}.tmp" "$VERSION_CACHE_FILE" 2>/dev/null || true
+    fi
+  fi
+) &
+disown 2>/dev/null || true
+
+if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptangtoc_ols:-}" ]]; then
   SHOW_UPDATE=1
   NEW_VERSION="$wptangtocols_version"
 fi
 
 # ==============================================================================
-# 2. CÁC HÀM VẼ COMPONENT ĐẶC THÙ CHO DASHBOARD
+# 2. CÁC HÀM VẼ COMPONENT ĐẶC THÙ CHO DASHBOARD (100% 0-SUBSHELL & PIXEL-PERFECT)
 # ==============================================================================
-draw_bar() {
+DASHBOARD_BUFFER=""
+DASHBOARD_LINES=0
+
+_append_row() {
+  # Thêm \033[K để xóa sạch mọi tàn dư ký tự ở cuối dòng (nếu có)
+  DASHBOARD_BUFFER+="$1"$'\033[K\n'
+  (( DASHBOARD_LINES++ ))
+}
+
+# Giải mã cả \033[...] lẫn \e[...] bằng printf -v '%b' rồi lọc sạch mã ANSI và đếm chuẩn UTF-8 (0 Subshell)
+_wptt_plain_len() {
+  local s=""
+  printf -v s '%b' "$1"
+  s="${s//[$'\r\n']/}"
+  while [[ "$s" =~ $'\x1B'\[[0-9\;]*[a-zA-Z] ]]; do
+    s="${s//"${BASH_REMATCH[0]}"/}"
+  done
+
+  local test_char="Đ"
+  if (( ${#test_char} == 1 )); then
+    REPLY_LEN=${#s}
+  else
+    local stripped
+    LC_ALL=C stripped="${s//[$'\x80'-$'\xbf']/}"
+    REPLY_LEN=${#stripped}
+  fi
+}
+
+# Vẽ thanh tiến trình trực tiếp vào biến REPLY_BAR (0 Subshell)
+draw_bar_fast() {
   local percent=$1
   local length=15
-  local fill=$(((percent * length) / 100))
-  [[ $fill -lt 0 ]] && fill=0
-  [[ $fill -gt $length ]] && fill=$length
-  local empty=$((length - fill))
-  local color=$C_GREEN
-  [[ "$percent" -ge 60 ]] && color=$C_YELLOW
-  [[ "$percent" -ge 80 ]] && color=$C_RED
-  local fill_str=""
-  [[ $fill -gt 0 ]] && printf -v fill_str "%${fill}s" "" && fill_str=${fill_str// /|}
-  local empty_str=""
-  [[ $empty -gt 0 ]] && printf -v empty_str "%${empty}s" "" && empty_str=${empty_str// /.}
-  printf "${C_CYAN}[${color}%s${C_RESET}%s${C_CYAN}]${C_RESET}" "$fill_str" "$empty_str"
+  local fill=$(( (percent * length) / 100 ))
+  (( fill < 0 )) && fill=0
+  (( fill > length )) && fill=$length
+  local empty=$(( length - fill ))
+  local color="$C_GREEN"
+  (( percent >= 60 )) && color="$C_YELLOW"
+  (( percent >= 80 )) && color="$C_RED"
+
+  local fill_str="" empty_str=""
+  if (( fill > 0 )); then
+    printf -v fill_str "%${fill}s" ""
+    fill_str="${fill_str// /|}"
+  fi
+  if (( empty > 0 )); then
+    printf -v empty_str "%${empty}s" ""
+    empty_str="${empty_str// /.}"
+  fi
+  REPLY_BAR="${C_CYAN}[${color}${fill_str}${C_RESET}${empty_str}${C_CYAN}]${C_RESET}"
 }
 
-# Hàm in 1 dòng tự động fill padding cho Dashboard
-print_line() {
+# Căn giữa 1 dòng chuẩn khung 78 ký tự (0 Subshell)
+buf_center_text() {
   local text="$1"
-  local clean_text=$(echo -en "$text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
-
-  local text_len
-  text_len="${#clean_text}" #đếm ký tự  Parameter Expansion 
-
-  [[ -z "$text_len" || "$text_len" == "0" ]] && text_len=${#clean_text}
-
-  local pad=$((78 - text_len - 2))
-  [[ $pad -lt 0 ]] && pad=0
-  echo -e "${C_CYAN}│${C_RESET}  ${text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+  local border_color="${2:-$C_CYAN}"
+  if [[ -z "$text" ]]; then
+    _append_row "${border_color}│${C_RESET}${EMPTY_78}${border_color}│${C_RESET}"
+    return 0
+  fi
+  local REPLY_LEN=0
+  _wptt_plain_len "$text"
+  local len=$REPLY_LEN
+  local pad_l=$(( (78 - len) / 2 ))
+  (( pad_l < 0 )) && pad_l=0
+  local pad_r=$(( 78 - len - pad_l ))
+  (( pad_r < 0 )) && pad_r=0
+  local pad_l_str="" pad_r_str=""
+  printf -v pad_l_str '%*s' "$pad_l" ""
+  printf -v pad_r_str '%*s' "$pad_r" ""
+  _append_row "${border_color}│${C_RESET}${pad_l_str}${text}${pad_r_str}${border_color}│${C_RESET}"
 }
 
-# Hàm in 2 cột cân đối cho Network & Service
-print_2col() {
+# Căn trái 1 dòng chuẩn khung 78 ký tự (0 Subshell)
+buf_left_text() {
+  local text="$1"
+  local indent="${2:-2}"
+  local border_color="${3:-$C_CYAN}"
+  local REPLY_LEN=0
+  _wptt_plain_len "$text"
+  local len=$REPLY_LEN
+  local pad_r=$(( 78 - len - indent ))
+  (( pad_r < 0 )) && pad_r=0
+  local pad_l_str="" pad_r_str=""
+  printf -v pad_l_str '%*s' "$indent" ""
+  printf -v pad_r_str '%*s' "$pad_r" ""
+  _append_row "${border_color}│${C_RESET}${pad_l_str}${text}${pad_r_str}${border_color}│${C_RESET}"
+}
+
+# In 1 dòng tài nguyên tự động fill padding chuẩn 78 ký tự (0 Subshell)
+buf_print_line() {
+  local text="$1"
+  local REPLY_LEN=0
+  _wptt_plain_len "$text"
+  local text_len=$REPLY_LEN
+  local pad=$(( 78 - text_len - 2 ))
+  (( pad < 0 )) && pad=0
+  local pad_str=""
+  printf -v pad_str '%*s' "$pad" ""
+  _append_row "${C_CYAN}│${C_RESET}  ${text}${pad_str}${C_CYAN}│${C_RESET}"
+}
+
+# In 2 cột cân đối cho Network & Service chuẩn 78 ký tự (0 Subshell)
+buf_print_2col() {
   local col1="$1"
   local col2="$2"
+  local REPLY_LEN=0
 
-  local clean1=$(echo -en "$col1" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+  _wptt_plain_len "$col1"
+  local len1=$REPLY_LEN
+  local pad1=$(( 38 - len1 ))
+  (( pad1 < 0 )) && pad1=0
 
+  _wptt_plain_len "$col2"
+  local len2=$REPLY_LEN
+  local pad2=$(( 36 - len2 ))
+  (( pad2 < 0 )) && pad2=0
 
-  local len1
-  len1="${#clean1}" #đếm ký tự  Parameter Expansion 
+  local pad1_str="" pad2_str=""
+  printf -v pad1_str '%*s' "$pad1" ""
+  printf -v pad2_str '%*s' "$pad2" ""
 
-  [[ -z "$len1" || "$len1" == "0" ]] && len1=${#clean1}
-
-  local col1_width=38 # Cố định lề cột trái
-  local pad1=$((col1_width - len1))
-  [[ $pad1 -lt 0 ]] && pad1=0
-
-  local clean2=$(echo -en "$col2" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
-
-  local len2
-  len2="${#clean2}" #đếm ký tự  Parameter Expansion 
-
-  # local len2=$( (LC_ALL=C.UTF-8 printf "%s" "$clean2") 2>/dev/null | wc -m | tr -d ' ')
-  [[ -z "$len2" || "$len2" == "0" ]] && len2=${#clean2}
-
-  local pad2=$((36 - len2)) # 78 - 2 lề - 38(col1) - 2 khoảng cách giữa = 36
-  [[ $pad2 -lt 0 ]] && pad2=0
-
-  echo -e "${C_CYAN}│${C_RESET}  ${col1}$(printf '%*s' "$pad1" "")  ${col2}$(printf '%*s' "$pad2" "")${C_CYAN}│${C_RESET}"
+  _append_row "${C_CYAN}│${C_RESET}  ${col1}${pad1_str}  ${col2}${pad2_str}${C_CYAN}│${C_RESET}"
 }
 
 # ==============================================================================
-# 3. ENGINE RENDER DASHBOARD CHÍNH (GỘP KHỐI UX MỚI)
+# 3. ENGINE RENDER DASHBOARD CHÍNH (GỘP KHỐI UX MỚI - 0 SUBSHELL)
 # ==============================================================================
+printf -v EMPTY_78 '%78s' ""
+BORDER_TOP="${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+BORDER_MID="${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+BORDER_BOT="${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-#cách bọc biến như thế này print thế này tương thích full các ubuntu và rocky và al và redhat
-# OS_NAME_STATIC=$(awk -F'[="]' '/PRETTY_NAME/ {print $3}' /etc/os-release | awk '{print $1,$2,$3}' | cut -f1 -d '(')
-# check hệ điều hành siêu tốc nhanh hơn cách cũ trên gấp 100 lần
-while read -r line; do
-  # 1. Chỉ bắt đúng dòng bắt đầu bằng PRETTY_NAME=
-  if [[ "$line" == PRETTY_NAME=* ]]; then
-    
-    # 2. Chặt bỏ phần tiền tố "PRETTY_NAME="
-    tmp_name="${line#*=}"
-    
-    # 3. Dọn sạch dấu nháy kép (")
-    tmp_name="${tmp_name//\"/}"
-    
-    # 4. Chặt bỏ toàn bộ phần mã sau dấu ngoặc đơn '(' (Ví dụ: " (Core)")
-    tmp_name="${tmp_name%%(*}"
-    
-    # 5. Hút đúng 3 từ đầu tiên và dọn rác khoảng trắng
-    read -r w1 w2 w3 _ <<< "$tmp_name"
-    words=($w1 $w2 $w3)
-    OS_NAME_STATIC="${words[*]}"
-    
-    # 6. Tìm thấy rồi thì phá vòng lặp thoát ra luôn cho nhẹ máy
-    break
-  fi
-done < /etc/os-release 2>/dev/null
+OS_NAME_STATIC="Linux Server"
+if [[ -r /etc/os-release ]]; then
+  while read -r line; do
+    if [[ "$line" == PRETTY_NAME=* ]]; then
+      tmp_name="${line#*=}"
+      tmp_name="${tmp_name//\"/}"
+      tmp_name="${tmp_name%%(*}"
+      read -r w1 w2 w3 _ <<< "$tmp_name"
+      OS_NAME_STATIC="${w1}${w2:+ $w2}${w3:+ $w3}"
+      break
+    fi
+  done < /etc/os-release 2>/dev/null
+fi
 
-
-print_dashboard() {
+render_dashboard_buffer() {
   local rx_rate_in=$1
   local tx_rate_in=$2
   local cpu_usage_in=$3
   local ols_status_in=$4
   local db_status_in=$5
 
-  # --- Data Fetching (Pure Bash) ---
+  DASHBOARD_BUFFER=""
+  DASHBOARD_LINES=0
+
+  # --- Data Fetching (Pure Bash - 0 Subshell) ---
+  local name value mem_total=1048576 mem_avail=524288
   while read -r name value _; do
-    case $name in MemTotal:) mem_total=$value ;; MemAvailable:) mem_avail=$value ;; esac
-  done </proc/meminfo
-  local ram_total=$((mem_total / 1024))
-  local ram_used=$(((mem_total - mem_avail) / 1024))
-  local ram_percent=$((ram_used * 100 / ram_total))
+    case "$name" in
+      MemTotal:) mem_total=$value ;;
+      MemAvailable:) mem_avail=$value; break ;;
+    esac
+  done < /proc/meminfo
+
+  local ram_total=$(( mem_total / 1024 ))
+  (( ram_total <= 0 )) && ram_total=1024
+  local ram_used=$(( (mem_total - mem_avail) / 1024 ))
+  local ram_percent=$(( ram_used * 100 / ram_total ))
 
   local net_in_display="${rx_rate_in} KB/s"
   local net_out_display="${tx_rate_in} KB/s"
-  [[ "$rx_rate_in" -gt 5120 ]] && net_in_display="${C_RED}${rx_rate_in} KB/s${C_RESET}"
-  [[ "$tx_rate_in" -gt 5120 ]] && net_out_display="${C_RED}${tx_rate_in} KB/s${C_RESET}"
+  (( rx_rate_in > 5120 )) && net_in_display="${C_RED}${rx_rate_in} KB/s${C_RESET}"
+  (( tx_rate_in > 5120 )) && net_out_display="${C_RED}${tx_rate_in} KB/s${C_RESET}"
 
-  read -r l1 l2 l3 _ </proc/loadavg
+  local l1 l2 l3 _
+  read -r l1 l2 l3 _ < /proc/loadavg
   local load_avg="$l1, $l2, $l3"
-  read -r uptime_full _ </proc/uptime
-  local up_seconds=${uptime_full%%.*}
-  local d=$((up_seconds / 86400))
-  local h=$(((up_seconds % 86400) / 3600))
-  local m=$(((up_seconds % 3600) / 60))
-  local uptime_display="${d}d ${h}h ${m}m"
 
-  # --- BẮT ĐẦU RENDER GIAO DIỆN KHỐI THỐNG NHẤT ---
-  print_border_top "$C_CYAN"
+  local uptime_full
+  read -r uptime_full _ < /proc/uptime
+  local up_seconds=${uptime_full%%.*}
+  local d=$(( up_seconds / 86400 ))
+  local h=$(( (up_seconds % 86400) / 3600 ))
+  local m=$(( (up_seconds % 3600) / 60 ))
+  local s=$(( up_seconds % 60 ))
+  local uptime_display="${d}d ${h}h ${m}m ${s}s"
+
+  # --- BẮT ĐẦU LẮP RÁP KHUNG HÌNH TRÊN RAM ---
+  _append_row "$BORDER_TOP"
 
   # Khối 1: Tên & Phiên bản
-  center_text "${C_BOLD_WHITE}WPTANGTOC OLS ${phien_ban:-phiên bản}: $version_wptangtoc_ols${C_RESET}" "$C_CYAN"
-  print_border_mid "$C_CYAN"
+  buf_center_text "${C_BOLD_WHITE}WPTANGTOC OLS ${phien_ban:-phiên bản}: ${version_wptangtoc_ols:-}${C_RESET}" "$C_CYAN"
+  _append_row "$BORDER_MID"
 
   # Khối 2: Tác giả & Bản quyền
-  center_text "" "$C_CYAN"
-  center_text "${C_BOLD_WHITE}${phat_trien_boi_gia_tuan:-Phát triển bởi: Gia Tuấn}${C_RESET}" "$C_CYAN"
+  buf_center_text "" "$C_CYAN"
+  buf_center_text "${C_BOLD_WHITE}${phat_trien_boi_gia_tuan:-Phát triển bởi: Gia Tuấn}${C_RESET}" "$C_CYAN"
 
-  if [[ "$wptangtoc_ols_giatuan" == "1" ]]; then
-	  center_text "${C_BOLD_WHITE}Bản Quyền: Enterprise${C_RESET}" "$C_CYAN"
-  elif [[ -n "$key_activate" ]]; then
-	  center_text "${C_BOLD_WHITE}Bản Quyền: Enterprise${C_RESET}" "$C_CYAN"
+  if [[ "${wptangtoc_ols_giatuan:-}" == "1" || -n "${key_activate:-}" ]]; then
+    buf_center_text "${C_BOLD_WHITE}Bản Quyền: Enterprise${C_RESET}" "$C_CYAN"
   fi
 
-  [[ "$beta_wptangtoc_ols" == "1" ]] && center_text "${C_BOLD_WHITE}[Phiên bản Beta]${C_RESET}" "$C_CYAN"
-  center_text "" "$C_CYAN"
-  print_border_mid "$C_CYAN"
+  [[ "${beta_wptangtoc_ols:-}" == "1" ]] && buf_center_text "${C_BOLD_WHITE}[Phiên bản Beta]${C_RESET}" "$C_CYAN"
+  buf_center_text "" "$C_CYAN"
+  _append_row "$BORDER_MID"
 
   # Khối 3: Trạng thái Server Nhúng
-  if [[ "$ols_status_in" == *Hoạt\ động* && "$db_status_in" == *Hoạt\ động* ]]; then
-    left_text "${C_BOLD_WHITE}${tinh_trang_may_chu:-Tình trạng máy chủ}: ${C_GREEN}Hoạt động tốt${C_RESET}" 2 "$C_CYAN"
-  elif [[ "$ols_status_in" == *Kiểm\ tra* || "$db_status_in" == *Kiểm\ tra* ]]; then
-    left_text "${C_BOLD_WHITE}${tinh_trang_may_chu:-Tình trạng máy chủ}: ${C_YELLOW}Đang kiểm tra...${C_RESET}" 2 "$C_CYAN"
+  if [[ "$ols_status_in" == *"Hoạt động"* && "$db_status_in" == *"Hoạt động"* ]]; then
+    buf_left_text "${C_BOLD_WHITE}${tinh_trang_may_chu:-Tình trạng máy chủ}: ${C_GREEN}Hoạt động tốt${C_RESET}" 2 "$C_CYAN"
+  elif [[ "$ols_status_in" == *"Kiểm tra"* || "$db_status_in" == *"Kiểm tra"* ]]; then
+    buf_left_text "${C_BOLD_WHITE}${tinh_trang_may_chu:-Tình trạng máy chủ}: ${C_YELLOW}Đang kiểm tra...${C_RESET}" 2 "$C_CYAN"
   else
-    left_text "${C_BOLD_WHITE}${tinh_trang_may_chu:-Tình trạng máy chủ}: ${C_RED}Đang gặp sự cố!${C_RESET}" 2 "$C_CYAN"
+    buf_left_text "${C_BOLD_WHITE}${tinh_trang_may_chu:-Tình trạng máy chủ}: ${C_RED}Đang gặp sự cố!${C_RESET}" 2 "$C_CYAN"
   fi
-  print_border_mid "$C_CYAN"
+  _append_row "$BORDER_MID"
 
-  # Khối 4: Tài nguyên (CPU, RAM, DISK)
-  print_line "$(printf "${C_BOLD_WHITE}CPU :${C_RESET} %3s%% %s  %-5s %s" "$cpu_usage_in" "$(draw_bar "$cpu_usage_in")" "Load:" "$load_avg")"
-  print_line "$(printf "${C_BOLD_WHITE}RAM :${C_RESET} %3s%% %s  %-5s %s/%s MB" "$ram_percent" "$(draw_bar $ram_percent)" "Used:" "$ram_used" "$ram_total")"
-  print_line "$(printf "${C_BOLD_WHITE}Disk:${C_RESET} %3s%% %s  %-5s %s/%s GB" "$cached_disk_percent" "$(draw_bar "$cached_disk_percent")" "Used:" "$cached_disk_used" "$cached_disk_total")"
-  print_border_mid "$C_CYAN"
+  # Khối 4: Tài nguyên (CPU, RAM, DISK) - 0 Subshell
+  local REPLY_BAR="" line_cpu="" line_ram="" line_disk=""
+  draw_bar_fast "$cpu_usage_in"
+  printf -v line_cpu "${C_BOLD_WHITE}CPU :${C_RESET} %3s%% %s  %-5s %s" "$cpu_usage_in" "$REPLY_BAR" "Load:" "$load_avg"
+  buf_print_line "$line_cpu"
+
+  draw_bar_fast "$ram_percent"
+  printf -v line_ram "${C_BOLD_WHITE}RAM :${C_RESET} %3s%% %s  %-5s %s/%s MB" "$ram_percent" "$REPLY_BAR" "Used:" "$ram_used" "$ram_total"
+  buf_print_line "$line_ram"
+
+  draw_bar_fast "$cached_disk_percent"
+  printf -v line_disk "${C_BOLD_WHITE}Disk:${C_RESET} %3s%% %s  %-5s %s/%s GB" "$cached_disk_percent" "$REPLY_BAR" "Used:" "$cached_disk_used" "$cached_disk_total"
+  buf_print_line "$line_disk"
+  _append_row "$BORDER_MID"
 
   # Khối 5: Network & Dịch vụ
-  print_2col "${C_BOLD_WHITE}Net In :${C_RESET} $net_in_display" "${C_BOLD_WHITE}OpenLiteSpeed :${C_RESET} $ols_status_in"
-  print_2col "${C_BOLD_WHITE}Net Out:${C_RESET} $net_out_display" "${C_BOLD_WHITE}MariaDB       :${C_RESET} $db_status_in"
-  print_2col "${C_BOLD_WHITE}Uptime :${C_RESET} $uptime_display" "${C_BOLD_WHITE}OS            :${C_RESET} $OS_NAME_STATIC"
-  print_border_mid "$C_CYAN"
+  buf_print_2col "${C_BOLD_WHITE}Net In :${C_RESET} $net_in_display" "${C_BOLD_WHITE}OpenLiteSpeed :${C_RESET} $ols_status_in"
+  buf_print_2col "${C_BOLD_WHITE}Net Out:${C_RESET} $net_out_display" "${C_BOLD_WHITE}MariaDB       :${C_RESET} $db_status_in"
+  buf_print_2col "${C_BOLD_WHITE}Uptime :${C_RESET} $uptime_display" "${C_BOLD_WHITE}OS            :${C_RESET} $OS_NAME_STATIC"
+  _append_row "$BORDER_MID"
 
   # Khối 6: Menu Điều hướng
-  menu_str="${C_GREEN}[ENTER]${C_RESET} Menu | ${C_GREEN}[2]${C_RESET} Menu nhanh"
+  local menu_str="${C_GREEN}[ENTER]${C_RESET} Menu | ${C_GREEN}[2]${C_RESET} Menu nhanh"
   [[ "$SHOW_UPDATE" == "1" ]] && menu_str="${menu_str} | ${C_YELLOW}[9] Cập nhật ($NEW_VERSION)${C_RESET}"
   menu_str="${menu_str} | ${C_RED}[0]${C_RESET} Thoát (Bash CLI)"
-  center_text "$menu_str" "$C_CYAN"
+  buf_center_text "$menu_str" "$C_CYAN"
 
   # Cảnh báo hệ thống (Nếu có)
-  if [ "$ram_percent" -gt 85 ] || [ "$cached_disk_percent" -gt 90 ]; then
-    print_border_mid "$C_CYAN"
-    [[ "$ram_percent" -gt 85 ]] && left_text "${C_RED} Cảnh báo: RAM đang quá tải!${C_RESET}" 2 "$C_CYAN"
-    [[ "$cached_disk_percent" -gt 90 ]] && left_text "${C_RED} Cảnh báo: Ổ cứng sắp đầy!${C_RESET}" 2 "$C_CYAN"
+  if (( ram_percent > 85 || cached_disk_percent > 90 )); then
+    _append_row "$BORDER_MID"
+    (( ram_percent > 85 )) && buf_left_text "${C_RED} Cảnh báo: RAM đang quá tải!${C_RESET}" 2 "$C_CYAN"
+    (( cached_disk_percent > 90 )) && buf_left_text "${C_RED} Cảnh báo: Ổ cứng sắp đầy!${C_RESET}" 2 "$C_CYAN"
   fi
-  print_border_bot "$C_CYAN"
+  _append_row "$BORDER_BOT"
 }
 
 # ==============================================================================
-# 4. VÒNG LẶP CHÍNH (REAL-TIME REFRESH)
+# 4. CÁC HÀM LẤY DỮ LIỆU HỆ THỐNG SIÊU NHẸ
 # ==============================================================================
-disk_raw=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | tr -d 'G%')
-read -r cached_disk_used cached_disk_total cached_disk_percent <<<"$disk_raw"
+cached_disk_used=0
+cached_disk_total=1
+cached_disk_percent=0
 
-read -r cpu a b c idle rest </proc/stat
-prev_total=$((a + b + c + idle))
-prev_idle=$idle
-cpu_display_val=0
+_update_disk_usage() {
+  local _fs _sz _used _avail _pct _mnt
+  {
+    read -r _
+    read -r _fs _sz _used _avail _pct _mnt
+  } < <(df -BG -P / 2>/dev/null)
+  cached_disk_used="${_used%G}"
+  cached_disk_total="${_sz%G}"
+  cached_disk_percent="${_pct%%%}"
+  [[ -z "$cached_disk_percent" ]] && cached_disk_percent=0
+}
 
-rx_prev=0
-tx_prev=0
-while read -r iface rx _ _ _ _ _ _ _ tx _; do
-  [[ "$iface" == *"Inter-"* || "$iface" == *"face"* || "$iface" == *"lo:"* ]] && continue
-  rx_prev=$((rx_prev + rx))
-  tx_prev=$((tx_prev + tx))
-done </proc/net/dev
+_update_services_status() {
+  local _ols_pid=""
+  if [[ -r /tmp/lshttpd/lshttpd.pid ]]; then
+    read -r _ols_pid < /tmp/lshttpd/lshttpd.pid 2>/dev/null || true
+  fi
+  if [[ -n "$_ols_pid" && -d "/proc/$_ols_pid" ]]; then
+    cached_ols_status="${C_GREEN}Hoạt động${C_RESET}"
+  elif timeout 3 /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running'; then
+    cached_ols_status="${C_GREEN}Hoạt động${C_RESET}"
+  else
+    cached_ols_status="${C_RED}Tạm dừng${C_RESET}"
+  fi
 
-tput civis
+  if [[ -S /var/lib/mysql/mysql.sock || -S /run/mysqld/mysqld.sock || -S /var/run/mysqld/mysqld.sock ]] && systemctl is-active --quiet mariadb.service 2>/dev/null; then
+    cached_db_status="${C_GREEN}Hoạt động${C_RESET}"
+  elif timeout 3 systemctl is-active --quiet mariadb.service 2>/dev/null || timeout 3 systemctl is-active --quiet mysql.service 2>/dev/null; then
+    cached_db_status="${C_GREEN}Hoạt động${C_RESET}"
+  else
+    cached_db_status="${C_RED}Tạm dừng${C_RESET}"
+  fi
+}
+
+_read_cpu_stat() {
+  local _cpu u n s idle iowait irq softirq steal _
+  read -r _cpu u n s idle iowait irq softirq steal _ < /proc/stat
+  CPU_IDLE=$(( idle + ${iowait:-0} ))
+  CPU_TOTAL=$(( u + n + s + CPU_IDLE + ${irq:-0} + ${softirq:-0} + ${steal:-0} ))
+}
+
+_read_net_stat() {
+  NET_RX=0
+  NET_TX=0
+  local iface rx _ tx
+  while read -r iface rx _ _ _ _ _ _ _ tx _; do
+    [[ "$iface" == *"Inter-"* || "$iface" == *"face"* || "$iface" == "lo:" ]] && continue
+    NET_RX=$(( NET_RX + rx ))
+    NET_TX=$(( NET_TX + tx ))
+  done < /proc/net/dev
+}
+
+# ==============================================================================
+# 5. VÒNG LẶP CHÍNH (REAL-TIME REFRESH - 0 SUBSHELL PER TICK)
+# ==============================================================================
+_read_cpu_stat
+prev_total=$CPU_TOTAL
+prev_idle=$CPU_IDLE
+
+_read_net_stat
+rx_prev=$NET_RX
+tx_prev=$NET_TX
+
+tput civis 2>/dev/null || printf '\033[?25l'
 ACTION="menu"
 counter=0
 cached_ols_status="${C_YELLOW}Kiểm tra...${C_RESET}"
 cached_db_status="${C_YELLOW}Kiểm tra...${C_RESET}"
 prev_lines=0
+cpu_display_val=0
 
 while true; do
-  # Network & CPU Data
-  rx_now=0
-  tx_now=0
-  while read -r iface rx _ _ _ _ _ _ _ tx _; do
-    [[ "$iface" == *"Inter-"* || "$iface" == *"face"* || "$iface" == *"lo:"* ]] && continue
-    rx_now=$((rx_now + rx))
-    tx_now=$((tx_now + tx))
-  done </proc/net/dev
-  rx_rate=$(((rx_now - rx_prev) / 1024))
-  tx_rate=$(((tx_now - tx_prev) / 1024))
-  rx_prev=$rx_now
-  tx_prev=$tx_now
-
-  read -r cpu a b c idle rest </proc/stat
-  total=$((a + b + c + idle))
-  diff_total=$((total - prev_total))
-  diff_idle=$((idle - prev_idle))
-  prev_total=$total
-  prev_idle=$idle
-  [[ $diff_total -eq 0 ]] && cpu_now=0 || cpu_now=$((100 * (diff_total - diff_idle) / diff_total))
-  cpu_display_val=$(((cpu_display_val + cpu_now) / 2))
-
-  if ((counter % 10 == 0)); then
-    timeout 5 /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running' && cached_ols_status="${C_GREEN}Hoạt động${C_RESET}" || cached_ols_status="${C_RED}Tạm dừng${C_RESET}"
-    timeout 5 systemctl is-active mariadb.service >/dev/null 2>&1 && cached_db_status="${C_GREEN}Hoạt động${C_RESET}" || cached_db_status="${C_RED}Tạm dừng${C_RESET}"
-    disk_raw=$(df -BG / | awk 'NR==2 {print $3, $2, $5}' | tr -d 'G%')
-    read -r cached_disk_used cached_disk_total cached_disk_percent <<<"$disk_raw"
+  if (( counter % 10 == 0 )); then
+    _update_services_status
+    _update_disk_usage
+    if (( SHOW_UPDATE == 0 )) && [[ -s "$VERSION_CACHE_FILE" ]]; then
+      wptangtocols_version=$(< "$VERSION_CACHE_FILE")
+      wptangtocols_version="${wptangtocols_version//[$'\r\n\t ']/}"
+      if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptangtoc_ols:-}" ]]; then
+        SHOW_UPDATE=1
+        NEW_VERSION="$wptangtocols_version"
+      fi
+    fi
   fi
-  ((counter++))
 
-  buffer=$(print_dashboard "$rx_rate" "$tx_rate" "$cpu_display_val" "$cached_ols_status" "$cached_db_status")
-  current_lines=$(echo -e "$buffer" | wc -l)
-  [[ $prev_lines -gt 0 ]] && tput cuu "$prev_lines"
-  echo -e "$buffer"
+  _read_net_stat
+  rx_rate=$(( (NET_RX - rx_prev) / 1024 ))
+  tx_rate=$(( (NET_TX - tx_prev) / 1024 ))
+  (( rx_rate < 0 )) && rx_rate=0
+  (( tx_rate < 0 )) && tx_rate=0
+  rx_prev=$NET_RX
+  tx_prev=$NET_TX
 
-  if [[ $prev_lines -gt $current_lines ]]; then
-    echo -en "\e[J"
+  _read_cpu_stat
+  diff_total=$(( CPU_TOTAL - prev_total ))
+  diff_idle=$(( CPU_IDLE - prev_idle ))
+  prev_total=$CPU_TOTAL
+  prev_idle=$CPU_IDLE
+
+  if (( diff_total <= 0 )); then
+    cpu_now=0
+  else
+    cpu_now=$(( 100 * (diff_total - diff_idle) / diff_total ))
   fi
-  prev_lines=$current_lines
+  if (( counter <= 1 )); then
+    cpu_display_val=$cpu_now
+  else
+    cpu_display_val=$(( (cpu_display_val + cpu_now) / 2 ))
+  fi
+  (( counter++ ))
 
-  read -t 1 -n 1 -s key_input
+  # Render toàn bộ khung hình trên RAM (0 Subshell)
+  render_dashboard_buffer "$rx_rate" "$tx_rate" "$cpu_display_val" "$cached_ols_status" "$cached_db_status"
+
+  if (( prev_lines > 0 )); then
+    printf "\033[%dA" "$prev_lines"
+  fi
+  printf "%b" "$DASHBOARD_BUFFER"
+
+  if (( prev_lines > DASHBOARD_LINES )); then
+    printf "\033[J"
+  fi
+  prev_lines=$DASHBOARD_LINES
+
+  key_input=""
+  read -r -t 1 -n 1 -s key_input
   READ_STATUS=$?
-  if [[ $READ_STATUS -eq 0 ]]; then
+
+  if (( READ_STATUS == 0 )); then
+    if [[ "$key_input" == $'\e' ]]; then
+      read -r -t 0.05 -n 10 -s _ 2>/dev/null || true
+      continue
+    fi
+
     if [[ "$key_input" == "0" ]]; then
       ACTION="exit"
     elif [[ "$key_input" == "2" ]]; then
       ACTION="search"
     elif [[ "$key_input" == "9" && "$SHOW_UPDATE" == "1" ]]; then
       ACTION="update"
-    else ACTION="menu"; fi
+    else
+      ACTION="menu"
+    fi
     break
-  elif [[ $READ_STATUS -eq 1 || $READ_STATUS -eq 255 ]]; then
+  elif (( READ_STATUS == 1 || READ_STATUS == 255 )); then
     exit 1
   fi
 done
 
-tput cnorm
+trap - EXIT SIGINT SIGTERM SIGQUIT
+_wptt_status_cleanup
+
 case "$ACTION" in
-"exit")
-  clear
-  echo -e "Đã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu."
-  # Kích hoạt "lối thoát hiểm": Gắn cờ bỏ qua menu và gọi Shell mới
-  export WPTT_BYPASS=1
-  #nên sử dụng thêm --login để hoàn hảo hơn để nạp lại full biến profile cho người dùng gõ terminal như mới hoàn toàn
-  exec bash --login
-  ;;
+  "exit")
+    clear
+    echo -e "Đã thoát ra WPTangToc OLS. Nhập lệnh ${C_GREEN}1${C_RESET} hoặc ${C_GREEN}wptangtoc${C_RESET} để quay lại menu."
+    export WPTT_BYPASS=1
+    exec bash --login
+    ;;
 
-"search")
-  # Bổ sung kiểm tra an toàn: Nếu mất file thì quay về menu chính thay vì báo lỗi rồi sập SSH
-  if [[ -f "/etc/wptt/search-wptangtoc" ]]; then
-    exec /etc/wptt/search-wptangtoc
-  else
-    clear && exec /usr/bin/wptangtoc
-  fi
-  ;;
+  "search")
+    if [[ -f "/etc/wptt/search-wptangtoc" ]]; then
+      exec /etc/wptt/search-wptangtoc
+    else
+      clear && exec /usr/bin/wptangtoc
+    fi
+    ;;
 
-"update")
-  if [[ -f "/etc/wptt/wptt-update" ]]; then
-    exec /etc/wptt/wptt-update
-  else
-    clear && exec /usr/bin/wptangtoc
-  fi
-  ;;
+  "update")
+    if [[ -f "/etc/wptt/wptt-update" ]]; then
+      exec /etc/wptt/wptt-update
+    else
+      clear && exec /usr/bin/wptangtoc
+    fi
+    ;;
 
-*)
-  clear
-  exec /usr/bin/wptangtoc
-  ;;
+  *)
+    clear
+    exec /usr/bin/wptangtoc
+    ;;
 esac
