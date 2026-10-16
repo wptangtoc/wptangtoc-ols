@@ -1,151 +1,229 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
 
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 
+# ==============================================================================
+# 1. TRUY VẤN TOÀN BỘ DỊCH VỤ TRONG 1 LẦN GỌI SYSTEMCTL DUY NHẤT (Cải thiện hiệu suất)
+# ==============================================================================
+CANDIDATE_UNITS=(
+  "lshttpd.service" "lsws.service"
+  "mariadb.service" "mysql.service" "mysqld.service"
+  "valkey.service" "keydb.service" "redis.service" "redis-server.service"
+  "memcached.service"
+  "dev-zram0.swap" "zramswap.service"
+  "wptt-htaccess.service" "wptt-phanquyen.service"
+  "csf.service" "lfd.service" "nftables.service" "firewalld.service" "ufw.service"
+  "fail2ban.service" "monit.service"
+  "postfix.service" "dovecot.service"
+  "chronyd.service" "chrony.service"
+  "sshd.service" "ssh.service"
+  "crond.service" "cron.service"
+)
+
+declare -A UNIT_LOAD=()
+declare -A UNIT_ACTIVE=()
+
+_id=""
+_load=""
+_active=""
+while IFS='=' read -r k v; do
+  v="${v%$'\r'}"
+  case "$k" in
+    Id) _id="$v" ;;
+    LoadState) _load="$v" ;;
+    ActiveState) _active="$v" ;;
+    "")
+      if [[ -n "$_id" ]]; then
+        UNIT_LOAD["$_id"]="$_load"
+        UNIT_ACTIVE["$_id"]="$_active"
+      fi
+      _id=""
+      _load=""
+      _active=""
+      ;;
+  esac
+done < <(systemctl show --property=Id,LoadState,ActiveState -- "${CANDIDATE_UNITS[@]}" 2>/dev/null; echo "")
+
+# Kiểm tra unit có tồn tại (đã cài đặt) trên hệ thống hay không
+unit_exists() {
+  local unit_name="$1"
+  [[ "$unit_name" != *.* ]] && unit_name="${unit_name}.service"
+  [[ "${UNIT_LOAD["$unit_name"]:-not-found}" == "loaded" ]]
+}
+
+# Lấy trạng thái thực tế từ bộ nhớ RAM (0 Subshell)
 get_status() {
-  local service_name="$1"
-  if ! systemctl cat "${service_name}.service" &>/dev/null; then
-    echo "not-found"
-    return
+  local unit_name="$1"
+  [[ "$unit_name" != *.* ]] && unit_name="${unit_name}.service"
+  if [[ "${UNIT_LOAD["$unit_name"]:-not-found}" != "loaded" ]]; then
+    REPLY_STATUS="not-found"
+    return 0
   fi
-  # Lấy trạng thái hoạt động thực tế
-  systemctl is-active "$service_name.service" 2>/dev/null || echo "inactive"
+  REPLY_STATUS="${UNIT_ACTIVE["$unit_name"]:-inactive}"
 }
 
-clean_status() {
-  echo "$1" | tr -d '\r' | xargs
-}
-
+# Vẽ từng dòng trạng thái với 0 Subshell (Thuần Built-in Bash)
 print_row() {
   local name="$1"
-  local raw_status=$(clean_status "$2")
+  local raw_status="${2//[[:space:]]/}"
   local color_status=""
   local status_text=""
+  local name_padded padding status_len pad_len
 
   case "$raw_status" in
-  active)
-    color_status="${C_GREEN}"
-    status_text="Đang hoạt động (Active)"
-    ;;
-  inactive)
-    color_status="${C_YELLOW}"
-    status_text="Đã dừng (Inactive)"
-    ;;
-  activating)
-    color_status="${C_CYAN}"
-    status_text="Đang khởi động (Activating)"
-    ;;
-  failed)
-    color_status="${C_RED}"
-    status_text="Lỗi sự cố (Failed)"
-    ;;
-  not-found) return 0 ;; # Bỏ qua không in nếu dịch vụ chưa cài đặt
-  *)
-    color_status="${C_WHITE}"
-    status_text="$raw_status"
-    ;;
+    active)
+      color_status="${C_GREEN}"
+      status_text="Đang hoạt động (Active)"
+      ;;
+    inactive)
+      color_status="${C_YELLOW}"
+      status_text="Đã dừng (Inactive)"
+      ;;
+    activating|reloading)
+      color_status="${C_CYAN}"
+      status_text="Đang khởi động (Activating)"
+      ;;
+    failed)
+      color_status="${C_RED}"
+      status_text="Lỗi sự cố (Failed)"
+      ;;
+    not-found|"")
+      return 0
+      ;;
+    *)
+      color_status="${C_WHITE}"
+      status_text="$raw_status"
+      ;;
   esac
 
-  # Căn lề trái 15 ký tự cho Tên Dịch vụ
-  local name_padded=$(printf "%-15s" "$name")
+  # Căn lề trái 15 ký tự cho Tên Dịch vụ bằng printf -v (0 Subshell)
+  printf -v name_padded '%-15s' "$name"
 
-  # Tính độ dài chuỗi tiếng Việt chuẩn xác để không bị vỡ khung Box
-  local status_len=$(echo -n "$status_text" | awk '{print length($0)}')
-  local pad_len=$((57 - status_len))
-  [[ $pad_len -lt 0 ]] && pad_len=0
-  local padding=$(printf '%*s' "$pad_len" "")
+  # Tính độ dài ký tự UTF-8 trực tiếp bằng Bash Parameter Expansion (0 Subshell)
+  status_len=${#status_text}
+  pad_len=$(( 57 - status_len ))
+  (( pad_len < 0 )) && pad_len=0
+  printf -v padding '%*s' "$pad_len" ""
 
   echo -e "${C_CYAN}│${C_RESET}  ${C_BOLD_WHITE}${name_padded}${C_RESET} : ${color_status}${status_text}${C_RESET}${padding} ${C_CYAN}│${C_RESET}"
+}
+
+print_unit_if_exists() {
+  local display_name="$1"
+  local unit_name="$2"
+  get_status "$unit_name"
+  [[ "$REPLY_STATUS" != "not-found" ]] && print_row "$display_name" "$REPLY_STATUS"
 }
 
 clear
 
 print_border_top
-# Căn giữa Tiêu đề (Độ rộng trong khung là 71 ký tự)
 title="BẢNG TRẠNG THÁI CÁC DỊCH VỤ (SERVICES) HỆ THỐNG"
-pad=$(((78 - ${#title}) / 2))
-printf "${C_CYAN}│${C_RESET}%*s${C_YELLOW}%s${C_RESET}%*s${C_CYAN}│${C_RESET}\n" $pad "" "$title" $((78 - pad - ${#title})) ""
+pad=$(( (78 - ${#title}) / 2 ))
+printf "${C_CYAN}│${C_RESET}%*s${C_YELLOW}%s${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$pad" "" "$title" "$(( 78 - pad - ${#title} ))" ""
 print_border_mid
 
-# 1. LiteSpeed Webserver
-print_row "LiteSpeed" "$(get_status lshttpd)"
-
-# 2. MariaDB / MySQL
-db_service=""
-if systemctl cat mariadb.service &>/dev/null; then
-  db_service="mariadb"
-  db_name="MariaDB"
-elif systemctl cat mysql.service &>/dev/null; then
-  db_service="mysql"
-  db_name="MySQL"
-elif systemctl cat mysqld.service &>/dev/null; then
-  db_service="mysqld"
-  db_name="MySQL"
-fi
-[[ -n "$db_service" ]] && print_row "$db_name" "$(get_status "$db_service")"
-
-# 3. PHP-FPM (Nếu dùng mô hình khác LSAPI, thường LSPHP chạy ngầm OLS, nhưng cứ check thử)
-# print_row "PHP-FPM" "$(get_status php-fpm)" # Mở dòng này nếu bạn dùng Nginx/Apache song song
-
-# 4. Object Cache (Ưu tiên: Valkey -> KeyDB -> Redis)
-active_cache=""
-active_name_display=""
-
-if systemctl cat valkey.service &>/dev/null; then
-  active_cache="valkey"
-  active_name_display="Valkey"
-elif systemctl cat keydb.service &>/dev/null; then
-  active_cache="keydb"
-  active_name_display="KeyDB"
-elif systemctl cat redis.service &>/dev/null; then
-  active_cache="redis"
-  active_name_display="Redis"
-elif systemctl cat redis-server.service &>/dev/null; then
-  active_cache="redis-server"
-  active_name_display="Redis"
-fi
-[[ -n "$active_cache" ]] && print_row "$active_name_display" "$(get_status "$active_cache")"
-
-# 5. Memcached (Standard)
-if systemctl cat memcached.service &>/dev/null; then
-  print_row "Memcached" "$(get_status memcached)"
+# 1. OpenLiteSpeed Webserver
+if unit_exists "lshttpd.service"; then
+  print_unit_if_exists "LiteSpeed" "lshttpd.service"
+elif unit_exists "lsws.service"; then
+  print_unit_if_exists "LiteSpeed" "lsws.service"
 fi
 
-# 6. SSH (Bảo mật truy cập)
-ssh_service=""
-if systemctl cat sshd.service &>/dev/null; then
-  ssh_service="sshd"
-elif systemctl cat ssh.service &>/dev/null; then
-  ssh_service="ssh"
-fi
-[[ -n "$ssh_service" ]] && print_row "SSH" "$(get_status "$ssh_service")"
+# 2. MariaDB / MySQL Database
+for _db_unit in "mariadb:MariaDB" "mysql:MySQL" "mysqld:MySQL"; do
+  _u="${_db_unit%%:*}"
+  _n="${_db_unit#*:}"
+  if unit_exists "${_u}.service"; then
+    print_unit_if_exists "$_n" "${_u}.service"
+    break
+  fi
+done
 
-# 7. Crond (Lập lịch tự động)
-cron_service=""
-if systemctl cat crond.service &>/dev/null; then
-  cron_service="crond"
-elif systemctl cat cron.service &>/dev/null; then
-  cron_service="cron"
-fi
-[[ -n "$cron_service" ]] && print_row "Cron Daemon" "$(get_status "$cron_service")"
+# 3. Object Cache (Ưu tiên: Valkey -> KeyDB -> Redis)
+for _cache_unit in "valkey:Valkey" "keydb:KeyDB" "redis:Redis" "redis-server:Redis"; do
+  _u="${_cache_unit%%:*}"
+  _n="${_cache_unit#*:}"
+  if unit_exists "${_u}.service"; then
+    print_unit_if_exists "$_n" "${_u}.service"
+    break
+  fi
+done
 
-# 8. Fail2Ban (Bảo mật Anti-Bruteforce)
-if systemctl cat fail2ban.service &>/dev/null; then
-  print_row "Fail2Ban" "$(get_status fail2ban)"
+# 4. Memcached
+print_unit_if_exists "Memcached" "memcached.service"
+
+# 5. ZRAM Swap (Bộ nhớ nén siêu tốc)
+if unit_exists "dev-zram0.swap"; then
+  print_unit_if_exists "ZRAM Swap" "dev-zram0.swap"
+elif unit_exists "zramswap.service"; then
+  print_unit_if_exists "ZRAM Swap" "zramswap.service"
+elif [[ -b /dev/zram0 ]] && grep -q '/zram0' /proc/swaps 2>/dev/null; then
+  print_row "ZRAM Swap" "active"
 fi
 
-# 9. Firewall
-if systemctl cat firewalld.service &>/dev/null; then
-  print_row "FirewallD" "$(get_status firewalld)"
-elif systemctl cat ufw.service &>/dev/null; then
-  print_row "UFW Firewall" "$(get_status ufw)"
+# 6. WPTangToc OLS Realtime Daemons (.htaccess & Auto Chmod/Chown)
+print_unit_if_exists "WPTT .htaccess" "wptt-htaccess.service"
+print_unit_if_exists "WPTT Phân Quyền" "wptt-phanquyen.service"
+
+# 7. Hệ thống Tường lửa (Ưu tiên hiển thị tường lửa đang hoạt động thực tế)
+if unit_exists "csf.service" && [[ "${UNIT_ACTIVE["csf.service"]:-}" == "active" ]]; then
+  print_unit_if_exists "CSF Firewall" "csf.service"
+  print_unit_if_exists "LFD Daemon" "lfd.service"
+elif unit_exists "nftables.service" && [[ "${UNIT_ACTIVE["nftables.service"]:-}" == "active" ]]; then
+  print_unit_if_exists "Nftables" "nftables.service"
+elif unit_exists "firewalld.service" && [[ "${UNIT_ACTIVE["firewalld.service"]:-}" == "active" ]]; then
+  print_unit_if_exists "FirewallD" "firewalld.service"
+elif unit_exists "ufw.service" && [[ "${UNIT_ACTIVE["ufw.service"]:-}" == "active" ]]; then
+  print_unit_if_exists "UFW Firewall" "ufw.service"
+else
+  # Nếu tất cả tường lửa đều đang tắt, hiển thị tường lửa chính đã cài đặt để cảnh báo
+  for _fw_unit in "csf:CSF Firewall" "firewalld:FirewallD" "ufw:UFW Firewall" "nftables:Nftables"; do
+    _u="${_fw_unit%%:*}"
+    _n="${_fw_unit#*:}"
+    if unit_exists "${_u}.service"; then
+      print_unit_if_exists "$_n" "${_u}.service"
+      break
+    fi
+  done
+fi
+
+# 8. Fail2Ban & Monit (Bảo mật & Tự phục hồi dịch vụ)
+print_unit_if_exists "Fail2Ban" "fail2ban.service"
+print_unit_if_exists "Monit Daemon" "monit.service"
+
+# 9. Mail Server (Chỉ hiển thị nếu người dùng đã cài đặt Postfix / Dovecot)
+print_unit_if_exists "Postfix Mail" "postfix.service"
+print_unit_if_exists "Dovecot IMAP" "dovecot.service"
+
+# 10. Dịch vụ Nền tảng Hệ điều hành (SSH, Cron, Đồng bộ thời gian Chrony)
+if unit_exists "sshd.service"; then
+  print_unit_if_exists "SSH Daemon" "sshd.service"
+elif unit_exists "ssh.service"; then
+  print_unit_if_exists "SSH Daemon" "ssh.service"
+fi
+
+if unit_exists "crond.service"; then
+  print_unit_if_exists "Cron Daemon" "crond.service"
+elif unit_exists "cron.service"; then
+  print_unit_if_exists "Cron Daemon" "cron.service"
+fi
+
+if unit_exists "chronyd.service"; then
+  print_unit_if_exists "Chrony Time" "chronyd.service"
+elif unit_exists "chrony.service"; then
+  print_unit_if_exists "Chrony Time" "chrony.service"
 fi
 
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
@@ -156,3 +234,4 @@ else
   echo -e "${C_RED}Không tìm thấy script Menu WPTT tại /etc/wptt/wptt-service-main!${C_RESET}"
   exit 1
 fi
+
