@@ -1,32 +1,42 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
 
-# ==============================================================================
-# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
-# ==============================================================================
-. /etc/wptt/.wptt.conf 2>/dev/null
-if [[ -z "$ngon_ngu" ]]; then ngon_ngu='vi'; fi
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+# Chỉ nạp thư viện nếu tiến trình cha chưa nạp (Chống nạp chồng tốn I/O)
+if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
+  . /etc/wptt/core-functions 2>/dev/null
+fi
+
+if [[ -z "${ngon_ngu:-}" || -z "${tai_ma_nguon_wordpress:-}" ]]; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/.wptt.conf 2>/dev/null
+  [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+  # shellcheck source=/dev/null
+  . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+fi
+
+if ! declare -F _runing &>/dev/null; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/echo-color 2>/dev/null
+fi
 
 function lua_chon_NAME() {
-
-	if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
-		return 1   # Mặc định tự động bấm Đồng ý
-	fi
-
-
-  local action_desc="$1" # Nhận thông điệp từ file gọi (nếu có)
+  local action_desc="${1:-}"
   unset NAME
+
+  # Nếu chạy tự động trên CI/CD mà không truyền dữ liệu qua Pipe (stdin là TTY) thì thoát ngay
+  if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]] && [[ -t 0 ]]; then
+    return 1
+  fi
+
   local selects=()
   local i=1
-  # Mặc định chuẩn khung 78
-  local box_inner_width=${box_inner_width:-78}
+  local box_inner_width="${box_inner_width:-78}"
+  local filepath domain valid_domain PROMPT_TEXT
 
-  # 1. Quét file siêu tốc trên RAM (LỌC NGHIÊM NGẶT CÁC DOMAIN CÓ CÀI WORDPRESS)
+  # 1. Quét file siêu tốc trên RAM (0 Subshell)
+  shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
 
@@ -34,75 +44,78 @@ function lua_chon_NAME() {
     domain="${domain%.conf}"
     domain="${domain#.}"
 
-    if [[ "$domain" == ?*.?* ]]; then
-      # ĐIỀU KIỆN LÕI CỦA FILE NÀY: Phải có 2 file wp-load và wp-config
+    if [[ "$domain" == ?*.?* && "$domain" != *..* ]]; then
       if [[ -f /usr/local/lsws/$domain/html/wp-load.php && -f /usr/local/lsws/$domain/html/wp-config.php ]]; then
         selects+=("$domain")
       fi
     fi
   done
+  shopt -u nullglob
 
-  # 2. Kiểm tra nếu VPS chưa có website nào thỏa mãn
-  if [[ ${#selects[@]} -eq 0 ]]; then
+  # 2. Kiểm tra nếu VPS chưa có website nào
+  if ((${#selects[@]} == 0)); then
     clear
-    echo -e "\n${C_RED}❌ Lỗi: Không có website WordPress nào tồn tại trên hệ thống.${C_RESET}"
-    exit
+    echo -e "\n${C_RED}Lỗi: ${khong_co_domain_nao_ton_tai_tren_he_thong:-Không có tên miền nào tồn tại trên hệ thống}${C_RESET}"
+    exit 1
   fi
 
-  # 3. Sắp xếp mảng chuẩn Version (Tự nhiên)
-  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+  # 3. Sắp xếp mảng chuẩn Version (Tự nhiên) chỉ khi có từ 2 tên miền trở lên
+  if ((${#selects[@]} > 1)); then
+    mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+  fi
 
   # ============================================================================
-  # 4. RENDER KHỐI BO CONG (ĐƯỜNG KẺ GẠCH CHÂN BÁM LỀ TRÁI)
+  # 4. RENDER KHỐI BO CONG (0 SUBSHELL - THUẦN BUILT-IN BASH)
   # ============================================================================
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 
-  # Tiêu đề hành động (Lệch trái)
   if [[ -n "$action_desc" ]]; then
     local title_text="${lua_chon_website_ban_muon:-Nhập lựa chọn website của bạn muốn} $action_desc:"
-    local clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g" | tr -d '\r\n')
+    local clean_title="$title_text"
+    # Khử mã màu ANSI (nếu có) bằng Regex thuần Bash thay vì gọi echo | sed
+    while [[ "$clean_title" =~ $'\x1B'\[[0-9\;]*[a-zA-Z] ]]; do
+      clean_title="${clean_title//"${BASH_REMATCH[0]}"/}"
+    done
 
-    # Tính số ký tự thực tế (Chống lỗi UTF-8)
-    local len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_text") 2>/dev/null | wc -m | tr -d ' ')
-    [[ -z "$len" || "$len" == "0" ]] && len=${#clean_title}
-
-    # Căn lề trái (cách 2 khoảng trắng), tính khoảng trắng bù bên phải
+    local len=${#clean_title}
     local pad_r=$((box_inner_width - len - 2))
-    [[ $pad_r -lt 0 ]] && pad_r=0
+    ((pad_r < 0)) && pad_r=0
 
-    # In ra Tiêu đề
-    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+    local pad_r_str=""
+    printf -v pad_r_str '%*s' "$pad_r" ""
+    echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}${pad_r_str}${C_CYAN}│${C_RESET}"
 
-    # Vẽ đường gạch chân, sử dụng sed thay cho tr để không bị lỗi UTF-8
     local line_len=$((len + 3))
+    ((line_len > box_inner_width)) && line_len=$box_inner_width
     local pad_line_r=$((box_inner_width - line_len))
-    [[ $pad_line_r -lt 0 ]] && pad_line_r=0
-    local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+    ((pad_line_r < 0)) && pad_line_r=0
 
-    # In đường phân cách (bám từ lề trái, tàng hình phần bên phải)
-    echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+    local short_line="" pad_line_str=""
+    printf -v short_line "%${line_len}s" ""
+    short_line="${short_line// /─}"
+    printf -v pad_line_str '%*s' "$pad_line_r" ""
+
+    echo -e "${C_CYAN}├${short_line}${pad_line_str}│${C_RESET}"
   fi
 
-  # Vòng lặp in danh sách tên miền vào trong khung
+  # Vòng lặp in danh sách tên miền vào trong khung (0 Subshell cho mọi số lượng domain)
+  local item_text clean_text len pad pad_str
   for domain in "${selects[@]}"; do
-    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain")
+    printf -v item_text "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$domain"
+    printf -v clean_text "  %3d) %s" "$i" "$domain"
 
-    # Tính toán khoảng trắng bù trừ chống UTF-8
-    local clean_text=$(printf "  %3d) %s" "$i" "$domain")
-    local len=$( (LC_ALL=en_US.UTF-8 printf "%s" "$clean_text") 2>/dev/null | wc -m | tr -d ' ')
-    [[ -z "$len" || "$len" == "0" ]] && len=${#clean_text}
+    len=${#clean_text}
+    pad=$((box_inner_width - len))
+    ((pad < 0)) && pad=0
+    printf -v pad_str '%*s' "$pad" ""
 
-    local pad=$((box_inner_width - len))
-    [[ $pad -lt 0 ]] && pad=0
-
-    # In dòng dữ liệu
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    echo -e "${C_CYAN}│${C_RESET}${item_text}${pad_str}${C_CYAN}│${C_RESET}"
     ((i++))
   done
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
   # ============================================================================
-  # 5. TỐI ƯU UX DÒNG NHẮC LỆNH (PROMPT) THÔNG MINH
+  # 5. TỐI ƯU UX DÒNG NHẮC LỆNH (PROMPT)
   # ============================================================================
   local fzf_installed=false
   if command -v fzf &>/dev/null; then
@@ -110,7 +123,6 @@ function lua_chon_NAME() {
   fi
 
   local prompt_quick_select=""
-  # CHỈ hiển thị Chọn Nhanh khi có FZF và CÓ TỪ 2 WEBSITE TRỞ LÊN
   if [[ "$fzf_installed" == true && ${#selects[@]} -gt 1 ]]; then
     prompt_quick_select=" [00=${chon_nhanh:-Chọn nhanh}]"
   fi
@@ -119,16 +131,16 @@ function lua_chon_NAME() {
 
   # ============================================================================
   # 6. ĐỘNG CƠ NHẬN PHÍM AN TOÀN
-  # ==============================================================================
+  # ============================================================================
   while true; do
     echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
 
     if ! read -r REPLY; then
-      echo -e "\n${C_RED}Đã mất kết nối Terminal (EOF). Tự động thoát Menu để bảo vệ hệ thống...${C_RESET}"
+      echo -e "\n${C_RED}⚠️ Đã mất kết nối Terminal (EOF). Tự động thoát Menu để bảo vệ hệ thống...${C_RESET}"
       exit 1
     fi
 
-    REPLY="${REPLY// /}"
+    REPLY="${REPLY//[[:space:]]/}"
     REPLY="${REPLY,,}"
 
     case "$REPLY" in
@@ -139,17 +151,17 @@ function lua_chon_NAME() {
       ;;
 
     00)
-      # Chỉ cho phép chạy 00 nếu có nhiều hơn 1 website
       if [[ "$fzf_installed" == true && ${#selects[@]} -gt 1 ]]; then
         local fzf_height=$((${#selects[@]} + 4))
+        ((fzf_height > 40)) && fzf_height=40
         local fzf_prompt="${nhap_lua_chon_website_cua_ban:-Tìm kiếm website} (Mũi tên di chuyển, Enter chọn, ESC hủy): "
+        local selected_name=""
+        local fzf_exit_status=0
 
-        local selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border=rounded --color=border:red --cycle --reverse)
-        local fzf_exit_status=$?
-
+        selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="$fzf_prompt" --height="$fzf_height" --border=rounded --color=border:red --cycle --reverse) || fzf_exit_status=$?
         selected_name="${selected_name#*: }"
 
-        if [[ $fzf_exit_status -eq 0 ]] && [[ -n "$selected_name" ]]; then
+        if ((fzf_exit_status == 0)) && [[ -n "$selected_name" ]]; then
           NAME="$selected_name"
           return 0
         else
@@ -157,17 +169,18 @@ function lua_chon_NAME() {
           continue
         fi
       else
-        echo -e "\n${C_RED}❌ Lỗi: ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ} '00'. Tính năng chọn nhanh không khả dụng lúc này.${C_RESET}"
+        echo -e "\n${C_RED}Lỗi: ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ} '00'. Tính năng chọn nhanh không khả dụng lúc này.${C_RESET}"
         continue
       fi
       ;;
 
     *)
-      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-        local action_index=$((REPLY - 1))
+      # Dùng 10#$REPLY để ép hệ thập phân, chống lỗi Octal khi người dùng nhập 08, 09
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && ((10#$REPLY >= 1 && 10#$REPLY <= ${#selects[@]})); then
+        local action_index=$((10#$REPLY - 1))
         NAME="${selects[$action_index]}"
         return 0
-      elif [[ "$REPLY" == ?*.?* ]] && [[ "$REPLY" != "." ]]; then
+      elif [[ "$REPLY" == ?*.?* && "$REPLY" != "." ]]; then
         local found=false
         for valid_domain in "${selects[@]}"; do
           if [[ "$valid_domain" == "$REPLY" ]]; then
@@ -177,14 +190,14 @@ function lua_chon_NAME() {
           fi
         done
 
-        if $found; then
+        if [[ "$found" == true ]]; then
           return 0
         else
-          echo -e "\n${C_RED}❌ Lỗi: Tên miền '$REPLY' không tồn tại hoặc không phải là WordPress.${C_RESET}"
+          echo -e "\n${C_RED}Lỗi: Tên miền '$REPLY' không tồn tại trên hệ thống.${C_RESET}"
           continue
         fi
       else
-        echo -e "\n${C_RED}❌ ${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
+        echo -e "\n${C_RED}${lua_chon_khong_hop_le:-Lựa chọn không hợp lệ}: '$REPLY'. ${vui_long_chon_lai:-Vui lòng chọn lại.}${C_RESET}"
         continue
       fi
       ;;
