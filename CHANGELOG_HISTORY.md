@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.2.3.5
+
+🛠️ **Tối ưu hệ thống**
+- Nâng cao hiệu suất hoạt động của thư viện giao diện cốt lõi (core UI), giúp thao tác quản trị phản hồi nhanh chóng, mượt mà và tiết kiệm tài nguyên hệ thống hơn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ### 🛠️ Tối ưu hệ thống
 - Tự động cấu hình và tinh chỉnh `fail2ban` dành riêng cho các máy chủ ảo (VPS) có dung lượng RAM nhỏ (512MB), giúp tiết kiệm tài nguyên hệ thống hiệu quả và nâng cao khả năng bảo mật.
 
