@@ -414,3 +414,53 @@ fi
 rm -f -- /etc/wptt/tmp/wptt_search_*.tsv 2>/dev/null || true
 rm -f -- /etc/wptt/tmp/wptt_search_*.idx 2>/dev/null || true
 /etc/wptt/search-wptangtoc --preload-cache </dev/null >/dev/null 2>&1
+
+
+# ==============================================================================
+# CHUẨN HÓA /root/.bashrc CHỐNG VĂNG SSH (LŨY ĐẲNG & ATOMIC REPLACE)
+# ==============================================================================
+wptt_fix_bashrc_idempotent() {
+  local target_file="/root/.bashrc"
+  [[ -f "$target_file" ]] || return 0
+
+  # Kiểm tra nhanh: Nếu tất cả đã ở dạng /bin/bash và không còn dấu '.' lẻ thì bỏ qua luôn (0 I/O thừa)
+  if ! grep -qE "(alias[[:space:]]+(00|99|999)=['\"]?\.[[:space:]]+/etc/wptt/|(\.[[:space:]]+/etc/wptt/wptt-status\b))" "$target_file" 2>/dev/null; then
+    return 0
+  fi
+
+  local tmp_dir="/etc/wptt/tmp"
+  mkdir -p "$tmp_dir" 2>/dev/null || true
+  local tmp_file
+  tmp_file="$(mktemp -p "$tmp_dir" bashrc.XXXXXX)" || return 1
+
+  # Đọc và thay thế chuẩn xác từng mẫu chuỗi:
+  # 1. alias 00='. /etc/wptt/...'  -> alias 00='/bin/bash /etc/wptt/...'
+  # 2. alias 99='. /etc/wptt/...'  -> alias 99='/bin/bash /etc/wptt/...'
+  # 3. alias 999='. /etc/wptt/...' -> alias 999='/bin/bash /etc/wptt/...'
+  # 4. . /etc/wptt/wptt-status     -> /bin/bash /etc/wptt/wptt-status
+  sed -E \
+    -e "s|alias[[:space:]]+00=['\"]?(\.[[:space:]]+|/bin/bash[[:space:]]+)?/etc/wptt/search-wptangtoc['\"]?|alias 00='/bin/bash /etc/wptt/search-wptangtoc'|g" \
+    -e "s|alias[[:space:]]+99=['\"]?(\.[[:space:]]+|/bin/bash[[:space:]]+)?/etc/wptt/wptt-update['\"]?|alias 99='/bin/bash /etc/wptt/wptt-update'|g" \
+    -e "s|alias[[:space:]]+999=['\"]?(\.[[:space:]]+|/bin/bash[[:space:]]+)?/etc/wptt/wptt-update2[[:space:]]+999['\"]?|alias 999='/bin/bash /etc/wptt/wptt-update2 999'|g" \
+    -e "s|(^[[:space:]]*|[;&][[:space:]]*)\.[[:space:]]+/etc/wptt/wptt-status\b|\1/bin/bash /etc/wptt/wptt-status|g" \
+    "$target_file" >"$tmp_file" || {
+      /bin/rm -f -- "$tmp_file" 2>/dev/null
+      return 1
+    }
+
+  # Đảm bảo file mới không bị rỗng rồi mới tráo đổi nguyên tử
+  if [[ -s "$tmp_file" ]]; then
+    chmod 644 "$tmp_file" 2>/dev/null || true
+    chown root:root "$tmp_file" 2>/dev/null || true
+    mv -f "$tmp_file" "$target_file" 2>/dev/null || {
+      /bin/rm -f -- "$tmp_file" 2>/dev/null
+      return 1
+    }
+  else
+    /bin/rm -f -- "$tmp_file" 2>/dev/null
+    return 1
+  fi
+}
+
+# Kích hoạt hàm
+wptt_fix_bashrc_idempotent
