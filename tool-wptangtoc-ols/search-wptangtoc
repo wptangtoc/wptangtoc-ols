@@ -5,7 +5,6 @@
 # @description: Công cụ tìm kiếm nhanh tính năng WPTangToc OLS
 # @since: 2026
 
-# Chỉ nạp thư viện nếu tiến trình cha chưa nạp
 if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
   # shellcheck source=/dev/null
   . /etc/wptt/core-functions 2>/dev/null
@@ -15,7 +14,8 @@ BUILD_ONLY=0
 [[ "${1:-}" == "--preload-cache" ]] && BUILD_ONLY=1
 
 if ! command -v fzf >/dev/null 2>&1; then
-  dnf install fzf -y
+  echo "Vui lòng cài fzf thì mới sử dụng được tính năng này"
+  exit 1
 fi
 
 export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
@@ -23,7 +23,7 @@ export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 stty iutf8 2>/dev/null || true
 shopt -s extglob
 
-if ! declare -F _runing &>/dev/null; then
+if [[ -z "${C_CYAN:-}" ]]; then
   if [[ -f /etc/wptt/echo-color ]]; then
     # shellcheck source=/dev/null
     . /etc/wptt/echo-color
@@ -51,7 +51,6 @@ elif [[ -f "/etc/wptt/lang/vi.sh" ]]; then
   . "/etc/wptt/lang/vi.sh"
 fi
 
-# Bẫy tín hiệu Ctrl+C an toàn
 _wptt_search_ctrl_c() {
   trap - SIGINT SIGTERM SIGQUIT
   stty sane 2>/dev/null || true
@@ -63,7 +62,7 @@ _wptt_search_ctrl_c() {
 trap '_wptt_search_ctrl_c' SIGINT SIGTERM SIGQUIT
 
 # ==============================================================================
-# 1. CÁC HÀM XỬ LÝ CHUỖI & GIẢI MÃ BIẾN THUẦN BASH
+# 1. CÁC HÀM XỬ LÝ CHUỖI, GIẢI MÃ BIẾN & BÓC TÁCH HƯỚNG DẪN (0 SUBSHELL)
 # ==============================================================================
 _trim_str() {
   local s="$1"
@@ -86,8 +85,6 @@ _expand_vars_safe() {
     s="${s%\'}"
   fi
 
-  # Thay biến đúng 1 lượt, từ trái sang phải.
-  # KHÔNG thay lại phần giá trị vừa chèn vào => không thể lặp vô hạn.
   local re='\$\{([a-zA-Z_][a-zA-Z0-9_]*):-([^}]*)\}|\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)'
   local out="" rest="$s" full prefix var_name def_val var_val
   while [[ "$rest" =~ $re ]]; do
@@ -163,17 +160,77 @@ _parse_options_from_file() {
   done <"$filepath"
 }
 
+declare -A script_doc_map=()
+_extract_huong_dan_flat() {
+  local script_file="$1"
+  REPLY_DOC=""
+  [[ -r "$script_file" ]] || return 0
+
+  if [[ -v script_doc_map["$script_file"] ]]; then
+    REPLY_DOC="${script_doc_map["$script_file"]}"
+    return 0
+  fi
+
+  local active=0 line trimmed doc_acc=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if ((active == 0)); then
+      if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?huong_dan[[:space:]]*\(\)[[:space:]]*\{ ]]; then
+        active=1
+      fi
+      continue
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*\} ]]; then
+      break
+    fi
+
+    if [[ "$line" =~ ^[[:space:]]*cat[[:space:]]+\<\<-?[[:space:]]*[\'\"]?EOF[\'\"]? ]] || [[ "$line" =~ ^[[:space:]]*EOF[[:space:]]*$ ]]; then
+      continue
+    fi
+
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    [[ -z "$trimmed" ]] && continue
+
+    if [[ "$trimmed" =~ ^echo([[:space:]]+-[eEn]+)?[[:space:]]+(.*)$ ]]; then
+      trimmed="${BASH_REMATCH[2]}"
+      if [[ "$trimmed" == \"*\" ]]; then
+        trimmed="${trimmed#\"}"
+        trimmed="${trimmed%\"}"
+      elif [[ "$trimmed" == \'*\' ]]; then
+        trimmed="${trimmed#\'}"
+        trimmed="${trimmed%\'}"
+      fi
+    fi
+
+    trimmed="${trimmed//$'\t'/ }"
+    if [[ -n "$doc_acc" ]]; then
+      doc_acc+=" $trimmed"
+    else
+      doc_acc="$trimmed"
+    fi
+  done <"$script_file"
+
+  if [[ "$doc_acc" == *"\033"* || "$doc_acc" == *"\e"* || "$doc_acc" == *$'\x1B'* ]]; then
+    printf -v doc_acc '%b' "$doc_acc"
+    doc_acc="${doc_acc//$'\x1B'\[*([0-9;])[a-zA-Z]/}"
+  fi
+  doc_acc="${doc_acc//[$'\r\n\t']/ }"
+
+  script_doc_map["$script_file"]="$doc_acc"
+  REPLY_DOC="$doc_acc"
+}
+
 # ==============================================================================
-# 2. KIỂM TRA CACHE INDEX SIÊU TỐC (MỞ TRONG 0.002 GIÂY)
+# 2. ĐỌC HOẶC XÂY DỰNG CACHE INDEX FULL-TEXT (DÙNG CHUNG VỚI SEARCH-HUONG-DAN)
 # ==============================================================================
 mkdir -p /etc/wptt/tmp 2>/dev/null || true
-# Xóa bản cache thử nghiệm cũ (nếu có) để áp dụng chuẩn tên ngắn gọn mới
-/bin/rm -f -- /etc/wptt/tmp/wptt_search_index_*.tsv 2>/dev/null || true
-CACHE_FILE="/etc/wptt/tmp/wptt_search_${ngon_ngu}_${version_wptangtoc_ols:-latest}.tsv"
+export CACHE_FILE="/etc/wptt/tmp/wptt_search_ft_${ngon_ngu}_${version_wptangtoc_ols:-latest}.tsv"
 
 declare -A feature_scripts=()
 declare -A feature_args=()
-declare -a sorted_features=()
+declare -a initial_lines=()
 
 use_cache=0
 if [[ -s "$CACHE_FILE" ]]; then
@@ -187,18 +244,15 @@ if [[ -s "$CACHE_FILE" ]]; then
 fi
 
 if ((use_cache == 1)); then
-  while IFS=$'\t' read -r f_key f_script f_arg; do
+  while IFS=$'\t' read -r f_key f_script f_arg _; do
     [[ -z "$f_key" || -z "$f_script" ]] && continue
     feature_scripts["$f_key"]="$f_script"
     feature_args["$f_key"]="${f_arg:-98}"
-    sorted_features+=("$f_key")
+    initial_lines+=("${f_key}"$'\t'"${f_key}"$'\t'"${f_script}"$'\t'"${f_arg:-98}")
   done <"$CACHE_FILE"
 fi
 
-# ==============================================================================
-# 3. NẾU CHƯA CÓ CACHE -> QUÉT TRỰC TIẾP TRÊN RAM VỚI TÊN GỐC NGẮN GỌN
-# ==============================================================================
-if ((${#sorted_features[@]} == 0)); then
+if ((${#initial_lines[@]} == 0)); then
   main_definition_file="/usr/bin/wptangtoc"
   declare -A main_menu_priority=()
 
@@ -231,12 +285,12 @@ if ((${#sorted_features[@]} == 0)); then
   fi
 
   declare -A feature_sort_keys=()
+  declare -A feature_docs=()
 
   for filepath in "${all_files_to_process[@]}"; do
     [[ -r "$filepath" ]] || continue
     file="${filepath##*/}"
 
-    # 1. Trích xuất Tiêu đề Danh mục: GIỮ NGUYÊN LOGIC TÊN NGẮN GỌN NHƯ BẢN GỐC
     category_title=""
     last_title_var=""
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -262,11 +316,9 @@ if ((${#sorted_features[@]} == 0)); then
       category_title="${category_base^}"
     fi
 
-    # 2. Trích xuất danh sách Options của file
     _parse_options_from_file "$filepath"
     ((${#PARSED_OPTIONS[@]} == 0)) && continue
 
-    # 3. Trích xuất ánh xạ case trong run_action() bằng thuần Bash (0 Subshell)
     in_run_action=0
     in_case=0
     current_label=""
@@ -316,12 +368,15 @@ if ((${#sorted_features[@]} == 0)); then
           if ((idx >= 0 && idx < ${#PARSED_OPTIONS[@]})) && [[ -n "$current_script" ]]; then
             opt_title="${PARSED_OPTIONS[$idx]}"
             if [[ -n "$opt_title" && "$opt_title" != *"───"* ]]; then
-              # Giữ nguyên định dạng ngăn cách " > " ngắn gọn như cũ
               feature_key="$category_title > $opt_title"
               if [[ -z "${feature_scripts["$feature_key"]:-}" ]]; then
                 feature_scripts["$feature_key"]="$current_script"
                 feature_args["$feature_key"]="${current_args:-98}"
                 feature_sort_keys["$feature_key"]="${main_menu_priority["$opt_title"]:-99}"
+
+                REPLY_DOC=""
+                _extract_huong_dan_flat "$current_script"
+                feature_docs["$feature_key"]="$REPLY_DOC"
               fi
             fi
           fi
@@ -339,8 +394,12 @@ if ((${#sorted_features[@]} == 0)); then
   : >"${CACHE_FILE}.tmp"
   while IFS=$'\t' read -r _ f_key; do
     [[ -z "$f_key" ]] && continue
-    sorted_features+=("$f_key")
-    printf "%s\t%s\t%s\n" "$f_key" "${feature_scripts["$f_key"]}" "${feature_args["$f_key"]}" >>"${CACHE_FILE}.tmp"
+    f_script="${feature_scripts["$f_key"]}"
+    f_arg="${feature_args["$f_key"]:-98}"
+    f_doc="${feature_docs["$f_key"]:-}"
+
+    initial_lines+=("${f_key}"$'\t'"${f_key}"$'\t'"${f_script}"$'\t'"${f_arg}")
+    printf "%s\t%s\t%s\t%s\n" "$f_key" "$f_script" "$f_arg" "$f_doc" >>"${CACHE_FILE}.tmp"
   done < <(
     for key in "${!feature_scripts[@]}"; do
       printf "%s\t%s\n" "${feature_sort_keys["$key"]:-99}" "$key"
@@ -349,33 +408,184 @@ if ((${#sorted_features[@]} == 0)); then
   mv -f "${CACHE_FILE}.tmp" "$CACHE_FILE" 2>/dev/null || true
 fi
 
+((BUILD_ONLY == 1)) && exit 0
+
+# ==============================================================================
+# 3. ENGINE TÌM KIẾM TRỌNG SỐ 5 TẦNG & PREVIEW SẠCH GỌN
+# ==============================================================================
+wptt_fzf_search() {
+  local query="${1:-}"
+  [[ -s "$CACHE_FILE" ]] || return 0
+
+  LC_ALL=C.UTF-8 awk -F'\t' -v q="$query" '
+    function norm_vn(s) {
+      s = tolower(s)
+      gsub(/oá/, "óa", s); gsub(/oà/, "òa", s); gsub(/oả/, "ỏa", s); gsub(/oã/, "õa", s); gsub(/oạ/, "ọa", s)
+      gsub(/uỷ/, "ủy", s); gsub(/uý/, "úy", s); gsub(/uỳ/, "ùy", s); gsub(/uỹ/, "ũy", s); gsub(/uỵ/, "ụy", s)
+      return s
+    }
+    BEGIN {
+      q_norm = norm_vn(q)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", q_norm)
+      n_words = split(q_norm, q_words, /[[:space:]]+/)
+    }
+    {
+      title = $1
+      script = $2
+      arg = ($3 != "" ? $3 : "98")
+      doc = $4
+
+      if (n_words == 0) {
+        printf "10\t%04d\t%s\t%s\t%s\t%s\n", NR, title, title, script, arg
+        next
+      }
+
+      t_norm = norm_vn(title)
+      d_norm = norm_vn(doc)
+
+      in_title = 0
+      in_doc = 0
+
+      for (i = 1; i <= n_words; i++) {
+        w = q_words[i]
+        if (index(t_norm, w) > 0) {
+          in_title++
+        } else if (index(d_norm, w) > 0) {
+          in_doc++
+        } else {
+          next
+        }
+      }
+
+      if (index(t_norm, q_norm) > 0) {
+        opt_part = t_norm
+        sub(/^.*>[[:space:]]*/, "", opt_part)
+        if (index(opt_part, q_norm) == 1) score = 5
+        else if (index(opt_part, q_norm) > 0) score = 8
+        else score = 10
+      } else if (in_title == n_words) {
+        score = 20
+      } else if (in_title > 0) {
+        score = 30 + (n_words - in_title)
+      } else if (index(d_norm, q_norm) > 0) {
+        score = 50
+      } else {
+        score = 60
+      }
+
+      printf "%02d\t%04d\t%s\t%s\t%s\t%s\n", score, NR, title, title, script, arg
+    }
+  ' "$CACHE_FILE" | sort -t$'\t' -k1,1n -k2,2n | cut -f3-
+}
+export -f wptt_fzf_search
+
+wptt_fzf_previewer() {
+  local f_title="$1"
+  local script_to_preview="$2"
+  local search_query="${3:-}"
+
+  printf "\033[1;36m⚡ %s\033[0m\n" "$f_title"
+
+  if [[ -z "$script_to_preview" || ! -r "$script_to_preview" ]]; then
+    return 0
+  fi
+
+  local alt_regex="" word esc_word i ch
+  if [[ -n "$search_query" ]]; then
+    for word in $search_query; do
+      ((${#word} < 2)) && continue
+      esc_word=""
+      for ((i = 0; i < ${#word}; i++)); do
+        ch="${word:i:1}"
+        case "$ch" in
+        '\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|') esc_word+="\\$ch" ;;
+        *) esc_word+="$ch" ;;
+        esac
+      done
+      esc_word="${esc_word//óa/(óa|oá)}"
+      esc_word="${esc_word//oá/(óa|oá)}"
+      esc_word="${esc_word//ủy/(ủy|uỷ)}"
+      esc_word="${esc_word//uỷ/(ủy|uỷ)}"
+      if [[ -n "$alt_regex" ]]; then
+        alt_regex+="|${esc_word}"
+      else
+        alt_regex="${esc_word}"
+      fi
+    done
+  fi
+
+  local active=0 line trimmed
+  shopt -s nocasematch
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if ((active == 0)); then
+      if [[ "$line" =~ ^[[:space:]]*(function[[:space:]]+)?huong_dan[[:space:]]*\(\)[[:space:]]*\{ ]]; then
+        active=1
+      fi
+      continue
+    fi
+    [[ "$line" =~ ^[[:space:]]*\} ]] && break
+    if [[ "$line" =~ ^[[:space:]]*cat[[:space:]]+\<\<-?[[:space:]]*[\'\"]?EOF[\'\"]? ]] || [[ "$line" =~ ^[[:space:]]*EOF[[:space:]]*$ ]]; then
+      continue
+    fi
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$trimmed" ]] && continue
+    if [[ "$trimmed" =~ ^echo([[:space:]]+-[eEn]+)?[[:space:]]+(.*)$ ]]; then
+      line="${BASH_REMATCH[2]}"
+      line="${line#\"}"
+      line="${line%\"}"
+      line="${line#\'}"
+      line="${line%\'}"
+    fi
+    if [[ -n "$alt_regex" && "$line" =~ ($alt_regex) ]]; then
+      local out="" rest="$line" m_str prefix
+      while [[ "$rest" =~ ($alt_regex) ]]; do
+        m_str="${BASH_REMATCH[1]}"
+        [[ -z "$m_str" ]] && break
+        prefix="${rest%%"$m_str"*}"
+        out+="${prefix}"$'\033[1;33;4m'"${m_str}"$'\033[0m'
+        rest="${rest#*"$m_str"}"
+      done
+      line="${out}${rest}"
+    fi
+    printf "\033[90m%b\033[0m\n" "$line"
+  done <"$script_to_preview"
+  shopt -u nocasematch
+}
+export -f wptt_fzf_previewer
+
 clear
-((BUILD_ONLY == 1)) && exit 0 #preload cache thì exit thoát ra
+
 # ==============================================================================
 # 4. HIỂN THỊ GIAO DIỆN TÌM KIẾM FZF
 # ==============================================================================
-selected_feature=""
+selected_line=""
 trap '' SIGINT
-selected_feature=$(
-  printf "%s\n" "${sorted_features[@]}" | fzf \
-    --prompt="Tìm kiếm tính năng WPTangToc OLS > " \
-    --height='~60%' \
+selected_line=$(
+  SHELL=/bin/bash printf "%s\n" "${initial_lines[@]}" | fzf \
+    --ansi \
+    --disabled \
+    --bind 'change:reload:wptt_fzf_search {q}' \
+    --prompt="🔍 Tìm kiếm tính năng WPTangToc OLS > " \
+    --height='~65%' \
     --border=rounded \
     --color=border:red \
     --layout=reverse \
     --cycle \
-    --header="Tìm thấy ${#sorted_features[@]} tính năng [↑/↓] Di chuyển, ESC hủy, Gõ để lọc, Enter chọn." \
-    --preview='echo {}' \
-    --preview-window=up:3:wrap
+    --with-nth=1 \
+    --delimiter=$'\t' \
+    --header="Tìm thấy ${#initial_lines[@]} tính năng [↑/↓] Di chuyển, ESC hủy, Gõ để lọc, Enter chọn." \
+    --preview='wptt_fzf_previewer {2} {3} {q}' \
+    --preview-window=up:5:wrap
 ) || true
 trap '_wptt_search_ctrl_c' SIGINT
 
 # ==============================================================================
 # 5. ĐIỀU HƯỚNG THỰC THI AN TOÀN
 # ==============================================================================
-if [[ -n "$selected_feature" ]]; then
-  script_to_run="${feature_scripts["$selected_feature"]:-}"
-  script_arguments="${feature_args["$selected_feature"]:-98}"
+if [[ -n "$selected_line" ]]; then
+  IFS=$'\t' read -r _ selected_feature script_to_run script_arguments <<<"$selected_line"
+  [[ -z "$script_arguments" ]] && script_arguments="98"
 
   echo ""
   echoXanhlacay "Bạn đã chọn:"
