@@ -1,14 +1,14 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Engine Render & Điều hướng Menu Trung tâm (0-Subshell Enterprise)
+# @description: Engine Render & Điều hướng Menu Trung tâm
 # @since: 2026
 
 # ==============================================================================
 # 1. KHỞI TẠO BIẾN & NẠP THƯ VIỆN GIAO DIỆN (CHỐNG NẠP CHỒNG)
 # ==============================================================================
-# Chỉ nạp thư viện nếu tiến trình cha chưa nạp (Chống nạp chồng tốn I/O)
 if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
+  # shellcheck source=/dev/null
   . /etc/wptt/core-functions 2>/dev/null
 fi
 
@@ -26,13 +26,17 @@ if ! declare -F _runing &>/dev/null; then
 fi
 
 export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 stty iutf8 2>/dev/null || true
+shopt -s extglob
 PS3=""
 
 # ==============================================================================
-# 2. XÁC ĐỊNH ROUTE ĐIỀU HƯỚNG & HÀM LAZY-LOAD SỐ THỨ TỰ TERMINAL CLI
+# 2. XÁC ĐỊNH ROUTE ĐIỀU HƯỚNG & NHẬN DIỆN MENU CHÍNH / MENU CON
 # ==============================================================================
-if [[ "$0" == *"/wptangtoc" || "$0" == *"wptangtoc" || "${MENU_TITLE:-}" == *"WPTANGTOC OLS"* ]]; then
+IS_MAIN_MENU=0
+if [[ "${0##*/}" == "wptangtoc" || "${MENU_TITLE:-}" == *"WPTANGTOC OLS"* ]]; then
+  IS_MAIN_MENU=1
   TEXT_BACK="Quay về Bảng theo dõi trạng thái"
   ROUTE_BACK="/etc/wptt/wptt-status2"
 else
@@ -60,10 +64,12 @@ _get_cli_menu_num() {
 }
 
 # ==============================================================================
-# 3. BẪY TÍN HIỆU (BẢO VỆ SHELL TIẾN TRÌNH)
+# 3. BẪY TÍN HIỆU (BẢO VỆ SHELL TIẾN TRÌNH & DỌN FILE TẠM)
 # ==============================================================================
+SUB_IDX_FILE=""
 _wptt_menu_ctrl_c() {
   trap - SIGINT SIGTERM SIGQUIT
+  [[ -n "${SUB_IDX_FILE:-}" ]] && /bin/rm -f -- "$SUB_IDX_FILE" 2>/dev/null || true
   if [[ ! -t 0 || ! -t 1 || "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
     exit 130
   fi
@@ -141,7 +147,6 @@ print_full_row() {
   _strip_ansi "$text"
 
   if [[ -z "$index" ]]; then
-    # Tiêu đề nhóm: "   ▶ " chiếm 5 ký tự
     clean_len=$((5 + ${#REPLY_PLAIN}))
     pad=$((box_inner_width - clean_len))
     ((pad < 0)) && pad=0
@@ -149,7 +154,6 @@ print_full_row() {
 
     echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_YELLOW}▶${C_RESET} ${C_BOLD_WHITE}${text^^}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
   else
-    # Dòng tính năng: "   [XX] " chiếm 8 ký tự
     printf -v formatted_index "%2s" "$index"
     clean_len=$((3 + ${#formatted_index} + 3 + ${#REPLY_PLAIN}))
     pad=$((box_inner_width - clean_len))
@@ -191,6 +195,392 @@ draw_default_grid() {
       ((item_count++))
     fi
   done
+}
+
+# ==============================================================================
+# 4B. ENGINE TÌM KIẾM SEO CHO MENU CON (KHÔNG DẤU + SỬA CHÍNH TẢ + PREVIEW)
+# ==============================================================================
+wptt_sub_fzf_search() {
+  local query="${1:-}"
+  [[ -s "${SUB_IDX_FILE:-}" ]] || return 0
+
+  LC_ALL=C.UTF-8 awk -F'\t' -v q="$query" -v hits_file="${HITS_FILE:-}" '
+    function norm_vn_q(s) {
+      s = tolower(s)
+      gsub(/À/, "à", s); gsub(/Á/, "á", s); gsub(/Ả/, "ả", s); gsub(/Ã/, "ã", s); gsub(/Ạ/, "ạ", s)
+      gsub(/Ă/, "ă", s); gsub(/Ằ/, "ằ", s); gsub(/Ắ/, "ắ", s); gsub(/Ẳ/, "ẳ", s); gsub(/Ẵ/, "ẵ", s); gsub(/Ặ/, "ặ", s)
+      gsub(/Â/, "â", s); gsub(/Ầ/, "ầ", s); gsub(/Ấ/, "ấ", s); gsub(/Ẩ/, "ẩ", s); gsub(/Ẫ/, "ẫ", s); gsub(/Ậ/, "ậ", s)
+      gsub(/Đ/, "đ", s)
+      gsub(/È/, "è", s); gsub(/É/, "é", s); gsub(/Ẻ/, "ẻ", s); gsub(/Ẽ/, "ẽ", s); gsub(/Ẹ/, "ẹ", s)
+      gsub(/Ê/, "ê", s); gsub(/Ề/, "ề", s); gsub(/Ế/, "ế", s); gsub(/Ể/, "ể", s); gsub(/Ễ/, "ễ", s); gsub(/Ệ/, "ệ", s)
+      gsub(/Ì/, "ì", s); gsub(/Í/, "í", s); gsub(/Ỉ/, "ỉ", s); gsub(/Ĩ/, "ĩ", s); gsub(/Ị/, "ị", s)
+      gsub(/Ò/, "ò", s); gsub(/Ó/, "ó", s); gsub(/Ỏ/, "ỏ", s); gsub(/Õ/, "õ", s); gsub(/Ọ/, "ọ", s)
+      gsub(/Ô/, "ô", s); gsub(/Ồ/, "ồ", s); gsub(/Ố/, "ố", s); gsub(/Ổ/, "ổ", s); gsub(/Ỗ/, "ỗ", s); gsub(/Ộ/, "ộ", s)
+      gsub(/Ơ/, "ơ", s); gsub(/Ờ/, "ờ", s); gsub(/Ớ/, "ớ", s); gsub(/Ở/, "ở", s); gsub(/Ỡ/, "ỡ", s); gsub(/Ợ/, "ợ", s)
+      gsub(/Ù/, "ù", s); gsub(/Ú/, "ú", s); gsub(/Ủ/, "ủ", s); gsub(/Ũ/, "ũ", s); gsub(/Ụ/, "ụ", s)
+      gsub(/Ư/, "ư", s); gsub(/Ừ/, "ừ", s); gsub(/Ứ/, "ứ", s); gsub(/Ử/, "ử", s); gsub(/Ữ/, "ữ", s); gsub(/Ự/, "ự", s)
+      gsub(/Ỳ/, "ỳ", s); gsub(/Ý/, "ý", s); gsub(/Ỷ/, "ỷ", s); gsub(/Ỹ/, "ỹ", s); gsub(/Ỵ/, "ỵ", s)
+      gsub(/oá/, "óa", s); gsub(/oà/, "òa", s); gsub(/oả/, "ỏa", s); gsub(/oã/, "õa", s); gsub(/oạ/, "ọa", s)
+      gsub(/uỷ/, "ủy", s); gsub(/uý/, "úy", s); gsub(/uỳ/, "ùy", s); gsub(/uỹ/, "ũy", s); gsub(/uỵ/, "ụy", s)
+      return s
+    }
+    function strip_vn_q(s) {
+      gsub(/à|á|ả|ã|ạ|ă|ằ|ắ|ẳ|ẵ|ặ|â|ầ|ấ|ẩ|ẫ|ậ/, "a", s)
+      gsub(/đ/, "d", s)
+      gsub(/è|é|ẻ|ẽ|ẹ|ê|ề|ế|ể|ễ|ệ/, "e", s)
+      gsub(/ì|í|ỉ|ĩ|ị/, "i", s)
+      gsub(/ò|ó|ỏ|õ|ọ|ô|ồ|ố|ổ|ỗ|ộ|ơ|ờ|ớ|ở|ỡ|ợ/, "o", s)
+      gsub(/ù|ú|ủ|ũ|ụ|ư|ừ|ứ|ử|ữ|ự/, "u", s)
+      gsub(/ỳ|ý|ỷ|ỹ|ỵ/, "y", s)
+      return s
+    }
+    function can_delete_one(long_s, short_s, ll, ls,    i, j, skipped) {
+      i = 1; j = 1; skipped = 0
+      while (i <= ll && j <= ls) {
+        if (substr(long_s, i, 1) == substr(short_s, j, 1)) { i++; j++ }
+        else { if (++skipped > 1) return 0; i++ }
+      }
+      return 1
+    }
+    function edit_dist_le1(a, b,    la, lb, i, diff, p1, p2) {
+      la = length(a); lb = length(b)
+      if (la < 4 || lb < 4 || la - lb > 1 || lb - la > 1) return 0
+      if (la == lb) {
+        diff = 0
+        for (i = 1; i <= la; i++) {
+          if (substr(a, i, 1) != substr(b, i, 1)) {
+            if (++diff == 1) p1 = i
+            else if (diff == 2) p2 = i
+            else return 0
+          }
+        }
+        if (diff <= 1) return 1
+        return (diff == 2 && p2 == p1 + 1 && substr(a, p1, 1) == substr(b, p2, 1) && substr(a, p2, 1) == substr(b, p1, 1))
+      }
+      return (la > lb) ? can_delete_one(a, b, la, lb) : can_delete_one(b, a, lb, la)
+    }
+    function check_typo_word(w, opt_ascii, t_words,    c1, c2, n_tw, tw_arr, k) {
+      if (length(w) < 2) return 0
+      c1 = substr(w, 1, 1); c2 = substr(w, 1, 2)
+      if (c1 == "s") { if (index(opt_ascii, "x" substr(w, 2)) > 0) return 1 }
+      else if (c1 == "x") { if (index(opt_ascii, "s" substr(w, 2)) > 0) return 1 }
+      else if (c2 == "ch") { if (index(opt_ascii, "tr" substr(w, 3)) > 0) return 1 }
+      else if (c2 == "tr") { if (index(opt_ascii, "ch" substr(w, 3)) > 0) return 1 }
+      else if (c2 == "gi") { if (index(opt_ascii, "d" substr(w, 3)) > 0) return 1 }
+
+      if (length(w) >= 4) {
+        n_tw = split(t_words, tw_arr, " ")
+        for (k = 1; k <= n_tw; k++) {
+          if (edit_dist_le1(w, tw_arr[k])) return 1
+        }
+      }
+      return 0
+    }
+    BEGIN {
+      q_norm = norm_vn_q(q)
+      gsub(/^[ \t]+|[ \t]+$/, "", q_norm)
+      q_ascii = strip_vn_q(q_norm)
+      n_words = split(q_norm, q_words, /[ \t]+/)
+      split(q_ascii, q_words_ascii, /[ \t]+/)
+
+      if (n_words > 0 && hits_file != "") {
+        while ((getline hline < hits_file) > 0) {
+          split(hline, hparts, "\t")
+          if (hparts[1] != "") user_hits[hparts[1]] = int(hparts[2])
+        }
+        close(hits_file)
+      }
+      m = 0
+    }
+    {
+      # Cột SUB_IDX: 1:disp | 2:num | 3:full_title | 4:script | 5:base_hot | 6:opt_len | 7:opt_norm | 8:opt_ascii | 9:d_ascii | 10:t_words
+      if (n_words == 0) {
+        print $1 "\t" $2 "\t" $3 "\t" $4
+        next
+      }
+
+      disp = $1; num = $2; full_title = $3; script = $4
+      base_hot = int($5); opt_len = int($6)
+      opt_norm = $7; opt_ascii = $8; d_ascii = $9; t_words = $10
+
+      # Nếu người dùng gõ trực tiếp số thứ tự trong fzf (VD: gõ "1", "2")
+      if (n_words == 1 && q_ascii ~ /^[0-9]+$/ && int(num) == int(q_ascii)) {
+        m++
+        keys[m] = sprintf("00000000%04d", NR)
+        rows[m] = disp "\t" num "\t" full_title "\t" script
+        next
+      }
+
+      in_exact = 0; in_ascii = 0; in_doc = 0; in_typo = 0
+
+      for (i = 1; i <= n_words; i++) {
+        w = q_words[i]; wa = q_words_ascii[i]
+        if (index(opt_norm, w) > 0) {
+          in_exact++; in_ascii++
+        } else if (index(opt_ascii, wa) > 0) {
+          in_ascii++
+        } else if (index(d_ascii, wa) > 0) {
+          in_doc++
+        } else if (check_typo_word(wa, opt_ascii, t_words)) {
+          in_typo++
+        } else {
+          next
+        }
+      }
+
+      if (in_typo > 0) score = 45 + in_typo
+      else if (index(opt_norm, q_norm) == 1) score = 1
+      else if (index(opt_ascii, q_ascii) == 1) score = 2
+      else if (index(opt_norm, q_norm) > 0) score = 6
+      else if (index(opt_ascii, q_ascii) > 0) score = 7
+      else if (in_exact == n_words) score = 13
+      else if (in_ascii == n_words) score = 15
+      else if (in_ascii > 0) score = 30 + (n_words - in_ascii)
+      else if (index(d_ascii, q_ascii) > 0) score = 50
+      else score = 60
+
+      hot_rank = base_hot
+      if (full_title != "" && (full_title in user_hits)) {
+        hot_rank -= (user_hits[full_title] * 3)
+        if (hot_rank < 1) hot_rank = 1
+      }
+
+      m++
+      keys[m] = sprintf("%02d%03d%03d%04d", score, hot_rank, opt_len, NR)
+      rows[m] = disp "\t" num "\t" full_title "\t" script
+    }
+    END {
+      if (m > 1) {
+        gap = int(m / 2)
+        while (gap > 0) {
+          for (i = gap + 1; i <= m; i++) {
+            tk = keys[i]; tr = rows[i]
+            j = i
+            while (j > gap && keys[j - gap] > tk) {
+              keys[j] = keys[j - gap]
+              rows[j] = rows[j - gap]
+              j -= gap
+            }
+            keys[j] = tk; rows[j] = tr
+          }
+          gap = int(gap / 2)
+        }
+      }
+      for (i = 1; i <= m; i++) print rows[i]
+    }
+  ' "$SUB_IDX_FILE"
+}
+export -f wptt_sub_fzf_search
+
+wptt_sub_fzf_previewer() {
+  local f_title="$1"
+  local script_to_preview="$2"
+  local search_query="${3:-}"
+
+  printf "\033[1;36m⚡ %s\033[0m\n" "$f_title"
+
+  if [[ -z "$script_to_preview" || ! -r "$script_to_preview" ]]; then
+    return 0
+  fi
+
+  local alt_regex="" word esc_word i ch
+  if [[ -n "$search_query" ]]; then
+    for word in $search_query; do
+      ((${#word} < 2)) && continue
+      esc_word=""
+      for ((i = 0; i < ${#word}; i++)); do
+        ch="${word:i:1}"
+        case "$ch" in
+          '\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|') esc_word+="\\$ch" ;;
+          'a' | 'A') esc_word+="(a|à|á|ả|ã|ạ|ă|ằ|ắ|ẳ|ẵ|ặ|â|ầ|ấ|ẩ|ẫ|ậ)" ;;
+          'd' | 'D') esc_word+="(d|đ)" ;;
+          'e' | 'E') esc_word+="(e|è|é|ẻ|ẽ|ẹ|ê|ề|ế|ể|ễ|ệ)" ;;
+          'i' | 'I') esc_word+="(i|ì|í|ỉ|ĩ|ị)" ;;
+          'o' | 'O') esc_word+="(o|ò|ó|ỏ|õ|ọ|ô|ồ|ố|ổ|ỗ|ộ|ơ|ờ|ớ|ở|ỡ|ợ)" ;;
+          'u' | 'U') esc_word+="(u|ù|ú|ủ|ũ|ụ|ư|ừ|ứ|ử|ữ|ự)" ;;
+          'y' | 'Y') esc_word+="(y|ỳ|ý|ỷ|ỹ|ỵ)" ;;
+          *) esc_word+="$ch" ;;
+        esac
+      done
+      if [[ -n "$alt_regex" ]]; then
+        alt_regex+="|${esc_word}"
+      else
+        alt_regex="${esc_word}"
+      fi
+    done
+  fi
+
+  local active=0 line trimmed line_count=0 re=""
+  [[ -n "$alt_regex" ]] && re="($alt_regex)"
+
+  shopt -s nocasematch
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if ((active == 0)); then
+      if [[ "$line" == *huong_dan*"("*")"*"{"* ]]; then
+        active=1
+      fi
+      continue
+    fi
+    trimmed="${line#"${line%%[![:space:]]*}"}"
+    [[ "$trimmed" == "}"* ]] && break
+    [[ -z "$trimmed" || "$trimmed" == "EOF"* || "$trimmed" == "cat <<"* ]] && continue
+
+    if [[ "$trimmed" == "echo "* ]]; then
+      line="${trimmed#echo }"
+      if [[ "$line" == -* ]]; then
+        line="${line#-*([eEn]) }"
+      fi
+      line="${line#\"}"
+      line="${line%\"}"
+      line="${line#\'}"
+      line="${line%\'}"
+    fi
+
+    if [[ -n "$re" && "$line" =~ $re ]]; then
+      local out="" rest="$line" m_str prefix
+      while [[ "$rest" =~ $re ]]; do
+        m_str="${BASH_REMATCH[1]}"
+        [[ -z "$m_str" ]] && break
+        prefix="${rest%%"$m_str"*}"
+        out+="${prefix}"$'\033[1;33;4m'"${m_str}"$'\033[0m'
+        rest="${rest#*"$m_str"}"
+      done
+      line="${out}${rest}"
+    fi
+    printf "\033[90m%b\033[0m\n" "$line"
+    ((++line_count >= 5)) && break
+  done <"$script_to_preview"
+  shopt -u nocasematch
+}
+export -f wptt_sub_fzf_previewer
+
+# Hàm dựng nhanh Index cho Menu Con (Kết nối với file .idx toàn cục nếu có)
+_run_submenu_seo_fzf() {
+  mkdir -p /etc/wptt/tmp 2>/dev/null || true
+  export SUB_IDX_FILE="/etc/wptt/tmp/wptt_sub_idx_$$.tsv"
+  export HITS_FILE="/etc/wptt/tmp/wptt_hits_search.tsv"
+  local global_idx="/etc/wptt/tmp/wptt_search_ft_v3_${ngon_ngu:-vi}_${version_wptangtoc_ols:-latest}.idx"
+
+  local -a raw_sub_lines=()
+  local count=1 i REPLY_PLAIN=""
+  for i in "${valid_indices[@]}"; do
+    _strip_ansi "${options[$i]}"
+    raw_sub_lines+=("${count}"$'\t'"${REPLY_PLAIN}")
+    ((count++))
+  done
+
+  LC_ALL=C.UTF-8 awk -F'\t' -v OFS='\t' -v g_idx="$global_idx" '
+    function norm_vn(s) {
+      s = tolower(s)
+      gsub(/À/, "à", s); gsub(/Á/, "á", s); gsub(/Ả/, "ả", s); gsub(/Ã/, "ã", s); gsub(/Ạ/, "ạ", s)
+      gsub(/Ă/, "ă", s); gsub(/Ằ/, "ằ", s); gsub(/Ắ/, "ắ", s); gsub(/Ẳ/, "ẳ", s); gsub(/Ẵ/, "ẵ", s); gsub(/Ặ/, "ặ", s)
+      gsub(/Â/, "â", s); gsub(/Ầ/, "ầ", s); gsub(/Ấ/, "ấ", s); gsub(/Ẩ/, "ẩ", s); gsub(/Ẫ/, "ẫ", s); gsub(/Ậ/, "ậ", s)
+      gsub(/Đ/, "đ", s)
+      gsub(/È/, "è", s); gsub(/É/, "é", s); gsub(/Ẻ/, "ẻ", s); gsub(/Ẽ/, "ẽ", s); gsub(/Ẹ/, "ẹ", s)
+      gsub(/Ê/, "ê", s); gsub(/Ề/, "ề", s); gsub(/Ế/, "ế", s); gsub(/Ể/, "ể", s); gsub(/Ễ/, "ễ", s); gsub(/Ệ/, "ệ", s)
+      gsub(/Ì/, "ì", s); gsub(/Í/, "í", s); gsub(/Ỉ/, "ỉ", s); gsub(/Ĩ/, "ĩ", s); gsub(/Ị/, "ị", s)
+      gsub(/Ò/, "ò", s); gsub(/Ó/, "ó", s); gsub(/Ỏ/, "ỏ", s); gsub(/Õ/, "õ", s); gsub(/Ọ/, "ọ", s)
+      gsub(/Ô/, "ô", s); gsub(/Ồ/, "ồ", s); gsub(/Ố/, "ố", s); gsub(/Ổ/, "ổ", s); gsub(/Ỗ/, "ỗ", s); gsub(/Ộ/, "ộ", s)
+      gsub(/Ơ/, "ơ", s); gsub(/Ờ/, "ờ", s); gsub(/Ớ/, "ớ", s); gsub(/Ở/, "ở", s); gsub(/Ỡ/, "ỡ", s); gsub(/Ợ/, "ợ", s)
+      gsub(/Ù/, "ù", s); gsub(/Ú/, "ú", s); gsub(/Ủ/, "ủ", s); gsub(/Ũ/, "ũ", s); gsub(/Ụ/, "ụ", s)
+      gsub(/Ư/, "ư", s); gsub(/Ừ/, "ừ", s); gsub(/Ứ/, "ứ", s); gsub(/Ử/, "ử", s); gsub(/Ữ/, "ữ", s); gsub(/Ự/, "ự", s)
+      gsub(/Ỳ/, "ỳ", s); gsub(/Ý/, "ý", s); gsub(/Ỷ/, "ỷ", s); gsub(/Ỹ/, "ỹ", s); gsub(/Ỵ/, "ỵ", s)
+      gsub(/oá/, "óa", s); gsub(/oà/, "òa", s); gsub(/oả/, "ỏa", s); gsub(/oã/, "õa", s); gsub(/oạ/, "ọa", s)
+      gsub(/uỷ/, "ủy", s); gsub(/uý/, "úy", s); gsub(/uỳ/, "ùy", s); gsub(/uỹ/, "ũy", s); gsub(/uỵ/, "ụy", s)
+      return s
+    }
+    function strip_vn(s) {
+      s = tolower(s)
+      gsub(/à|á|ả|ã|ạ|ă|ằ|ắ|ẳ|ẵ|ặ|â|ầ|ấ|ẩ|ẫ|ậ|À|Á|Ả|Ã|Ạ|Ă|Ằ|Ắ|Ẳ|Ẵ|Ặ|Â|Ầ|Ấ|Ẩ|Ẫ|Ậ/, "a", s)
+      gsub(/đ|Đ/, "d", s)
+      gsub(/è|é|ẻ|ẽ|ẹ|ê|ề|ế|ể|ễ|ệ|È|É|Ẻ|Ẽ|Ẹ|Ê|Ề|Ế|Ể|Ễ|Ệ/, "e", s)
+      gsub(/ì|í|ỉ|ĩ|ị|Ì|Í|Ỉ|Ĩ|Ị/, "i", s)
+      gsub(/ò|ó|ỏ|õ|ọ|ô|ồ|ố|ổ|ỗ|ộ|ơ|ờ|ớ|ở|ỡ|ợ|Ò|Ó|Ỏ|Õ|Ọ|Ô|Ồ|Ố|Ổ|Ỗ|Ộ|Ơ|Ờ|Ớ|Ở|Ỡ|Ợ/, "o", s)
+      gsub(/ù|ú|ủ|ũ|ụ|ư|ừ|ứ|ử|ữ|ự|Ù|Ú|Ủ|Ũ|Ụ|Ư|Ừ|Ứ|Ử|Ữ|Ự/, "u", s)
+      gsub(/ỳ|ý|ỷ|ỹ|ỵ|Ỳ|Ý|Ỷ|Ỹ|Ỵ/, "y", s)
+      return s
+    }
+    function calc_base_hot(opt_a,    h) {
+      h = 50
+      if (opt_a == "them domain && subdomain" || opt_a == "them domain") h = 1
+      else if (opt_a == "tai ma nguon wordpress" || index(opt_a, "tai ma nguon wordpress") == 1) h = 2
+      else if (index(opt_a, "quet ma doc") == 1 || index(opt_a, "sao luu") == 1 || index(opt_a, "khoi phuc") == 1) h = 5
+      else if (index(opt_a, "cai dat ssl") == 1 || index(opt_a, "xoa domain") == 1 || index(opt_a, "phan quyen domain") == 1) h = 8
+      else if (index(opt_a, "xoa toan bo cache") == 1 || index(opt_a, "xoa cache") == 1 || index(opt_a, "khoi dong lai") == 1) h = 10
+      else if (index(opt_a, "chinh sua vhost") == 1 || index(opt_a, "chinh sua php") == 1 || index(opt_a, "doi mat khau") == 1) h = 12
+      else if (index(opt_a, "tao swap") == 1 || index(opt_a, "xoa swap") == 1 || index(opt_a, "nhan ban") == 1) h = 15
+      return h
+    }
+    BEGIN {
+      if (g_idx != "") {
+        while ((getline gline < g_idx) > 0) {
+          split(gline, gp, "\t")
+          # gp[8] = opt_part, gp[1] = full_title, gp[2] = script, gp[4] = base_hot, gp[12] = d_ascii
+          if (gp[8] != "" && !(gp[8] in map_full)) {
+            map_full[gp[8]] = gp[1]
+            map_script[gp[8]] = gp[2]
+            map_hot[gp[8]] = gp[4]
+            map_doc[gp[8]] = gp[12]
+          }
+        }
+        close(g_idx)
+      }
+    }
+    {
+      num = $1
+      opt_plain = $2
+      disp = sprintf("%2d. %s", num, opt_plain)
+      opt_norm = norm_vn(opt_plain)
+      opt_ascii = strip_vn(opt_norm)
+
+      full_t = (opt_norm in map_full) ? map_full[opt_norm] : opt_plain
+      script_p = (opt_norm in map_script) ? map_script[opt_norm] : ""
+      base_hot = (opt_norm in map_hot) ? int(map_hot[opt_norm]) : calc_base_hot(opt_ascii)
+      d_ascii = (opt_norm in map_doc) ? map_doc[opt_norm] : ""
+
+      opt_len = length(opt_ascii)
+      if (opt_len > 999) opt_len = 999
+
+      t_words = opt_ascii
+      gsub(/[^a-z0-9]+/, " ", t_words)
+      gsub(/^ +| +$/, "", t_words)
+
+      print disp, num, full_t, script_p, base_hot, opt_len, opt_norm, opt_ascii, d_ascii, t_words
+    }
+  ' < <(printf "%s\n" "${raw_sub_lines[@]}") >"$SUB_IDX_FILE" 2>/dev/null
+
+  local -a sub_init_lines=()
+  local f_disp f_num f_full f_script
+  while IFS=$'\t' read -r f_disp f_num f_full f_script _; do
+    [[ -z "$f_disp" ]] && continue
+    sub_init_lines+=("${f_disp}"$'\t'"${f_num}"$'\t'"${f_full}"$'\t'"${f_script}")
+  done <"$SUB_IDX_FILE"
+
+  export SHELL=/bin/bash
+  REPLY_SUB_SELECTED=""
+  trap '' SIGINT
+  REPLY_SUB_SELECTED=$(
+    printf "%s\n" "${sub_init_lines[@]}" | fzf \
+      --ansi \
+      --disabled \
+      --bind 'change:reload:sleep 0.041; wptt_sub_fzf_search {q}' \
+      --prompt="🔍 Tìm kiếm trong Menu này > " \
+      --height='~55%' \
+      --border=rounded \
+      --color=border:cyan \
+      --layout=reverse \
+      --cycle \
+      --with-nth=1 \
+      --delimiter=$'\t' \
+      --header="Gõ từ khóa | ESC hủy" \
+      --preview='wptt_sub_fzf_previewer {3} {4} {q}' \
+      --preview-window=up:4:wrap
+  ) || true
+  trap '_wptt_menu_ctrl_c' SIGINT
+
+  /bin/rm -f -- "$SUB_IDX_FILE" 2>/dev/null || true
+  SUB_IDX_FILE=""
 }
 
 # ==============================================================================
@@ -248,7 +638,6 @@ while true; do
   fi
   echo -en "\033[2B"
 
-  # Cắt khoảng trắng thừa ở 2 đầu nhưng giữ nguyên khoảng trắng ở giữa (để nhận diện lệnh CLI nếu có)
   choice="${choice#"${choice%%[![:space:]]*}"}"
   choice="${choice%"${choice##*[![:space:]]}"}"
 
@@ -276,24 +665,46 @@ while true; do
     exit 0
 
   elif [[ "$choice" == "00" ]]; then
-    if command -v fzf &>/dev/null; then
-      selected=""
-      # Tạm khóa SIGINT của shell mẹ để ấn Ctrl+C hoặc ESC trong fzf chỉ thoát fzf về lại Menu
-      trap '' SIGINT
-      selected=$(
-        count=1
-        for i in "${valid_indices[@]}"; do
-          printf "%2d. %s\n" "$count" "${options[$i]}"
-          ((count++))
-        done | fzf --prompt="Tìm kiếm > " --height=40% --border=rounded --color=border:cyan --cycle --reverse
-      ) || true
-      trap '_wptt_menu_ctrl_c' SIGINT
+    # 1. Nếu đang ở Menu Chính -> Gọi thẳng công cụ tìm kiếm toàn cục search-wptangtoc
+    if ((IS_MAIN_MENU == 1)); then
+      if [[ -f /etc/wptt/search-wptangtoc ]]; then
+        chmod +x /etc/wptt/search-wptangtoc 2>/dev/null || true
+        exec /etc/wptt/search-wptangtoc
+      elif [[ -f /etc/wptt/wptangtoc-search ]]; then
+        chmod +x /etc/wptt/wptangtoc-search 2>/dev/null || true
+        exec /etc/wptt/wptangtoc-search
+      fi
+    fi
 
-      if [[ -n "$selected" ]]; then
-        sel_num="${selected//[[:space:]]/}"
-        sel_num="${sel_num%%[!0-9]*}"
-        if [[ -n "$sel_num" ]]; then
+    # 2. Nếu đang ở Menu Con -> Chạy SEO Search Engine (Không dấu + Sửa chính tả + Preview)
+    if command -v fzf &>/dev/null; then
+      REPLY_SUB_SELECTED=""
+      _run_submenu_seo_fzf
+
+      if [[ -n "$REPLY_SUB_SELECTED" ]]; then
+        IFS=$'\t' read -r _ sel_num sel_full_title _ <<<"$REPLY_SUB_SELECTED"
+        sel_num="${sel_num//[[:space:]]/}"
+        if [[ "$sel_num" =~ ^[0-9]+$ ]]; then
           actual_index="${valid_indices[$((10#$sel_num - 1))]}"
+
+          # Ghi nhận +1 điểm thói quen vào wptt_hits_search.tsv
+          if [[ -n "$sel_full_title" ]]; then
+            [[ -f "$HITS_FILE" ]] || : >"$HITS_FILE" 2>/dev/null
+            hits_tmp="${HITS_FILE}.tmp.$$"
+            if awk -F'\t' -v feat="$sel_full_title" '
+                BEGIN { OFS="\t"; found=0 }
+                NF >= 2 {
+                  if ($1 == feat) { $2 = int($2) + 1; found=1 }
+                  print $1, $2
+                }
+                END { if (!found) print feat, 1 }
+              ' "$HITS_FILE" >"$hits_tmp" 2>/dev/null; then
+              mv -f "$hits_tmp" "$HITS_FILE" 2>/dev/null || rm -f "$hits_tmp"
+            else
+              rm -f "$hits_tmp"
+            fi
+          fi
+
           echo -e "\n${MARGIN}${C_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
           run_action "$actual_index"
         fi
