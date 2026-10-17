@@ -102,26 +102,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.2.5
-
-🐛 Sửa lỗi
-- Khắc phục triệt để lỗi tương thích với thư viện kiểm tra SSL mới, đảm bảo quá trình kiểm tra và cấp phát chứng chỉ hoạt động ổn định, không bị gián đoạn.
-- Vá các lỗ hổng bảo mật và nâng cao độ an toàn cho hệ thống quản lý tên miền phụ (`wptt-alias-domain`).
-
-🛠️ Tối ưu hệ thống
-- Nâng cấp cơ chế nhận diện mạng thông minh, tự động thích ứng với các thay đổi cấu hình mạng (chuyển đổi linh hoạt giữa IPv4, IPv6 hoặc dual-stack) từ phía nhà cung cấp VPS hoặc người dùng, giúp máy chủ luôn vận hành trơn tru trong mọi tình huống triển khai.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.2.4
-
-### 🚀 Tính năng mới
-- **Cải tiến quản lý Alias Domain:** Nâng cấp cơ chế xử lý và nhận diện tên miền phụ (alias domain), giúp hệ thống liên kết và quản lý đa tên miền linh hoạt, chính xác hơn.
-
-### 🛠️ Tối ưu hệ thống
-- **Tối ưu cơ chế xử lý biểu thức chính quy (Regex):** Cải tiến phương thức thay thế và ánh xạ cấu hình bằng regex an toàn tuyệt đối, giúp ngăn chặn triệt để rủi ro xung đột chuỗi hoặc ghi nhầm dữ liệu trong quá trình vận hành tự động.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*

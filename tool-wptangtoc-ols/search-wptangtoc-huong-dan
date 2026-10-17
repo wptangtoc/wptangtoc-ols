@@ -403,7 +403,8 @@ if ((${#initial_lines[@]} == 0)); then
               if [[ -z "${feature_scripts["$feature_key"]:-}" ]]; then
                 feature_scripts["$feature_key"]="$current_script"
                 feature_args["$feature_key"]="${current_args:-98}"
-                feature_sort_keys["$feature_key"]="${main_menu_priority["$opt_title"]:-99}"
+                # Ưu tiên sắp xếp theo thứ tự Chuyên mục trên Menu chính (/usr/bin/wptangtoc)
+                feature_sort_keys["$feature_key"]="${main_menu_priority["$opt_title"]:-${main_menu_priority["$category_title"]:-99}}"
 
                 REPLY_DOC=""
                 _extract_huong_dan_flat "$current_script"
@@ -442,7 +443,7 @@ fi
 ((BUILD_ONLY == 1)) && exit 0
 
 # ==============================================================================
-# 3. ENGINE TÌM KIẾM TRỌNG SỐ 5 TẦNG & PREVIEW SẠCH GỌN
+# 3. ENGINE TÌM KIẾM CHUẨN SEO 3 TẦNG & PREVIEW SẠCH GỌN
 # ==============================================================================
 wptt_fzf_search() {
   local query="${1:-}"
@@ -467,40 +468,57 @@ wptt_fzf_search() {
       doc = $4
 
       if (n_words == 0) {
-        printf "10\t%04d\t%s\t%s\t%s\t%s\n", NR, title, title, script, arg
+        printf "10\t000\t%04d\t%s\t%s\t%s\t%s\n", NR, title, title, script, arg
         next
       }
 
       t_norm = norm_vn(title)
       d_norm = norm_vn(doc)
 
+      sep_pos = index(t_norm, ">")
+      if (sep_pos > 0) {
+        cat_part = substr(t_norm, 1, sep_pos - 1)
+        opt_part = substr(t_norm, sep_pos + 1)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", cat_part)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", opt_part)
+      } else {
+        cat_part = ""
+        opt_part = t_norm
+      }
+
       in_title = 0
+      in_cat = 0
+      in_opt = 0
       in_doc = 0
 
       for (i = 1; i <= n_words; i++) {
         w = q_words[i]
-        if (index(t_norm, w) > 0) {
+        matched_t = 0
+        if (index(opt_part, w) > 0) { in_opt++; matched_t = 1 }
+        if (index(cat_part, w) > 0) { in_cat++; matched_t = 1 }
+        if (matched_t == 1) {
           in_title++
         } else if (index(d_norm, w) > 0) {
           in_doc++
         } else {
-          # Từ khóa không xuất hiện trong cả Tiêu đề lẫn Nội dung -> Loại bỏ 100%
           next
         }
       }
 
-      # Phân tầng Trọng số (Số nhỏ xếp lên đầu):
-      # Tầng 1 (5..10): Khớp cụm từ trực tiếp trong Tiêu đề
-      # Tầng 2 (20): Tất cả các từ khóa đều nằm trong Tiêu đề
-      # Tầng 3 (30..39): Kết hợp từ khóa trong Tiêu đề + Nội dung
-      # Tầng 4 (50): Khớp cụm từ trực tiếp trong Nội dung huong_dan
-      # Tầng 5 (60): Tất cả các từ khóa nằm trong Nội dung huong_dan
-      if (index(t_norm, q_norm) > 0) {
-        opt_part = t_norm
-        sub(/^.*>[[:space:]]*/, "", opt_part)
-        if (index(opt_part, q_norm) == 1) score = 5
-        else if (index(opt_part, q_norm) > 0) score = 8
-        else score = 10
+      # Chấm điểm SEO (Số càng nhỏ càng ưu tiên lên Top 1):
+      # Score 1: Khớp ngay đầu Tên tính năng + Từ khóa khớp luôn cả Tên chuyên mục (VD: Quản lý Domain > Thêm domain...)
+      # Score 3: Khớp ngay đầu Tên tính năng chính
+      # Score 6: Khớp cụm từ bên trong Tên tính năng + Khớp Tên chuyên mục
+      # Score 8: Khớp cụm từ bên trong Tên tính năng
+      # Score 10: Khớp cụm từ trong toàn bộ chuỗi "Chuyên mục > Tính năng"
+      if (index(opt_part, q_norm) == 1) {
+        score = (in_cat > 0) ? 1 : 3
+      } else if (index(opt_part, q_norm) > 0) {
+        score = (in_cat > 0) ? 6 : 8
+      } else if (index(t_norm, q_norm) > 0) {
+        score = 10
+      } else if (in_opt == n_words) {
+        score = (in_cat > 0) ? 14 : 16
       } else if (in_title == n_words) {
         score = 20
       } else if (in_title > 0) {
@@ -511,9 +529,12 @@ wptt_fzf_search() {
         score = 60
       }
 
-      printf "%02d\t%04d\t%s\t%s\t%s\t%s\n", score, NR, title, title, script, arg
+      opt_len = length(opt_part)
+      if (opt_len > 999) opt_len = 999
+
+      printf "%02d\t%03d\t%04d\t%s\t%s\t%s\t%s\n", score, opt_len, NR, title, title, script, arg
     }
-  ' "$CACHE_FILE" | sort -t$'\t' -k1,1n -k2,2n | cut -f3-
+  ' "$CACHE_FILE" | sort -t$'\t' -k1,1n -k2,2n -k3,3n | cut -f4-
 }
 export -f wptt_fzf_search
 
@@ -538,11 +559,10 @@ wptt_fzf_previewer() {
       for ((i = 0; i < ${#word}; i++)); do
         ch="${word:i:1}"
         case "$ch" in
-        '\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|') esc_word+="\\$ch" ;;
-        *) esc_word+="$ch" ;;
+          '\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|') esc_word+="\\$ch" ;;
+          *) esc_word+="$ch" ;;
         esac
       done
-      # Hỗ trợ tô sáng cả 2 kiểu bỏ dấu (xóa/xoá, hủy/huỷ, hòa/hoà)
       esc_word="${esc_word//óa/(óa|oá)}"
       esc_word="${esc_word//oá/(óa|oá)}"
       esc_word="${esc_word//ủy/(ủy|uỷ)}"
