@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.2.4.1
+
+🛠️ Tối ưu hệ thống:
+- Cải thiện cơ chế quản lý tiến trình shell (SHLVL), nâng cao độ ổn định và chính xác khi thực thi các tập lệnh hệ thống, giúp ngăn ngừa tình trạng lồng lặp tiến trình không mong muốn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.4.0
 
 ### 🚀 Tính năng mới
