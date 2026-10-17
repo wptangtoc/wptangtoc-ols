@@ -1,3 +1,13 @@
+### 🚀 Tính năng mới & Tối ưu hệ thống
+
+- **Đột phá tốc độ tìm kiếm:** Nâng cấp toàn diện hệ thống tìm kiếm hướng dẫn và tăng tốc, mang lại hiệu suất phản hồi nhanh gấp 200 lần, giúp quản trị viên tra cứu thông tin tức thì.
+- **Tìm kiếm thông minh, chính xác cao:** Bổ sung cơ chế tìm kiếm nội dung khớp từ khóa chuẩn xác (Strict AND) cùng hệ thống phân hạng ưu tiên 5 tầng (ưu tiên từ Tiêu đề đến Nội dung), giúp định ính chính xác tài liệu cần tìm.
+- **Trải nghiệm Preview trực quan:** Tự động highlight (làm nổi bật) từ khóa đang gõ ngay trong khung xem trước (Preview), giúp quan sát kết quả nhanh chóng mà không cần chuyển trang.
+- **Tích hợp sẵn Preload Cache Search:** Triển khai tính năng nạp trước bộ nhớ đệm tìm kiếm trực tiếp ngay trong bộ cài đặt ban đầu, giúp hệ thống sẵn sàng hiệu năng tối đa ngay từ lần khởi chạy đầu tiên.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.2.3.6
 
 🛠️ **Tối ưu hệ thống**
