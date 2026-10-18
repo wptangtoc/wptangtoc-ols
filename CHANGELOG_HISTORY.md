@@ -98,14 +98,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.3.0
-
-🚀 **Tính năng mới**
-- Bổ sung hỗ trợ toàn diện các định dạng chứng chỉ SSL trả phí (gồm **ECDSA**, **RSA 2048**, và **RSA 4096**), mang lại sự linh hoạt tối đa trong việc lựa chọn chuẩn mã hóa bảo mật theo nhu cầu doanh nghiệp.
-
-🛠️ **Tối ưu hệ thống**
-- Nâng cao khả năng tương thích với các môi trường ảo hóa một phần (partial virtualization), giúp hệ thống vận hành ổn định và tối ưu hóa tài nguyên trên các hạ tầng máy chủ ảo giá rẻ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
