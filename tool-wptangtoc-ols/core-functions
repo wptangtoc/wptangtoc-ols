@@ -121,53 +121,6 @@ wptt_die() {
   fi
 }
 
-#Hướng dẫn sử dụng: wptt_check_mariadb || wptt_die "MariaDB đang bị sập! Hệ thống từ chối tạo Database mới."
-wptt_check_mariadb() {
-  # Lớp 1: Kiểm tra Service của Hệ điều hành
-  if ! systemctl is-active --quiet mariadb; then
-    systemctl start mariadb || {
-      return 1 # Trả về lỗi
-    }
-  fi
-
-  # Lớp 2: Kiểm tra kết nối thực tế (Sát chiêu)
-  # Dùng mysqladmin ping để xem DB có thực sự đang lắng nghe hay không, dùng localhost dùng --skip-ssl cũng được
-  if ! mariadb-admin --skip-ssl ping >/dev/null 2>&1; then
-    return 1 # Trả về lỗi
-  fi
-
-  # Lớp 3: Pass qua hết thì OK
-  return 0 # Trả về true
-}
-
-#Hướng dẫn sử dụng: wptt_check_lsws || wptt_die "OpenLiteSpeed đang bị lỗi hoặc không mở được cổng mạng. Đã hủy thao tác để an toàn!"
-#cách hành code kiểu này giải quyết vấn đề: đó chính là người dùng reboot với máy chủ rất nhiều vhost có thể downtime vài giây nhẹ nó đúng lúc người ta thêm website... dùng thư viện này thì đúng là không ổn, cách viết kiểu này sẽ tối ưu hơn tình huống đó
-wptt_check_lsws() {
-  local max_retries=8
-  local wait_time=2
-  local attempt=1
-
-  while ((attempt <= max_retries)); do
-    # Lớp 1: Kiểm tra Service cấp Hệ điều hành (systemd)
-    if ! systemctl is-active --quiet lsws; then
-      systemctl start lsws >/dev/null 2>&1
-    fi
-
-    # Lớp 2: Kiểm tra bằng công cụ lõi của OpenLiteSpeed
-    # Xác minh Master Process (Tiến trình mẹ) thực sự tồn tại và có số PID rõ ràng
-    if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -iq "is running"; then
-      return 0 # Dịch vụ đã chạy bình thường -> Báo thành công và thoát hàm
-    fi
-
-    # Nếu chưa chạy, ngủ (sleep) 2 giây rồi vòng lại thử tiếp
-    sleep "$wait_time"
-    ((attempt++))
-  done
-
-  # Nếu lặp hết 8 lần (6 giây) mà vẫn không thấy "is running" -> Sập thật sự
-  return 1
-}
-
 # ==============================================================================
 # THƯ VIỆN UI: POPUP XÁC NHẬN BO CONG WPTANGTOC
 # Cách gọi: wptt_xac_nhan "Tiêu đề" "Dòng info 1" "Dòng info 2" "Tên Nút 1" "Tên Nút 2"
@@ -522,49 +475,7 @@ function wptt_smart_reload_lsws() {
   return 0
 }
 
-# function wptt_smart_reload_lsws() {
-#     local lock_file="/etc/wptt/tmp/.wptt_ls_reload.lock"
-#     local lsws_marker="/usr/local/lsws/cgid"
 
-#     (
-#         flock -n 9 || exit 0
-
-#         local current_time=$(date +%s)
-#         local last_run=0
-
-#         # Đọc trực tiếp Timestamp từ file do chính LiteSpeed quản lý
-#         if [[ -f "$lsws_marker" ]]; then
-#             last_run=$(stat -c %Y "$lsws_marker" 2>/dev/null || echo 0)
-#         fi
-
-#         local time_diff=$((current_time - last_run))
-
-#         if [[ $time_diff -lt 8 ]]; then
-#             sleep $((8 - time_diff))
-#         fi
-
-#         /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
-
-#         # Cho LiteSpeed 3 giây để thở và ghi đè file cgid mới, thuờng 1 lệnh reload của litespeed cũng mất khoảng 3 giây thì cho sleep 3 giây là hợp lý
-# 		# time /usr/local/lsws/bin/lswsctrl reload
-# 		# Cho LiteSpeed 3.2 giây để "thở" sau khi tốn ~3s gửi tín hiệu SIGUSR1
-#         sleep 3.2
-
-#         # Kiểm tra sinh hiệu
-#         if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -q 'litespeed is running'; then
-# 			:
-#         else
-#             wptt_logs "INFO" "Kích hoạt Auto-Heal do lỗi Reload"
-
-#             systemctl stop lsws.service >/dev/null 2>&1
-#             rm -f /tmp/lshttpd/lshttpd.pid
-#             killall -9 openlitespeed litespeed lshttpd 2>/dev/null
-#             systemctl start lsws.service >/dev/null 2>&1
-#             # Khi start thành công, file cgid tự động được hệ thống nạp lại
-#         fi
-
-#     ) 9> "$lock_file" &
-# }
 
 # ==============================================================================
 # HÀM MÃ HÓA & GIẢI MÃ AES-256-CBC
@@ -876,4 +787,186 @@ wptt_quay_ve_menu() {
   fi
   exit "$exit_code"
   # return "$exit_code" 2>/dev/null || exit "$exit_code"
+}
+
+# ==============================================================================
+# HÀM PHỤ DÙNG CHUNG CHO wptt_check_mariadb / wptt_check_lsws: PHÂN TÍCH ĐỐI SỐ
+# (gán thẳng vào biến local route_arg, custom_msg, quiet_mode của hàm gọi)
+#
+# Quy tắc:
+#   - 97 | 98 | 99            -> cờ quay về menu (ở bất kỳ vị trí nào)
+#   - -q | --quiet | quiet | return -> chế độ im lặng, chỉ trả mã 0/1
+#   - Đối số THỨ NHẤT là "ô cờ menu" (kiểu "${1:-}"): chỉ coi là thông báo lỗi
+#     khi nó là một câu (có khoảng trắng). Giá trị khác như "", "1", tên miền...
+#     sẽ bị bỏ qua, không bị in nhầm thành thông báo lỗi.
+#   - Từ đối số thứ 2 trở đi: chuỗi bất kỳ khác rỗng là thông báo lỗi tùy chỉnh.
+#   - Không truyền cờ nhưng script gọi có MENU_WPTT_IN=97/98/99 -> tự dùng giá trị đó.
+# ==============================================================================
+_wptt_check_parse_args() {
+  local idx=0 arg
+  for arg in "$@"; do
+    idx=$((idx + 1))
+    case "$arg" in
+      97 | 98 | 99)
+        route_arg="$arg"
+        ;;
+      -q | --quiet | quiet | return)
+        quiet_mode=1
+        ;;
+      "")
+        ;;
+      *)
+        if (( idx > 1 )) || [[ "$arg" == *[[:space:]]* ]]; then
+          custom_msg="$arg"
+        fi
+        ;;
+    esac
+  done
+
+  if [[ -z "$route_arg" ]]; then
+    case "${MENU_WPTT_IN:-}" in
+      97 | 98 | 99) route_arg="$MENU_WPTT_IN" ;;
+    esac
+  fi
+  return 0
+}
+
+# ==============================================================================
+# HÀM KIỂM TRA & TỰ ĐỘNG CỨU HỘ MARIADB (AUTO-HEALING + AUTO MENU RETURN)
+# Cách dùng (giống wptt_quay_ve_menu: đối số đầu là cờ menu "${1:-}"):
+#   - Trong tính năng chạy từ menu:  wptt_check_mariadb "${1:-}"
+#   - Kèm thông báo tùy chỉnh:       wptt_check_mariadb "${1:-}" "MariaDB đang sập! Không thể khôi phục."
+#   - Chạy CLI / không cờ menu:      wptt_check_mariadb
+#   - Chỉ lấy mã trả về (0/1):       if wptt_check_mariadb --quiet; then ...
+#   - MariaDB sập: có cờ 97/98/99 -> quay về menu cha; không có cờ -> exit 1
+# ==============================================================================
+wptt_check_mariadb() {
+  local route_arg="" custom_msg="" quiet_mode=0
+  _wptt_check_parse_args "$@"
+
+  local admin_bin="mariadb-admin"
+  command -v mariadb-admin >/dev/null 2>&1 || admin_bin="mysqladmin"
+
+  # 1. FAST-PATH (0ms): Nếu dịch vụ đang chạy và phản hồi ping -> Thoát êm ngay lập tức
+  if systemctl is-active --quiet mariadb 2>/dev/null && "$admin_bin" --skip-ssl --connect-timeout=2 ping >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # 2. AUTO-HEALING: Phát hiện MariaDB ngừng hoạt động -> Tự động mồi lại dịch vụ
+  if (( quiet_mode == 0 )); then
+    declare -F _runing >/dev/null 2>&1 || . /etc/wptt/echo-color 2>/dev/null || true
+  fi
+
+  local task_heal="Tự động khởi động lại dịch vụ MariaDB"
+  (( quiet_mode == 0 )) && declare -F _runing >/dev/null 2>&1 && _runing "$task_heal"
+
+  systemctl start mariadb >/dev/null 2>&1 || systemctl start mysql >/dev/null 2>&1 || true
+
+  local attempt=1
+  local max_retries=5
+  while (( attempt <= max_retries )); do
+    if systemctl is-active --quiet mariadb 2>/dev/null && "$admin_bin" --skip-ssl --connect-timeout=2 ping >/dev/null 2>&1; then
+      if (( quiet_mode == 0 )); then
+        declare -F _rundone >/dev/null 2>&1 && _rundone "$task_heal"
+        declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Auto-Healing: Đã tự động khởi động lại MariaDB thành công"
+      fi
+      return 0
+    fi
+    sleep 1
+    ((attempt++))
+  done
+
+  # 3. FAIL-SAFE: Nếu sau 5 giây vẫn sập -> Báo lỗi, hướng dẫn xử lý và quay về Menu
+  (( quiet_mode == 1 )) && return 1
+
+  declare -F _runloi >/dev/null 2>&1 && _runloi "$task_heal"
+
+  local err_msg="${custom_msg:-MariaDB đang bị sập và không thể tự khởi động lại! Hệ thống tạm dừng tác vụ để bảo vệ dữ liệu.}"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "$err_msg"
+
+  printf '\n'
+  if declare -F print_border_top >/dev/null 2>&1; then
+    print_border_top
+    center_text "${C_RED:-}CẢNH BÁO: DỊCH VỤ MARIADB ĐANG NGỪNG HOẠT ĐỘNG${C_RESET:-}"
+    print_border_mid
+    left_text "${C_YELLOW:-}Nguyên nhân:${C_RESET:-} $err_msg" 2
+    left_text "${C_CYAN:-}Hướng xử lý:${C_RESET:-} Kiểm tra dung lượng ổ cứng (df -h), RAM hoặc vào Menu Database -> Cấp cứu MariaDB." 2
+    print_border_bot
+  else
+    printf '\033[1;31m[LỖI] %s\033[0m\n' "$err_msg" >&2
+  fi
+
+  wptt_quay_ve_menu "$route_arg" 1 "enter"
+}
+
+# ==============================================================================
+# HÀM KIỂM TRA & TỰ ĐỘNG CỨU HỘ OPENLITESPEED (AUTO-HEALING + AUTO MENU RETURN)
+# Cách dùng (giống wptt_quay_ve_menu: đối số đầu là cờ menu "${1:-}"):
+#   - Trong tính năng chạy từ menu:  wptt_check_lsws "${1:-}"
+#   - Kèm thông báo tùy chỉnh:       wptt_check_lsws "${1:-}" "OpenLiteSpeed đang bị sập!"
+#   - Chạy CLI / không cờ menu:      wptt_check_lsws
+#   - Chỉ lấy mã trả về (0/1):       if wptt_check_lsws --quiet; then ...
+#   - Web server sập: có cờ 97/98/99 -> quay về menu cha; không có cờ -> exit 1
+# ==============================================================================
+wptt_check_lsws() {
+  local route_arg="" custom_msg="" quiet_mode=0
+  _wptt_check_parse_args "$@"
+
+  # 1. FAST-PATH: Nếu systemd báo active và lswsctrl báo running -> Thoát êm ngay lập tức
+  if systemctl is-active --quiet lsws 2>/dev/null && /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -iq "is running"; then
+    return 0
+  fi
+
+  # 2. AUTO-HEALING: Phát hiện OpenLiteSpeed sập -> Hiển thị trạng thái và thử cứu hộ
+  if (( quiet_mode == 0 )); then
+    declare -F _runing >/dev/null 2>&1 || . /etc/wptt/echo-color 2>/dev/null || true
+  fi
+
+  local task_heal="Tự động khởi động lại dịch vụ OpenLiteSpeed"
+  (( quiet_mode == 0 )) && declare -F _runing >/dev/null 2>&1 && _runing "$task_heal"
+
+  local max_retries=8
+  local wait_time=2
+  local attempt=1
+
+  while (( attempt <= max_retries )); do
+    if ! systemctl is-active --quiet lsws 2>/dev/null; then
+      systemctl start lsws >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true
+    else
+      /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true
+    fi
+
+    if /usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -iq "is running"; then
+      if (( quiet_mode == 0 )); then
+        declare -F _rundone >/dev/null 2>&1 && _rundone "$task_heal"
+        declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Auto-Healing: Đã tự động khởi động lại OpenLiteSpeed thành công"
+      fi
+      return 0
+    fi
+
+    sleep "$wait_time"
+    ((attempt++))
+  done
+
+  # 3. FAIL-SAFE: Lặp hết 8 lần vẫn không lên -> Báo lỗi, hướng dẫn xử lý và quay về Menu
+  (( quiet_mode == 1 )) && return 1
+
+  declare -F _runloi >/dev/null 2>&1 && _runloi "$task_heal"
+
+  local err_msg="${custom_msg:-OpenLiteSpeed đang bị sập và không thể tự khởi động lại! Hệ thống tạm dừng tác vụ.}"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "$err_msg"
+
+  printf '\n'
+  if declare -F print_border_top >/dev/null 2>&1; then
+    print_border_top
+    center_text "${C_RED:-}CẢNH BÁO: WEB SERVER OPENLITESPEED ĐANG NGỪNG HOẠT ĐỘNG${C_RESET:-}"
+    print_border_mid
+    left_text "${C_YELLOW:-}Nguyên nhân:${C_RESET:-} $err_msg" 2
+    left_text "${C_CYAN:-}Hướng xử lý:${C_RESET:-} Kiểm tra dung lượng đĩa (df -h) hoặc xem lỗi tại Menu Nhật ký (Logs) -> Error Log Server." 2
+    print_border_bot
+  else
+    printf '\033[1;31m[LỖI] %s\033[0m\n' "$err_msg" >&2
+  fi
+
+  wptt_quay_ve_menu "$route_arg" 1 "enter"
 }
