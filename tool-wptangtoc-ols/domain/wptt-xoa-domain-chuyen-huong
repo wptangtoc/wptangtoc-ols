@@ -5,7 +5,7 @@
 # @since: 2026
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Tính năng Xóa chuyển hướng domain là quá trình gỡ bỏ hoặc vô hiệu hóa một cài đặt đã được thiết lập trước đó để tự động điều hướng người dùng và công cụ tìm kiếm từ một tên miền này sang một tên miền khác.
 
   Nói một cách đơn giản, đây là hành động dừng việc tự động chuyển tiếp từ tên miền A sang tên miền B. Sau khi xóa chuyển hướng, khi người dùng truy cập vào tên miền A, họ sẽ không còn bị tự động đưa đến tên miền B nữa.
@@ -15,158 +15,373 @@ function huong_dan() {
   * Thay đổi đích đến của chuyển hướng: Nếu bạn muốn tên miền A chuyển hướng đến một tên miền C hoàn toàn mới, bạn có thể cần xóa chuyển hướng cũ [sang B] trước khi thiết lập chuyển hướng mới [sang C].
   * Hủy bỏ việc gộp tên miền: Nếu trước đó bạn gộp nhiều tên miền về một, nay muốn tách chúng ra hoạt động độc lập.
   * Gỡ lỗi: Nếu chuyển hướng đang gây ra lỗi [ví dụ: vòng lặp chuyển hướng, sai đích] thì việc xóa bỏ nó là cần thiết để khắc phục.
-  * Không còn nhu cầu: Khi việc chuyển hướng không còn còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
+  * Không còn nhu cầu: Khi việc chuyển hướng không còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
 EOF
 }
 
-# fix output: GETCWD Nhảy ra khỏi thư mục đang đứng để tránh lỗi khi thư mục bị xóa
+# Nhảy ra khỏi thư mục đang đứng để tránh lỗi GETCWD khi thư mục hiện tại bị xóa
 cd /root 2>/dev/null || cd /
 
+# shellcheck disable=SC1091
 . /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck disable=SC1090
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
+# shellcheck disable=SC1091
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+# shellcheck disable=SC1091
+. /etc/wptt/core-functions 2>/dev/null
+
+MENU_WPTT_IN="${1:-}"
 
 clear
 print_border_top
-center_text "${C_YELLOW}${quan_ly_domain} ➜ ${xoa_chuyen_huong_domain}${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_domain:-Quản lý Domain} ➜ ${xoa_chuyen_huong_domain:-Xóa chuyển hướng Domain}${C_RESET}"
 print_border_bot
-echo ""
+printf '\n'
 
 if [[ ! -d /etc/wptt/chuyen-huong ]]; then
-  echo -e "${C_YELLOW}Bạn chưa từng thiết lập chuyển hướng domain nào trên hệ thống!${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-domain-main 1
-  exit 0
+  printf '%b\n' "${C_YELLOW}Bạn chưa từng thiết lập chuyển hướng domain nào trên hệ thống!${C_RESET}"
+  wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1 "enter"
 fi
 
+# ==============================================================================
+# HÀM CHỌN TÊN MIỀN ĐANG CHUYỂN HƯỚNG
+# ==============================================================================
 function lua_chon_NAME() {
-  unset NAME selects
-  selects=()
+  unset NAME
+  local filepath entry dom htaccess_file line in_block target
+  local -a selects=()
 
-  if [ "$(ls -At /etc/wptt/chuyen-huong 2>/dev/null)" ]; then
-    for entry in $(ls -A /etc/wptt/chuyen-huong); do
-      local dom=$(echo "$entry" | sed 's/^.//' | sed 's/.conf//')
-      if [[ "$dom" != "${dom/./}" ]]; then
-        # Bóc tách tên miền đích từ file .htaccess
-        local target=$(sed '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/!d' "/usr/local/lsws/$dom/html/.htaccess" 2>/dev/null | grep '301' | grep -o -E '([a-zA-Z0-9-]+\.)+[a-zA-Z0-9-]{2,}' | tail -n 1)
-        [[ -z "$target" ]] && target="Không xác định"
-        selects+=("$dom|$target")
-      fi
-    done
+  for filepath in /etc/wptt/chuyen-huong/.*.conf /etc/wptt/chuyen-huong/*.conf; do
+    [[ -f "$filepath" ]] || continue
 
-    if [[ ${#selects[@]} -eq 0 ]]; then
-      echo -e "${C_YELLOW}Hệ thống chưa có domain nào được kích hoạt sử dụng chuyển hướng!${C_RESET}"
-      sleep 3
-      exec /etc/wptt/wptt-domain-main 1
-    fi
+    entry="${filepath##*/}"
+    [[ "$entry" == "..conf" || "$entry" == ".conf" ]] && continue
+    dom="${entry#.}"
+    dom="${dom%.conf}"
 
-    # Render Menu Bo Cong - Đồng bộ 100% bằng UX Pro 1 Cột
-    print_border_top
-    center_text "${C_YELLOW}DANH SÁCH WEBSITE ĐANG CHUYỂN HƯỚNG${C_RESET}"
-    print_border_mid
-    
-    local i=1
-    for item in "${selects[@]}"; do
-      local source_dom=$(echo "$item" | cut -d'|' -f1)
-      local target_dom=$(echo "$item" | cut -d'|' -f2)
-      
-      # Tạo text hiển thị với mã màu chuẩn
-      local text_hien_thi="${C_BOLD_WHITE}${source_dom}${C_RESET} ➜ ${C_GREEN}${target_dom}${C_RESET}"
-      print_full_row "$i" "$text_hien_thi"
-      ((i++))
-    done
-    print_border_bot
+    # Validate định dạng domain hợp lệ (chống Path Traversal / Injection)
+    [[ "$dom" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ ]] || continue
+    [[ "$dom" == *".."* ]] && continue
 
-    local fzf_installed=false
-    if command -v fzf &>/dev/null; then
-      fzf_installed=true
-      PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+    htaccess_file="/usr/local/lsws/${dom}/html/.htaccess"
+    target=""
+
+    if [[ -r "$htaccess_file" ]]; then
+      in_block=0
+      while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$line" == "#begin-chuyen-huong-domain-wptangtoc"* ]]; then
+          in_block=1
+          continue
+        elif [[ "$line" == "#end-chuyen-huong-domain-wptangtoc"* ]]; then
+          break
+        fi
+
+        if ((in_block == 1)) && [[ "$line" == *"301"* ]]; then
+          if [[ "$line" =~ https?://([a-zA-Z0-9.-]+\.[a-zA-Z0-9-]{2,}) ]]; then
+            target="${BASH_REMATCH[1]}"
+          elif [[ "$line" =~ ([a-zA-Z0-9-]+\.)+[a-zA-Z0-9-]{2,} ]]; then
+            target="${BASH_REMATCH[0]}"
+          fi
+        fi
+      done <"$htaccess_file"
+      [[ -z "$target" ]] && target="Không xác định"
     else
-      PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+      # Vẫn hiển thị trong danh sách để người dùng có thể dọn dẹp nếu Vhost bị lỗi/mất .htaccess
+      target="Không xác định (Mất .htaccess)"
     fi
 
-    while true; do
-      echo -en "\n${C_CYAN}${PROMPT_TEXT}${C_RESET}"
-      if ! read -r REPLY; then exit 1; fi
-      REPLY="${REPLY// /}"
-      REPLY="${REPLY,,}"
+    selects+=("${dom}|${target}")
+  done
 
-      case "$REPLY" in
+  if (( ${#selects[@]} == 0 )); then
+    printf '%b\n' "${C_YELLOW}Hệ thống chưa có domain nào được kích hoạt sử dụng chuyển hướng!${C_RESET}"
+    sleep 2
+    wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1 "enter"
+  fi
+
+  print_border_top
+  center_text "${C_YELLOW}DANH SÁCH WEBSITE ĐANG CHUYỂN HƯỚNG${C_RESET}"
+  print_border_mid
+
+  local i=1 item source_dom target_dom text_hien_thi
+  for item in "${selects[@]}"; do
+    source_dom="${item%%|*}"
+    target_dom="${item#*|}"
+    text_hien_thi="${C_BOLD_WHITE}${source_dom}${C_RESET} ➜ ${C_GREEN}${target_dom}${C_RESET}"
+    print_full_row "$i" "$text_hien_thi"
+    ((i++))
+  done
+  print_border_bot
+
+  local fzf_installed=false prompt_text
+  if command -v fzf &>/dev/null; then
+    fzf_installed=true
+    prompt_text="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=Thoát]: "
+  else
+    prompt_text="Nhập lựa chọn (1-${#selects[@]}) [0=Thoát]: "
+  fi
+
+  local reply selected_item action_index
+  while true; do
+    printf '\n%b' "${C_CYAN}${prompt_text}${C_RESET}"
+    if ! read -r reply; then
+      wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1
+    fi
+    reply="${reply//[[:space:]]/}"
+    reply="${reply,,}"
+
+    case "$reply" in
       0)
-        echo -e "${C_GREEN}Đang thoát...${C_RESET}"
+        printf '%b\n' "${C_GREEN}Đang thoát...${C_RESET}"
         NAME="0"
         return 0
         ;;
       00)
-        if $fzf_installed; then
-          local selected_item=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
-          local dom=$(echo "$selected_item" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | cut -d'|' -f1)
+        if [[ "$fzf_installed" == true ]]; then
+          selected_item="$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm website >> " --height=40% --border=rounded --color=border:red --cycle --reverse || true)"
+          dom="$(printf '%s' "$selected_item" | sed 's/^[[:space:]]*[0-9]\+:[[:space:]]*//')"
+          dom="${dom%%|*}"
           if [[ -n "$dom" ]]; then
             NAME="$dom"
             return 0
-          else echo -e "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"; fi
+          else
+            printf '%b\n' "${C_YELLOW}Đã hủy chọn. Vui lòng chọn lại.${C_RESET}"
+          fi
         else
-          echo -e "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
+          printf '%b\n' "${C_RED}Lỗi: FZF chưa cài đặt.${C_RESET}"
         fi
         ;;
       *)
-        if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-          local action_index=$((REPLY - 1))
-          NAME=$(echo "${selects[$action_index]}" | cut -d'|' -f1)
+        if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#selects[@]} )); then
+          action_index=$((reply - 1))
+          NAME="${selects[$action_index]%%|*}"
           return 0
         else
-          echo -e "${C_RED}Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
+          printf '%b\n' "${C_RED}Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
         fi
         ;;
-      esac
-    done
-  else
-    echo -e "${C_YELLOW}Không có domain nào tồn tại trên hệ thống!${C_RESET}"
-    sleep 3
-    exec /etc/wptt/wptt-domain-main 1
+    esac
+  done
+}
+
+# ==============================================================================
+# HÀM THÁO DỠ VHOST ẢO RỖNG (DÀNH CHO DOMAIN CHỈ TẠO RA ĐỂ CHUYỂN HƯỚNG)
+# ==============================================================================
+function wptt_xoa_vhost_ao_chuyen_huong() {
+  local clean_dom="${1:?}"
+
+  # Chốt chặn bảo mật: Kiểm tra định dạng domain nghiêm ngặt trước khi xóa vật lý
+  if [[ ! "$clean_dom" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ || "$clean_dom" == *".."* ]]; then
+    _runloi "Kiểm tra an toàn tên miền $clean_dom"
+    return 1
   fi
+
+  # 1. Phòng vệ trường hợp hy hữu Vhost ảo đang giữ vai trò Website_chinh
+  if [[ "${Website_chinh:-}" == "$clean_dom" ]]; then
+    local candidate="" fp cand
+    for fp in /etc/wptt/vhost/.*.conf; do
+      [[ -f "$fp" && "$fp" != *"/..conf" ]] || continue
+      cand="${fp##*/}"
+      cand="${cand#.}"
+      cand="${cand%.conf}"
+      if [[ "$cand" != "$clean_dom" && -d "/usr/local/lsws/${cand}/html" ]]; then
+        candidate="$cand"
+        break
+      fi
+    done
+
+    if [[ -n "$candidate" ]]; then
+      local task_main="Chuyển đổi website chính từ ${clean_dom} thành ${candidate}"
+      _runing "$task_main"
+      local ols_conf="/usr/local/lsws/conf/httpd_config.conf"
+      local tmp_ols=""
+      if tmp_ols="$(wptt_atomic_begin "$ols_conf")"; then
+        sed -i -E '/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*[{]/,/^[[:space:]]*[}]/ {
+          /^[[:space:]]*(keyFile|certFile|CACertFile)[[:space:]]+/d
+        }' "$tmp_ols"
+        sed -i "/https/a \  keyFile                 /etc/wptt-ssl-tu-ky/${candidate}/${candidate}.key\n  certFile                /etc/wptt-ssl-tu-ky/${candidate}/cert.crt" "$tmp_ols"
+        wptt_atomic_commit "$tmp_ols" "$ols_conf"
+        wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "Website_chinh=$candidate"
+        _rundone "$task_main"
+      else
+        _runloi "$task_main"
+      fi
+    fi
+  fi
+
+  local task_del="Xóa Virtual Host chuyển hướng $clean_dom"
+  _runing "$task_del"
+
+  # 2. Truy vết chính xác User hệ thống của Vhost ảo (kể cả khi có hậu tố random)
+  local vhost_user=""
+  local vhost_conf_file="/usr/local/lsws/conf/vhosts/${clean_dom}/${clean_dom}.conf"
+
+  if [[ -f "$vhost_conf_file" ]]; then
+    vhost_user="$(awk '/^[[:space:]]*extUser[[:space:]]+/ {print $2; exit}' "$vhost_conf_file" 2>/dev/null || true)"
+  fi
+  if [[ -z "$vhost_user" ]]; then
+    vhost_user="$(awk -F: -v home="/usr/local/lsws/${clean_dom}" '$6 == home {print $1; exit}' /etc/passwd 2>/dev/null || true)"
+  fi
+  if [[ -z "$vhost_user" ]]; then
+    vhost_user="${clean_dom//[-._]/}"
+    (( ${#vhost_user} > 32 )) && vhost_user="${vhost_user:0:30}"
+  fi
+
+  # 3. Khóa User, dừng tiến trình và tháo dỡ Namespace / Mount Point
+  case "$vhost_user" in
+    "" | root | nobody | nogroup | lsadm | mysql | mariadb | www-data | sshd)
+      # Tuyệt đối không đụng vào các tài khoản đặc quyền của hệ thống
+      vhost_user=""
+      ;;
+  esac
+
+  if [[ -n "$vhost_user" ]] && id -u "$vhost_user" >/dev/null 2>&1; then
+    usermod -L -s /sbin/nologin "$vhost_user" >/dev/null 2>&1 || true
+    pkill -9 -u "$vhost_user" >/dev/null 2>&1 || true
+    crontab -r -u "$vhost_user" >/dev/null 2>&1 || true
+    find /tmp /dev/shm /var/tmp -user "$vhost_user" -delete >/dev/null 2>&1 || true
+  fi
+
+  # Tháo dỡ Namespace OLS (/var/lsns/*/$clean_dom) nếu chạy trên KVM
+  shopt -s nullglob
+  local -a ns_dirs=(/var/lsns/*/"$clean_dom")
+  shopt -u nullglob
+  if (( ${#ns_dirs[@]} > 0 )); then
+    fuser -k -9 "${ns_dirs[@]}"/* "${ns_dirs[@]}"/*/mnt >/dev/null 2>&1 || true
+    umount -fl "${ns_dirs[@]}"/*/mnt >/dev/null 2>&1 || true
+    umount -fl "${ns_dirs[@]}"/* >/dev/null 2>&1 || true
+    /bin/rm -rf -- "${ns_dirs[@]}" >/dev/null 2>&1 || true
+  fi
+
+  # Tháo toàn bộ mount point còn sót bên trong thư mục Vhost (nếu có)
+  local jail_path="/usr/local/lsws/${clean_dom}"
+  if [[ -d "$jail_path" ]]; then
+    local mp
+    while IFS= read -r mp; do
+      [[ -n "$mp" ]] && umount -fl "$mp" >/dev/null 2>&1 || true
+    done < <(awk -v jp="$jail_path" '$2 ~ "^"jp"(/|$)" {print $2}' /proc/mounts 2>/dev/null | sort -r)
+  fi
+
+  # Xóa User khỏi hệ điều hành
+  if [[ -n "$vhost_user" ]] && id -u "$vhost_user" >/dev/null 2>&1; then
+    usermod -R wptangtoc-ols "$vhost_user" >/dev/null 2>&1 || true
+    userdel -f "$vhost_user" >/dev/null 2>&1 || true
+  fi
+
+  # 4. ATOMIC TRANSACTION: Gỡ bỏ VirtualHost và Map Listener khỏi httpd_config.conf
+  local ols_master_conf="/usr/local/lsws/conf/httpd_config.conf"
+  if [[ -f "$ols_master_conf" ]]; then
+    local tmp_ols_master=""
+    if tmp_ols_master="$(wptt_atomic_begin "$ols_master_conf")"; then
+      local clean_esc="${clean_dom//./\\.}"
+      sed -i -E "/^[[:space:]]*map[[:space:]]+${clean_esc}[[:space:]]+(.*[[:space:],])?${clean_esc}([[:space:],]|$)/d" "$tmp_ols_master"
+      sed -i -e "/^[[:space:]]*virtualhost[[:space:]]\+${clean_dom:?}/,/^[[:space:]]*}[[:space:]]*$/d" "$tmp_ols_master"
+      sed -i -e "/^[[:space:]]*#bkwptt_virtualhost[[:space:]]\+${clean_dom:?}/,/^[[:space:]]*#bkwptt_}[[:space:]]*$/d" "$tmp_ols_master"
+      sed -i "/${clean_esc}[[:space:]]\+${clean_esc}/d" "$tmp_ols_master"
+
+      if ! wptt_atomic_commit "$tmp_ols_master" "$ols_master_conf"; then
+        /bin/rm -f -- "$tmp_ols_master" 2>/dev/null || true
+        _runloi "$task_del"
+        return 1
+      fi
+    else
+      _runloi "$task_del"
+      return 1
+    fi
+  fi
+
+  # 5. Xóa an toàn các thư mục vật lý của Vhost ảo (Có kiểm tra Allowlist)
+  local vhost_cfg_dir="/usr/local/lsws/conf/vhosts/${clean_dom}"
+  local vhost_web_dir="/usr/local/lsws/${clean_dom}"
+  local ssl_self_dir="/etc/wptt-ssl-tu-ky/${clean_dom}"
+
+  case "$vhost_cfg_dir" in
+    /usr/local/lsws/conf/vhosts/?*.?*)
+      [[ -d "$vhost_cfg_dir" ]] && /bin/rm -rf -- "${vhost_cfg_dir:?}"
+      ;;
+  esac
+
+  case "$vhost_web_dir" in
+    /usr/local/lsws/?*.?*)
+      if [[ -d "$vhost_web_dir" ]]; then
+        chattr -i "${vhost_web_dir}/html/.htaccess" "${vhost_web_dir}/html/wp-config.php" >/dev/null 2>&1 || true
+        /bin/rm -rf -- "${vhost_web_dir:?}"
+      fi
+      ;;
+  esac
+
+  case "$ssl_self_dir" in
+    /etc/wptt-ssl-tu-ky/?*.?*)
+      [[ -d "$ssl_self_dir" ]] && /bin/rm -rf -- "${ssl_self_dir:?}"
+      ;;
+  esac
+
+  /bin/rm -f -- "/etc/wptt/vhost/.${clean_dom:?}.conf" "/etc/wptt/vhost_bk/.${clean_dom:?}.conf" 2>/dev/null || true
+
+  _rundone "$task_del"
+
+  # 6. Kiểm tra và dọn dẹp chứng chỉ SSL Let's Encrypt (nếu Vhost chuyển hướng từng cài SSL)
+  local -a thu_muc_ssl=()
+  [[ -f "/etc/letsencrypt/live/${clean_dom}/cert.pem" ]] && thu_muc_ssl+=("$clean_dom")
+  [[ -f "/etc/letsencrypt/live/www.${clean_dom}/cert.pem" ]] && thu_muc_ssl+=("www.${clean_dom}")
+
+  if (( ${#thu_muc_ssl[@]} > 0 )); then
+    local dongyssl='n'
+    if wptt_xac_nhan "${xac_nhan:-Xác nhận} ${ban_co_muon:-bạn có muốn} ${xoa:-xóa} ${chung_chi:-chứng chỉ} SSL Let's Encrypt của $clean_dom?" \
+      "Nếu sau này khởi tạo lại đúng domain này bạn sẽ không phải xin cấp lại." \
+      "" "Đồng ý (Xoá sạch SSL)" "Không đồng ý (Giữ lại SSL)"; then
+      dongyssl='y'
+    fi
+
+    if [[ "$dongyssl" == "y" ]]; then
+      local task_ssl="Xóa chứng chỉ SSL website $clean_dom"
+      _runing "$task_ssl"
+      local ssl_name
+      for ssl_name in "${thu_muc_ssl[@]}"; do
+        if [[ -d "/etc/letsencrypt/live/${ssl_name}" ]]; then
+          certbot revoke --non-interactive --agree-tos --cert-path "/etc/letsencrypt/live/${ssl_name}/cert.pem" >/dev/null 2>&1 || true
+          /bin/rm -f -- "/etc/letsencrypt/renewal/${ssl_name:?}.conf" 2>/dev/null || true
+          /bin/rm -rf -- "/etc/letsencrypt/live/${ssl_name:?}" "/etc/letsencrypt/archive/${ssl_name:?}" 2>/dev/null || true
+        fi
+      done
+      _rundone "$task_ssl"
+    fi
+  fi
+
+  return 0
 }
 
-lua_chon_NAME
+# ==============================================================================
+# XÁC ĐỊNH DOMAIN CẦN XỬ LÝ (HỖ TRỢ CẢ MENU TƯƠNG TÁC LẪN THAM SỐ CLI)
+# ==============================================================================
+if [[ -n "${1:-}" && "${1:-}" != "98" && "${1:-}" != "99" && -f "/etc/wptt/chuyen-huong/.${1}.conf" ]]; then
+  NAME="$1"
+else
+  lua_chon_NAME
+fi
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
-  wptt_quay_ve_menu "${1:-}" 0
-}
+if [[ "${NAME:-0}" == "0" || -z "${NAME:-}" ]]; then
+  wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1
+fi
 
-path="/etc/wptt/chuyen-huong/.$NAME.conf"
+path="/etc/wptt/chuyen-huong/.${NAME}.conf"
 if [[ ! -f "$path" ]]; then
-  echo -e "\n${C_RED}❌ Domain chuyển hướng không tồn tại trên VPS!${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-domain-main 1
+  printf '\n%b\n' "${C_RED}Domain chuyển hướng không tồn tại trên VPS!${C_RESET}"
+  wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1 "enter"
 fi
 
 CLEAN="$NAME"
 
 # ==============================================================================
-# KIỂM TRA TRẠNG THÁI THÙNG RÁC VÀ CRONJOB (FAIL-SAFE)
-# ==============================================================================
-[[ -z "$WPTT_TRASH_ENABLE" ]] && WPTT_TRASH_ENABLE=1
-DISK_USAGE=$(df -h / | awk 'NR==2 {print $5}' | tr -d '%')
-CRON_LINK="/etc/cron.d/wptt-trash-cleaner"
-
-if [[ "$WPTT_TRASH_ENABLE" -eq 1 ]]; then
-    if [[ "$DISK_USAGE" -ge 90 ]]; then
-        WPTT_TRASH_ENABLE=0
-    elif [[ ! -f "$CRON_LINK" ]]; then
-        WPTT_TRASH_ENABLE=0
-    fi
-fi
-
-# ==============================================================================
-# HỎI XÓA MÃ NGUỒN (NẾU CÓ TỒN TẠI)
+# PHÂN LOẠI TRẠNG THÁI VHOST & HỎI XÁC NHẬN NẾU CÓ MÃ NGUỒN
 # ==============================================================================
 xoa_ma_nguon="y"
 
-if [[ -n $(find "/usr/local/lsws/$CLEAN/html" -maxdepth 2 -type f -name "*.php" 2>/dev/null | head -n 1) ]]; then
-  echo ""
-  echo -e "${C_YELLOW}Hệ thống phát hiện Website này đang chứa mã nguồn (.php).${C_RESET}"
+# Kiểm tra xem domain này có chứa mã nguồn (.php) hay không
+if [[ -d "/usr/local/lsws/${CLEAN}/html" ]] && [[ -n "$(find "/usr/local/lsws/${CLEAN}/html" -maxdepth 2 -type f -name "*.php" -print -quit 2>/dev/null)" ]]; then
+  printf '\n%b\n' "${C_YELLOW}Hệ thống phát hiện Website này đang chứa mã nguồn (.php).${C_RESET}"
   if wptt_xac_nhan "Bạn có muốn XÓA SẠCH toàn bộ Mã nguồn & Database không?" "${C_BOLD_WHITE}Website:${C_RESET} $CLEAN" "" "Có (Xóa sạch)" "Không (Chỉ gỡ luật chuyển hướng)"; then
     xoa_ma_nguon="y"
   else
@@ -174,44 +389,27 @@ if [[ -n $(find "/usr/local/lsws/$CLEAN/html" -maxdepth 2 -type f -name "*.php" 
   fi
 fi
 
-wptt_logs "INFO" "Xóa chuyển hướng website $CLEAN "
-echo ""
+wptt_logs "INFO" "Xóa chuyển hướng website $CLEAN" 2>/dev/null || true
+printf '\n'
 
 # ==============================================================================
-# THỰC THI GỠ BỎ
+# THỰC THI GỠ BỎ CHUYỂN HƯỚNG
 # ==============================================================================
-if [[ "$xoa_ma_nguon" == 'y' ]]; then
-  # _runing "Đang chuẩn bị dọn dẹp hệ thống website $CLEAN"
-
-	[[ -d /usr/local/lsws/$CLEAN/html/phpmyadmin ]] && rm -rf /usr/local/lsws/${CLEAN:?}/html/phpmyadmin
-	[[ -d /usr/local/lsws/"$CLEAN"/html/phpmyadmin ]] && rm -rf /usr/local/lsws/${CLEAN:?}/html/phpmyadmin
-
-echo '# BEGIN WordPress
-<IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
-RewriteBase /
-RewriteRule ^index\.php$ - [L]
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule . /index.php [L]
-</IfModule>
-# END WordPress' >"/usr/local/lsws/$CLEAN/html/.htaccess"
-
-
-bash /etc/wptt/domain/wptt-xoa-website "$CLEAN"
-  # _rundone "Gỡ bỏ Vhost, User và đưa dữ liệu vào Thùng rác thành công"
-  msg_action="Xóa hoàn toàn Mã nguồn, DB và gỡ Chuyển hướng."
-
-else
-  _runing "Đang gỡ bỏ luật chuyển hướng trong file .htaccess..."
-  sed -i -e '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/d' "/usr/local/lsws/$CLEAN/html/.htaccess"
-
-  if [[ -f "/etc/wptt/vhost_bk/.$CLEAN.conf" ]]; then
-    mv "/etc/wptt/vhost_bk/.$CLEAN.conf" "/etc/wptt/vhost/"
+if [[ "$xoa_ma_nguon" == "y" ]]; then
+  # Khôi phục file cấu hình từ vhost_bk về vhost (nếu là website có hồ sơ gốc)
+  if [[ -f "/etc/wptt/vhost_bk/.${CLEAN}.conf" ]]; then
+    /bin/mv -f -- "/etc/wptt/vhost_bk/.${CLEAN}.conf" "/etc/wptt/vhost/.${CLEAN}.conf" 2>/dev/null || true
   fi
 
-  echo '# BEGIN WordPress
+  # TRƯỜNG HỢP 1: Website có hồ sơ gốc (/etc/wptt/vhost/.$CLEAN.conf tồn tại)
+  if [[ -f "/etc/wptt/vhost/.${CLEAN}.conf" ]]; then
+    if [[ -d "/usr/local/lsws/${CLEAN}/html/phpmyadmin" ]]; then
+      /bin/rm -rf -- "/usr/local/lsws/${CLEAN:?}/html/phpmyadmin"
+    fi
+
+    if [[ -d "/usr/local/lsws/${CLEAN}/html" ]]; then
+      cat >"/usr/local/lsws/${CLEAN}/html/.htaccess" <<'EOF'
+# BEGIN WordPress
 <IfModule mod_rewrite.c>
 RewriteEngine On
 RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
@@ -221,26 +419,86 @@ RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule . /index.php [L]
 </IfModule>
-# END WordPress' >"/usr/local/lsws/$CLEAN/html/.htaccess"
+# END WordPress
+EOF
+    fi
 
-  _rundone "Phục hồi cấu hình .htaccess nguyên bản"
+    if /bin/bash /etc/wptt/domain/wptt-xoa-website "$CLEAN"; then
+      msg_action="Xóa hoàn toàn Mã nguồn, DB và gỡ Chuyển hướng."
+    else
+      # Fallback phòng vệ: Nếu wptt-xoa-website gặp sự cố, cưỡng chế tháo dỡ Vhost
+      wptt_xoa_vhost_ao_chuyen_huong "$CLEAN" || wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1 "enter"
+      msg_action="Xóa hoàn toàn Vhost chuyển hướng và dữ liệu liên quan."
+    fi
+
+  # TRƯỜNG HỢP 2: Vhost ảo rỗng (Chỉ tạo ra từ Nhánh 2 của wptt-chuyen-huong, không có hồ sơ vhost)
+  else
+    if ! wptt_xoa_vhost_ao_chuyen_huong "$CLEAN"; then
+      wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1 "enter"
+    fi
+    msg_action="Xóa hoàn toàn Virtual Host chuyển hướng khỏi hệ thống."
+  fi
+
+else
+  # TRƯỜNG HỢP 3: Giữ lại mã nguồn & Database, chỉ gỡ luật chuyển hướng trong .htaccess
+  task_restore="Gỡ bỏ luật chuyển hướng và phục hồi .htaccess cho $CLEAN"
+  _runing "$task_restore"
+
+  htaccess_target="/usr/local/lsws/${CLEAN}/html/.htaccess"
+  chattr -i "$htaccess_target" >/dev/null 2>&1 || true
+
+  if [[ -f "$htaccess_target" ]]; then
+    sed -i -e '/^#begin-chuyen-huong-domain-wptangtoc/,/^#end-chuyen-huong-domain-wptangtoc$/d' "$htaccess_target"
+  fi
+
+  # Nếu file .htaccess trống hoặc chưa có cấu hình rewrite sau khi cắt bỏ block chuyển hướng
+  if [[ ! -s "$htaccess_target" ]] || ! grep -q "RewriteEngine" "$htaccess_target" 2>/dev/null; then
+    cat >"$htaccess_target" <<'EOF'
+# BEGIN WordPress
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+RewriteBase /
+RewriteRule ^index\.php$ - [L]
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule . /index.php [L]
+</IfModule>
+# END WordPress
+EOF
+  fi
+
+  if [[ -f "/etc/wptt/vhost_bk/.${CLEAN}.conf" ]]; then
+    /bin/mv -f -- "/etc/wptt/vhost_bk/.${CLEAN}.conf" "/etc/wptt/vhost/.${CLEAN}.conf"
+  fi
+
+  # Đồng bộ lại quyền sở hữu file .htaccess cho User của website
+  if [[ -f "/etc/wptt/vhost/.${CLEAN}.conf" ]]; then
+    # shellcheck disable=SC1090
+    . "/etc/wptt/vhost/.${CLEAN}.conf" 2>/dev/null || true
+    if [[ -n "${User_name_vhost:-}" ]] && id -u "$User_name_vhost" >/dev/null 2>&1; then
+      /bin/chown -- "${User_name_vhost}:${User_name_vhost}" "$htaccess_target" 2>/dev/null || true
+    fi
+  fi
+
+  _rundone "$task_restore"
   msg_action="Giữ lại dữ liệu. Chỉ gỡ bỏ luật Chuyển hướng."
 fi
 
 # ==============================================================================
 # KẾT THÚC DỌN DẸP & BÁO CÁO
 # ==============================================================================
-rm -f "/etc/wptt/chuyen-huong/.${CLEAN:?}.conf"
+/bin/rm -f -- "/etc/wptt/chuyen-huong/.${CLEAN:?}.conf"
 
 wptt_smart_reload_lsws >/dev/null 2>&1
 
-echo ""
+printf '\n'
 print_border_top
 center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ CHUYỂN HƯỚNG${C_RESET}"
 print_border_mid
 left_text "Tên miền xử lý : ${C_YELLOW}$CLEAN${C_RESET}" 2
 left_text "Hành động      : ${C_GREEN}$msg_action${C_RESET}" 2
 print_border_bot
-echo ""
+printf '\n'
 
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 0
