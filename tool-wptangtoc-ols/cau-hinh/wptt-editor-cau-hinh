@@ -50,10 +50,7 @@ while true; do
 
   if [[ "$REPLY" == "0" ]]; then
     echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-    if [[ "${1:-}" == "98" ]]; then
-        exec /etc/wptt/wptt-cau-hinh-websever-main 1
-    fi
-    exit 0
+    wptt_quay_ve_menu "${1:-}" 0
   fi
 
   case "$REPLY" in
@@ -75,39 +72,60 @@ done
 
 echo ""
 
+if [[ -z "$trinh_go_code" ]];then
+	echo "Không xác định được lựa chọn trình soạn code"
+	wptt_quay_ve_menu "${1:-}" 0
+fi
+
 # Nếu chọn giống cái cũ thì không làm gì cả
 if [[ "$trinh_go_code" == "$editor_cau_hinh" ]]; then
   echo -e "${C_YELLOW}Hệ thống hiện tại đã sử dụng [$trinh_go_code] làm trình soạn thảo mặc định rồi!${C_RESET}\n"
 
-  echo -en "${C_GREEN}Nhấn phím [Enter] để quay lại Menu...${C_RESET}"
-  read -r _
-  if [[ "${1:-}" == "98" ]]; then
-      exec /etc/wptt/wptt-cau-hinh-websever-main 1
-  fi
-  exit 0
+  wptt_quay_ve_menu "${1:-}" 0 "enter"
 fi
 
-if ! command -v "$trinh_go_code" >/dev/null 2>&1; then
-  UI_STRING="Đang tải và cài đặt Package: $trinh_go_code..."
-  _runing "$UI_STRING"
 
-  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+# Đảm bảo biến đầu vào tồn tại và không rỗng (Fail-fast)
+pkg_name="${trinh_go_code:-}"
+[[ -z "$pkg_name" ]] && return 1
+
+# Chỉ cài đặt nếu lệnh chưa tồn tại trên hệ thống
+if ! command -v "$pkg_name" >/dev/null 2>&1; then
+  task_msg="Tải và cài đặt Package: $pkg_name"
+  _runing "$task_msg"
+
+  rc=0
+  # Nhận diện chính xác Package Manager
+  if command -v apt-get >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update >/dev/null 2>&1
-    apt-get install -y "$trinh_go_code" >/dev/null 2>&1
+    # Cập nhật repo (cho phép lỗi nhẹ qua || true vì có thể chỉ vài repo phụ bị timeout)
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq "$pkg_name" >/dev/null 2>&1 || rc=$?
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y -q "$pkg_name" >/dev/null 2>&1 || rc=$?
   else
-    dnf install -y "$trinh_go_code" >/dev/null 2>&1 || yum install -y "$trinh_go_code" >/dev/null 2>&1
+    rc=127 # Không tìm thấy trình quản lý gói nào
   fi
 
-  _rundone "Cài đặt Package thành công"
+  # Cài xong không tin vào exit code, phải check lại xem tool đã thực sự tồn tại chưa!
+  if (( rc == 0 )) && command -v "$pkg_name" >/dev/null 2>&1; then
+    _rundone "$task_msg"
+  else
+    _runloi "$task_msg"
+		if [[ "${1:-}" == "98" ]]; then
+			sleep 3
+			exec /etc/wptt/wptt-cau-hinh-websever-main 1
+		fi
+    # Trả về mã lỗi
+    return 1 2>/dev/null || exit 1
+  fi
 fi
 
 # ==============================================================================
 # CẬP NHẬT CẤU HÌNH WPTANGTOC VÀ BÁO CÁO
 # ==============================================================================
 _runing "Đang ghi cấu hình mặc định vào hệ thống..."
-sed -i "/editor_cau_hinh=/d" /etc/wptt/.wptt.conf 2>/dev/null
-echo "editor_cau_hinh=$trinh_go_code" >>/etc/wptt/.wptt.conf
+wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "editor_cau_hinh=${trinh_go_code:-nano}"
 
 wptt_logs "INFO" "Thay đổi công cụ cấu hình $trinh_go_code "
 _rundone "Lưu cấu hình thành công"
@@ -121,6 +139,4 @@ left_text "Kể từ bây giờ, mọi thao tác chỉnh sửa cấu hình (Webs
 left_text "Database, Cronjob...) sẽ được mở bằng công cụ này." 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if [[ "${1:-}" == "98" ]]; then
-    exec /etc/wptt/wptt-cau-hinh-websever-main 1
-fi
+wptt_quay_ve_menu "${1:-}" 0
