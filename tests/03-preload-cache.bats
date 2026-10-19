@@ -42,14 +42,18 @@ in_log_neu_loi() {
 @test "Preload Cache: Chặn tên miền sai định dạng" {
   run bash "$SCRIPT_TEST" "tenmiensai"
   
-  in_log_neu_loi 0 
+  # Script bash chuẩn enterprise đã exit 1 -> Test cũng phải kỳ vọng 1
+  in_log_neu_loi 1 
+  [ "$status" -eq 1 ]
   [[ "$output" =~ "không đúng định dạng" || -z "$output" ]] 
 }
 
 @test "Preload Cache: Bắt lỗi Website không tồn tại" {
   run bash "$SCRIPT_TEST" "web-khong-ton-tai.com"
   
-  in_log_neu_loi 0
+  # Script bash chuẩn enterprise đã exit 1 -> Test cũng phải kỳ vọng 1
+  in_log_neu_loi 1
+  [ "$status" -eq 1 ]
   [[ "$output" =~ "không tồn tại trên hệ thống" ]]
 }
 
@@ -74,9 +78,8 @@ in_log_neu_loi() {
   [[ "$output" =~ "Xác nhận bạn đang sử dụng công nghệ" && "$output" =~ "LiteSpeed Cache" ]]
   
   # 3. Hoàn tất tiến trình
-  [[ "$output" =~ "Hoàn tất tạo bộ nhớ đệm cho: $TEST_DOMAIN" ]]
+  [[ "$output" =~ "Preload cache thành công cho website: $TEST_DOMAIN" ]]
 }
-
 
 @test "Preload Cache: Nghiệm thu CACHE HIT có sitemap.xml thực tế trên bài viết Hello World" {
   local UA_DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -110,7 +113,6 @@ in_log_neu_loi() {
 }
 
 
-
 # =================================================================
 # NHÓM 3: KIỂM THỬ CHẾ ĐỘ SPIDER CRAWL (FALLBACK KHI MẤT SITEMAP)
 # =================================================================
@@ -124,22 +126,22 @@ in_log_neu_loi() {
   # FIX: Chỉ cần chmod 644 (Read-only) để đảm bảo tiến trình PHP của Vhost tự do đọc được file
   chmod -R 755 "$MU_PLUGIN_DIR"
   chmod 644 "$MU_PLUGIN_DIR/disable-sitemap.php"
-
   
   # XÓA VẬT LÝ ĐỀ PHÒNG CÓ FILE TỒN ĐỌNG VÀ XOÁ SẠCH CACHE LITESPEED
   rm -f /usr/local/lsws/$TEST_DOMAIN/html/*.xml 2>/dev/null || true
   run /etc/wptt/cache/wptt-xoacache "$TEST_DOMAIN" >/dev/null 2>&1 || true
   run /etc/wptt/wptt-phanquyen "$TEST_DOMAIN" >/dev/null 2>&1 || true
 
-	rm -rf -- /usr/local/lsws/$TEST_DOMAIN/html/wp-content/litespeed/* 2>/dev/null || true
-	rm -rf -- /usr/local/lsws/$TEST_DOMAIN/luucache 2>/dev/null || true
+  rm -rf -- /usr/local/lsws/$TEST_DOMAIN/html/wp-content/litespeed/* 2>/dev/null || true
+  rm -rf -- /usr/local/lsws/$TEST_DOMAIN/luucache 2>/dev/null || true
   
   # KHỞI ĐỘNG LẠI OLS: Ép xả bóng ma OPcache trên RAM để nhận lệnh tắt Sitemap
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
   
   # Flush lại rewrite để WordPress clear cache route
   /usr/local/bin/wp rewrite flush --path="/usr/local/lsws/$TEST_DOMAIN/html" --allow-root >/dev/null 2>&1 || true
-	sleep 20
+  sleep 20
+  
   # Bắn luồng
   run bash "$SCRIPT_TEST" "$TEST_DOMAIN"
   
@@ -151,7 +153,9 @@ in_log_neu_loi() {
   
   # 2. Bật quá trình WGET chạy ẩn
   [[ "$output" =~ "Cào liên kết chế độ mặc định" ]]
-  [[ "$output" =~ "Hoàn tất tạo bộ nhớ đệm cho: $TEST_DOMAIN" ]]
+  
+  # UPDATE: Kiểm tra câu thông báo hoàn tất mới của script chuẩn
+  [[ "$output" =~ "Preload cache thành công cho website: $TEST_DOMAIN" ]]
 }
 
 
@@ -170,7 +174,6 @@ in_log_neu_loi() {
   local is_hit=false
 
   # SMART POLLING: Chờ tối đa 30s để tiến trình Preload (chạy nền) ghi xong cache
-
   while [ $attempt -le $max_attempts ]; do
       REQ_HEADERS=$($CURL_CMD | tr -d '\r')
       

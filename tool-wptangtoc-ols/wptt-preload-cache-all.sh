@@ -1,7 +1,7 @@
 #!/bin/bash
 #Author          :LiteSpeedtech & Gia Tuấn
-#date            :20250315
-#version         :2.0.1
+#date            :19-10-2026
+#version         :2.0.2
 #Require         :Prepare site map XML
 #                 Allow LSCache crawler
 #thư viện để phục vụ tính năng preload cache

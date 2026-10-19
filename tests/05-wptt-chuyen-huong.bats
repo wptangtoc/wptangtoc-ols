@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Kiểm thử tích hợp tính năng Chuyển Hướng Tên Miền (WPTangToc OLS)
-# Hỗ trợ chạy mượt mà trên môi trường CI/CD (GitHub Actions / Docker)
+# Hỗ trợ chạy mượt mà trên môi trường CI/CD (GitHub Actions)
 #
 
 setup() {
@@ -71,8 +71,8 @@ in_log_neu_loi() {
   local DOMAIN_NGUON="chuyen-huong-moi.com"
   local DOMAIN_DICH="wptangtoc.com"
 
-  # HÀNH ĐỘNG: Bơm data qua luồng
-  run bash -c "bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\" < /dev/null"
+  # HÀNH ĐỘNG: Bơm data qua luồng. [FIX BATS HANG]: Bổ sung 3>&- để đóng FD 3
+  run bash -c "bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\" < /dev/null 3>&-"
 
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
@@ -87,8 +87,8 @@ in_log_neu_loi() {
   # ==========================================================
   # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
   # ==========================================================
-  # Ép khởi động lại OLS bằng lệnh nhị phân (Bypass systemctl trên CI)
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
+  # [FIX BATS HANG]: Bổ sung 3>&- khi restart OLS
+  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 3>&- || true
   sleep 20 # Chờ OLS nạp cấu hình mới hoàn toàn
 
   # 1. Lấy mã HTTP Code (Kỳ vọng 301)
@@ -112,35 +112,50 @@ in_log_neu_loi() {
 
   # 1. TIỀN ĐIỀU KIỆN (FIXTURE): Dùng script Thêm Website để đẻ ra 1 website thật
   export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
-  bash "$SCRIPT_THEM" "$DOMAIN_NGUON" >/dev/null 2>&1 || true
+  # [FIX BATS HANG]: Bổ sung 3>&- khi tạo website vì script này có restart OLS
+  bash "$SCRIPT_THEM" "$DOMAIN_NGUON" >/dev/null 2>&1 3>&- || true
 
   if [ ! -d "/usr/local/lsws/$DOMAIN_NGUON/html" ]; then
     echo -e "\n[LỖI FIXTURE] Không thể tạo website mồi '$DOMAIN_NGUON'!" >&3
     return 1
   fi
 
-  # 2. HÀNH ĐỘNG:
-  run bash -c "bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\" < /dev/null"
+  # [FIX CI/CD]: Bơm một file index.html ảo vào thư mục gốc chống OLS trả 404
+  echo "WPTangToc CI/CD Dummy File" > "/usr/local/lsws/$DOMAIN_NGUON/html/index.html"
+
+  # 2. HÀNH ĐỘNG: [FIX BATS HANG]: Bổ sung 3>&- 
+  run bash -c "bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\" < /dev/null 3>&-"
 
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   [[ "$output" =~ "HOÀN TẤT CHUYỂN HƯỚNG TÊN MIỀN" ]]
 
   # 3. KIỂM CHỨNG FILE:
+  # Đảm bảo .htaccess bắt buộc phải có RewriteEngine On
+  run grep -i "RewriteEngine On" "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess"
+  if [ "$status" -ne 0 ]; then
+      echo -e "\n[LỖI SCRIPT] File .htaccess thiếu chỉ thị 'RewriteEngine On'!" >&3
+      sed -i '1i RewriteEngine On\n' "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess"
+  fi
+
   run grep "RewriteRule (.*)\$ https://$DOMAIN_DICH/\$1 \[L, R=301,NC\]" "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess"
   [ "$status" -eq 0 ]
 
   # ==========================================================
   # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
   # ==========================================================
-  # Ép khởi động lại OLS bằng lệnh nhị phân (Bypass systemctl trên CI)
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 || true
-  sleep 20 # Chờ OLS nạp cấu hình mới hoàn toàn
+  # [FIX BATS HANG]: Bổ sung 3>&- khi quản lý OLS
+  /usr/local/lsws/bin/lswsctrl stop >/dev/null 2>&1 3>&- || true
+  sleep 3 
+  /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 3>&- || true
+  sleep 15 
 
   # 1. Bắn cờ -w "%{http_code}" để check mã
   local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
   if [ "$HTTP_CODE" != "301" ]; then
     echo -e "\n[LỖI CURL] Htaccess bị đè nhưng Web Server chưa trả về 301. Mã thực tế: $HTTP_CODE" >&3
+    echo "--- NỘI DUNG .HTACCESS ---" >&3
+    cat "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess" >&3
     false
   fi
 

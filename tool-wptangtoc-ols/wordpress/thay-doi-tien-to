@@ -4,7 +4,7 @@
 # @since: 2026
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Đây là tính năng thay đổi tiền tố database
   mặc định WordPress sử dụng tiền tố wp_
   tính năng này sẽ thay đổi tiền tố đó sẽ giúp nâng cao bảo mật cho WordPress hơn
@@ -32,8 +32,7 @@ path_conf="/etc/wptt/vhost/.$NAME.conf"
 # Kiểm tra an toàn bằng khối { ... }
 [[ ! -f "$path_conf" ]] && {
   echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 2
-  exec /etc/wptt/wptt-wordpress-main 1
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 }
 
 path="/usr/local/lsws/$NAME/html"
@@ -42,20 +41,17 @@ path="/usr/local/lsws/$NAME/html"
 [[ ! -f "$path/wp-load.php" ]] && {
   echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
   echoDo "Tính năng này chỉ có thể hoạt động trên WordPress"
-  sleep 2
-  exec /etc/wptt/wptt-wordpress-main 1
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 }
 
 # Kiểm tra Multisite bằng Regex an toàn xuyên comment
 check_multisite=$(grep -E "^[[:space:]]*define[[:space:]]*\([[:space:]]*['\"]MULTISITE['\"]" "$path/wp-config.php" 2>/dev/null | awk -F"['\"]" '{print $4}')
 if [[ "$check_multisite" == 'true' ]]; then
   echoDo "Tính năng này không hỗ trợ website WordPress Multisite"
-  sleep 2
-  exec /etc/wptt/wptt-wordpress-main 1
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-
-
+wptt_check_mariadb "${1:-}"
 #chạy lệnh [[ -L "/usr/local/lsws/$NAME/html/wp-config.php" ]], Bash sẽ chỉ kiểm tra chính cái điểm cuối cùng (tức là file wp-config.php). Nó không bận tâm việc các thư mục cha (như $NAME hay html) có phải là symlink hay không.
 # Chống tấn công Symlink (Ghi đè file hệ thống /etc/shadow)
 if [[ -L "$path/wp-config.php" ]]; then #xách định wp-config.php có phải symlink không?
@@ -72,19 +68,18 @@ if [[ -L "$path/wp-config.php" ]]; then #xách định wp-config.php có phải 
   echo -e "  3. Copy/Tạo lại một file wp-config.php vật lý (file thật) vào đó."
   echo -e "  4. Chạy lại tính năng này sau khi đã xử lý xong."
   echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
-  sleep 4
-  wptt_quay_ve_menu "${1:-}" 1
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
 . "$path_conf"
 if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
   wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
   _runloi "Không xác định được phiên bản PHP"
-  return 1 2>/dev/null || exit 1
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
 # Khai báo WP_EXEC chuẩn quyền User
-WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
+WP_EXEC=(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp)
 
 unset NEW_PREFIX OLD_PREFIX dongy
 
@@ -102,7 +97,7 @@ tien_to_cu="$OLD_PREFIX"
 echo ""
 if ! wptt_xac_nhan "Bạn có chắc chắn muốn thay đổi tiền tố DB cho $NAME không?" "Tiền tố sẽ được đổi từ ${C_YELLOW}$tien_to_cu${C_RESET} thành ${C_GREEN}${NEW_PREFIX}${C_RESET}" "Lưu ý: Hãy BACKUP website trước khi sử dụng tính năng này! " "Đồng ý (Thay đổi)" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-  wptt_quay_ve_menu "${1:-}" 0
+  wptt_quay_ve_menu "${1:-}" 1
 fi
 
 echo ""
@@ -132,13 +127,15 @@ if [[ -n "$TABLES" ]]; then
   sed -i -e "s/\$table_prefix[[:space:]]*=[[:space:]]*['\"][^'\"]*['\"]/\$table_prefix = '${NEW_PREFIX}'/" "$wp_config_path"
 
   # ================== XÓA CACHE TOÀN DIỆN ==================
-#xoá opcache cache
-. /etc/wptt/cache/lib-opcache-clear
-wptt_xoa_opcache "$NAME"
-#xoá opcache cache
+  #xoá opcache cache
+  if ! declare -F wptt_xoa_opcache >/dev/null 2>&1; then
+    . /etc/wptt/cache/lib-opcache-clear
+  fi
 
+  wptt_xoa_opcache "$NAME"
+  #xoá opcache cache
 
-#xoá object cache
+  #xoá object cache
   "${WP_EXEC[@]}" cache flush --path="$path" >/dev/null 2>&1
 
   if [ "$(systemctl is-active memcached.service)" == "active" ]; then
@@ -150,11 +147,15 @@ wptt_xoa_opcache "$NAME"
 
   if [[ "$tien_to_moi" == "$tien_to_cu" || -z "$tien_to_moi" ]]; then
     _runloi "$UI_STRING"
+    [[ $lock_down ]] && chattr +i "$wp_config_path"
+    wptt_quay_ve_menu "${1:-}" 1 #trả về lỗi ngừng luôn
   else
     _rundone "$UI_STRING"
   fi
 else
   _runloi "$UI_STRING (Không tìm thấy Table)"
+  [[ $lock_down ]] && chattr +i "$wp_config_path"
+  wptt_quay_ve_menu "${1:-}" 1 "enter" #trả về lỗi ngừng luôn
 fi
 
 wptt_logs "INFO" "Thay đổi tiền tố website $NAME"
