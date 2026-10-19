@@ -1,3 +1,11 @@
+## Phiên bản 8.2.4.5
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến công cụ kiểm tra ổ cứng:** Nâng cấp tính năng kiểm tra và đánh giá trạng thái thiết bị lưu trữ, giúp quản trị viên theo dõi hiệu năng ổ đĩa chính xác và chủ động hơn trong việc bảo vệ dữ liệu hệ thống.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ### 🛠️ Tối ưu hệ thống
 - **Nâng cấp công cụ kiểm tra tốc độ mạng:** Cải tiến và tối ưu hóa công cụ đo lường tốc độ kết nối internet trên máy chủ, giúp quản trị viên đánh giá nhanh chóng, chính xác và hiệu quả hơn băng thông mạng phục vụ hệ thống.
 
