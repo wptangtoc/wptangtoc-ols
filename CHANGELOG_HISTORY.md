@@ -1,3 +1,12 @@
+## Phiên bản 8.2.4.3
+
+🛠️ **Tối ưu hệ thống & Quản trị**
+- Tinh gọn và chuẩn hóa cơ chế kiểm tra trạng thái dịch vụ LiteSpeed Web Server (LSWS) và MariaDB, giúp tối ưu hóa tốc độ phản hồi và nâng cao độ ổn định của hệ thống.
+- Cải tiến cấu trúc mã nguồn backend, giúp quản trị viên dễ dàng bảo trì và đảm bảo khả năng vận hành lâu dài cho máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## Phiên bản 8.2.4.2
 
 🛠️ **Tối ưu hệ thống & Trải nghiệm quản trị**
