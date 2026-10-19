@@ -97,20 +97,35 @@ teardown() {
 # CÁC BÀI TEST TÍCH HỢP
 # ============================================================================
 
-@test "Ngoại lệ: Chặn di cư khi MariaDB đang sập" {
-	cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
-		cat <<'EOF' >> /etc/wptt/core-functions
-		wptt_check_mariadb() {
-			printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
-				exit 1
-		}
+# @test "Ngoại lệ: Chặn di cư khi MariaDB đang sập" {
+# 	cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
+# 		cat <<'EOF' >> /etc/wptt/core-functions
+# 		wptt_check_mariadb() {
+# 			printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
+# 				exit 1
+# 		}
 
-	EOF
+# 		run bash "$SCRIPT_TEST"
+# 		in_log_neu_loi 1
+# 		[ "$status" -ne 0 ]
+# 		[[ "$output" =~ "MariaDB" ]] || [[ "$output" =~ "tạm dừng tác vụ" ]]
+# }
 
-		run bash "$SCRIPT_TEST"
-		in_log_neu_loi 1
-		[ "$status" -ne 0 ]
-		[[ "$output" =~ "MariaDB" ]] || [[ "$output" =~ "tạm dừng tác vụ" ]]
+
+
+@test "Integration: Chặn sao lưu khi MariaDB đang sập" {
+  cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
+  cat <<'EOF' >> /etc/wptt/core-functions
+wptt_check_mariadb() {
+  printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
+  exit 1
+}
+
+EOF
+  run bash "$SCRIPT_TEST"
+  in_log_neu_loi 1
+  [ "$status" -ne 0 ]
+  [[ "$output" =~ "MariaDB" ]] || [[ "$output" =~ "tạm dừng tác vụ" ]]
 }
 
 
