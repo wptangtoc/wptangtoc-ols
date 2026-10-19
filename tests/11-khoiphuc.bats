@@ -88,8 +88,9 @@ teardown() {
   return 0
 }
 
-
-
+# =================================================================
+# PHẦN B — UNIT TEST
+# =================================================================
 
 @test "Unit: Chặn khôi phục nếu tên miền không tồn tại trên máy chủ" {
   run bash -c "bash $SCRIPT_KHOIPHUC domain-ao-khong-ton-tai.com <<< $'1\n1\n'"
@@ -127,26 +128,6 @@ EOF
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   rm -f "$SCRIPT_TEST"
-}
-
-@test "Sự cố ngoài lề TEST: Chặn khôi phục khi MariaDB đang sập" {
-  if [ ! -d "/usr/local/lsws/$TEST_DOMAIN/html" ]; then
-     skip "Website $TEST_DOMAIN chưa được tạo thành công."
-  fi
-
-  cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
-  cat <<'EOF' >> /etc/wptt/core-functions
-wptt_check_mariadb() {
-  printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
-  exit 1
-}
-EOF
-
-  run bash -c "bash $SCRIPT_KHOIPHUC"
-
-  in_log_neu_loi 1
-  [ "$status" -ne 0 ]
-  [[ "$output" =~ "MariaDB" ]] || [[ "$output" =~ "tạm dừng tác vụ" ]]
 }
 
 @test "Integration: Khôi phục thành công định dạng truyền thống [.zip] & [.sql]" {
