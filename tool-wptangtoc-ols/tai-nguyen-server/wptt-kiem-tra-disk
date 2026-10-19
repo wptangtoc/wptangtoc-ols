@@ -233,7 +233,8 @@ gather_storage_profile() {
   # Nhận diện thiết bị khối vật lý (vda, sda, nvme0n1...) trong /sys/block
   local base_dev="${DISK_DEV##*/}"
   base_dev="${base_dev%%[0-9]*}"
-  [[ "$ DISK_DEV" == *"nvme"* ]] && base_dev="$(printf '%s' "${DISK_DEV##*/}" | sed -E 's/p[0-9]+$//')"
+  # [[ "$ DISK_DEV" == *"nvme"* ]] && base_dev="$(printf '%s' "${DISK_DEV##*/}" | sed -E 's/p[0-9]+$//')"
+	[[ "$DISK_DEV" == *nvme* ]] && base_dev="$(printf '%s' "${DISK_DEV##*/}" | sed -E 's/p[0-9]+$//')"
 
   if [[ -z "$base_dev" || ! -d "/sys/block/$base_dev" ]]; then
     for blk in /sys/block/nvme* /sys/block/vd* /sys/block/sd* /sys/block/xvd* /sys/block/mmcblk*; do
@@ -253,13 +254,31 @@ gather_storage_profile() {
       model="${model//+([[:space:]])/ }"
     fi
 
-    if [[ "$base_dev" == nvme* ]]; then
-      DISK_TYPE="NVMe SSD (${model:-PCIe High-Speed})"
-    elif [[ "$rota" == "0" ]]; then
-      DISK_TYPE="Solid State Drive - SSD (${model:-Virtual/SATA})"
-    else
-      DISK_TYPE="Hard Disk Drive - (${model:-VirtIO})"
-    fi
+
+		local virt="none"
+		if command -v systemd-detect-virt >/dev/null 2>&1; then
+			virt="$(systemd-detect-virt 2>/dev/null || true)"
+			[[ -z "$virt" ]] && virt="none"
+		fi
+
+		if [[ "$base_dev" == nvme* ]]; then
+			DISK_TYPE="NVMe SSD (${model:-PCIe High-Speed})"
+		elif [[ "$rota" == "0" ]]; then
+			DISK_TYPE="Solid State Drive - SSD (${model:-Virtual/SATA})"
+		elif [[ "$virt" != "none" || "$base_dev" == vd* || "$base_dev" == xvd* ]]; then
+			# VirtIO/Xen thường báo rotational=1 dù phần cứng nền là SSD/NVMe
+			DISK_TYPE="Virtual Disk ${virt^^} (${model:-VirtIO}) - xem IOPS để biết loại thật"
+		else
+			DISK_TYPE="Hard Disk Drive - HDD (${model:-SATA})"
+		fi
+
+    # if [[ "$base_dev" == nvme* ]]; then
+    #   DISK_TYPE="NVMe SSD (${model:-PCIe High-Speed})"
+    # elif [[ "$rota" == "0" ]]; then
+    #   DISK_TYPE="Solid State Drive - SSD (${model:-Virtual/SATA})"
+    # else
+    #   DISK_TYPE="Hard Disk Drive - (${model:-VirtIO})"
+    # fi
 
     if [[ -r "/sys/block/$base_dev/queue/scheduler" ]]; then
       local raw_sched=""
@@ -683,22 +702,27 @@ printf '\033[?25h' 2>/dev/null || true
 _ui_table_bot
 
 # ==============================================================================
-# ĐÁNH GIÁ CHẤT LƯỢNG Ổ CỨNG CHO WORDPRESS & MARIADB
+# ĐÁNH GIÁ CHẤT LƯỢNG Ổ CỨNG CHO WORDPRESS
 # ==============================================================================
 str_4k_iops="$(format_iops_val "$iops_4k_raw")"
 str_1m_bw="$(format_bw_speed "$bw_1m_raw")"
 
-disk_verdict="$(LC_ALL=C awk -v iops="$iops_4k_raw" -v bw="$bw_1m_raw" 'BEGIN {
-  if (iops >= 15000 || bw >= 1048576) {
-    print "Xuất sắc (Chuẩn NVMe Enterprise - Chịu tải cực cao cho WooCommerce & MariaDB)";
-  } else if (iops >= 3000 || bw >= 307200) {
-    print "Tốt (Chuẩn SSD Tiêu chuẩn - Vận hành mượt mà cho Website WordPress)";
-  } else if (iops >= 500 || bw >= 81920) {
-    print "Trung bình (SSD giới hạn IOPS hoặc Ceph Storage - Cần bật Object Cache Redis)";
+verdict_raw="$(LC_ALL=C awk -v iops="$iops_4k_raw" 'BEGIN {
+  if (iops >= 15000) {
+    print "Rất cao (mức NVMe)|Phù hợp WooCommerce, MariaDB tải lớn";
+  } else if (iops >= 3000) {
+    print "Tốt (mức SSD)|Phù hợp hầu hết website WordPress";
+  } else if (iops >= 500) {
+    print "Trung bình|SSD bị giới hạn IOPS hoặc storage mạng (Ceph)";
   } else {
-    print "Chậm / Nghẽn I/O (Ổ cứng HDD hoặc VPS bị bóp IOPS - Khuyến nghị bật LSCache/RAM)";
+    print "Thấp|Ổ chậm hoặc nhà cung cấp bóp IOPS, nên bật LSCache/Redis";
   }
 }')"
+IFS='|' read -r verdict_label verdict_note <<< "$verdict_raw"
+
+if [[ "$BENCH_ENGINE" == "dd" ]]; then
+  verdict_label="${verdict_label} - ước lượng bằng dd"
+fi
 
 printf '\n'
 _ui_box_top
@@ -706,7 +730,8 @@ _ui_box_center "${C_BOLD_WHITE:-}BÁO CÁO ĐÁNH GIÁ HIỆU SUẤT LƯU TRỮ 
 _ui_box_mid
 _ui_box_left "Hiệu năng Database (4K) : ${C_YELLOW:-}${str_4k_iops} IOPS${C_RESET:-} (Độ trễ trung bình: ${C_BOLD_WHITE:-}$(format_lat_val "$lat_4k_raw")${C_RESET:-})"
 _ui_box_left "Băng thông Tuần tự (1M) : ${C_GREEN:-}${str_1m_bw}${C_RESET:-} (Engine đo lường: ${C_CYAN:-}${BENCH_ENGINE^^}${C_RESET:-})"
-_ui_box_left "Xếp hạng Ổ cứng VPS     : ${C_YELLOW:-}${disk_verdict}${C_RESET:-}"
+_ui_box_left "Mức hiệu năng Ổ cứng    : ${C_YELLOW:-}${verdict_label}${C_RESET:-}"
+_ui_box_left "Nhận định               : ${verdict_note}"
 _ui_box_bot
 
 wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 0 "enter"
