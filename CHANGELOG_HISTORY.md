@@ -1,3 +1,14 @@
+## Phiên bản 8.2.4.6
+
+🐛 **Sửa lỗi**
+- **Khắc phục lỗi kiểm tra Preload Cache:** Nâng cấp cơ chế kiểm tra và xử lý ngoại lệ trong tiến trình nạp trước bộ nhớ đệm, giúp hệ thống vận hành chính xác và ngăn ngừa triệt để các lỗi phát sinh trong quá trình quét dữ liệu.
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến độ ổn định:** Tinh chỉnh các thuật toán kiểm tra lỗi và tối ưu hóa tiến trình nền, đảm bảo hiệu suất hoạt động liên tục, mượt mà và an toàn cho máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## Phiên bản 8.2.4.5
 
 🛠️ **Tối ưu hệ thống**
