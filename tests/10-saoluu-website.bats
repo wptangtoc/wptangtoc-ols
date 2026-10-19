@@ -286,6 +286,11 @@ EOF
   cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
   cat <<'EOF' >> /etc/wptt/core-functions
 wptt_check_mariadb() { return 1; }
+wptt_check_mariadb() {
+  printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
+  exit 1
+}
+
 EOF
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
