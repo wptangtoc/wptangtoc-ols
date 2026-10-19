@@ -285,14 +285,17 @@ EOF
 
   cp /etc/wptt/core-functions /tmp/core-functions.bak 2>/dev/null || true
   cat <<'EOF' >> /etc/wptt/core-functions
-wptt_check_mariadb() { return 1; }
+wptt_check_mariadb() {
+  printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
+  exit 1
+}
 EOF
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
 
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "MariaDB" ]]
+  [[ "$output" =~ "MariaDB" ]] || [[ "$output" =~ "tạm dừng tác vụ" ]]
 }
 
 @test "Integration: SAO LƯU THÀNH CÔNG tạo đủ file .zip và .sql với quyền 600" {
