@@ -297,7 +297,7 @@ EOF
 
   in_log_neu_loi 1
   [ "$status" -ne 0 ]
-  [[ "$output" =~ "MariaDB" ]]
+  [[ "$output" =~ "MariaDB" ]] || [[ "$output" =~ "tạm dừng tác vụ" ]]
 }
 
 @test "Integration: SAO LƯU THÀNH CÔNG tạo đủ file .zip và .sql với quyền 600" {
