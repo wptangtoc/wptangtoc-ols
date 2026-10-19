@@ -24,8 +24,8 @@ DEBUGURL='OFF'
 BLACKLIST='OFF'
 CRAWLQS='OFF'
 REPORT='OFF'
-CRAWLLOG='/tmp/crawler.log'
-BLACKLSPATH='/tmp/blk_crawler.txt'
+CRAWLLOG='/etc/wptt/tmp/crawler.log'
+BLACKLSPATH='/etc/wptt/tmp/blk_crawler.txt'
 CT_URLS=0
 CT_NOCACHE=0
 CT_CACHEHIT=0
@@ -113,7 +113,7 @@ EOF
     echow '-e, --escape'
     echo "${EPACE}${EPACE}To escape URL with perl, use this when your URL has special character."
     echow '-v, --verbose'
-    echo "${EPACE}${EPACE}Show complete response header under /tmp/crawler.log"
+    echo "${EPACE}${EPACE}Show complete response header under /etc/wptt/tmp/crawler.log"
     echow '-d, --debug-url'
     echo "${EPACE}${EPACE}Test one URL directly. sh cachecrawler.sh -v -d http://example.com/test.html"
     echow '-qs,--crawl-qs'
@@ -401,8 +401,6 @@ function validmap() {
     echo "========================================================================="
     echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
     echo "========================================================================="
-    wptangtoc 1
-
     exit 1
 
   else
@@ -419,9 +417,7 @@ function validmap() {
       echo "========================================================================="
       echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
       echo "========================================================================="
-      wptangtoc 1
       exit 1
-
     fi
     echoG "Kết với sitemap thành công \n"
   fi
