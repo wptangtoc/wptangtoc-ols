@@ -289,7 +289,6 @@ wptt_check_mariadb() {
   printf '[LỖI] MariaDB đang bị sập (mock)\n' >&2
   exit 1
 }
-
 EOF
 
   run bash "$SCRIPT_GOC" "$TEST_DOMAIN"
