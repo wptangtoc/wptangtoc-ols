@@ -3,6 +3,9 @@
 # @website: https://wptangtoc.com
 # @since: 2026
 # @email: giatuan@wptangtoc.com
+# @standard: Enterprise Big Upgrade (Adaptive Throttling & Zero-Subshell)
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 function huong_dan() {
   cat <<'EOF'
@@ -15,23 +18,126 @@ function huong_dan() {
 EOF
 }
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-if [[ -z "$ngon_ngu" ]]; then
+# shellcheck source=/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null || true
+if [[ -z "${ngon_ngu:-}" ]]; then
   ngon_ngu='vi'
 fi
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+. /etc/wptt/echo-color 2>/dev/null || true
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null || true
 
-NAME=$1
-if [[ $NAME = "98" ]]; then
+# =======================================================================
+# 0. QUẢN LÝ TÀI NGUYÊN TẠM & BẪY LỖI AN TOÀN (TRAP CLEANUP)
+# =======================================================================
+FAKE_HOSTS=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${FAKE_HOSTS:-}" && -f "$FAKE_HOSTS" ]]; then
+    case "$FAKE_HOSTS" in
+      /etc/wptt/tmp/*) /bin/rm -f -- "${FAKE_HOSTS:?}" ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# =======================================================================
+# HÀM ĐO LƯỜNG TÀI NGUYÊN SIÊU TỐC (PURE BASH BUILT-IN - ZERO SUBSHELL)
+# =======================================================================
+get_cpu_cores() {
+  local cores=0 line
+  if [[ -r /proc/cpuinfo ]]; then
+    while IFS= read -r line; do
+      [[ "$line" == processor* ]] && ((cores++))
+    done < /proc/cpuinfo
+  fi
+  ((cores == 0)) && cores=1
+  printf '%s' "$cores"
+}
+
+get_realtime_cpu_usage() {
+  local _cpu u1 n1 s1 i1 w1 x1 y1 z1 _rest1 u2 n2 s2 i2 w2 x2 y2 z2 _rest2
+  read -r _cpu u1 n1 s1 i1 w1 x1 y1 z1 _rest1 < /proc/stat
+  sleep 0.2
+  read -r _cpu u2 n2 s2 i2 w2 x2 y2 z2 _rest2 < /proc/stat
+
+  local idle1=$(( ${i1:-0} + ${w1:-0} ))
+  local idle2=$(( ${i2:-0} + ${w2:-0} ))
+  local total1=$(( ${u1:-0} + ${n1:-0} + ${s1:-0} + ${i1:-0} + ${w1:-0} + ${x1:-0} + ${y1:-0} + ${z1:-0} ))
+  local total2=$(( ${u2:-0} + ${n2:-0} + ${s2:-0} + ${i2:-0} + ${w2:-0} + ${x2:-0} + ${y2:-0} + ${z2:-0} ))
+
+  local diff_idle=$((idle2 - idle1))
+  local diff_total=$((total2 - total1))
+  if ((diff_total <= 0)); then
+    printf '0'
+    return 0
+  fi
+  local usage=$(( (100 * (diff_total - diff_idle)) / diff_total ))
+  ((usage < 0)) && usage=0
+  ((usage > 100)) && usage=100
+  printf '%s' "$usage"
+}
+
+get_ram_stats() {
+  local key val _unit total=0 avail=0 free_mem=0 buffers=0 cached=0
+  while read -r key val _unit; do
+    case "$key" in
+      MemTotal:) total="${val:-0}" ;;
+      MemAvailable:) avail="${val:-0}" ;;
+      MemFree:) free_mem="${val:-0}" ;;
+      Buffers:) buffers="${val:-0}" ;;
+      Cached:) cached="${val:-0}" ;;
+    esac
+  done < /proc/meminfo
+
+  if ((avail == 0)); then
+    avail=$((free_mem + buffers + cached))
+  fi
+  local used_pct=0
+  if ((total > 0)); then
+    used_pct=$(( (total - avail) * 100 / total ))
+  fi
+  local avail_mb=$((avail / 1024))
+  printf '%s %s' "$used_pct" "$avail_mb"
+}
+
+adaptive_throttle_check() {
+  local cores="${1:-1}"
+  local load1 _rest load_int
+  read -r load1 _rest < /proc/loadavg
+  load_int="${load1%%.*}"
+  [[ ! "$load_int" =~ ^[0-9]+$ ]] && load_int=0
+
+  local ram_used_pct ram_avail_mb
+  read -r ram_used_pct ram_avail_mb <<< "$(get_ram_stats)"
+
+  if ((ram_avail_mb < 64 || load_int >= cores * 2)); then
+    printf "\r\033[K      \033[0;31m[Bảo vệ Server]\033[0m Tải cao (Load: %s, RAM trống: %sMB) -> Tạm nghỉ 8s...\n" "$load1" "$ram_avail_mb"
+    sleep 8
+  elif ((ram_used_pct > 85 || load_int >= cores)); then
+    sleep 2
+  fi
+}
+
+# =======================================================================
+# 1. XÁC THỰC ĐẦU VÀO & ĐIỀU HƯỚNG MENU
+# =======================================================================
+NAME="${1:-}"
+if [[ "$NAME" = "98" ]]; then
   NAME=""
 fi
 
-if [[ "$NAME" ]]; then
-  if [ "$NAME" = "${NAME/./}" ]; then
+if [[ -n "$NAME" && "$NAME" != "Tất cả website" ]]; then
+  if [[ "$NAME" = "${NAME/./}" ]] || [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]] || [[ "$NAME" == -* ]] || [[ "$NAME" == *..* ]]; then
     clear
-    _runloi "$domain_nhap_khong_dung_dinh_dang"
+    _runloi "${domain_nhap_khong_dung_dinh_dang:-Domain tên miền nhập không đúng định dạng}"
     wptt_quay_ve_menu "${1:-}" 1
   fi
 fi
@@ -41,126 +147,160 @@ if [[ -z "$NAME" ]]; then
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}PRELOAD CACHE${C_RESET}"
   echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  # shellcheck source=/dev/null
   . /etc/wptt/tenmien-them-lua-chon-tat-ca-website
   lua_chon_NAME "preload cache"
 
-  if [[ "$NAME" = "0" || -z "$NAME" ]]; then
+  if [[ "${NAME:-}" = "0" || -z "${NAME:-}" ]]; then
     wptt_quay_ve_menu "${1:-}" 1
   fi
 fi
 
-# Xử lý khi chọn Tất cả website
-if [[ $NAME = 'Tất cả website' ]]; then
-  if [[ -n $(find /etc/wptt/vhost -mindepth 1 -maxdepth 1 -type f ! -name '..conf' -print -quit 2>/dev/null) ]]; then
-    for filepath in /etc/wptt/vhost/.*.conf; do
-      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+if [[ "$NAME" = 'Tất cả website' ]]; then
+  shopt -s nullglob
+  vhost_files=(/etc/wptt/vhost/.*.conf)
+  shopt -u nullglob
 
-      domain="${filepath##*/}" #cắt hết / ở phía truớc chỉ dữ giá trị / ở sau còn dữ lại như: .wptangtoc.com.conf
-      domain="${domain%.conf}" #cắt .conf ở phía sau => còn: .wptangtoc.com
-      domain="${domain#.}"     #cắt . ở phía truớc => còn wptangtoc.com
+  for filepath in "${vhost_files[@]}"; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"/...conf" ]] && continue
 
-      if [[ "$domain" != ?*.?* ]]; then #yêu cầu phải có dấu . trong domain thì mới gọi là domain đúng, nếu không có . thì continue nhảy qua for
-        continue
-      fi
-      path_html="/usr/local/lsws/$domain/html"
-      if [ "$domain" != "${domain/./}" ] && [ "$domain" != '.' ]; then
-        if [[ -d "$path_html" ]]; then
-          (/etc/wptt/wptt-preload-cache2 "$domain")
-        fi
-      fi
-    done
-  fi
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+
+    [[ "$domain" != ?*.?* || ! "$domain" =~ ^[a-zA-Z0-9._-]+$ ]] && continue
+    path_html="/usr/local/lsws/$domain/html"
+    if [[ -d "$path_html" ]]; then
+      /bin/bash /etc/wptt/wptt-preload-cache2 "$domain"
+      sleep 2
+    fi
+  done
   wptt_quay_ve_menu "${1:-}" 0
 fi
 
-if [[ ! -f /etc/wptt/vhost/.$NAME.conf ]]; then
+if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
   clear
   _runloi "Tên miền không tồn tại trên hệ thống này"
   wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-wptt_logs "INFO" "Preload website $NAME "
+wptt_logs "INFO" "Preload website $NAME"
+
+# shellcheck source=/dev/null
+. "/etc/wptt/vhost/.$NAME.conf"
 
 domain="$NAME"
-if [[ $ip_domain ]]; then
-  domain_ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com)
-  [[ -n "$domain_ip" ]] && domain=$(echo "$domain_ip" | grep -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}') || domain="$NAME"
+if [[ -n "${ip_domain:-}" ]]; then
+  domain_ip=$(curl -skf --connect-timeout 5 --max-time 10 https://ipv4.icanhazip.com || curl -skf --connect-timeout 5 --max-time 10 https://checkip.amazonaws.com || true)
+  if [[ "$domain_ip" =~ ([0-9]{1,3}\.){3}[0-9]{1,3} ]]; then
+    domain="${BASH_REMATCH[0]}"
+  fi
 fi
 
 echo ""
-_runing "Kiểm tra kết nối cho website: $NAME"
+TASK_CONN="Kiểm tra kết nối cho website: $NAME"
+_runing "$TASK_CONN"
 
-checkssl=$(curl -kIs https://"${domain}" --connect-to "${domain}::127.0.0.1:443" --connect-to "${domain}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | head -n 1 | grep -c "200")
-checkssl2=$(curl -kIs http://"${domain}" --connect-to "${domain}::127.0.0.1:443" --connect-to "${domain}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | head -n 1 | grep -c "200")
-checkssl3=$(curl -kIs https://www."${domain}" --connect-to "${domain}::127.0.0.1:443" --connect-to "${domain}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | head -n 1 | grep -c "200")
-checkssl4=$(curl -kIs http://www."${domain}" --connect-to "${domain}::127.0.0.1:443" --connect-to "${domain}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | head -n 1 | grep -c "200")
+# =======================================================================
+# KIỂM TRA KẾT NỐI HTTP / HTTPS CHÍNH XÁC TUYỆT ĐỐI (PORT 80 -> 80, 443 -> 443)
+# =======================================================================
+# Không dùng -L (follow redirect) ở bước dò để biết chính xác giao thức gốc không bị 301
+probe_direct_200() {
+  local target_url="$1"
+  local base_dom="${2#www.}"
+  local code
+  code=$(curl -kIs -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+    --connect-to "${base_dom}:443:127.0.0.1:443" \
+    --connect-to "www.${base_dom}:443:127.0.0.1:443" \
+    --connect-to "${base_dom}:80:127.0.0.1:80" \
+    --connect-to "www.${base_dom}:80:127.0.0.1:80" \
+    -A "WPTangToc OLS preload cache" "$target_url" 2>/dev/null || true)
+  [[ "$code" == "200" ]]
+}
 
-if [[ "$checkssl" = "0" && "$checkssl2" = "0" && "$checkssl3" = "0" && "$checkssl4" = "0" ]]; then
-  _runloi "Website $NAME ngưng hoạt động hoặc không phản hồi nội bộ."
+# Hàm dùng cho Sitemap (Cho phép follow redirect tối đa 3 lần nếu sitemap.xml redirect sang wp-sitemap.xml)
+probe_sitemap_200() {
+  local target_url="$1"
+  local base_dom="${2#www.}"
+  local code
+  code=$(curl -kIs -L --max-redirs 3 -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+    --connect-to "${base_dom}:443:127.0.0.1:443" \
+    --connect-to "www.${base_dom}:443:127.0.0.1:443" \
+    --connect-to "${base_dom}:80:127.0.0.1:80" \
+    --connect-to "www.${base_dom}:80:127.0.0.1:80" \
+    -A "WPTangToc OLS preload cache" "$target_url" 2>/dev/null || true)
+  [[ "$code" == "200" ]]
+}
+
+ssl="http"
+if [[ -f /etc/wptt/ssl/check-ssl-cert-con-kha-dung ]]; then
+  if /bin/bash /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$NAME" >/dev/null 2>&1; then
+    ssl="https"
+  fi
+fi
+
+conn_ok=0
+if probe_direct_200 "${ssl}://${domain}/" "$domain"; then
+  conn_ok=1
+elif probe_direct_200 "${ssl}://www.${domain#www.}/" "$domain"; then
+  conn_ok=1
+  domain="www.${domain#www.}"
+else
+  # Nếu giao thức dự kiến bị 301/302 (ví dụ HTTP redirect sang HTTPS hoặc ngược lại), thử giao thức đối lập
+  alt_ssl="https"
+  [[ "$ssl" == "https" ]] && alt_ssl="http"
+  if probe_direct_200 "${alt_ssl}://${domain}/" "$domain"; then
+    conn_ok=1
+    ssl="$alt_ssl"
+  elif probe_direct_200 "${alt_ssl}://www.${domain#www.}/" "$domain"; then
+    conn_ok=1
+    ssl="$alt_ssl"
+    domain="www.${domain#www.}"
+  fi
+fi
+
+if ((conn_ok == 0)); then
+  _runloi "$TASK_CONN"
+  echo -e "${C_RED}Website $NAME ngưng hoạt động hoặc không phản hồi nội bộ.${C_RESET}"
   wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
-_rundone "Kiểm tra kết nối"
+_rundone "$TASK_CONN"
 
-. /etc/wptt/vhost/."$NAME".conf
-if [[ $vhost_chuyen_htaccess ]]; then
-  check=$(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | sed -e '/^context/,/^}$/!d' | sed -e '/rewrite/,/^}$/!d')
-else
-  check=$(cat /usr/local/lsws/"$NAME"/html/.htaccess)
+check=""
+if [[ -n "${vhost_chuyen_htaccess:-}" && -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" ]]; then
+  check=$(sed -e '/^context/,/^}$/!d' -e '/rewrite/,/^}$/!d' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null || true)
+elif [[ -f "/usr/local/lsws/$NAME/html/.htaccess" ]]; then
+  check=$(<"/usr/local/lsws/$NAME/html/.htaccess")
 fi
 
 NAME_path="$NAME"
-if [[ "$checkssl3" = "1" || "$checkssl4" = "1" ]]; then
-  domain=$(echo www."${domain}")
-fi
 
-ssl="http"
-[[ "$checkssl" = "1" || "$checkssl3" = "1" ]] && ssl="https"
-
-grepmobile=$(echo "$check" | grep -c Android)
-grepwebp=$(echo "$check" | grep -c "+webp")
+grepmobile=0
+[[ "$check" == *"Android"* ]] && grepmobile=1
+grepwebp=0
+[[ "$check" == *"+webp"* ]] && grepwebp=1
 
 # =======================================================================
 # 2. TÌM KIẾM SITEMAP & PHÂN LOẠI CÔNG NGHỆ CACHE
 # =======================================================================
-_runing "Đang quét cấu trúc Sitemap..."
+TASK_SITEMAP="Đang quét cấu trúc Sitemap..."
+_runing "$TASK_SITEMAP"
 sitemap_paths=("/sitemap_index.xml" "/sitemap.xml" "/wp-sitemap.xml" "/sitemaps.xml")
 
-check_sitemap() {
-  local domain="$1"
-
-  local ssl="$2"
-  local path="$3"
-  local full_url="${ssl}://${domain}${path}"
-
-  # tuong thích với www preload cache
-  if [[ "$domain" == www.* ]]; then
-    # local domain=$(echo "$domain" | sed 's/^www.//g')
-    local domain="${domain#www.}" #loại bỏ www. ở đầu
-  fi
-
-  # Sử dụng --connect-to thay vì --connect-to
-  local check_http_200=$(curl -kIs "$full_url" --connect-to "${domain}::127.0.0.1:443" --connect-to "${domain}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | head -n 1 | grep -c "200")
-
-  if [[ "$check_http_200" != "0" ]]; then
-    return 0 # Thành công
-  else
-    return 1 # Thất bại
-  fi
-}
-
 found_sitemap=false
+NAME2=""
 
 for path in "${sitemap_paths[@]}"; do
-  if check_sitemap "$domain" "$ssl" "$path"; then
+  if probe_sitemap_200 "${ssl}://${domain}${path}" "$domain"; then
     found_sitemap=true
     NAME2="${ssl}://${domain}${path}"
-    break # Thoát vòng lặp khi tìm thấy sitemap
+    break
   fi
 done
 
 spider_mode=false
 if ! "$found_sitemap"; then
-  _runloi "$khong_xac_dinh_duoc sitemap website $NAME"
+  _runloi "${khong_xac_dinh_duoc:-Không xác định được} sitemap website $NAME"
   echo -e "    ➜ ${C_YELLOW}Tự động kích hoạt chế độ Spider Crawl${C_RESET}"
   spider_mode=true
 else
@@ -169,18 +309,17 @@ fi
 
 # Xác định công cụ Cache
 cong_cu=""
-grep=$(echo "$check" | grep -c LiteSpeed)
-if [[ "$grep" = "0" ]]; then
+if [[ "$check" != *[Ll]ite[Ss]peed* ]]; then
   pluginsspeed=(cache-enabler fast-velocity-minify wp-rocket w3-total-cache wp-super-cache wp2speed nitropack wp-fastest-cache hummingbird-performance swift-performance-lite swift-performance-pro breeze wp-meteor phastpress flying-press simple-cache powered-cache yasakani-cache batcache sg-cachepress cloudflare wp-optimize)
   for plugintt in "${pluginsspeed[@]}"; do
     pathcheckplugin3="/usr/local/lsws/${NAME_path}/html/wp-content/plugins/$plugintt"
     if [[ -d "$pathcheckplugin3" ]]; then
-      plugintt2=$(echo "$plugintt" | sed 's/-/ /g')
+      plugintt2="${plugintt//-/ }"
       echo -e "${C_GREEN}Xác nhận bạn đang sử dụng công nghệ cache: ${C_YELLOW}$plugintt2${C_RESET}"
       cong_cu="wptt-preload-cache-all.sh"
     fi
   done
-  if [[ -f /usr/local/lsws/"${NAME_path}"/html/wp-content/plugins/wptangtoc/class/Cache.php ]]; then
+  if [[ -f "/usr/local/lsws/${NAME_path}/html/wp-content/plugins/wptangtoc/class/Cache.php" ]]; then
     echo -e "${C_GREEN}Đang sử dụng hệ thống WPTangToc Cache${C_RESET}"
     cong_cu="wptt-preload-cache-all.sh"
   fi
@@ -194,20 +333,31 @@ else
 fi
 
 # =======================================================================
-# 3. KIỂM TRA TÀI NGUYÊN HỆ THỐNG TRƯỚC KHI CHẠY (BẢO VỆ SERVER)
+# 3. KIỂM TRA & TỰ ĐỘNG ĐIỀU TIẾT TÀI NGUYÊN HỆ THỐNG (ADAPTIVE PREFLIGHT)
 # =======================================================================
-ps -ef | grep -v grep | grep 'bash' | grep '/etc/wptt' | grep -E 'wptt-preload-cache-all.sh' | grep "$NAME" | awk '{print $2}' | xargs kill -9 >/dev/null 2>&1
+pkill -f "wptt-preload-cache-all.sh.*${domain}" >/dev/null 2>&1 || true
 
-cpu_su_dung=$(grep 'cpu ' /proc/stat | awk '{usage=($2+$4)*100/($2+$4+$5)} END {print usage "%"}' | cut -f1 -d '.')
-if [[ -n $cpu_su_dung ]] && ((cpu_su_dung > 85)); then
+CPU_CORES=$(get_cpu_cores)
+cpu_su_dung=$(get_realtime_cpu_usage)
+read -r ram_sudung ram_avail_mb <<< "$(get_ram_stats)"
+
+CRAWL_INTERVAL="0.3"
+SPIDER_WAIT="1"
+
+if ((cpu_su_dung > 92)); then
   _runloi "Cảnh báo: CPU đang quá tải ($cpu_su_dung%). Tạm dừng để bảo vệ server."
   wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-ram_sudung=$(free | grep Mem | awk '{print $3/$2 * 100.0}' | cut -f1 -d '.')
-if [[ -n $ram_sudung ]] && ((ram_sudung > 85)); then
+if ((ram_sudung > 92 && ram_avail_mb < 64)); then
   _runloi "Cảnh báo: RAM đang đầy ($ram_sudung%). Tạm dừng để bảo vệ server."
   wptt_quay_ve_menu "${1:-}" 1 "enter"
+fi
+
+if ((ram_avail_mb < 256 || cpu_su_dung > 70 || ram_sudung > 75)); then
+  CRAWL_INTERVAL="1.2"
+  SPIDER_WAIT="2"
+  echo -e "${C_YELLOW}⚡ Phát hiện máy chủ đang bận (CPU: ${cpu_su_dung}%, RAM: ${ram_sudung}%) -> Tự động kích hoạt chế độ Tiết kiệm Tài nguyên (Interval: ${CRAWL_INTERVAL}s).${C_RESET}"
 fi
 
 # =======================================================================
@@ -218,94 +368,113 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}TIẾN TRÌNH PRELOAD ĐANG CHẠY${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-if [ "$spider_mode" = false ]; then
-  # TRƯỜNG HỢP 1: CÓ SITEMAP (CHẠY TOOL WPTANGTOC OLS vs LiteSpeed Webserver)
-  if [[ "$grepmobile" != "0" ]]; then
-    left_text "  ➜ Tạo cache Mobile giao diện..." 2
-    check_run='1'
-    ionice -c 3 nice -n 19 bash /etc/wptt/$cong_cu -i 0.5 -m -g "${NAME2}"
-    trang_thai_bao_loi_preload_cache=$?
-  fi
-  if [[ "$grepwebp" != "0" ]]; then
-    left_text "  ➜ Tạo cache WebP định dạng..." 2
-    check_run='1'
-    ionice -c 3 nice -n 19 bash /etc/wptt/$cong_cu -i 0.5 -w "${NAME2}"
-    trang_thai_bao_loi_preload_cache=$?
-  fi
-  if [[ -z "$check_run" ]]; then
+trang_thai_bao_loi_preload_preload_cache=0
+
+if [[ "$spider_mode" = false ]]; then
+  crawler_args=("-i" "$CRAWL_INTERVAL")
+
+  if ((grepmobile != 0)); then
+    left_text "  ➜ Tạo cache Mobile & Desktop giao diện..." 2
+    crawler_args+=("-m" "-g")
+  else
     left_text "  ➜ Tạo cache mặc định..." 2
-    ionice -c 3 nice -n 19 bash /etc/wptt/$cong_cu -i 0.5 "${NAME2}"
-    trang_thai_bao_loi_preload_cache=$?
   fi
+
+  if ((grepwebp != 0)); then
+    left_text "  ➜ Kích hoạt luồng nạp bộ nhớ đệm định dạng WebP..." 2
+    crawler_args+=("-w")
+  fi
+
+  ionice -c 3 nice -n 19 /bin/bash "/etc/wptt/$cong_cu" "${crawler_args[@]}" "${NAME2}" || trang_thai_bao_loi_preload_cache=$?
+
 else
-  # TRƯỜNG HỢP 2: KHÔNG CÓ SITEMAP (WGET ĐỆ QUY GET + CHỐNG DDOS + REAL-TIME UI + LOCALHOST ROUTING)
   UA_DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
   UA_MOBILE="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) Version/16.0 Mobile/15E148"
   HEADER_WEBP="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
 
-  # Biểu thức Regex chặn rác tuyệt đối
   REGEX_REJECT="(wp-content|wp-includes|/wp-admin/|/wp-json/|/feed/|\.php|\.png|\.jpg|\.jpeg|\.gif|\.css|\.js|\.svg|\.woff|\.zip|p=|replytocom=|attachment_id=|s=|add-to-cart=|/%20|add_to_wishlist=|add_to_compare=|add-to-wishlist|tel:|action=|filtera-kich-thuoc=|product-cato=|price=|designId=|wmc-currency=)"
 
-  # Tạo file hosts ảo (Chỉ dành riêng cho tiến trình này)
-  FAKE_HOSTS="/tmp/wptt_hosts_fake_${domain}.tmp"
-  cp /etc/hosts "$FAKE_HOSTS"
-  echo -e "127.0.0.1\t${domain}\n127.0.0.1\twww.${domain}" >>"$FAKE_HOSTS"
+  /bin/mkdir -p /etc/wptt/tmp
+  chmod 700 /etc/wptt/tmp
+  FAKE_HOSTS=$(mktemp -p /etc/wptt/tmp "wptt_hosts_fake_${NAME}.XXXXXX")
+  /bin/cp -f -- /etc/hosts "$FAKE_HOSTS"
+  printf "127.0.0.1\t%s\n127.0.0.1\twww.%s\n" "${domain#www.}" "${domain#www.}" >>"$FAKE_HOSTS"
+  chmod 644 "$FAKE_HOSTS"
 
-  # Cờ Tối Ưu Wget: BỎ -nv để lấy log chi tiết nhằm bắt trạng thái "Đang tải"
-  CMD_WGET="ionice -c 3 nice -n 19 wget -r -l 3 -nd --delete-after -w 1 -T 5 -t 1 --domains=${domain} --no-check-certificate --reject-regex=\"$REGEX_REJECT\""
-
-  # Hàm xử lý in log thời gian thực (Real-time UI)
   process_spider_log() {
-    local current_url=""
-    while read -r line; do
-      # 1. Bắt lấy dòng "Đang chuẩn bị tải" của Wget
-      if echo "$line" | grep -qE "^--[0-9 :-]+--  http"; then
-        current_url=$(echo "$line" | sed -E 's/^--[0-9 :-]+--  //')
-
-        # Lọc rác bảo hiểm thêm lần nữa
-        if ! echo "$current_url" | grep -i -qE "$REGEX_REJECT"; then
-          # Tuyệt kỹ \r và \033[K: Ghi đè dòng hiện tại tạo hiệu ứng loading động
+    local current_url="" line url_count=0
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^--[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9:]+--\ \ (https?://.+) ]]; then
+        current_url="${BASH_REMATCH[1]}"
+        if [[ ! "${current_url,,}" =~ $REGEX_REJECT ]]; then
           printf "\r\033[K      \033[0;33mĐang quét:\033[0m \033[0;36m%s\033[0m" "$current_url"
         else
           current_url=""
         fi
-
-      # 2. Bắt lấy dòng "Tải thành công" (Báo HTTP 200 OK)
-      elif echo "$line" | grep -q "200 OK"; then
+      elif [[ "$line" == *"200 OK"* ]]; then
         if [[ -n "$current_url" ]]; then
-          # Ghi đè dòng "Đang quét" thành "Đã nạp" và bắt buộc xuống dòng (\n)
           printf "\r\033[K      \033[0;32mĐã nạp Cache:\033[0m %s\n" "$current_url"
-          current_url="" # Reset lại biến để đón link tiếp theo
+          current_url=""
+          ((url_count++))
+          if ((url_count % 10 == 0)); then
+            adaptive_throttle_check "$CPU_CORES"
+          fi
         fi
       fi
     done
-    echo "" # Đẩy thêm 1 dòng trống khi kết thúc để không dính chữ
+    echo ""
+  }
+
+  run_spider_pass() {
+    local ua="$1"
+    local extra_header="${2:-}"
+    local wget_args=(
+      -r -l 3 -nd --delete-after
+      -w "$SPIDER_WAIT" -T 5 -t 1
+      "--domains=${domain}"
+      --no-check-certificate
+      "--reject-regex=${REGEX_REJECT}"
+      -U "$ua"
+    )
+    [[ -n "$extra_header" ]] && wget_args+=("--header=$extra_header")
+    wget_args+=("${ssl}://${domain}/")
+
+    if unshare -m true 2>/dev/null; then
+      unshare -m /bin/bash -c '
+        mount --bind "$1" /etc/hosts 2>/dev/null || true
+        shift
+        exec ionice -c 3 nice -n 19 wget "$@"
+      ' _ "$FAKE_HOSTS" "${wget_args[@]}" 2>&1 | process_spider_log
+    else
+      ionice -c 3 nice -n 19 wget "${wget_args[@]}" 2>&1 | process_spider_log
+    fi
   }
 
   left_text "  ➜ Cào liên kết chế độ mặc định" 2
-  unshare -m bash -c "mount --bind '$FAKE_HOSTS' /etc/hosts && $CMD_WGET -U '$UA_DESKTOP' '${ssl}://${domain}/'" 2>&1 | process_spider_log
-  trang_thai_bao_loi_preload_cache=$?
-  if [[ "$grepmobile" != "0" ]]; then
+  run_spider_pass "$UA_DESKTOP" "" || trang_thai_bao_loi_preload_cache=$?
+
+  if ((grepmobile != 0)); then
     left_text "  ➜ Cào liên kết chế độ Mobile" 2
-    unshare -m bash -c "mount --bind '$FAKE_HOSTS' /etc/hosts && $CMD_WGET -U '$UA_MOBILE' '${ssl}://${domain}/'" 2>&1 | process_spider_log
-    trang_thai_bao_loi_preload_cache=$?
+    run_spider_pass "$UA_MOBILE" "" || trang_thai_bao_loi_preload_cache=$?
   fi
 
-  if [[ "$grepwebp" != "0" ]]; then
+  if ((grepwebp != 0)); then
     left_text "  ➜ Cào liên kết chế độ WebP" 2
-    unshare -m bash -c "mount --bind '$FAKE_HOSTS' /etc/hosts && $CMD_WGET -U '$UA_DESKTOP' --header='$HEADER_WEBP' '${ssl}://${domain}/'" 2>&1 | process_spider_log
-    trang_thai_bao_loi_preload_cache=$?
+    run_spider_pass "$UA_DESKTOP" "$HEADER_WEBP" || trang_thai_bao_loi_preload_cache=$?
   fi
 
-  rm -f "${FAKE_HOSTS:?}"
+  if [[ -n "$FAKE_HOSTS" && -f "$FAKE_HOSTS" ]]; then
+    /bin/rm -f -- "${FAKE_HOSTS:?}"
+    FAKE_HOSTS=""
+  fi
 fi
 
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
-if [ "$trang_thai_bao_loi_preload_cache" -eq 0 ]; then
-	_rundone "Preload cache thành công cho website: $NAME"
+if [[ "${trang_thai_bao_loi_preload_cache:-0}" -eq 0 ]]; then
+  _rundone "Preload cache thành công cho website: $NAME"
 else
-	_runloi "Preload cache thất bại website: $NAME"
+  _runloi "Preload cache thất bại website: $NAME"
 fi
 
 wptt_quay_ve_menu "${1:-}" "${trang_thai_bao_loi_preload_cache:-0}" "enter"

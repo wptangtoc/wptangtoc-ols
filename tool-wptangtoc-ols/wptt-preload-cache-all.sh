@@ -1,22 +1,24 @@
 #!/bin/bash
-#Author          :LiteSpeedtech & Gia Tuấn
-#date            :19-10-2026
-#version         :2.0.2
-#Require         :Prepare site map XML
-#                 Allow LSCache crawler
-#thư viện để phục vụ tính năng preload cache
+# thư viện LiteSpeedtech fork lại bởi Gia Tuấn
+# Author          : LiteSpeedtech & Gia Tuấn
+# Date            : 20-10-2026
+# Version         : 3.0.2
+# Require         : Prepare sitemap XML & Allow LSCache crawler
+# Description     : Thư viện lõi Preload Cache hiệu năng cao (Zero-Subshell & Adaptive Load Governor)
 #=======================================================
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 AGENTDESKTOP='User-Agent: lscache_runner'
 AGENTMOBILE='User-Agent: lscache_runner iPhone'
-SVALUE="0.1"
+SVALUE="0.2"
 WITH_MOBILE='OFF'
 WITH_COOKIE='OFF'
 COOKIE=''
 CUSTUM_COOKIE=''
 WITH_WEBP=''
 XML_LIST=()
-CURL_OPTS=''
+CURL_OPTS='--http1.1'
 PROTECTOR='OFF'
 ESCAPE='OFF'
 VERBOSE='OFF'
@@ -24,6 +26,8 @@ DEBUGURL='OFF'
 BLACKLIST='OFF'
 CRAWLQS='OFF'
 REPORT='OFF'
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+chmod 700 /etc/wptt/tmp 2>/dev/null || true
 CRAWLLOG='/etc/wptt/tmp/crawler.log'
 BLACKLSPATH='/etc/wptt/tmp/blk_crawler.txt'
 CT_URLS=0
@@ -34,8 +38,16 @@ CT_BLACKLIST=0
 CT_FAILCACHE=0
 DETECT_NUM=0
 DETECT_LIMIT=10
-ERR_LIST="'400'|'401'|'403'|'404'|'407|'500'|'502'"
+ERR_LIST="'400'|'401'|'403'|'404'|'407'|'500'|'502'"
 EPACE='        '
+
+SYS_CORES=0
+if [[ -r /proc/cpuinfo ]]; then
+  while IFS= read -r _line; do
+    [[ "$_line" == processor* ]] && ((SYS_CORES++))
+  done < /proc/cpuinfo
+fi
+((SYS_CORES == 0)) && SYS_CORES=1
 
 function echoY {
   echo -e "\033[38;5;41m${1}\033[39m"
@@ -54,7 +66,6 @@ function echoCYAN {
   shift
   echo -e "\033[1;36m$FLAG\033[0m$*"
 }
-
 function echow {
   local FLAG="$1"
   shift
@@ -62,8 +73,7 @@ function echow {
 }
 
 function help_message() {
-  case ${1} in
-
+  case "${1:-}" in
   "1")
     cat <<EOF
         Server crawler engine not enabled. Please check
@@ -73,94 +83,65 @@ EOF
     ;;
   "2")
     echo -e "\033[1mIMPORTANT\033[0m"
-    echow 'Valid xml file and allow LSCache cawler are needed'
-
+    echow 'Valid xml file and allow LSCache crawler are needed'
     echo -e "\033[1mEXAMPLE\033[0m"
     echow "0. bash cachecrawler.sh -h                 ## help"
     echow "1. bash cachecrawler.sh SITE-MAP-URL       ## When desktop and mobile share same theme"
     echow "2. bash cachecrawler.sh -m SITE-MAP-URL    ## When desktop & mobile have different theme"
     echow "3. bash cachecrawler.sh -g -m SITE-MAP-URL ## Use general user-agent when mobile view not working"
-    echow "4. bash cachecrawler.sh -c SITE-MAP-URL    ## For brining cookies case"
-    echow "5. bash cachecrawler.sh -b -c SITE-MAP-URL ## For brining cookies case and blacklist check"
-
-    echo -e "\033[1mDEBUG EXAMPLE\033[0m"
-    echow "1. bash cachecrawler.sh -v SITE-MAP-URL    ## To output details to crawler log"
-    echow "2. bash cachecrawler.sh -d SITE-URL        ## Debug one URL directly"
-    echow "3. bash cachecrawler.sh -b -c -d SITE-URL  ## Debug one URL with cookies and blacklist check"
-
-    echo -e "\033[1mSITE MAP EXAMPLE\033[0m"
-    echow "0. http://magento.com/sitemap.xml"
-    echo "${EPACE}${EPACE}Please check LiteSpeed doc here for more information:"
-    echoB "${EPACE}${EPACE}https://docs.litespeedtech.com/lscache/lscps/crawler/"
-
-    echo -e "\033[1mOPTIONAL ARGUMENTS\033[0m"
-    echow '-h, --help'
-    echo "${EPACE}${EPACE}Show this message and exit"
-    echow '-m, --with-mobile'
-    echo "${EPACE}${EPACE}Crawl mobile view in addition to default view"
-    echow '-c, --with-cookie'
-    echo "${EPACE}${EPACE}Crawl with site's cookies"
-    echow '-cc, --custom-cookie'
-    echo "${EPACE}${EPACE}Crawl with site's cookies and custom cookie"
-    echow '-w, --webp'
-    echo "${EPACE}${EPACE}Crawl with webp header"
-    echow '-b, --black-list'
-    echo "${EPACE}${EPACE}Page will be added to black list if html status error and no cache. Next run will bypas page"
-    echow '-g, --general-ua'
-    echo "${EPACE}${EPACE}Use general user-agent instead of lscache_runner"
-    echow '-i, --interval'
-    echo "${EPACE}${EPACE}Change request interval. '-i 0.2' changes from default 0.1s to 0.2s"
-    echow '-e, --escape'
-    echo "${EPACE}${EPACE}To escape URL with perl, use this when your URL has special character."
-    echow '-v, --verbose'
-    echo "${EPACE}${EPACE}Show complete response header under /etc/wptt/tmp/crawler.log"
-    echow '-d, --debug-url'
-    echo "${EPACE}${EPACE}Test one URL directly. sh cachecrawler.sh -v -d http://example.com/test.html"
-    echow '-qs,--crawl-qs'
-    echo "${EPACE}${EPACE}Crawl sitemap, including URLS with query strings"
-    echow '-r, --report'
-    echo "${EPACE}${EPACE}Display total count of crawl result"
+    echow "4. bash cachecrawler.sh -c SITE-MAP-URL    ## For bringing cookies case"
+    echow "5. bash cachecrawler.sh -b -c SITE-MAP-URL ## For bringing cookies case and blacklist check"
     ;;
   esac
   exit 1
 }
 
-function checkcurlver() {
-  curl --help | grep 'Use HTTP 2' >/dev/null
-  if [ ${?} = 0 ]; then
-    CURL_OPTS='--http1.1'
-  fi
-}
-### Curl with version1 only
-checkcurlver
+function adaptive_governor() {
+  local load1 _rest load_int
+  read -r load1 _rest < /proc/loadavg
+  load_int="${load1%%.*}"
+  [[ ! "$load_int" =~ ^[0-9]+$ ]] && load_int=0
 
-function excludecookie() {
-  ### Check if cloudflare
-  if [[ $(echo "${1}" | grep -i 'Server: cloudflare') ]]; then
-    CURLRESULT=$(echo "${1}" | grep -Ev 'Set-Cookie.*__cfduid')
+  local key val _unit total=0 avail=0 free_mem=0 buffers=0 cached=0
+  while read -r key val _unit; do
+    case "$key" in
+      MemTotal:) total="${val:-0}" ;;
+      MemAvailable:) avail="${val:-0}" ;;
+      MemFree:) free_mem="${val:-0}" ;;
+      Buffers:) buffers="${val:-0}" ;;
+      Cached:) cached="${val:-0}" ;;
+    esac
+  done < /proc/meminfo
+  ((avail == 0)) && avail=$((free_mem + buffers + cached))
+  local avail_mb=$((avail / 1024))
+
+  if ((avail_mb < 64 || load_int >= SYS_CORES * 2)); then
+    echoR "   [Bảo vệ VPS] Máy chủ đang chịu tải cao (Load: ${load1}, RAM trống: ${avail_mb}MB) -> Tạm dừng 6s..."
+    sleep 6
+  elif ((avail_mb < 150 || load_int >= SYS_CORES)); then
+    sleep 1.5
   fi
 }
 
 function duplicateck() {
-  grep -w "${1}" ${2} >/dev/null 2>&1
+  grep -qxF -- "${1}" "${2}" >/dev/null 2>&1
 }
 
 function cachecount() {
-  if [ ${1} = 'miss' ]; then
-    CT_CACHEMISS=$((CT_CACHEMISS + 1))
-  elif [ ${1} = 'hit' ]; then
-    CT_CACHEHIT=$((CT_CACHEHIT + 1))
-  elif [ ${1} = 'no' ]; then
-    CT_NOCACHE=$((CT_NOCACHE + 1))
-  elif [ ${1} = 'black' ]; then
-    CT_BLACKLIST=$((CT_BLACKLIST + 1))
-  elif [ ${1} = 'fail' ]; then
-    CT_FAILCACHE=$((CT_FAILCACHE + 1))
-  elif [[ ${1} =~ ^[0-9]+$ ]]; then
-    CT_URLS=$((CT_URLS + ${1}))
-  else
-    echoR "${1} no define to cachecount!"
-  fi
+  case "${1:-}" in
+    miss)  ((CT_CACHEMISS++)) ;;
+    hit)   ((CT_CACHEHIT++)) ;;
+    no)    ((CT_NOCACHE++)) ;;
+    black) ((CT_BLACKLIST++)) ;;
+    fail)  ((CT_FAILCACHE++)) ;;
+    *)
+      if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        ((CT_URLS += $1))
+      else
+        echoR "${1:-} no define to cachecount!"
+      fi
+      ;;
+  esac
 }
 
 prttwostr() {
@@ -172,45 +153,39 @@ function cachereport() {
   prttwostr "Total URLs :" "${CT_URLS}" ''
   prttwostr "Added      :" "${CT_CACHEMISS}" ''
   prttwostr "Existing   :" "${CT_CACHEHIT}" ''
-  if [ "${CT_NOCACHE}" -gt 0 ]; then
+  local TMPMESG=''
+  if ((CT_NOCACHE > 0)); then
     TMPMESG="(Page with 'no cache', please check cache debug log for the reason)"
-  else
-    TMPMESG=''
   fi
   prttwostr "Skipped    :" "${CT_NOCACHE}" "${TMPMESG}"
-  if [ "${BLACKLIST}" != 'OFF' ]; then
-    if [ "${CT_BLACKLIST}" -gt 0 ]; then
-      TMPMESG="(Pages with status code ${ERR_LIST} may add into blacklist)"
-    else
-      TMPMESG=''
-    fi
+  if [[ "${BLACKLIST}" != 'OFF' ]]; then
+    TMPMESG=''
+    ((CT_BLACKLIST > 0)) && TMPMESG="(Pages with status code ${ERR_LIST} may add into blacklist)"
     prttwostr "Blacklisted:" "${CT_BLACKLIST}" "${TMPMESG}"
   fi
-  if [ "${CT_FAILCACHE}" -gt 0 ]; then
-    TMPMESG="(Pages with status code ${ERR_LIST} may add into blacklist)"
-  else
-    TMPMESG=''
-  fi
+  TMPMESG=''
+  ((CT_FAILCACHE > 0)) && TMPMESG="(Pages with status code ${ERR_LIST} may add into blacklist)"
   prttwostr "Failed     :" "${CT_FAILCACHE}" "${TMPMESG}"
 }
 
 function protect_count() {
-  if [ "${PROTECTOR}" = 'ON' ]; then
-    if [ ${1} -eq 1 ]; then
-      DETECT_NUM=$((DETECT_NUM + 1))
-      if [ ${DETECT_NUM} -ge ${DETECT_LIMIT} ]; then
+  if [[ "${PROTECTOR}" = 'ON' ]]; then
+    if [[ "${1}" -eq 1 ]]; then
+      ((DETECT_NUM++))
+      if ((DETECT_NUM >= DETECT_LIMIT)); then
         echoR "Hit ${DETECT_LIMIT} times 'page error' or 'no cache' in a row, abort !!"
         echoR "To run script with no abort, please set PROTECTOR from 'ON' to 'OFF'."
         exit 1
       fi
-    elif [ ${1} -eq 0 ]; then
+    elif [[ "${1}" -eq 0 ]]; then
       DETECT_NUM=0
     fi
   fi
 }
+
 function addtoblacklist() {
   echoB "Add ${1} to BlackList"
-  echo "${1}" >>${BLACKLSPATH}
+  printf '%s\n' "${1}" >>"${BLACKLSPATH}"
 }
 
 function escape_url() {
@@ -218,48 +193,54 @@ function escape_url() {
   URL=$(perl -MURI::Escape -e 'print uri_escape("$ENV{TMP_URL_ENV}", "^A-Za-z0-9\-\._~:?/")')
 }
 
-function debugurl_display() {
-  echo ''
-  echoY "-------Debug curl start-------"
-  echoY "URL: ${2}"
-  echoY "AGENTDESKTOP: ${1}"
-  echoY "COOKIE: ${3}"
-  echo "${4}"
-  echoY "-------Debug curl end-------"
-  echoY "Header Match: ${5}"
-}
-
-function crawl_verbose() {
-  echo "URL: ${2}" >>${CRAWLLOG}
-  echo "AGENTDESKTOP: ${1}" >>${CRAWLLOG}
-  echo "COOKIE: ${3}" >>${CRAWLLOG}
-  echo "${4}" >>${CRAWLLOG}
-  echo "Header Match: ${5}" >>${CRAWLLOG}
-  echo "----------------------------------------------------------" >>${CRAWLLOG}
-}
-
-# hàm được sửa lại cho tương thích với toàn bộ preload cache
+# =======================================================================
+# HÀM CÀO URL TỐI ƯU HÓA CỰC ĐẠI (FIX CỔNG 80/443 TÁCH BIỆT CHO HTTP/HTTPS)
+# =======================================================================
 function crawlreq() {
-  if [ "${DEBUGURL}" != "OFF" ] && [ "${BLACKLIST}" = 'ON' ]; then
-    duplicateck ${2} ${BLACKLSPATH}
-    if [ ${?} = 0 ]; then
-      echoY "${2} is in blacklist"
+  local ua_header="$1"
+  local target_url="$2"
+  local cookie_str="${3:-}"
+  local extra_accept="${4:-}"
+
+  if [[ "${DEBUGURL}" != "OFF" && "${BLACKLIST}" = 'ON' ]]; then
+    if duplicateck "${target_url}" "${BLACKLSPATH}"; then
+      echoY "${target_url} is in blacklist"
       exit 0
     fi
   fi
-  echo "${2} -> " | tr -d '\n'
-  domain_host=$(echo ${2} | sed 's/https\?:\/\///g' | cut -f1 -d '/' | sed 's/^www.//g')
-  if [ ! -z "${WITH_WEBP}" ]; then
 
-    CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} |
-      sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq' | tr '\n' ' ')
-  else
-    CURLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} |
-      sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq' | tr '\n' ' ')
+  printf "%s -> " "${target_url}"
+
+  local domain_host="${target_url#*://}"
+  domain_host="${domain_host%%/*}"
+  local base_host="${domain_host#www.}"
+
+  # [FIXED]: Ghi rõ cổng nguồn :443 đi 443 và :80 đi 80 để HTTP không bị đẩy nhầm vào cổng 443
+  local curl_args=(
+    "$CURL_OPTS"
+    --connect-to "${base_host}:443:127.0.0.1:443"
+    --connect-to "www.${base_host}:443:127.0.0.1:443"
+    --connect-to "${base_host}:80:127.0.0.1:80"
+    --connect-to "www.${base_host}:80:127.0.0.1:80"
+    -s -L -k
+    --connect-timeout 5
+    --max-time 15
+    -o /dev/null
+    -w "%{http_code}"
+    -X GET
+    -H "Accept-Encoding: gzip, deflate, br"
+    -H "${ua_header}"
+  )
+
+  [[ -n "$cookie_str" ]] && curl_args+=(-b "name=${cookie_str}")
+  if [[ -n "$extra_accept" ]]; then
+    curl_args+=(-H "Accept: image/webp")
   fi
-  excludecookie "${CURLRESULT}"
-  STATUS_CODE=$(echo "${CURLRESULT}" | grep HTTP | awk '{print $2}')
-  if [[ $STATUS_CODE = '200' ]]; then
+
+  local STATUS_CODE
+  STATUS_CODE=$(curl "${curl_args[@]}" "${target_url}" 2>/dev/null || printf '000')
+
+  if [[ "$STATUS_CODE" == "200" || "$STATUS_CODE" == "201" ]]; then
     echoY 'Đang tiến hành tạo cache'
     cachecount 'miss'
     protect_count 0
@@ -267,230 +248,164 @@ function crawlreq() {
     echoY 'Không tạo được cache'
     cachecount 'fail'
     protect_count 1
-  fi
-}
-
-#ham mặc định
-function crawlreq_mac_dinh() {
-  if [ "${DEBUGURL}" != "OFF" ] && [ "${BLACKLIST}" = 'ON' ]; then
-    duplicateck ${2} ${BLACKLSPATH}
-    if [ ${?} = 0 ]; then
-      echoY "${2} is in blacklist"
-      exit 0
+    if [[ "${BLACKLIST}" = 'ON' ]]; then
+      addtoblacklist "${target_url}"
     fi
   fi
-  echo "${2} -> " | tr -d '\n'
-  if [ ! -z "${WITH_WEBP}" ]; then
-    CURLRESULT=$(curl ${CURL_OPTS} -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" -H "Accept: image/webp" ${2} |
-      sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq')
-  else
-    CURLRESULT=$(curl ${CURL_OPTS} -siLk -b name="${3}" -X GET -H "Accept-Encoding: gzip, deflate, br" -H "${1}" ${2} |
-      sed '/^HTTP\/1.1 3[0-9][0-9]/,/^\r$/d' | tac | tac | sed '/Server: /Iq')
-  fi
-
-  excludecookie "${CURLRESULT}"
-  STATUS_CODE=$(echo "${CURLRESULT}" | grep HTTP | awk '{print $2}')
-
-  CHECKMATCH=$(echo ${STATUS_CODE} | grep -Eio "$(echo ${ERR_LIST} | tr -d "'")")
-  if [ "${CHECKMATCH}" == '' ]; then
-    CHECKMATCH=$(grep -Eio '(x-lsadc-cache: hit,litemage|x-lsadc-cache: hit|x-lsadc-cache: miss|x-qc-cache: hit|x-qc-cache: miss)' \
-      <<<${CURLRESULT} | tr -d '\n')
-  fi
-  if [ "${CHECKMATCH}" == '' ]; then
-    CHECKMATCH=$(grep -Eio '(X-LiteSpeed-Cache: miss|X-Litespeed-Cache: hit|X-Litespeed-Cache-Control: no-cache)' \
-      <<<${CURLRESULT} | tr -d '\n')
-  fi
-  if [ "${CHECKMATCH}" == '' ]; then
-    CHECKMATCH=$(grep -Eio '(lsc_private|HTTP/1.1 201 Created|HTTP/2 201|HTTP/3 201)' \
-      <<<${CURLRESULT} | tr -d '\n')
-  fi
-  if [ ${VERBOSE} = 'ON' ]; then
-    crawl_verbose "${1}" "${2}" "${3}" "${CURLRESULT}" "${CHECKMATCH}"
-  fi
-  if [[ ${DEBUGURL} != "OFF" ]]; then
-    debugurl_display "${1}" "${2}" "${3}" "${CURLRESULT}" "${CHECKMATCH}"
-  fi
-  case ${CHECKMATCH} in
-  'CreatedSet-CookieSet-CookieSet-Cookie' | [Xx]-[Ll]ite[Ss]peed-[Cc]ache:\ miss | 'X-LSADC-Cache: miss' | [Xx]-[Qq][Cc]-[Cc]ache:\ miss)
-    echoY 'Đang tiến hành tạo cache'
-    cachecount 'miss'
-    protect_count 0
-    ;;
-  'HTTP/1.1 201 Created' | 'HTTP/2 201 Created' | 'HTTP/2 201' | 'HTTP/3 201 Created' | 'HTTP/3 201')
-    if [ $(echo ${CURLRESULT} | grep -i 'Cookie' | wc -l) != 0 ]; then
-      if [[ ${DEBUGURL} != "OFF" ]]; then
-        echoY "Set-Cookie found"
-      fi
-      echoY 'Đang tiến hành tạo cache'
-      cachecount 'miss'
-    else
-      echoY 'Cache đã được tạo trước đó rồi'
-      cachecount 'hit'
-    fi
-    protect_count 0
-    ;;
-  [Xx]-[Ll]ite[Ss]peed-Cache:\ hit | 'x-lsadc-cache: hit' | 'x-lsadc-cache: hit,litemage' | 'x-qc-cache: hit')
-    echoY 'Cache đã được tạo trước đó rồi'
-    cachecount 'hit'
-    protect_count 0
-    ;;
-  'HTTP/1.1 201 Createdlsc_private' | 'HTTP/2 201lsc_private' | 'HTTP/3 201lsc_private')
-    echoY 'Đang tiến hành tạo cache'
-    cachecount 'miss'
-    protect_count 0
-    ;;
-  '400' | '401' | '403' | '404' | '407' | '500' | '502')
-    echoY "STATUS: ${CHECKMATCH}, không thể lưu cache"
-    cachecount 'fail'
-    protect_count 1
-    if [ "${BLACKLIST}" = 'ON' ]; then
-      addtoblacklist ${2}
-    fi
-    ;;
-  [Xx]-[Ll]ite[sS]peed-Cache-Control:\ no-cache)
-    echoY 'Trang web không cần bộ nhớ cache'
-    cachecount 'no'
-    protect_count 1
-    ### To add 'no cache' page to black list, remove following lines' comment
-    #if [ "${BLACKLIST}" = 'ON' ]; then
-    #    addtoblacklist ${2}
-    #fi
-    ;;
-  *)
-    echoY 'Trang web không cần bộ nhớ cache'
-    cachecount 'no'
-    ;;
-  esac
 }
 
 function runLoop() {
-  for URL in ${URLLIST}; do
+  local ua="$1"
+  local cookie="$2"
+  local webp_flag="${3:-}"
+  local req_counter=0
+  local URL
+
+  for URL in "${URLLIST_ARR[@]}"; do
+    [[ -z "$URL" ]] && continue
     local ONLIST='NO'
-    if [ "${ESCAPE}" = 'ON' ]; then
+    if [[ "${ESCAPE}" = 'ON' ]]; then
       escape_url "${URL}"
     fi
-    if [ "${BLACKLIST}" = 'ON' ]; then
-      duplicateck ${URL} ${BLACKLSPATH}
-      if [ ${?} -eq 0 ]; then
+    if [[ "${BLACKLIST}" = 'ON' ]]; then
+      if duplicateck "${URL}" "${BLACKLSPATH}"; then
         ONLIST='YES'
         cachecount 'black'
       fi
     fi
-    if [ "${ONLIST}" = 'NO' ]; then
-      crawlreq "${1}" "${URL}" "${2}"
-      sleep ${SVALUE}
+    if [[ "${ONLIST}" = 'NO' ]]; then
+      crawlreq "${ua}" "${URL}" "${cookie}" "${webp_flag}"
+      ((req_counter++))
+      if ((req_counter % 15 == 0)); then
+        adaptive_governor
+      fi
+      sleep "${SVALUE}"
     fi
   done
 }
 
-function validmap() {
-  domain_host=$(echo ${SITEMAP} | sed 's/https\?:\/\///g' | cut -f1 -d '/' | sed 's/^www.//g')
-  CURL_CMD="curl -IkL -w httpcode=%{http_code}"
-  CURL_MAX_CONNECTION_TIMEOUT="-m 100"
-  CURL_RETURN_CODE=0
-  CURL_OUTPUT=$(${CURL_CMD} ${CURL_MAX_CONNECTION_TIMEOUT} ${SITEMAP} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache check" 2>/dev/null) || CURL_RETURN_CODE=$?
-
-  if [ ${CURL_RETURN_CODE} -ne 0 ]; then
-    . /etc/wptt/.wptt.conf
-    if [[ $ngon_ngu = '' ]]; then
-      ngon_ngu='vi'
-    fi
-    . /etc/wptt/lang/$ngon_ngu.sh
-
-    echo "Kết nối không thành công với không có code mã nào được trả về - ${CURL_RETURN_CODE}, exit"
-    echo "========================================================================="
-    echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
-    echo "========================================================================="
-    exit 1
-
-  else
-    HTTPCODE=$(echo "${CURL_OUTPUT}" | grep 'HTTP' | tail -1 | awk '{print $2}')
-    if [ "${HTTPCODE}" != '200' ]; then
-
-      . /etc/wptt/.wptt.conf
-      if [[ $ngon_ngu = '' ]]; then
-        ngon_ngu='vi'
-      fi
-      . /etc/wptt/lang/$ngon_ngu.sh
-
-      echo "Kết nối không thành công do mã trả về khác 200 HTTP - ${HTTPCODE}, exit"
-      echo "========================================================================="
-      echo " Preload cache $da_xay_ra_loi_vui_long_thu_lai_sau	                       "
-      echo "========================================================================="
-      exit 1
-    fi
-    echoG "Kết với sitemap thành công \n"
-  fi
-}
-
 function checkcrawler() {
-  TRYURL=$(echo ${URLLIST} | cut -d " " -f1)
-  CRAWLRESULT=$(curl ${CURL_OPTS} -sI -X GET -H "${AGENTDESKTOP}" $TRYURL | grep -o "Precondition Required")
-  if [ "${CRAWLRESULT}" = 'Precondition Required' ]; then
+  local TRYURL="${URLLIST_ARR[0]:-}"
+  [[ -z "$TRYURL" ]] && return 0
+  local domain_host="${TRYURL#*://}"
+  domain_host="${domain_host%%/*}"
+  local base_host="${domain_host#www.}"
+
+  local CRAWLRESULT
+  CRAWLRESULT=$(curl ${CURL_OPTS} \
+    --connect-to "${base_host}:443:127.0.0.1:443" \
+    --connect-to "www.${base_host}:443:127.0.0.1:443" \
+    --connect-to "${base_host}:80:127.0.0.1:80" \
+    --connect-to "www.${base_host}:80:127.0.0.1:80" \
+    -skI --max-time 10 -X GET -H "${AGENTDESKTOP}" "$TRYURL" 2>/dev/null || true)
+  if [[ "$CRAWLRESULT" == *"Precondition Required"* ]]; then
     help_message 1
   fi
 }
 
 function genrandom() {
-  RANDOMSTR=$(
-    head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16
-    echo ''
-  )
+  RANDOMSTR=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || echo "wptt123456")
 }
 
 function getcookie() {
-
-  for URL in ${URLLIST}; do
-    local ONLIST='NO'
-    if [ "${BLACKLIST}" = 'ON' ]; then
-      duplicateck ${URL} ${BLACKLSPATH}
-      if [ ${?} -eq 1 ]; then
+  local URL=""
+  for URL in "${URLLIST_ARR[@]}"; do
+    if [[ "${BLACKLIST}" = 'ON' ]]; then
+      if ! duplicateck "${URL}" "${BLACKLSPATH}"; then
         break
       fi
+    else
+      break
     fi
   done
-  COOKIESTRING=$(curl ${CURL_OPTS} -sILk -X GET ${URL} | grep -i 'Set-Cookie' | awk '{print $2}' | tr '\n' ' ')
-  if [ "${COOKIESTRING}" = '' ]; then
+  [[ -z "$URL" ]] && return 0
+  local domain_host="${URL#*://}"
+  domain_host="${domain_host%%/*}"
+  local base_host="${domain_host#www.}"
+
+  COOKIESTRING=$(curl ${CURL_OPTS} \
+    --connect-to "${base_host}:443:127.0.0.1:443" \
+    --connect-to "${base_host}:80:127.0.0.1:80" \
+    -sILk --max-time 10 -X GET "${URL}" | awk 'tolower($1)=="set-cookie:" {printf "%s ", $2}')
+  if [[ -z "${COOKIESTRING}" ]]; then
     genrandom
-    COOKIESTRING=$(curl ${CURL_OPTS} -sILk -X GET ${URL}?${RANDOMSTR} | grep -i 'Set-Cookie' | awk '{print $2}' | tr '\n' ' ')
+    COOKIESTRING=$(curl ${CURL_OPTS} \
+      --connect-to "${base_host}:443:127.0.0.1:443" \
+      --connect-to "${base_host}:80:127.0.0.1:80" \
+      -sILk --max-time 10 -X GET "${URL}?${RANDOMSTR}" | awk 'tolower($1)=="set-cookie:" {printf "%s ", $2}')
   fi
   COOKIE="${COOKIESTRING}"
-  if [ ! -z "${CUSTUM_COOKIE}" ]; then
+  if [[ -n "${CUSTUM_COOKIE}" ]]; then
     COOKIE="${COOKIE} ${CUSTUM_COOKIE}"
   fi
 }
 
 function debugurl() {
   URL="${1}"
-  if [ "${WITH_COOKIE}" = 'ON' ]; then
+  if [[ "${WITH_COOKIE}" = 'ON' ]]; then
     getcookie
   fi
-  if [ "${ESCAPE}" = 'ON' ]; then
+  if [[ "${ESCAPE}" = 'ON' ]]; then
     escape_url "${URL}"
   fi
-  if [ "${WITH_MOBILE}" = 'ON' ]; then
-    crawlreq "${AGENTMOBILE}" "${URL}" "${COOKIE}"
+  if [[ "${WITH_MOBILE}" = 'ON' ]]; then
+    crawlreq "${AGENTMOBILE}" "${URL}" "${COOKIE}" "${WITH_WEBP}"
   else
-    crawlreq "${AGENTDESKTOP}" "${URL}" "${COOKIE}"
+    crawlreq "${AGENTDESKTOP}" "${URL}" "${COOKIE}" "${WITH_WEBP}"
   fi
 }
 
+function fetch_xml_stream() {
+  local xml_url="$1"
+  local domain_host="${xml_url#*://}"
+  domain_host="${domain_host%%/*}"
+  local base_host="${domain_host#www.}"
+
+  if [[ "$xml_url" == *.gz ]]; then
+    curl ${CURL_OPTS} \
+      --connect-to "${base_host}:443:127.0.0.1:443" \
+      --connect-to "www.${base_host}:443:127.0.0.1:443" \
+      --connect-to "${base_host}:80:127.0.0.1:80" \
+      --connect-to "www.${base_host}:80:127.0.0.1:80" \
+      -sLk --max-time 30 -A "WPTangToc OLS preload cache" "$xml_url" 2>/dev/null | gzip -dc 2>/dev/null || true
+  else
+    curl ${CURL_OPTS} \
+      --connect-to "${base_host}:443:127.0.0.1:443" \
+      --connect-to "www.${base_host}:443:127.0.0.1:443" \
+      --connect-to "${base_host}:80:127.0.0.1:80" \
+      --connect-to "www.${base_host}:80:127.0.0.1:80" \
+      -sLk --max-time 30 -A "WPTangToc OLS preload cache" "$xml_url" 2>/dev/null || true
+  fi
+}
+
+function extract_locs_from_xml() {
+  sed -e 's/<loc>/\n<loc>/g' -e 's/<\/loc>/<\/loc>\n/g' | awk '
+    /<loc>.*<\/loc>/ {
+      sub(/.*<loc>/, "")
+      sub(/<\/loc>.*/, "")
+      gsub(/<!\[CDATA\[|\]\]>/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if ($0 != "" && $0 !~ /xmlns=/) print $0
+    }
+  '
+}
+
 function storexml() {
-  #bình luận validmap không cần phải check điêu kiện vì preload-cache2 đã check điều kiện rooiff
-  # validmap
-  if [ $(echo ${1} | grep '\.xml$' | wc -l) != 0 ]; then
-    #thêm sed 's/<loc>/\n<loc>/g' để tương thích với wp sitemap vì wp sitemap nó nén, nên phải giải mã kiểu này mới tương thích
-    XML_URL=$(curl ${CURL_OPTS} -sk ${1} | grep '<loc>' | grep '\.xml' | sed 's/<loc>/\n<loc>/g' | sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed '/ xmlns=/d')
-    XML_NUM=$(echo ${XML_URL} | grep '\.xml' | wc -l)
-    if [ ${XML_NUM} -gt 0 ]; then
-      for URL in $XML_URL; do
-        XML_LIST=(${URL} "${XML_LIST[@]}")
-      done
+  local target_map="$1"
+  if [[ "$target_map" =~ \.xml(\.gz)?$ ]]; then
+    local sub_xmls
+    sub_xmls=$(fetch_xml_stream "$target_map" | extract_locs_from_xml | grep -E '\.xml(\.gz)?$' || true)
+
+    if [[ -n "$sub_xmls" ]]; then
+      local u
+      while IFS= read -r u; do
+        [[ -n "$u" ]] && XML_LIST+=("$u")
+      done <<< "$sub_xmls"
     else
-      XML_LIST=(${1} "${XML_LIST[@]}")
+      XML_LIST+=("$target_map")
     fi
   else
-    echo "SITEMAP: $SITEMAP is not a valid xml"
+    echo "SITEMAP: $target_map is not a valid xml"
     help_message 2
   fi
 }
@@ -498,52 +413,71 @@ function storexml() {
 function maincrawl() {
   checkcrawler
   echoY "Có ${URLCOUNT} urls trong sitemap này"
-  if [ ${URLCOUNT} -gt 0 ]; then
-    START_TIME="$(date -u +%s)"
+  if ((URLCOUNT > 0)); then
+    local START_TIME END_TIME ELAPSED
+    printf -v START_TIME '%(%s)T' -1
     echoY 'Bắt đầu Preload Cache...'
-    if [ "${WITH_COOKIE}" = 'ON' ]; then
+    if [[ "${WITH_COOKIE}" = 'ON' ]]; then
       getcookie
     fi
-    cachecount ${URLCOUNT}
-    runLoop "${AGENTDESKTOP}" "${COOKIE}"
-    if [ "${WITH_MOBILE}" = 'ON' ]; then
-      echoY 'Starting to view with mobile agent...'
-      cachecount ${URLCOUNT}
-      runLoop "${AGENTMOBILE}" "${COOKIE}"
+
+    cachecount "${URLCOUNT}"
+    runLoop "${AGENTDESKTOP}" "${COOKIE}" ""
+
+    if [[ -n "${WITH_WEBP}" ]]; then
+      echoY 'Starting to view with WebP header...'
+      cachecount "${URLCOUNT}"
+      runLoop "${AGENTDESKTOP}" "${COOKIE}" "ENABLE"
     fi
-    END_TIME="$(date -u +%s)"
-    ELAPSED="$((${END_TIME} - ${START_TIME}))"
+
+    if [[ "${WITH_MOBILE}" = 'ON' ]]; then
+      echoY 'Starting to view with mobile agent...'
+      cachecount "${URLCOUNT}"
+      runLoop "${AGENTMOBILE}" "${COOKIE}" "${WITH_WEBP}"
+    fi
+
+    printf -v END_TIME '%(%s)T' -1
+    ELAPSED=$((END_TIME - START_TIME))
     echoY "***Tổng ${ELAPSED} giây hoàn thành tiến trình***"
   fi
 }
 
 function main() {
-  if [ "${DEBUGURL}" != 'OFF' ]; then
-    debugurl ${DEBUGURL}
+  if [[ "${DEBUGURL}" != 'OFF' ]]; then
+    URLLIST_ARR=("${DEBUGURL}")
+    debugurl "${DEBUGURL}"
   else
+    local XMLURL
     for XMLURL in "${XML_LIST[@]}"; do
       echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
-      domain_host=$(echo ${XMLURL} | sed 's/https\?:\/\///g' | cut -f1 -d '/' | sed 's/^www.//g')
-      if [ "${CRAWLQS}" = 'ON' ]; then
-        URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g' | grep '<loc>' | sed 's/<loc>/\n<loc>/g' |
-          sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//' |
-          grep -iPo '^((?!png|jpg|webp).)*$' | sort -u | sed '/ xmlns=/d' | sed '/><url>/d')
-      else
-        URLLIST=$(curl ${CURL_OPTS} -Lk --silent ${XMLURL} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -A "WPTangToc OLS preload cache" | sed -e 's/\/url/\n/g' | grep '<loc>' | sed 's/<loc>/\n<loc>/g' |
-          sed -e 's/.*<loc>\(.*\)<\/loc>.*/\1/' | sed 's/<!\[CDATA\[//;s/]]>//;s/.*?.*//' |
-          grep -iPo '^((?!png|jpg|webp).)*$' | sort -u | sed '/ xmlns=/d' | sed '/><url>/d')
+      local raw_urls
+      raw_urls=$(fetch_xml_stream "${XMLURL}" | extract_locs_from_xml | awk -v crawl_qs="${CRAWLQS}" '
+        {
+          if (crawl_qs != "ON") {
+            sub(/\?.*/, "")
+          }
+          low = tolower($0)
+          if (low ~ /^https?:\/\// && low !~ /\.(png|jpg|jpeg|webp|gif|svg|css|js|woff|woff2|ttf|eot|ico|pdf|zip|mp4|mp3)$/) {
+            print $0
+          }
+        }
+      ' | sort -u)
+
+      URLLIST_ARR=()
+      if [[ -n "$raw_urls" ]]; then
+        mapfile -t URLLIST_ARR <<< "$raw_urls"
       fi
-      URLCOUNT=$(echo "${URLLIST}" | grep -c '[^[:space:]]')
+      URLCOUNT="${#URLLIST_ARR[@]}"
       maincrawl
     done
-    if [ "${REPORT}" != 'OFF' ]; then
+    if [[ "${REPORT}" != 'OFF' ]]; then
       cachereport
     fi
   fi
 }
 
-while [ ! -z "${1}" ]; do
-  case ${1} in
+while [[ -n "${1:-}" ]]; do
+  case "${1}" in
   -h | --help)
     help_message 2
     ;;
@@ -556,11 +490,11 @@ while [ ! -z "${1}" ]; do
   -cc | --custom-cookie)
     shift
     WITH_COOKIE='ON'
-    CUSTUM_COOKIE="${1}"
+    CUSTUM_COOKIE="${1:-}"
     ;;
   -i | --interval)
     shift
-    SVALUE=${1}
+    SVALUE="${1:-0.2}"
     ;;
   -w | --WITH_WEBP | --webp)
     WITH_WEBP='ENABLE'
@@ -579,20 +513,15 @@ while [ ! -z "${1}" ]; do
     ;;
   -b | --black-list)
     BLACKLIST='ON'
-    if [ ! -e ${BLACKLSPATH} ]; then
-      touch ${BLACKLSPATH}
-    fi
+    [[ ! -e "${BLACKLSPATH}" ]] && touch "${BLACKLSPATH}"
     ;;
   -d | --debug-url)
     shift
-    if [ "${1}" = '' ]; then
+    if [[ -z "${1:-}" ]]; then
       help_message 2
     else
       DEBUGURL="${1}"
-      URLLIST="${1}"
-      if [ ! -e ${CRAWLLOG} ]; then
-        touch ${CRAWLLOG}
-      fi
+      [[ ! -e "${CRAWLLOG}" ]] && touch "${CRAWLLOG}"
     fi
     ;;
   -qs | --crawl-qs)
@@ -602,8 +531,8 @@ while [ ! -z "${1}" ]; do
     REPORT='ON'
     ;;
   *)
-    SITEMAP=${1}
-    storexml ${SITEMAP}
+    SITEMAP="${1}"
+    storexml "${SITEMAP}"
     ;;
   esac
   shift
