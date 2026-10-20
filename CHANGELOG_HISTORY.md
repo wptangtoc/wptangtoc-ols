@@ -1,3 +1,11 @@
+## Phiên bản 8.3.0
+
+🚀 **Tính năng mới & Nâng cấp**
+- **Đại tu hệ thống Preload Cache:** Nâng cấp toàn diện cơ chế nạp trước bộ nhớ đệm (Preload Cache) với hiệu năng vượt trội, giúp website WordPress tải nhanh chóng, tối ưu hóa tài nguyên máy chủ và mang lại trải nghiệm mượt mà cho người truy cập.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## Phiên bản 8.2.4.6
 
 🐛 **Sửa lỗi**
