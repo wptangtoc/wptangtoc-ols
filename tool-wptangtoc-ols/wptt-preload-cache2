@@ -62,7 +62,6 @@ get_cpu_cores() {
   printf '%s' "$cores"
 }
 
-# [FIXED]: Thêm biến _rest để hứng các cột guest/guest_nice trong /proc/stat, chống lỗi "0 0 0: syntax error"
 get_realtime_cpu_usage() {
   local _cpu u1 n1 s1 i1 w1 x1 y1 z1 _rest1 u2 n2 s2 i2 w2 x2 y2 z2 _rest2
   read -r _cpu u1 n1 s1 i1 w1 x1 y1 z1 _rest1 < /proc/stat
@@ -86,7 +85,6 @@ get_realtime_cpu_usage() {
   printf '%s' "$usage"
 }
 
-# Đọc trực tiếp /proc/meminfo không qua lệnh free hay awk
 get_ram_stats() {
   local key val _unit total=0 avail=0 free_mem=0 buffers=0 cached=0
   while read -r key val _unit; do
@@ -110,7 +108,6 @@ get_ram_stats() {
   printf '%s %s' "$used_pct" "$avail_mb"
 }
 
-# Hàm tự động phanh (Adaptive Throttling) khi máy chủ tăng tải giữa chừng
 adaptive_throttle_check() {
   local cores="${1:-1}"
   local load1 _rest load_int
@@ -159,7 +156,6 @@ if [[ -z "$NAME" ]]; then
   fi
 fi
 
-# Xử lý khi chọn Tất cả website
 if [[ "$NAME" = 'Tất cả website' ]]; then
   shopt -s nullglob
   vhost_files=(/etc/wptt/vhost/.*.conf)
@@ -206,8 +202,36 @@ TASK_CONN="Kiểm tra kết nối cho website: $NAME"
 _runing "$TASK_CONN"
 
 # =======================================================================
-# KIỂM TRA GIAO THỨC HTTP / HTTPS BẰNG THƯ VIỆN CHUẨN WPTANGTOC
+# KIỂM TRA KẾT NỐI HTTP / HTTPS CHÍNH XÁC TUYỆT ĐỐI (PORT 80 -> 80, 443 -> 443)
 # =======================================================================
+# Không dùng -L (follow redirect) ở bước dò để biết chính xác giao thức gốc không bị 301
+probe_direct_200() {
+  local target_url="$1"
+  local base_dom="${2#www.}"
+  local code
+  code=$(curl -kIs -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+    --connect-to "${base_dom}:443:127.0.0.1:443" \
+    --connect-to "www.${base_dom}:443:127.0.0.1:443" \
+    --connect-to "${base_dom}:80:127.0.0.1:80" \
+    --connect-to "www.${base_dom}:80:127.0.0.1:80" \
+    -A "WPTangToc OLS preload cache" "$target_url" 2>/dev/null || true)
+  [[ "$code" == "200" ]]
+}
+
+# Hàm dùng cho Sitemap (Cho phép follow redirect tối đa 3 lần nếu sitemap.xml redirect sang wp-sitemap.xml)
+probe_sitemap_200() {
+  local target_url="$1"
+  local base_dom="${2#www.}"
+  local code
+  code=$(curl -kIs -L --max-redirs 3 -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+    --connect-to "${base_dom}:443:127.0.0.1:443" \
+    --connect-to "www.${base_dom}:443:127.0.0.1:443" \
+    --connect-to "${base_dom}:80:127.0.0.1:80" \
+    --connect-to "www.${base_dom}:80:127.0.0.1:80" \
+    -A "WPTangToc OLS preload cache" "$target_url" 2>/dev/null || true)
+  [[ "$code" == "200" ]]
+}
+
 ssl="http"
 if [[ -f /etc/wptt/ssl/check-ssl-cert-con-kha-dung ]]; then
   if /bin/bash /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$NAME" >/dev/null 2>&1; then
@@ -215,55 +239,20 @@ if [[ -f /etc/wptt/ssl/check-ssl-cert-con-kha-dung ]]; then
   fi
 fi
 
-# Hàm kiểm tra HTTP 200 chính xác (Không tự động nhảy từ http sang https tự ký)
-probe_http_200() {
-  local target_url="$1"
-  local connect_domain="${2#www.}"
-  local code
-  # Chỉ lấy mã của trang cuối nếu cùng giao thức hoặc kiểm tra trực tiếp
-  code=$(curl -kIs -L --max-redirs 3 -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
-    --connect-to "${connect_domain}::127.0.0.1:443" \
-    --connect-to "${connect_domain}::127.0.0.1:80" \
-    -A "WPTangToc OLS preload cache" "$target_url" 2>/dev/null || true)
-  [[ "$code" == "200" ]]
-}
-
-# Kiểm tra kết nối theo đúng giao thức $ssl đã xác thực và nhận diện www hay non-www
 conn_ok=0
-use_www=0
-
-# Kiểm tra xem header Location của trang gốc có ép chuyển sang www không
-first_loc=$(curl -kIs --connect-timeout 5 --max-time 10 \
-  --connect-to "${domain#www.}::127.0.0.1:443" \
-  --connect-to "${domain#www.}::127.0.0.1:80" \
-  -A "WPTangToc OLS preload cache" "${ssl}://${domain}/" 2>/dev/null | awk 'tolower($1)=="location:" {print $2; exit}' | tr -d '\r')
-
-if [[ "$first_loc" == *"://www.${domain#www.}"* ]]; then
-  use_www=1
-fi
-
-if ((use_www == 1)); then
-  if probe_http_200 "${ssl}://www.${domain#www.}" "$domain"; then
-    conn_ok=1
-    domain="www.${domain#www.}"
-  fi
+if probe_direct_200 "${ssl}://${domain}/" "$domain"; then
+  conn_ok=1
+elif probe_direct_200 "${ssl}://www.${domain#www.}/" "$domain"; then
+  conn_ok=1
+  domain="www.${domain#www.}"
 else
-  if probe_http_200 "${ssl}://${domain}" "$domain"; then
-    conn_ok=1
-  elif probe_http_200 "${ssl}://www.${domain#www.}" "$domain"; then
-    conn_ok=1
-    domain="www.${domain#www.}"
-  fi
-fi
-
-# Fallback kiểm tra giao thức còn lại nếu cấu hình SSL lệch thực tế (ví dụ trong CI/CD dùng self-signed cert)
-if ((conn_ok == 0)); then
+  # Nếu giao thức dự kiến bị 301/302 (ví dụ HTTP redirect sang HTTPS hoặc ngược lại), thử giao thức đối lập
   alt_ssl="https"
   [[ "$ssl" == "https" ]] && alt_ssl="http"
-  if probe_http_200 "${alt_ssl}://${domain}" "$domain"; then
+  if probe_direct_200 "${alt_ssl}://${domain}/" "$domain"; then
     conn_ok=1
     ssl="$alt_ssl"
-  elif probe_http_200 "${alt_ssl}://www.${domain#www.}" "$domain"; then
+  elif probe_direct_200 "${alt_ssl}://www.${domain#www.}/" "$domain"; then
     conn_ok=1
     ssl="$alt_ssl"
     domain="www.${domain#www.}"
@@ -302,7 +291,7 @@ found_sitemap=false
 NAME2=""
 
 for path in "${sitemap_paths[@]}"; do
-  if probe_http_200 "${ssl}://${domain}${path}" "$domain"; then
+  if probe_sitemap_200 "${ssl}://${domain}${path}" "$domain"; then
     found_sitemap=true
     NAME2="${ssl}://${domain}${path}"
     break
@@ -379,10 +368,9 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}TIẾN TRÌNH PRELOAD ĐANG CHẠY${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-trang_thai_bao_loi_preload_cache=0
+trang_thai_bao_loi_preload_preload_cache=0
 
 if [[ "$spider_mode" = false ]]; then
-  # TRƯỜNG HỢP 1: CÓ SITEMAP
   crawler_args=("-i" "$CRAWL_INTERVAL")
 
   if ((grepmobile != 0)); then
@@ -400,7 +388,6 @@ if [[ "$spider_mode" = false ]]; then
   ionice -c 3 nice -n 19 /bin/bash "/etc/wptt/$cong_cu" "${crawler_args[@]}" "${NAME2}" || trang_thai_bao_loi_preload_cache=$?
 
 else
-  # TRƯỜNG HỢP 2: KHÔNG CÓ SITEMAP (SPIDER LOCALHOST ROUTING + ADAPTIVE THROTTLE)
   UA_DESKTOP="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
   UA_MOBILE="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) Version/16.0 Mobile/15E148"
   HEADER_WEBP="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"

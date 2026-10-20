@@ -1,7 +1,8 @@
 #!/bin/bash
+# thư viện LiteSpeedtech fork lại bởi Gia Tuấn
 # Author          : LiteSpeedtech & Gia Tuấn
 # Date            : 20-10-2026
-# Version         : 3.0.1-Enterprise
+# Version         : 3.0.2
 # Require         : Prepare sitemap XML & Allow LSCache crawler
 # Description     : Thư viện lõi Preload Cache hiệu năng cao (Zero-Subshell & Adaptive Load Governor)
 #=======================================================
@@ -25,7 +26,6 @@ DEBUGURL='OFF'
 BLACKLIST='OFF'
 CRAWLQS='OFF'
 REPORT='OFF'
-FORCED_SCHEME=''
 /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
 chmod 700 /etc/wptt/tmp 2>/dev/null || true
 CRAWLLOG='/etc/wptt/tmp/crawler.log'
@@ -96,9 +96,6 @@ EOF
   exit 1
 }
 
-# =======================================================================
-# BỘ ĐIỀU TIẾT TẢI THÔNG MINH (ADAPTIVE LOAD GOVERNOR - ZERO SUBSHELL)
-# =======================================================================
 function adaptive_governor() {
   local load1 _rest load_int
   read -r load1 _rest < /proc/loadavg
@@ -197,18 +194,13 @@ function escape_url() {
 }
 
 # =======================================================================
-# HÀM CÀO URL TỐI ƯU HÓA CỰC ĐẠI (ZERO-SUBSHELL STRING MANIPULATION)
+# HÀM CÀO URL TỐI ƯU HÓA CỰC ĐẠI (FIX CỔNG 80/443 TÁCH BIỆT CHO HTTP/HTTPS)
 # =======================================================================
 function crawlreq() {
   local ua_header="$1"
   local target_url="$2"
   local cookie_str="${3:-}"
   local extra_accept="${4:-}"
-
-  # Đồng bộ giao thức theo FORCED_SCHEME (http hoặc https) đã được kiểm chứng từ SITEMAP gốc
-  if [[ -n "$FORCED_SCHEME" ]]; then
-    target_url="${FORCED_SCHEME}://${target_url#*://}"
-  fi
 
   if [[ "${DEBUGURL}" != "OFF" && "${BLACKLIST}" = 'ON' ]]; then
     if duplicateck "${target_url}" "${BLACKLSPATH}"; then
@@ -221,12 +213,15 @@ function crawlreq() {
 
   local domain_host="${target_url#*://}"
   domain_host="${domain_host%%/*}"
-  domain_host="${domain_host#www.}"
+  local base_host="${domain_host#www.}"
 
+  # [FIXED]: Ghi rõ cổng nguồn :443 đi 443 và :80 đi 80 để HTTP không bị đẩy nhầm vào cổng 443
   local curl_args=(
     "$CURL_OPTS"
-    --connect-to "${domain_host}::127.0.0.1:443"
-    --connect-to "${domain_host}::127.0.0.1:80"
+    --connect-to "${base_host}:443:127.0.0.1:443"
+    --connect-to "www.${base_host}:443:127.0.0.1:443"
+    --connect-to "${base_host}:80:127.0.0.1:80"
+    --connect-to "www.${base_host}:80:127.0.0.1:80"
     -s -L -k
     --connect-timeout 5
     --max-time 15
@@ -239,7 +234,7 @@ function crawlreq() {
 
   [[ -n "$cookie_str" ]] && curl_args+=(-b "name=${cookie_str}")
   if [[ -n "$extra_accept" ]]; then
-    curl_args+=(-H "Accept: image/webp,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+    curl_args+=(-H "Accept: image/webp")
   fi
 
   local STATUS_CODE
@@ -294,10 +289,15 @@ function checkcrawler() {
   [[ -z "$TRYURL" ]] && return 0
   local domain_host="${TRYURL#*://}"
   domain_host="${domain_host%%/*}"
-  domain_host="${domain_host#www.}"
+  local base_host="${domain_host#www.}"
 
   local CRAWLRESULT
-  CRAWLRESULT=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -skI --max-time 10 -X GET -H "${AGENTDESKTOP}" "$TRYURL" 2>/dev/null || true)
+  CRAWLRESULT=$(curl ${CURL_OPTS} \
+    --connect-to "${base_host}:443:127.0.0.1:443" \
+    --connect-to "www.${base_host}:443:127.0.0.1:443" \
+    --connect-to "${base_host}:80:127.0.0.1:80" \
+    --connect-to "www.${base_host}:80:127.0.0.1:80" \
+    -skI --max-time 10 -X GET -H "${AGENTDESKTOP}" "$TRYURL" 2>/dev/null || true)
   if [[ "$CRAWLRESULT" == *"Precondition Required"* ]]; then
     help_message 1
   fi
@@ -321,12 +321,18 @@ function getcookie() {
   [[ -z "$URL" ]] && return 0
   local domain_host="${URL#*://}"
   domain_host="${domain_host%%/*}"
-  domain_host="${domain_host#www.}"
+  local base_host="${domain_host#www.}"
 
-  COOKIESTRING=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -sILk --max-time 10 -X GET "${URL}" | awk 'tolower($1)=="set-cookie:" {printf "%s ", $2}')
+  COOKIESTRING=$(curl ${CURL_OPTS} \
+    --connect-to "${base_host}:443:127.0.0.1:443" \
+    --connect-to "${base_host}:80:127.0.0.1:80" \
+    -sILk --max-time 10 -X GET "${URL}" | awk 'tolower($1)=="set-cookie:" {printf "%s ", $2}')
   if [[ -z "${COOKIESTRING}" ]]; then
     genrandom
-    COOKIESTRING=$(curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -sILk --max-time 10 -X GET "${URL}?${RANDOMSTR}" | awk 'tolower($1)=="set-cookie:" {printf "%s ", $2}')
+    COOKIESTRING=$(curl ${CURL_OPTS} \
+      --connect-to "${base_host}:443:127.0.0.1:443" \
+      --connect-to "${base_host}:80:127.0.0.1:80" \
+      -sILk --max-time 10 -X GET "${URL}?${RANDOMSTR}" | awk 'tolower($1)=="set-cookie:" {printf "%s ", $2}')
   fi
   COOKIE="${COOKIESTRING}"
   if [[ -n "${CUSTUM_COOKIE}" ]]; then
@@ -351,24 +357,27 @@ function debugurl() {
 
 function fetch_xml_stream() {
   local xml_url="$1"
-  if [[ -n "$FORCED_SCHEME" ]]; then
-    xml_url="${FORCED_SCHEME}://${xml_url#*://}"
-  fi
   local domain_host="${xml_url#*://}"
   domain_host="${domain_host%%/*}"
-  domain_host="${domain_host#www.}"
+  local base_host="${domain_host#www.}"
 
   if [[ "$xml_url" == *.gz ]]; then
-    curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -sLk --max-time 30 -A "WPTangToc OLS preload cache" "$xml_url" 2>/dev/null | gzip -dc 2>/dev/null || true
+    curl ${CURL_OPTS} \
+      --connect-to "${base_host}:443:127.0.0.1:443" \
+      --connect-to "www.${base_host}:443:127.0.0.1:443" \
+      --connect-to "${base_host}:80:127.0.0.1:80" \
+      --connect-to "www.${base_host}:80:127.0.0.1:80" \
+      -sLk --max-time 30 -A "WPTangToc OLS preload cache" "$xml_url" 2>/dev/null | gzip -dc 2>/dev/null || true
   else
-    curl ${CURL_OPTS} --connect-to "${domain_host}::127.0.0.1:443" --connect-to "${domain_host}::127.0.0.1:80" -sLk --max-time 30 -A "WPTangToc OLS preload cache" "$xml_url" 2>/dev/null || true
+    curl ${CURL_OPTS} \
+      --connect-to "${base_host}:443:127.0.0.1:443" \
+      --connect-to "www.${base_host}:443:127.0.0.1:443" \
+      --connect-to "${base_host}:80:127.0.0.1:80" \
+      --connect-to "www.${base_host}:80:127.0.0.1:80" \
+      -sLk --max-time 30 -A "WPTangToc OLS preload cache" "$xml_url" 2>/dev/null || true
   fi
 }
 
-# =======================================================================
-# [FIXED]: TÁCH MỌI THẺ <loc>...</loc> TRÊN CÙNG 1 DÒNG THÀNH NHIỀU DÒNG RIÊNG BIỆT
-# Giải quyết triệt để lỗi wp-sitemap.xml bị nén trên 1 dòng chỉ lấy được nhánh cuối
-# =======================================================================
 function extract_locs_from_xml() {
   sed -e 's/<loc>/\n<loc>/g' -e 's/<\/loc>/<\/loc>\n/g' | awk '
     /<loc>.*<\/loc>/ {
@@ -383,13 +392,6 @@ function extract_locs_from_xml() {
 
 function storexml() {
   local target_map="$1"
-  # Ghi nhận giao thức gốc (http hoặc https) từ tham số đầu vào để đồng bộ toàn bộ URL con
-  if [[ "$target_map" == https://* ]]; then
-    FORCED_SCHEME="https"
-  elif [[ "$target_map" == http://* ]]; then
-    FORCED_SCHEME="http"
-  fi
-
   if [[ "$target_map" =~ \.xml(\.gz)?$ ]]; then
     local sub_xmls
     sub_xmls=$(fetch_xml_stream "$target_map" | extract_locs_from_xml | grep -E '\.xml(\.gz)?$' || true)
@@ -397,10 +399,7 @@ function storexml() {
     if [[ -n "$sub_xmls" ]]; then
       local u
       while IFS= read -r u; do
-        if [[ -n "$u" ]]; then
-          [[ -n "$FORCED_SCHEME" ]] && u="${FORCED_SCHEME}://${u#*://}"
-          XML_LIST+=("$u")
-        fi
+        [[ -n "$u" ]] && XML_LIST+=("$u")
       done <<< "$sub_xmls"
     else
       XML_LIST+=("$target_map")
@@ -452,13 +451,10 @@ function main() {
     for XMLURL in "${XML_LIST[@]}"; do
       echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
       local raw_urls
-      raw_urls=$(fetch_xml_stream "${XMLURL}" | extract_locs_from_xml | awk -v crawl_qs="${CRAWLQS}" -v scheme="${FORCED_SCHEME}" '
+      raw_urls=$(fetch_xml_stream "${XMLURL}" | extract_locs_from_xml | awk -v crawl_qs="${CRAWLQS}" '
         {
           if (crawl_qs != "ON") {
             sub(/\?.*/, "")
-          }
-          if (scheme != "") {
-            sub(/^https?:\/\//, scheme "://")
           }
           low = tolower($0)
           if (low ~ /^https?:\/\// && low !~ /\.(png|jpg|jpeg|webp|gif|svg|css|js|woff|woff2|ttf|eot|ico|pdf|zip|mp4|mp3)$/) {
