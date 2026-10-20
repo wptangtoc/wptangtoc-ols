@@ -3,6 +3,7 @@
 # @website: https://wptangtoc.com
 # @since: 2026
 # @email: giatuan@wptangtoc.com
+# @standard: Enterprise Big Upgrade (Adaptive Throttling & Zero-Subshell)
 
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -61,17 +62,17 @@ get_cpu_cores() {
   printf '%s' "$cores"
 }
 
-# Đọc trực tiếp /proc/stat tại 2 thời điểm cách nhau 0.2s để lấy tải CPU THỰC TẾ
+# [FIXED]: Thêm biến _rest để hứng các cột guest/guest_nice trong /proc/stat, chống lỗi "0 0 0: syntax error"
 get_realtime_cpu_usage() {
-  local _cpu u1 n1 s1 i1 w1 x1 y1 z1 u2 n2 s2 i2 w2 x2 y2 z2
-  read -r _cpu u1 n1 s1 i1 w1 x1 y1 z1 < /proc/stat
+  local _cpu u1 n1 s1 i1 w1 x1 y1 z1 _rest1 u2 n2 s2 i2 w2 x2 y2 z2 _rest2
+  read -r _cpu u1 n1 s1 i1 w1 x1 y1 z1 _rest1 < /proc/stat
   sleep 0.2
-  read -r _cpu u2 n2 s2 i2 w2 x2 y2 z2 < /proc/stat
+  read -r _cpu u2 n2 s2 i2 w2 x2 y2 z2 _rest2 < /proc/stat
 
-  local idle1=$((i1 + w1))
-  local idle2=$((i2 + w2))
-  local total1=$((u1 + n1 + s1 + i1 + w1 + x1 + y1 + z1))
-  local total2=$((u2 + n2 + s2 + i2 + w2 + x2 + y2 + z2))
+  local idle1=$(( ${i1:-0} + ${w1:-0} ))
+  local idle2=$(( ${i2:-0} + ${w2:-0} ))
+  local total1=$(( ${u1:-0} + ${n1:-0} + ${s1:-0} + ${i1:-0} + ${w1:-0} + ${x1:-0} + ${y1:-0} + ${z1:-0} ))
+  local total2=$(( ${u2:-0} + ${n2:-0} + ${s2:-0} + ${i2:-0} + ${w2:-0} + ${x2:-0} + ${y2:-0} + ${z2:-0} ))
 
   local diff_idle=$((idle2 - idle1))
   local diff_total=$((total2 - total1))
@@ -80,6 +81,8 @@ get_realtime_cpu_usage() {
     return 0
   fi
   local usage=$(( (100 * (diff_total - diff_idle)) / diff_total ))
+  ((usage < 0)) && usage=0
+  ((usage > 100)) && usage=100
   printf '%s' "$usage"
 }
 
@@ -88,11 +91,11 @@ get_ram_stats() {
   local key val _unit total=0 avail=0 free_mem=0 buffers=0 cached=0
   while read -r key val _unit; do
     case "$key" in
-      MemTotal:) total="$val" ;;
-      MemAvailable:) avail="$val" ;;
-      MemFree:) free_mem="$val" ;;
-      Buffers:) buffers="$val" ;;
-      Cached:) cached="$val" ;;
+      MemTotal:) total="${val:-0}" ;;
+      MemAvailable:) avail="${val:-0}" ;;
+      MemFree:) free_mem="${val:-0}" ;;
+      Buffers:) buffers="${val:-0}" ;;
+      Cached:) cached="${val:-0}" ;;
     esac
   done < /proc/meminfo
 
@@ -113,17 +116,15 @@ adaptive_throttle_check() {
   local load1 _rest load_int
   read -r load1 _rest < /proc/loadavg
   load_int="${load1%%.*}"
-  [[ -z "$load_int" ]] && load_int=0
+  [[ ! "$load_int" =~ ^[0-9]+$ ]] && load_int=0
 
   local ram_used_pct ram_avail_mb
   read -r ram_used_pct ram_avail_mb <<< "$(get_ram_stats)"
 
-  # Ngưỡng nguy hiểm: RAM trống < 64MB hoặc Load > 2 lần số nhân CPU
   if ((ram_avail_mb < 64 || load_int >= cores * 2)); then
     printf "\r\033[K      \033[0;31m[Bảo vệ Server]\033[0m Tải cao (Load: %s, RAM trống: %sMB) -> Tạm nghỉ 8s...\n" "$load1" "$ram_avail_mb"
     sleep 8
   elif ((ram_used_pct > 85 || load_int >= cores)); then
-    # Ngưỡng cảnh báo: Tự động giãn nhịp thở thêm 2 giây
     sleep 2
   fi
 }
@@ -137,7 +138,6 @@ if [[ "$NAME" = "98" ]]; then
 fi
 
 if [[ -n "$NAME" && "$NAME" != "Tất cả website" ]]; then
-  # Kiểm tra có dấu chấm và validate whitelist chống injection
   if [[ "$NAME" = "${NAME/./}" ]] || [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]] || [[ "$NAME" == -* ]] || [[ "$NAME" == *..* ]]; then
     clear
     _runloi "${domain_nhap_khong_dung_dinh_dang:-Domain tên miền nhập không đúng định dạng}"
@@ -176,7 +176,6 @@ if [[ "$NAME" = 'Tất cả website' ]]; then
     path_html="/usr/local/lsws/$domain/html"
     if [[ -d "$path_html" ]]; then
       /bin/bash /etc/wptt/wptt-preload-cache2 "$domain"
-      # Nghỉ 2s giữa các website để giải phóng áp lực I/O và PHP Worker
       sleep 2
     fi
   done
@@ -191,7 +190,6 @@ fi
 
 wptt_logs "INFO" "Preload website $NAME"
 
-# Đọc cấu hình vhost trước để biết có dùng ip_domain không
 # shellcheck source=/dev/null
 . "/etc/wptt/vhost/.$NAME.conf"
 
@@ -207,30 +205,72 @@ echo ""
 TASK_CONN="Kiểm tra kết nối cho website: $NAME"
 _runing "$TASK_CONN"
 
-# Hàm kiểm tra HTTP 200 siêu nhẹ không dùng pipe head/grep
+# =======================================================================
+# KIỂM TRA GIAO THỨC HTTP / HTTPS BẰNG THƯ VIỆN CHUẨN WPTANGTOC
+# =======================================================================
+ssl="http"
+if [[ -f /etc/wptt/ssl/check-ssl-cert-con-kha-dung ]]; then
+  if /bin/bash /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$NAME" >/dev/null 2>&1; then
+    ssl="https"
+  fi
+fi
+
+# Hàm kiểm tra HTTP 200 chính xác (Không tự động nhảy từ http sang https tự ký)
 probe_http_200() {
   local target_url="$1"
   local connect_domain="${2#www.}"
   local code
-  code=$(curl -kIs -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
+  # Chỉ lấy mã của trang cuối nếu cùng giao thức hoặc kiểm tra trực tiếp
+  code=$(curl -kIs -L --max-redirs 3 -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 \
     --connect-to "${connect_domain}::127.0.0.1:443" \
     --connect-to "${connect_domain}::127.0.0.1:80" \
     -A "WPTangToc OLS preload cache" "$target_url" 2>/dev/null || true)
   [[ "$code" == "200" ]]
 }
 
-checkssl=0; checkssl2=0; checkssl3=0; checkssl4=0
-if probe_http_200 "https://${domain}" "$domain"; then
-  checkssl=1
-elif probe_http_200 "https://www.${domain}" "$domain"; then
-  checkssl3=1
-elif probe_http_200 "http://${domain}" "$domain"; then
-  checkssl2=1
-elif probe_http_200 "http://www.${domain}" "$domain"; then
-  checkssl4=1
+# Kiểm tra kết nối theo đúng giao thức $ssl đã xác thực và nhận diện www hay non-www
+conn_ok=0
+use_www=0
+
+# Kiểm tra xem header Location của trang gốc có ép chuyển sang www không
+first_loc=$(curl -kIs --connect-timeout 5 --max-time 10 \
+  --connect-to "${domain#www.}::127.0.0.1:443" \
+  --connect-to "${domain#www.}::127.0.0.1:80" \
+  -A "WPTangToc OLS preload cache" "${ssl}://${domain}/" 2>/dev/null | awk 'tolower($1)=="location:" {print $2; exit}' | tr -d '\r')
+
+if [[ "$first_loc" == *"://www.${domain#www.}"* ]]; then
+  use_www=1
 fi
 
-if ((checkssl == 0 && checkssl2 == 0 && checkssl3 == 0 && checkssl4 == 0)); then
+if ((use_www == 1)); then
+  if probe_http_200 "${ssl}://www.${domain#www.}" "$domain"; then
+    conn_ok=1
+    domain="www.${domain#www.}"
+  fi
+else
+  if probe_http_200 "${ssl}://${domain}" "$domain"; then
+    conn_ok=1
+  elif probe_http_200 "${ssl}://www.${domain#www.}" "$domain"; then
+    conn_ok=1
+    domain="www.${domain#www.}"
+  fi
+fi
+
+# Fallback kiểm tra giao thức còn lại nếu cấu hình SSL lệch thực tế (ví dụ trong CI/CD dùng self-signed cert)
+if ((conn_ok == 0)); then
+  alt_ssl="https"
+  [[ "$ssl" == "https" ]] && alt_ssl="http"
+  if probe_http_200 "${alt_ssl}://${domain}" "$domain"; then
+    conn_ok=1
+    ssl="$alt_ssl"
+  elif probe_http_200 "${alt_ssl}://www.${domain#www.}" "$domain"; then
+    conn_ok=1
+    ssl="$alt_ssl"
+    domain="www.${domain#www.}"
+  fi
+fi
+
+if ((conn_ok == 0)); then
   _runloi "$TASK_CONN"
   echo -e "${C_RED}Website $NAME ngưng hoạt động hoặc không phản hồi nội bộ.${C_RESET}"
   wptt_quay_ve_menu "${1:-}" 1 "enter"
@@ -245,12 +285,6 @@ elif [[ -f "/usr/local/lsws/$NAME/html/.htaccess" ]]; then
 fi
 
 NAME_path="$NAME"
-if ((checkssl3 == 1 || checkssl4 == 1)); then
-  domain="www.${domain#www.}"
-fi
-
-ssl="http"
-((checkssl == 1 || checkssl3 == 1)) && ssl="https"
 
 grepmobile=0
 [[ "$check" == *"Android"* ]] && grepmobile=1
@@ -284,7 +318,7 @@ else
   _rundone "Tìm thấy Sitemap: $NAME2"
 fi
 
-# Xác định công cụ Cache (Dùng pure bash string matching thay cho echo | grep)
+# Xác định công cụ Cache
 cong_cu=""
 if [[ "$check" != *[Ll]ite[Ss]peed* ]]; then
   pluginsspeed=(cache-enabler fast-velocity-minify wp-rocket w3-total-cache wp-super-cache wp2speed nitropack wp-fastest-cache hummingbird-performance swift-performance-lite swift-performance-pro breeze wp-meteor phastpress flying-press simple-cache powered-cache yasakani-cache batcache sg-cachepress cloudflare wp-optimize)
@@ -312,14 +346,12 @@ fi
 # =======================================================================
 # 3. KIỂM TRA & TỰ ĐỘNG ĐIỀU TIẾT TÀI NGUYÊN HỆ THỐNG (ADAPTIVE PREFLIGHT)
 # =======================================================================
-# Dọn dẹp tiến trình preload cũ bị kẹt của đúng domain này (An toàn bằng pkill -f)
 pkill -f "wptt-preload-cache-all.sh.*${domain}" >/dev/null 2>&1 || true
 
 CPU_CORES=$(get_cpu_cores)
 cpu_su_dung=$(get_realtime_cpu_usage)
 read -r ram_sudung ram_avail_mb <<< "$(get_ram_stats)"
 
-# Tính toán khoảng nghỉ động (Dynamic Interval) dựa trên sức khỏe VPS hiện tại
 CRAWL_INTERVAL="0.3"
 SPIDER_WAIT="1"
 
@@ -333,7 +365,6 @@ if ((ram_sudung > 92 && ram_avail_mb < 64)); then
   wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-# Nếu máy chủ RAM thấp (<= 1GB) hoặc đang chịu tải trung bình (> 70%), tự động giảm tốc độ cào
 if ((ram_avail_mb < 256 || cpu_su_dung > 70 || ram_sudung > 75)); then
   CRAWL_INTERVAL="1.2"
   SPIDER_WAIT="2"
@@ -352,7 +383,6 @@ trang_thai_bao_loi_preload_cache=0
 
 if [[ "$spider_mode" = false ]]; then
   # TRƯỜNG HỢP 1: CÓ SITEMAP
-  # Gộp các cờ để chỉ phải tải và phân tích XML Sitemap 1 LẦN DUY NHẤT (Tiết kiệm 50-70% RAM & I/O)
   crawler_args=("-i" "$CRAWL_INTERVAL")
 
   if ((grepmobile != 0)); then
@@ -377,7 +407,6 @@ else
 
   REGEX_REJECT="(wp-content|wp-includes|/wp-admin/|/wp-json/|/feed/|\.php|\.png|\.jpg|\.jpeg|\.gif|\.css|\.js|\.svg|\.woff|\.zip|p=|replytocom=|attachment_id=|s=|add-to-cart=|/%20|add_to_wishlist=|add_to_compare=|add-to-wishlist|tel:|action=|filtera-kich-thuoc=|product-cato=|price=|designId=|wmc-currency=)"
 
-  # Tạo file hosts ảo an toàn trong /etc/wptt/tmp (Chống Symlink Attack ở /tmp)
   /bin/mkdir -p /etc/wptt/tmp
   chmod 700 /etc/wptt/tmp
   FAKE_HOSTS=$(mktemp -p /etc/wptt/tmp "wptt_hosts_fake_${NAME}.XXXXXX")
@@ -385,11 +414,9 @@ else
   printf "127.0.0.1\t%s\n127.0.0.1\twww.%s\n" "${domain#www.}" "${domain#www.}" >>"$FAKE_HOSTS"
   chmod 644 "$FAKE_HOSTS"
 
-  # Hàm xử lý in log thời gian thực thuần Bash (Zero-Subshell: Không gọi grep/sed trong mỗi dòng log)
   process_spider_log() {
     local current_url="" line url_count=0
     while IFS= read -r line; do
-      # 1. Bắt dòng "--YYYY-MM-DD HH:MM:SS--  http..." của wget bằng Bash Regex
       if [[ "$line" =~ ^--[0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9:]+--\ \ (https?://.+) ]]; then
         current_url="${BASH_REMATCH[1]}"
         if [[ ! "${current_url,,}" =~ $REGEX_REJECT ]]; then
@@ -397,13 +424,11 @@ else
         else
           current_url=""
         fi
-      # 2. Bắt dòng "200 OK" bằng Bash Glob
       elif [[ "$line" == *"200 OK"* ]]; then
         if [[ -n "$current_url" ]]; then
           printf "\r\033[K      \033[0;32mĐã nạp Cache:\033[0m %s\n" "$current_url"
           current_url=""
           ((url_count++))
-          # Cứ mỗi 10 URLs kiểm tra tải máy chủ 1 lần để tự động phanh nếu VPS quá tải
           if ((url_count % 10 == 0)); then
             adaptive_throttle_check "$CPU_CORES"
           fi
@@ -413,7 +438,6 @@ else
     echo ""
   }
 
-  # Hàm chạy spider cách ly namespace mạng/mount an toàn, có fallback nếu container chặn unshare
   run_spider_pass() {
     local ua="$1"
     local extra_header="${2:-}"
@@ -435,7 +459,6 @@ else
         exec ionice -c 3 nice -n 19 wget "$@"
       ' _ "$FAKE_HOSTS" "${wget_args[@]}" 2>&1 | process_spider_log
     else
-      # Fallback nếu chạy trong môi trường container (Docker/LXC) không cấp quyền unshare mount
       ionice -c 3 nice -n 19 wget "${wget_args[@]}" 2>&1 | process_spider_log
     fi
   }

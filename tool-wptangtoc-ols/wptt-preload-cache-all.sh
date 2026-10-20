@@ -1,8 +1,7 @@
 #!/bin/bash
-# phát triển bởi LiteSpeedtech được fork lại bởi Gia Tuấn
 # Author          : LiteSpeedtech & Gia Tuấn
 # Date            : 20-10-2026
-# Version         : 3.0.0
+# Version         : 3.0.1-Enterprise
 # Require         : Prepare sitemap XML & Allow LSCache crawler
 # Description     : Thư viện lõi Preload Cache hiệu năng cao (Zero-Subshell & Adaptive Load Governor)
 #=======================================================
@@ -26,6 +25,7 @@ DEBUGURL='OFF'
 BLACKLIST='OFF'
 CRAWLQS='OFF'
 REPORT='OFF'
+FORCED_SCHEME=''
 /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
 chmod 700 /etc/wptt/tmp 2>/dev/null || true
 CRAWLLOG='/etc/wptt/tmp/crawler.log'
@@ -41,7 +41,6 @@ DETECT_LIMIT=10
 ERR_LIST="'400'|'401'|'403'|'404'|'407'|'500'|'502'"
 EPACE='        '
 
-# Đếm số nhân CPU 1 lần duy nhất lúc khởi chạy bằng Bash built-in
 SYS_CORES=0
 if [[ -r /proc/cpuinfo ]]; then
   while IFS= read -r _line; do
@@ -100,31 +99,28 @@ EOF
 # =======================================================================
 # BỘ ĐIỀU TIẾT TẢI THÔNG MINH (ADAPTIVE LOAD GOVERNOR - ZERO SUBSHELL)
 # =======================================================================
-# Kiểm tra định kỳ mỗi 15 request: Tự động giảm tốc nếu CPU/RAM tăng cao
 function adaptive_governor() {
   local load1 _rest load_int
   read -r load1 _rest < /proc/loadavg
   load_int="${load1%%.*}"
-  [[ -z "$load_int" ]] && load_int=0
+  [[ ! "$load_int" =~ ^[0-9]+$ ]] && load_int=0
 
   local key val _unit total=0 avail=0 free_mem=0 buffers=0 cached=0
   while read -r key val _unit; do
     case "$key" in
-      MemTotal:) total="$val" ;;
-      MemAvailable:) avail="$val" ;;
-      MemFree:) free_mem="$val" ;;
-      Buffers:) buffers="$val" ;;
-      Cached:) cached="$val" ;;
+      MemTotal:) total="${val:-0}" ;;
+      MemAvailable:) avail="${val:-0}" ;;
+      MemFree:) free_mem="${val:-0}" ;;
+      Buffers:) buffers="${val:-0}" ;;
+      Cached:) cached="${val:-0}" ;;
     esac
   done < /proc/meminfo
   ((avail == 0)) && avail=$((free_mem + buffers + cached))
   local avail_mb=$((avail / 1024))
 
-  # 1. Mức Nguy Hiểm (RAM trống < 64MB hoặc Load >= 2x Cores): Ngủ đông 6 giây nhường Server
   if ((avail_mb < 64 || load_int >= SYS_CORES * 2)); then
     echoR "   [Bảo vệ VPS] Máy chủ đang chịu tải cao (Load: ${load1}, RAM trống: ${avail_mb}MB) -> Tạm dừng 6s..."
     sleep 6
-  # 2. Mức Cảnh Báo (RAM trống < 150MB hoặc Load >= 1x Cores): Giãn nhịp nghỉ thêm 1.5s
   elif ((avail_mb < 150 || load_int >= SYS_CORES)); then
     sleep 1.5
   fi
@@ -203,13 +199,16 @@ function escape_url() {
 # =======================================================================
 # HÀM CÀO URL TỐI ƯU HÓA CỰC ĐẠI (ZERO-SUBSHELL STRING MANIPULATION)
 # =======================================================================
-# Thay vì dùng 12 lệnh sed/awk/cut/tac cho mỗi URL, ta dùng Bash Parameter Expansion
-# và cờ -w "%{http_code}" của curl. Nhanh hơn gấp 10 lần và không tốn CPU fork().
 function crawlreq() {
   local ua_header="$1"
   local target_url="$2"
   local cookie_str="${3:-}"
   local extra_accept="${4:-}"
+
+  # Đồng bộ giao thức theo FORCED_SCHEME (http hoặc https) đã được kiểm chứng từ SITEMAP gốc
+  if [[ -n "$FORCED_SCHEME" ]]; then
+    target_url="${FORCED_SCHEME}://${target_url#*://}"
+  fi
 
   if [[ "${DEBUGURL}" != "OFF" && "${BLACKLIST}" = 'ON' ]]; then
     if duplicateck "${target_url}" "${BLACKLSPATH}"; then
@@ -220,7 +219,6 @@ function crawlreq() {
 
   printf "%s -> " "${target_url}"
 
-  # Cắt lấy domain thuần bằng Bash Built-in (Không dùng echo | sed | cut | sed)
   local domain_host="${target_url#*://}"
   domain_host="${domain_host%%/*}"
   domain_host="${domain_host#www.}"
@@ -283,7 +281,6 @@ function runLoop() {
     if [[ "${ONLIST}" = 'NO' ]]; then
       crawlreq "${ua}" "${URL}" "${cookie}" "${webp_flag}"
       ((req_counter++))
-      # Cứ mỗi 15 URLs thì đo tải hệ thống 1 lần để tự động điều tiết
       if ((req_counter % 15 == 0)); then
         adaptive_governor
       fi
@@ -352,9 +349,11 @@ function debugurl() {
   fi
 }
 
-# Hàm tải nội dung XML hỗ trợ cả file nén .xml.gz và định tuyến nội bộ Localhost
 function fetch_xml_stream() {
   local xml_url="$1"
+  if [[ -n "$FORCED_SCHEME" ]]; then
+    xml_url="${FORCED_SCHEME}://${xml_url#*://}"
+  fi
   local domain_host="${xml_url#*://}"
   domain_host="${domain_host%%/*}"
   domain_host="${domain_host#www.}"
@@ -366,29 +365,42 @@ function fetch_xml_stream() {
   fi
 }
 
+# =======================================================================
+# [FIXED]: TÁCH MỌI THẺ <loc>...</loc> TRÊN CÙNG 1 DÒNG THÀNH NHIỀU DÒNG RIÊNG BIỆT
+# Giải quyết triệt để lỗi wp-sitemap.xml bị nén trên 1 dòng chỉ lấy được nhánh cuối
+# =======================================================================
+function extract_locs_from_xml() {
+  sed -e 's/<loc>/\n<loc>/g' -e 's/<\/loc>/<\/loc>\n/g' | awk '
+    /<loc>.*<\/loc>/ {
+      sub(/.*<loc>/, "")
+      sub(/<\/loc>.*/, "")
+      gsub(/<!\[CDATA\[|\]\]>/, "")
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+      if ($0 != "" && $0 !~ /xmlns=/) print $0
+    }
+  '
+}
+
 function storexml() {
   local target_map="$1"
+  # Ghi nhận giao thức gốc (http hoặc https) từ tham số đầu vào để đồng bộ toàn bộ URL con
+  if [[ "$target_map" == https://* ]]; then
+    FORCED_SCHEME="https"
+  elif [[ "$target_map" == http://* ]]; then
+    FORCED_SCHEME="http"
+  fi
+
   if [[ "$target_map" =~ \.xml(\.gz)?$ ]]; then
-    # Trích xuất danh sách sub-sitemap bằng 1 lệnh awk duy nhất thay vì 5 lệnh grep/sed nối nhau
     local sub_xmls
-    sub_xmls=$(fetch_xml_stream "$target_map" | awk '
-      {
-        gsub(/<loc>/, "\n<loc>")
-        gsub(/<\/loc>/, "</loc>\n")
-      }
-      /<loc>.*<\/loc>/ {
-        sub(/.*<loc>/, "")
-        sub(/<\/loc>.*/, "")
-        gsub(/<!\[CDATA\[|\]\]>/, "")
-        gsub(/^[[:space:]]+|[[:space:]]+$/, "")
-        if ($0 ~ /\.xml(\.gz)?$/ && $0 !~ /xmlns=/) print $0
-      }
-    ')
+    sub_xmls=$(fetch_xml_stream "$target_map" | extract_locs_from_xml | grep -E '\.xml(\.gz)?$' || true)
 
     if [[ -n "$sub_xmls" ]]; then
       local u
       while IFS= read -r u; do
-        [[ -n "$u" ]] && XML_LIST+=("$u")
+        if [[ -n "$u" ]]; then
+          [[ -n "$FORCED_SCHEME" ]] && u="${FORCED_SCHEME}://${u#*://}"
+          XML_LIST+=("$u")
+        fi
       done <<< "$sub_xmls"
     else
       XML_LIST+=("$target_map")
@@ -410,18 +422,15 @@ function maincrawl() {
       getcookie
     fi
 
-    # 1. Luồng Desktop tiêu chuẩn
     cachecount "${URLCOUNT}"
     runLoop "${AGENTDESKTOP}" "${COOKIE}" ""
 
-    # 2. Luồng Desktop WebP (Nếu kích hoạt -w)
     if [[ -n "${WITH_WEBP}" ]]; then
       echoY 'Starting to view with WebP header...'
       cachecount "${URLCOUNT}"
       runLoop "${AGENTDESKTOP}" "${COOKIE}" "ENABLE"
     fi
 
-    # 3. Luồng Mobile (Nếu kích hoạt -m)
     if [[ "${WITH_MOBILE}" = 'ON' ]]; then
       echoY 'Starting to view with mobile agent...'
       cachecount "${URLCOUNT}"
@@ -442,20 +451,14 @@ function main() {
     local XMLURL
     for XMLURL in "${XML_LIST[@]}"; do
       echoCYAN "Chuẩn bị quét ${XMLURL} XML file"
-      # Dùng 1 pipeline awk + sort -u duy nhất, loại bỏ grep -P để tương thích 100% mọi bản Linux
       local raw_urls
-      raw_urls=$(fetch_xml_stream "${XMLURL}" | awk -v crawl_qs="${CRAWLQS}" '
+      raw_urls=$(fetch_xml_stream "${XMLURL}" | extract_locs_from_xml | awk -v crawl_qs="${CRAWLQS}" -v scheme="${FORCED_SCHEME}" '
         {
-          gsub(/<loc>/, "\n<loc>")
-          gsub(/<\/loc>/, "</loc>\n")
-        }
-        /<loc>.*<\/loc>/ {
-          sub(/.*<loc>/, "")
-          sub(/<\/loc>.*/, "")
-          gsub(/<!\[CDATA\[|\]\]>/, "")
-          gsub(/^[[:space:]]+|[[:space:]]+$/, "")
           if (crawl_qs != "ON") {
             sub(/\?.*/, "")
+          }
+          if (scheme != "") {
+            sub(/^https?:\/\//, scheme "://")
           }
           low = tolower($0)
           if (low ~ /^https?:\/\// && low !~ /\.(png|jpg|jpeg|webp|gif|svg|css|js|woff|woff2|ttf|eot|ico|pdf|zip|mp4|mp3)$/) {
