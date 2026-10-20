@@ -1,5 +1,4 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
 
 function huong_dan() {
     cat << 'EOF'
@@ -13,6 +12,7 @@ EOF
 [[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
 . "/etc/wptt/lang/$ngon_ngu.sh"
 
+. /etc/wptt/core-functions 2>/dev/null
 . /etc/wptt/echo-color
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}$quan_ly_wordpress ➜ $cap_nhat Url home && siteurl${C_RESET}"
@@ -27,45 +27,40 @@ lua_chon_NAME "$cap_nhat home && siteurl"
 path_conf="/etc/wptt/vhost/.$NAME.conf"
 [[ ! -f "$path_conf" ]] && {
   echoDo "$ten_mien_nay_khong_ton_tai_tren_he_thong"
-  sleep 2
-  exec /etc/wptt/wptt-wordpress-main 1
+	wptt_quay_ve_menu "${1:-}" 1 "enter"
 }
 
 path="/usr/local/lsws/$NAME/html"
 [[ ! -f "$path/wp-load.php" ]] && {
   echoDo "$he_thong_xac_nhan_ban_khong_su_ma_nguon"
   echoDo "$tinh_nang_nay_chi_danh_cho_ma_nguon_wordpress"
-  sleep 2
-  exec /etc/wptt/wptt-wordpress-main 1
+	wptt_quay_ve_menu "${1:-}" 1 "enter"
 }
 
 [[ ! -f "$path/wp-config.php" ]] && {
   echoDo "$he_thong_xac_nhan_ban_khong_su_ma_nguon"
   sleep 2
-  exec /etc/wptt/wptt-wordpress-main 1
+	wptt_quay_ve_menu "${1:-}" 1 "enter"
 }
 
 . "$path_conf"
 if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
   wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
   _runloi "Không xác định được phiên bản PHP"
-  return 1 2>/dev/null || exit 1
+	wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
 # Khai báo WP_EXEC chuẩn quyền
 WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
 
 # --- BƯỚC 1: XÁC ĐỊNH PROTOCOL (HTTP hay HTTPS) ---
-is_ssl=false
-if [[ -f "/etc/letsencrypt/live/$NAME/cert.pem" || -d "/usr/local/lsws/$NAME/ssl" ]]; then
-  is_ssl=true
-# Curl check header thay vì body để tăng tốc x10 lần, timeout 5s chống treo
-elif curl -sI -m 5 "https://$NAME" 2>/dev/null | grep -qiE 'cf-|cloudflare'; then
-  is_ssl=true
+protocol="http"
+if [[ -f /etc/wptt/ssl/check-ssl-cert-con-kha-dung ]]; then
+  if /bin/bash /etc/wptt/ssl/check-ssl-cert-con-kha-dung "$NAME" >/dev/null 2>&1; then
+    protocol="https"
+  fi
 fi
 
-protocol="http"
-[[ "$is_ssl" == true ]] && protocol="https"
 
 # --- BƯỚC 2: XÁC ĐỊNH PREFIX (có www hay không) ---
 current_home=$("${WP_EXEC[@]}" option get home --path="$path" 2>/dev/null)
@@ -80,17 +75,16 @@ UI_STRING="$cap_nhat Home URL website $NAME: $final_url"
 
 _runing "$UI_STRING"
 
-"${WP_EXEC[@]}" option update home "$final_url" --path="$path" >/dev/null 2>&1
-"${WP_EXEC[@]}" option update siteurl "$final_url" --path="$path" >/dev/null 2>&1
+# Kiểm tra đồng thời cả 2 lệnh. Nếu lệnh 1 thất bại, lệnh 2 sẽ tự động bị hủy (nhờ &&)
+if "${WP_EXEC[@]}" option update home "$final_url" --path="$path" >/dev/null 2>&1 && \
+	"${WP_EXEC[@]}" option update siteurl "$final_url" --path="$path" >/dev/null 2>&1; then
+	"${WP_EXEC[@]}" cache flush --path="$path" >/dev/null 2>&1 #xóa object cache, vì update database mà xóa object cache
+	_rundone "$UI_STRING"
+else
+	_runloi "$UI_STRING"
+	wptt_quay_ve_menu "${1:-}" 1 "enter"
+fi
 
-#xoá object cache
-#xoa cache redis để tránh bị lỗi tiếp update database version khi hạ cấp phiên bản php
-"${WP_EXEC[@]}" cache flush --path="$path" >/dev/null 2>&1
-
-# (/etc/wptt/cache/wptt-xoa-cache-redis-valkey-keydb $NAME >/dev/null 2>&1)
-
-_rundone "$UI_STRING"
 
 wptt_logs "INFO" "Update home - siteurl Wordpress website $NAME ($final_url)"
-
 wptt_quay_ve_menu "${1:-}" 0
