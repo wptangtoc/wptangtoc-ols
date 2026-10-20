@@ -10,42 +10,53 @@ PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/b
 
 
 . /etc/wptt/vhost/."$NAME".conf
-[[ -z "$User_name_vhost" ]] && exit 1
 
-if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
-  wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
-  _runloi "Không xác định được phiên bản PHP"
-  return 1 2>/dev/null || exit 1
-fi
-WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp )
+# Tìm xem có file kết thúc bằng _options.ibd hay không
+found_ibd=$(find "/var/lib/mysql/${DB_Name_web:?}" -maxdepth 1 -name "*_options.ibd" -print -quit 2>/dev/null)
 
-
-# --- 2. KIỂM TRA TRẠNG THÁI CÀI ĐẶT ---
-# Sử dụng đường dẫn tuyệt đối cho WP-CLI để tránh lỗi môi trường Cron
-if [[ -z $("${WP_EXEC[@]}" option get home --allow-root --path="/usr/local/lsws/$NAME/html" 2>/dev/null) ]]; then
+if [[ -z "$found_ibd" ]]; then
   echo "Chưa hoàn tất cài đặt WordPress cho $NAME. Đang chờ..."
-  exit 0
-fi
+	exit 0 #dùng exit 0 thay vì exit 1 để đỡ phải print log vào kernel nhiều, đoạn này chỉ chạy cron thôi mà
+fi 
+
 
 # --- 3. GỠ BỎ KHIÊN BẢO VỆ HTTP AUTH ---
 vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 
-if [[ -f "$vhost_conf" ]]; then
+[[ ! -f "$vhost_conf" ]] && exit 1
+
+tmp_vhost_conf=$(wptt_atomic_begin "$vhost_conf") || {
+	_runloi "Không thể khởi tạo file nháp OpenLiteSpeed vhost"
+	exit 1
+}
+
+
   # Xóa Realm và Context của LiteSpeed (Đã dùng ngoặc kép "" an toàn)
-  sed -i -e "/^realm ${NAME}wordpress-setup/,/^}$/d" "$vhost_conf"
-  sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' "$vhost_conf"
+	sed -i -e "/^realm ${NAME}wordpress-setup/,/^}$/d" "$tmp_vhost_conf"
+	sed -i -e '/^context exp:wp-admin\/install.php/,/^}$/d' "$tmp_vhost_conf"
+
+wptt_atomic_commit "$tmp_vhost_conf" "$vhost_conf"
+
+
+# Xóa file chứa user/password tạm của trang setup
+passwd_dir="/usr/local/lsws/${NAME:?}/passwd"
+/bin/rm -f -- "$passwd_dir/.mk-setup" 2>/dev/null || true
+
+# Nếu thư mục passwd tồn tại nhưng hoàn toàn trống rỗng (không còn file nào khác bên trong) -> Xóa luôn thư mục passwd
+if [[ -d "$passwd_dir" ]]; then
+  # Dùng find kiểm tra nhanh xem thư mục có còn file/thư mục con nào không
+  if [[ -z "$(find "$passwd_dir" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    /bin/rmdir -- "$passwd_dir" 2>/dev/null || true
+  fi
 fi
 
-# Xóa file chứa user/password
-rm -f "/usr/local/lsws/${NAME:?}/passwd/.mk-setup"
-
 # --- 4. TỰ HỦY CRONJOB DỌN DẸP ---
-rm -f "/etc/cron.d/wp-delete-setup-bao-mat-${NAME:?}.cron"
+rm -f -- "/etc/cron.d/wp-delete-setup-bao-mat-${NAME:?}.cron"
 
 # Xử lý riêng cho đặc thù của Ubuntu (đổi dấu chấm thành gạch dưới)
 if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
   NAME_CRON_ubuntu=${NAME//[.]/_}
-  rm -f "/etc/cron.d/wp-delete-setup-bao-mat-${NAME_CRON_ubuntu:?}_cron"
+  rm -f -- "/etc/cron.d/wp-delete-setup-bao-mat-${NAME_CRON_ubuntu:?}_cron"
   systemctl reload cron >/dev/null 2>&1
 else
   systemctl reload crond >/dev/null 2>&1

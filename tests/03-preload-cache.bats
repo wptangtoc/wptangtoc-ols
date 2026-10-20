@@ -18,7 +18,7 @@ setup_file() {
 
 teardown_file() {
   # Dọn dẹp website mồi (Chuyển giao từ file 03 sang file 04)
-  export SCRIPT_XOA="/etc/wptt/domain/wptt-xoawebsite"
+  export SCRIPT_XOA="/etc/wptt/domain/wptt-xoa-website"
   if [ -x "$SCRIPT_XOA" ]; then
       echo -e "y\ny\n" | bash "$SCRIPT_XOA" "$TEST_DOMAIN" >/dev/null 2>&1 || true
   fi
