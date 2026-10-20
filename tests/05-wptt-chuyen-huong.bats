@@ -85,34 +85,52 @@ in_log_neu_loi() {
   [ "$status" -eq 0 ]
 
   # ==========================================================
-  # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
+  # CURL KIỂM CHỨNG THỰC TẾ (SMART POLLING HTTP 301 & Location)
   # ==========================================================
-  # [FIX BATS HANG]: Bổ sung 3>&- khi restart OLS
-  /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 3>&- || true
-  sleep 20 # Chờ OLS nạp cấu hình mới hoàn toàn
+  /usr/local/lsws/bin/lswsctrl stop >/dev/null 2>&1 3>&- || true
+  sleep 3 
+  /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 3>&- || true
 
-  # 1. Lấy mã HTTP Code (Kỳ vọng 301)
-  local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
-  if [ "$HTTP_CODE" != "301" ]; then
-    echo -e "\n[LỖI CURL] Web Server không trả về 301. Mã thực tế: $HTTP_CODE" >&3
-    false
+  local max_attempts=15
+  local attempt=1
+  local is_hit=false
+  local HTTP_CODE=""
+  local LOCATION=""
+
+  # SMART POLLING: Chờ tối đa 30s để OLS nạp file cấu hình mới và trả về 301
+  while [ $attempt -le $max_attempts ]; do
+      local CURL_OUT
+      CURL_OUT=$(curl -s -I -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ | tr -d '\r')
+      
+      # Lấy mã HTTP Code (dòng đầu tiên) và Header Location bằng awk cho tốc độ siêu nhanh
+      HTTP_CODE=$(echo "$CURL_OUT" | awk 'NR==1 {print $2}')
+      LOCATION=$(echo "$CURL_OUT" | awk 'tolower($1)=="location:" {print $2}')
+
+      if [[ "$HTTP_CODE" == "301" && "$LOCATION" == "https://$DOMAIN_DICH/" ]]; then
+          is_hit=true
+          break
+      fi
+      
+      sleep 2
+      ((attempt++))
+  done
+
+  if [ "$is_hit" = false ]; then
+      echo -e "\n[LỖI CURL] Đã chờ 30s nhưng Web Server không trả về 301 hoặc sai đích." >&3
+      echo "Mã thực tế: $HTTP_CODE" >&3
+      echo "Đích thực tế: '$LOCATION'" >&3
+      false
   fi
 
-  # 2. Lấy URL đích từ Header Location (Kỳ vọng trỏ về https://DOMAIN_DICH/)
-  local LOCATION=$(curl -s -I -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ | grep -i "^Location:" | tr -d '\r' | awk '{print $2}')
-  if [[ "$LOCATION" != "https://$DOMAIN_DICH/" ]]; then
-    echo -e "\n[LỖI CURL] Chuyển hướng sai đích. Đích thực tế: '$LOCATION'" >&3
-    false
-  fi
+  echo "[PASSED] Web Server đã trả về 301 Redirect chính xác!" >&3
 }
 
 @test "Integration: Chuyển hướng một Tên miền ĐÃ TỒN TẠI (Ghi đè htaccess)" {
   local DOMAIN_NGUON="website-dang-chay.com"
   local DOMAIN_DICH="chuyen-nha-moi.com"
 
-  # 1. TIỀN ĐIỀU KIỆN (FIXTURE): Dùng script Thêm Website để đẻ ra 1 website thật
+  # 1. TIỀN ĐIỀU KIỆN (FIXTURE)
   export SCRIPT_THEM="/etc/wptt/domain/wptt-themwebsite"
-  # [FIX BATS HANG]: Bổ sung 3>&- khi tạo website vì script này có restart OLS
   bash "$SCRIPT_THEM" "$DOMAIN_NGUON" >/dev/null 2>&1 3>&- || true
 
   if [ ! -d "/usr/local/lsws/$DOMAIN_NGUON/html" ]; then
@@ -123,7 +141,7 @@ in_log_neu_loi() {
   # [FIX CI/CD]: Bơm một file index.html ảo vào thư mục gốc chống OLS trả 404
   echo "WPTangToc CI/CD Dummy File" > "/usr/local/lsws/$DOMAIN_NGUON/html/index.html"
 
-  # 2. HÀNH ĐỘNG: [FIX BATS HANG]: Bổ sung 3>&- 
+  # 2. HÀNH ĐỘNG:
   run bash -c "bash $SCRIPT_TEST \"$DOMAIN_NGUON\" \"$DOMAIN_DICH\" < /dev/null 3>&-"
 
   in_log_neu_loi 0
@@ -131,7 +149,6 @@ in_log_neu_loi() {
   [[ "$output" =~ "HOÀN TẤT CHUYỂN HƯỚNG TÊN MIỀN" ]]
 
   # 3. KIỂM CHỨNG FILE:
-  # Đảm bảo .htaccess bắt buộc phải có RewriteEngine On
   run grep -i "RewriteEngine On" "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess"
   if [ "$status" -ne 0 ]; then
       echo -e "\n[LỖI SCRIPT] File .htaccess thiếu chỉ thị 'RewriteEngine On'!" >&3
@@ -142,27 +159,43 @@ in_log_neu_loi() {
   [ "$status" -eq 0 ]
 
   # ==========================================================
-  # CURL KIỂM CHỨNG THỰC TẾ (HTTP 301 & Location)
+  # CURL KIỂM CHỨNG THỰC TẾ (SMART POLLING HTTP 301 & Location)
   # ==========================================================
-  # [FIX BATS HANG]: Bổ sung 3>&- khi quản lý OLS
   /usr/local/lsws/bin/lswsctrl stop >/dev/null 2>&1 3>&- || true
   sleep 3 
   /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 3>&- || true
-  sleep 15 
 
-  # 1. Bắn cờ -w "%{http_code}" để check mã
-  local HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: $DOMAIN_NGUON" http://127.0.0.1/)
-  if [ "$HTTP_CODE" != "301" ]; then
-    echo -e "\n[LỖI CURL] Htaccess bị đè nhưng Web Server chưa trả về 301. Mã thực tế: $HTTP_CODE" >&3
+  local max_attempts=15
+  local attempt=1
+  local is_hit=false
+  local HTTP_CODE=""
+  local LOCATION=""
+
+  # SMART POLLING: Chờ tối đa 30s để OLS nạp htaccess và trả về 301
+  while [ $attempt -le $max_attempts ]; do
+      local CURL_OUT
+      CURL_OUT=$(curl -s -I -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ | tr -d '\r')
+      
+      HTTP_CODE=$(echo "$CURL_OUT" | awk 'NR==1 {print $2}')
+      LOCATION=$(echo "$CURL_OUT" | awk 'tolower($1)=="location:" {print $2}')
+
+      if [[ "$HTTP_CODE" == "301" && "$LOCATION" == "https://$DOMAIN_DICH/" ]]; then
+          is_hit=true
+          break
+      fi
+      
+      sleep 2
+      ((attempt++))
+  done
+
+  if [ "$is_hit" = false ]; then
+    echo -e "\n[LỖI CURL] Đã chờ 30s nhưng Htaccess bị đè chưa làm Web Server trả về 301." >&3
+    echo "Mã thực tế: $HTTP_CODE" >&3
+    echo "Đích thực tế: '$LOCATION'" >&3
     echo "--- NỘI DUNG .HTACCESS ---" >&3
     cat "/usr/local/lsws/$DOMAIN_NGUON/html/.htaccess" >&3
     false
   fi
 
-  # 2. Bắn cờ -I để soi Header Location
-  local LOCATION=$(curl -s -I -H "Host: $DOMAIN_NGUON" http://127.0.0.1/ | grep -i "^Location:" | tr -d '\r' | awk '{print $2}')
-  if [[ "$LOCATION" != "https://$DOMAIN_DICH/" ]]; then
-    echo -e "\n[LỖI CURL] Chuyển hướng sai đích. Đích thực tế: '$LOCATION'" >&3
-    false
-  fi
+  echo "[PASSED] Web Server đã trả về 301 Redirect chính xác sau khi cập nhật Htaccess!" >&3
 }
