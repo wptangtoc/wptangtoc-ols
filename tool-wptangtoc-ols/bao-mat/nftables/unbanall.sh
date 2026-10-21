@@ -22,12 +22,13 @@ tmp_conf=$(mktemp -p "/etc/wptt/tmp" wptt_nftables_XXXXXX.txt)
 if nft list ruleset > "$tmp_conf" && [[ -s "$tmp_conf" ]]; then
 	mv -f "$tmp_conf" "$path_nftables_config"
 	chmod 600 "$path_nftables_config"
-	systemctl restart nftables >/dev/null 2>&1
-	return 0
+	if ! systemctl restart nftables >/dev/null 2>&1;then
+		return 1 2>/dev/null || exit 1
+	fi
 else
 	echo "Lỗi: Không thể xuất ruleset — GIỮ NGUYÊN file cấu hình cũ để tránh mất firewall khi reboot!"
 	rm -f "$tmp_conf"
-	return 1
+	return 1 2>/dev/null || exit 1
 fi
 
 
