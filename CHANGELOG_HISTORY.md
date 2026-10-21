@@ -1,3 +1,12 @@
+## WPTangToc OLS 8.3.0.2
+
+🛠️ Tối ưu hệ thống:
+- **Cải tiến tính năng sao chép website:** Tối ưu hóa toàn diện quy trình nhân bản dữ liệu, giúp thao tác sao chép website diễn ra nhanh chóng và ổn định hơn.
+- **Tăng tốc quản lý extension PHP:** Rút ngắn đáng kể thời gian thêm mới hoặc gỡ bỏ các extension PHP, giúp quản trị viên tùy chỉnh môi trường máy chủ linh hoạt và tiết kiệm thời gian.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.3.0.1
 
 🚀 **Tính năng mới**
