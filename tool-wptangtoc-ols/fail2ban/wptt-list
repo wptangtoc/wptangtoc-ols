@@ -1,121 +1,279 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Xem toàn bộ danh sách IP và dải CIDR đang bị chặn (Blacklist)
 
 function huong_dan() {
-    cat << 'EOF'
-  Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hiện đang bị ngăn chặn truy cập vào máy chủ.
+  cat <<'EOF'
+  Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hoặc dải mạng (CIDR) hiện đang bị ngăn chặn truy cập vào máy chủ trên mọi lớp bảo mật (Fail2ban, CSF, Nftables, Firewalld và OpenLiteSpeed).
 EOF
 }
 
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null
+
+# shellcheck source=/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+if [[ -z "${ngon_ngu:-}" ]]; then
+  ngon_ngu='vi'
+fi
+# shellcheck source=/dev/null
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+
+# Quản lý file tạm an toàn với trap
+TMP_LIST=""
+TMP_SORTED=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${TMP_LIST:-}" && -f "$TMP_LIST" ]]; then
+    /bin/rm -f -- "${TMP_LIST:?}"
+  fi
+  if [[ -n "${TMP_SORTED:-}" && -f "$TMP_SORTED" ]]; then
+    /bin/rm -f -- "${TMP_SORTED:?}"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+route_flag="${1:-}"
 
 clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ IP ➜ Danh Sách IP Đang Bị Khóa (Blacklist)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+echo ""
+print_border_top "$C_CYAN"
+center_text "${C_YELLOW}QUẢN LÝ IP ➜ Danh Sách IP Đang Bị Khóa (Blacklist)${C_RESET}" "$C_CYAN"
+print_border_bot "$C_CYAN"
+echo ""
 
-_runing "Đang càn quét dữ liệu từ các lớp Tường lửa (Fail2ban, CSF, OLS...)"
+task_msg="Thu thập dữ liệu IP bị chặn từ các lớp tường lửa"
+_runing "$task_msg"
 
-# Tạo một file tạm an toàn để gom data thô
-TMP_LIST=$(mktemp)
-
-# Biến Regex bắt chính xác IPv4 và IPv6 (Tối đa 39 ký tự)
-REGEX_IP='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|\b([0-9a-fA-F:]+:+)+[0-9a-fA-F]+\b'
+mkdir -p /etc/wptt/tmp 2>/dev/null
+TMP_LIST="$(mktemp -p /etc/wptt/tmp wptt_blacklist_raw_XXXXXX.tmp)"
+TMP_SORTED="$(mktemp -p /etc/wptt/tmp wptt_blacklist_sorted_XXXXXX.tmp)"
 
 # ==============================================================================
-# 1. QUÉT FAIL2BAN (Dán nhãn chi tiết đến từng Jail)
+# 1. QUÉT FAIL2BAN (0-SUBSHELL JAIL PARSING & LỌC SẠCH TỪ KHÓA HỆ THỐNG)
 # ==============================================================================
-if systemctl is-active --quiet fail2ban; then
-  for JAIL in $(fail2ban-client status 2>/dev/null | grep 'Jail list:' | cut -d ':' -f2 | tr ',' '\n' | sed -e 's/^[ \t]*//'); do
-    if [[ -n "$JAIL" ]]; then
-      fail2ban-client status "$JAIL" 2>/dev/null | grep 'Banned IP list:' | grep -oE "$REGEX_IP" | awk -v j="$JAIL" '{print "Fail2ban-"j, $1}' >>"$TMP_LIST"
-    fi
-  done
+if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
+  jail_raw="$(fail2ban-client status 2>/dev/null)"
+  if [[ "$jail_raw" =~ Jail[[:space:]]list:[[:space:]]*([^\n\r]+) ]]; then
+    for jail in ${BASH_REMATCH[1]//,/ }; do
+      [[ -n "$jail" ]] || continue
+      awk -v j="Fail2ban-${jail}" '
+        function is_valid_ip(val) {
+          if (val == "" || val == "list:" || val == "Banned" || val == "IP" || val == "none") return 0
+          if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) return 1
+          if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}\/[0-9]{1,2}$/) return 1
+          if (index(val, ":") > 0 && val ~ /^[0-9a-fA-F:\/]+$/) return 1
+          return 0
+        }
+        /Banned IP list:/ {
+          for (i = 4; i <= NF; i++) {
+            cand = $i
+            gsub(/[,]/, "", cand)
+            if (is_valid_ip(cand)) print j, cand
+          }
+        }
+      ' < <(fail2ban-client status "$jail" 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+    done
+  fi
 fi
 
 # ==============================================================================
-# 2. QUÉT CSF
+# 2. QUÉT CSF FIREWALL (CẢ DANH SÁCH CHẶN VĨNH VIỄN VÀ CHẶN TẠM THỜI)
 # ==============================================================================
-if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.deny ]]; then
-  grep -vE '^#|^$' /etc/csf/csf.deny | grep -oE "$REGEX_IP" | awk '{print "CSF", $1}' >>"$TMP_LIST"
+if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
+  if [[ -f /etc/csf/csf.deny ]]; then
+    awk '
+      /^[ \t]*#/ { next }
+      /^[ \t]*$/ { next }
+      {
+        if (index($1, "\x7c") == 0) print "CSF", $1
+      }
+    ' /etc/csf/csf.deny >>"$TMP_LIST" 2>/dev/null
+  fi
+
+  # Quét thêm danh sách khóa tạm thời của CSF/LFD (nếu có)
+  if [[ -s /var/lib/csf/csf.tempban ]]; then
+    awk -F '\x7c' '
+      /^[ \t]*#/ { next }
+      NF >= 1 && $1 != "" {
+        gsub(/[[:space:]]/, "", $1)
+        if ($1 != "") print "CSF-Temp", $1
+      }
+    ' /var/lib/csf/csf.tempban >>"$TMP_LIST" 2>/dev/null
+  fi
 fi
 
 # ==============================================================================
-# 3. QUÉT OPENLITESPEED (Khóa Tĩnh & Khóa Động)
+# 3. QUÉT OPENLITESPEED (KHÓA TĨNH ACCESS CONTROL & KHÓA ĐỘNG ANTI-DDOS)
 # ==============================================================================
-# A. Quét config tĩnh (OLS-Static)
 if [[ -f /usr/local/lsws/conf/httpd_config.conf ]]; then
-  grep -E '^[ \t]*deny' /usr/local/lsws/conf/httpd_config.conf | grep -oE "$REGEX_IP" | awk '{print "OLS-Static", $1}' >>"$TMP_LIST"
+  awk '
+    /^[ \t]*deny[ \t]+/ {
+      for (i = 2; i <= NF; i++) {
+        cand = $i
+        gsub(/[,;]/, "", cand)
+        if (cand == "0.0.0.0" || cand == "ALL" || cand == "all") continue
+        if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}/) {
+          print "OLS-Static", cand
+        } else if (index(cand, ":") > 0 && cand ~ /^[0-9a-fA-F:\/]+$/) {
+          print "OLS-Static", cand
+        }
+      }
+    }
+  ' /usr/local/lsws/conf/httpd_config.conf >>"$TMP_LIST" 2>/dev/null
 fi
 
-# B. Quét Block động từ hệ thống Anti-DDoS của OLS (OLS-Dynamic)
-if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1; then
-  grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -oE "$REGEX_IP" | awk '{print "OLS-Dynamic", $1}' >>"$TMP_LIST"
+rtreport_files=(/tmp/lshttpd/.rtreport*)
+if [[ -e "${rtreport_files[0]}" ]]; then
+  awk '
+    /^BLOCKED_IP:/ {
+      gsub(/BLOCKED_IP:/, "", $0)
+      gsub(/,/, " ", $0)
+      for (i = 1; i <= NF; i++) {
+        cand = $i
+        if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}/) {
+          print "OLS-Dynamic", cand
+        } else if (index(cand, ":") > 0 && cand ~ /^[0-9a-fA-F:\/]+$/) {
+          print "OLS-Dynamic", cand
+        }
+      }
+    }
+  ' /tmp/lshttpd/.rtreport* >>"$TMP_LIST" 2>/dev/null
 fi
 
 # ==============================================================================
-# 4. QUÉT FIREWALLD (Native Zone Drop)
+# 4. QUÉT FIREWALLD (ZONE DROP - GIỮ NGUYÊN CẢ DẢI MẠNG CIDR)
 # ==============================================================================
-if systemctl is-active --quiet firewalld; then
-  firewall-cmd --zone=drop --list-sources 2>/dev/null | tr ' ' '\n' | grep -oE "$REGEX_IP" | awk '{print "Firewalld", $1}' >>"$TMP_LIST"
+if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd >/dev/null 2>&1; then
+  awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i != "") print "Firewalld", $i
+      }
+    }
+  ' < <(firewall-cmd --zone=drop --list-sources 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
 fi
 
 # ==============================================================================
-# 5. QUÉT NFTABLES (Bảng Custom Blackblock - LOẠI TRỪ 0.0.0.0)
+# 5. QUÉT NFTABLES (LOẠI TRỪ HOÀN TOÀN 0.0.0.0 VÀ ::)
 # ==============================================================================
-if systemctl is-active --quiet nftables; then
-  nft list set ip blackblock blackaction 2>/dev/null | grep -oE "$REGEX_IP" | grep -v "^0\.0\.0\.0$" | awk '{print "Nftables", $1}' >>"$TMP_LIST"
+if systemctl is-active --quiet nftables 2>/dev/null && command -v nft >/dev/null 2>&1; then
+  awk '
+    function is_ip(val) {
+      if (val == "0.0.0.0" || val == "::" || val ~ /^0(\.0){3}/) return 0
+      if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) return 1
+      if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}\/[0-9]{1,2}$/) return 1
+      if (index(val, ":") > 0 && val ~ /^[0-9a-fA-F:\/]+$/) return 1
+      return 0
+    }
+    /elements[ \t]*=[ \t]*\{/ { in_elem = 1 }
+    in_elem {
+      for (i = 1; i <= NF; i++) {
+        cand = $i
+        gsub(/[,{}]/, "", cand)
+        if (is_ip(cand)) print "Nftables", cand
+      }
+      if (index($0, "}") > 0) in_elem = 0
+    }
+    /saddr/ && /drop/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "saddr" && (i + 1) <= NF) {
+          cand = $(i + 1)
+          gsub(/[,{}]/, "", cand)
+          if (is_ip(cand)) print "Nftables", cand
+        }
+      }
+    }
+  ' < <(nft list ruleset 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
 fi
 
-# ==============================================================================
-# LÕI LỌC IP THÔNG MINH (DEDUPLICATE)
-# ==============================================================================
-# Dùng awk gom nhóm tag và tạo dấu phân cách "|" để cắt cột
-FINAL_LIST=$(awk '{
-  ip = $2; source = $1;
-  if (map[ip] == "") { map[ip] = source }
-  else if (index(map[ip], source) == 0) { map[ip] = map[ip] ", " source }
-} END {
-  for (ip in map) print ip "|" map[ip]
-}' "$TMP_LIST" | sort -V)
 
-# Dọn rác file tạm
-rm -f "${TMP_LIST:?}"
-
-_rundone "Hoàn tất thu thập dữ liệu IP"
 
 # ==============================================================================
-# HIỂN THỊ GIAO DIỆN BẢNG 3 CỘT (ULTIMATE UX)
+# 7. GOM NHÓM DEDUPLICATE & SẮP XẾP TỰ NHIÊN (SORT -V)
 # ==============================================================================
-if [[ -z "$FINAL_LIST" ]]; then
-  echo -e "\n${C_GREEN}✅ TUYỆT VỜI! Hệ thống của bạn hiện tại không có IP nào bị chặn.${C_RESET}\n"
+awk '
+  NF >= 2 {
+    src = $1
+    addr = $2
+    if (map[addr] == "") {
+      map[addr] = src
+    } else if (index(", " map[addr] ", ", ", " src ", ") == 0) {
+      map[addr] = map[addr] ", " src
+    }
+  }
+  END {
+    for (addr in map) {
+      printf "%s\t%s\n", addr, map[addr]
+    }
+  }
+' "$TMP_LIST" >"$TMP_SORTED.unsorted"
+
+sort -V "$TMP_SORTED.unsorted" >"$TMP_SORTED" 2>/dev/null
+/bin/rm -f -- "$TMP_SORTED.unsorted" "${TMP_LIST:?}"
+TMP_LIST=""
+
+_rundone "$task_msg"
+
+# ==============================================================================
+# 8. HIỂN THỊ GIAO DIỆN BẢNG 3 CỘT CHUẨN ENTERPRISE (RENDER BẰNG AWK SIÊU TỐC)
+# ==============================================================================
+if [[ ! -s "$TMP_SORTED" ]]; then
+  /bin/rm -f -- "${TMP_SORTED:?}"
+  TMP_SORTED=""
+  echo -e "\n${C_GREEN}✔ TUYỆT VỜI! Hệ thống của bạn hiện tại không có địa chỉ IP nào bị chặn.${C_RESET}\n"
 else
-  # Giao diện Bảng 3 Cột bo góc mềm mại
   echo -e "\n${C_CYAN}╭───────┬─────────────────────────────────────────┬───────────────────────────────╮${C_RESET}"
-  echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}STT${C_RESET}   ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}ĐỊA CHỈ IP BỊ CHẶN (BLACKLIST)${C_RESET}          ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}NGUỒN CHẶN (TAGS)${C_RESET}             ${C_CYAN}│${C_RESET}"
+  echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}STT${C_RESET}   ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}ĐỊA CHỈ IP / DẢI MẠNG (BLACKLIST)${C_RESET}       ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}NGUỒN CHẶN (TAGS)${C_RESET}             ${C_CYAN}│${C_RESET}"
   echo -e "${C_CYAN}├───────┼─────────────────────────────────────────┼───────────────────────────────┤${C_RESET}"
 
-  # Đọc từng dòng, tách IP và Tag thông qua dấu "|"
-  STT=1
-  while IFS='|' read -r ip tags; do
-    if [[ -n "$ip" ]]; then
-      # Sử dụng printf căn lề chuẩn (%-5s, %-39s, %-29s) bọc trong biến màu sắc
-      printf "${C_CYAN}│${C_RESET} %-5s ${C_CYAN}│${C_RESET} ${C_RED}%-39s${C_RESET} ${C_CYAN}│${C_RESET} ${C_YELLOW}%-29s${C_RESET} ${C_CYAN}│${C_RESET}\n" "[$STT]" "$ip" "$tags"
-      ((STT++))
-    fi
-  done <<<"$FINAL_LIST"
+  # Render toàn bộ bảng qua 1 tiến trình awk duy nhất, tự động chống tràn cột
+  COUNT="$(awk -F '\t' \
+    -v c_cyan="$C_CYAN" \
+    -v c_red="$C_RED" \
+    -v c_yellow="$C_YELLOW" \
+    -v c_reset="$C_RESET" '
+    NF >= 2 && $1 != "" {
+      stt++
+      idx_str = "[" stt "]"
+      ip_str = $1
+      tag_str = $2
+
+      if (length(ip_str) > 39) {
+        ip_str = substr(ip_str, 1, 36) "..."
+      }
+      if (length(tag_str) > 29) {
+        tag_str = substr(tag_str, 1, 26) "..."
+      }
+
+      printf "%s│%s %-5s %s│%s %s%-39s%s %s│%s %s%-29s%s %s│%s\n",
+        c_cyan, c_reset, idx_str,
+        c_cyan, c_reset, c_red, ip_str, c_reset,
+        c_cyan, c_reset, c_yellow, tag_str, c_reset,
+        c_cyan, c_reset
+    }
+    END {
+      print stt + 0 > "/dev/stderr"
+    }
+  ' "$TMP_SORTED" 2>&1 >/dev/tty)"
+
+  /bin/rm -f -- "${TMP_SORTED:?}"
+  TMP_SORTED=""
 
   echo -e "${C_CYAN}╰───────┴─────────────────────────────────────────┴───────────────────────────────╯${C_RESET}"
-
-  # Footer tổng kết
-  COUNT=$((STT - 1))
-  echo -e "  ${C_BOLD_WHITE}Tổng cộng:${C_RESET} Đang có ${C_RED}$COUNT${C_RESET} địa chỉ IP bị cách ly khỏi hệ thống.\n"
+  echo -e "  ${C_BOLD_WHITE}Tổng cộng:${C_RESET} Đang có ${C_RED}${COUNT:-0}${C_RESET} địa chỉ IP / dải mạng bị cách ly khỏi hệ thống.\n"
 fi
 
-# ==============================================================================
-# HOÀN TẤT VÀ THOÁT
-# ==============================================================================
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "$route_flag" 0 "enter"

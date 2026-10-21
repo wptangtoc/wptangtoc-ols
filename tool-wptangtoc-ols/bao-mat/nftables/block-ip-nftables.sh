@@ -54,4 +54,3 @@ else
   rm -f "$tmp_conf"
 fi
 
-return 0

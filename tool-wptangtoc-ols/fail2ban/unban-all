@@ -1,21 +1,42 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Mở khóa toàn bộ địa chỉ IP (Unban All) đa tầng chuẩn Enterprise (O(1) Batching & 0-Subshell)
 
 function huong_dan() {
-    cat << 'EOF'
-  Tính năng Mở khóa toàn bộ IP [Unban All] trong WPTangToc OLS.
+  cat <<'EOF'
+  Tính năng Mở khóa toàn bộ IP [Unban All] trong WPTangToc OLS giúp người quản trị xóa nhanh toàn bộ danh sách đen (Blacklist) đang bị khóa trên tất cả các lớp bảo vệ của máy chủ (Fail2ban, CSF, Nftables, Firewalld và OpenLiteSpeed Anti-DDoS).
+
+  Mục đích sử dụng:
+  * Khắc phục sự cố chặn nhầm hàng loạt sau khi cấu hình sai ngưỡng bảo mật hoặc sau đợt kiểm thử chịu tải (Stress Test).
+  * Làm sạch toàn bộ bộ nhớ tường lửa để đưa hệ thống về trạng thái ban đầu.
 EOF
 }
 
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 2>/dev/null
+
+# shellcheck source=/dev/null
 . /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+if [[ -z "${ngon_ngu:-}" ]]; then
+  ngon_ngu='vi'
+fi
+# shellcheck source=/dev/null
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+route_flag="${1:-}"
 
 clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ IP ➜ Mở Khóa Toàn Bộ Địa Chỉ IP (Unban All)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+echo ""
+print_border_top "$C_CYAN"
+center_text "${C_YELLOW}QUẢN LÝ IP ➜ Mở Khóa Toàn Bộ Địa Chỉ IP (Unban All)${C_RESET}" "$C_CYAN"
+print_border_bot "$C_CYAN"
+echo ""
 
 # ==============================================================================
 # CẢNH BÁO XÁC NHẬN AN TOÀN
@@ -25,119 +46,176 @@ if ! wptt_xac_nhan "BẠN CÓ CHẮC CHẮN MUỐN MỞ KHÓA TOÀN BỘ IP?" \
   "Bao gồm: Fail2ban, CSF, Firewalld, Nftables và bộ nhớ LiteSpeed." \
   "Đồng ý MỞ KHÓA" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-  wptt_quay_ve_menu "${1:-}" 0
+  wptt_quay_ve_menu "$route_flag" 0
 fi
 
 echo ""
-REGEX_IP='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b|\b([0-9a-fA-F:]+:+)+[0-9a-fA-F]+\b'
-CLEARED_LIST=""
+declare -a cleared_services=()
 
 # ==============================================================================
-# 1. MỞ KHÓA TRÊN FAIL2BAN
+# 1. MỞ KHÓA TRÊN FAIL2BAN (0-SUBSHELL PARSING & KHÔNG RELOAD NẶNG NỀ)
 # ==============================================================================
-if systemctl is-active --quiet fail2ban; then
-  _runing "Đang quét và dọn dẹp Danh sách đen Fail2ban..."
+if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
+  task_f2b="Dọn dẹp danh sách đen trên Fail2ban"
+  _runing "$task_f2b"
 
-  # Ưu tiên dùng lệnh unban all của bản Fail2ban mới
-  fail2ban-client unban --all >/dev/null 2>&1 || {
-    # Fallback cho bản Fail2ban cũ
-    for JAIL in $(fail2ban-client status 2>/dev/null | grep 'Jail list:' | cut -d ':' -f2 | tr ',' '\n' | sed -e 's/^[ \t]*//'); do
-      fail2ban-client set "$JAIL" unbanall >/dev/null 2>&1
-    done
-  }
-  fail2ban-client reload >/dev/null 2>&1
+  f2b_ok=0
+  if fail2ban-client unban --all >/dev/null 2>&1; then
+    f2b_ok=1
+  else
+    # Fallback cho phiên bản Fail2ban cũ: tách danh sách Jail bằng Pure Bash (0 Subshell)
+    jail_raw="$(fail2ban-client status 2>/dev/null)"
+    if [[ "$jail_raw" =~ Jail[[:space:]]list:[[:space:]]*([^\n\r]+) ]]; then
+      for jail in ${BASH_REMATCH[1]//,/ }; do
+        [[ -n "$jail" ]] || continue
+        fail2ban-client set "$jail" unbanall >/dev/null 2>&1
+      done
+      f2b_ok=1
+    fi
+  fi
 
-  _rundone "Mở khóa Fail2ban hoàn tất"
-  CLEARED_LIST+="Fail2ban, "
+  if ((f2b_ok == 1)); then
+    _rundone "$task_f2b"
+    cleared_services+=("Fail2ban")
+  else
+    _runloi "$task_f2b"
+  fi
 fi
 
 # ==============================================================================
-# 2. MỞ KHÓA TRÊN CSF
+# 2. MỞ KHÓA TRÊN CSF FIREWALL (XÓA CẢ TEMPORARY VÀ PERMANENT DENY)
 # ==============================================================================
 if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
-  _runing "Đang quét và dọn dẹp Tường lửa CSF..."
+  task_csf="Dọn dẹp danh sách đen trên CSF Firewall"
+  _runing "$task_csf"
 
-  csf -tf >/dev/null 2>&1
-  csf -df >/dev/null 2>&1
+  csf_ok=0
+  if csf -tf >/dev/null 2>&1; then
+    csf_ok=1
+  fi
+  if csf -df >/dev/null 2>&1; then
+    csf_ok=1
+  fi
 
-  _rundone "Mở khóa CSF Firewall hoàn tất"
-  CLEARED_LIST+="CSF Firewall, "
+  if ((csf_ok == 1)); then
+    _rundone "$task_csf"
+    cleared_services+=("CSF Firewall")
+  else
+    _runloi "$task_csf"
+  fi
 fi
 
 # ==============================================================================
 # 3. MỞ KHÓA TRÊN NFTABLES
 # ==============================================================================
-if systemctl is-active --quiet nftables; then
-  _runing "Đang quét và dọn dẹp Tường lửa Nftables..."
+if systemctl is-active --quiet nftables 2>/dev/null; then
+  task_nft="Dọn dẹp danh sách đen trên Nftables"
+  _runing "$task_nft"
 
-  if /etc/wptt/bao-mat/nftables/unbanall.sh >/dev/null 2>&1;then
-  _rundone "Mở khóa Nftables hoàn tất"
-else
-  _runloi "Mở khóa Nftables hoàn tất"
-	fi
+  nft_ok=0
+  if [[ -f /etc/wptt/bao-mat/nftables/unbanall.sh ]]; then
+    if /bin/bash /etc/wptt/bao-mat/nftables/unbanall.sh >/dev/null 2>&1; then
+      nft_ok=1
+    fi
+  fi
 
-  CLEARED_LIST+="Nftables, "
+  if ((nft_ok == 1)); then
+    _rundone "$task_nft"
+    cleared_services+=("Nftables")
+  else
+    _runloi "$task_nft"
+  fi
 fi
 
 # ==============================================================================
-# 4. MỞ KHÓA TRÊN FIREWALLD (Native Zone Drop + Dọn Rác)
+# 4. MỞ KHÓA TRÊN FIREWALLD (THUẬT TOÁN GOM MẢNG O(1) - CHỈ GỌI 2 LỆNH DUY NHẤT)
 # ==============================================================================
-if systemctl is-active --quiet firewalld; then
-  _runing "Đang quét và dọn dẹp Tường lửa Firewalld..."
+if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd >/dev/null 2>&1; then
+  task_fwd="Dọn dẹp danh sách đen trên Firewalld (Zone Drop)"
+  _runing "$task_fwd"
 
-  # A. THUẬT TOÁN UNBAN CHUẨN (Tháo mọi IP đang bị treo trên Zone Drop)
-  DROP_SOURCES=$(firewall-cmd --zone=drop --list-sources 2>/dev/null)
+  fwd_ok=1
+  DROP_SOURCES="$(firewall-cmd --zone=drop --list-sources 2>/dev/null)"
   if [[ -n "$DROP_SOURCES" ]]; then
-    for source in $DROP_SOURCES; do
-      firewall-cmd --zone=drop --remove-source="$source" >/dev/null 2>&1
-      firewall-cmd --permanent --zone=drop --remove-source="$source" >/dev/null 2>&1
+    declare -a remove_args=()
+    for src in $DROP_SOURCES; do
+      [[ -n "$src" ]] && remove_args+=("--remove-source=$src")
     done
-  fi
 
-  # B. DỌN RÁC: Tẩy trần tàn dư Rich-rule (Từ bản WPTangToc cũ trước 26-03-2026)
-  RICH_RULES=$(firewall-cmd --permanent --list-rich-rules 2>/dev/null | grep -E 'reject|drop' | grep 'source address')
-  if [[ -n "$RICH_RULES" ]]; then
-    while IFS= read -r rule; do
-      if [[ -n "$rule" ]]; then
-        firewall-cmd --remove-rich-rule="$rule" >/dev/null 2>&1
-        firewall-cmd --permanent --remove-rich-rule="$rule" >/dev/null 2>&1
+    if ((${#remove_args[@]} > 0)); then
+      if ! firewall-cmd --zone=drop "${remove_args[@]}" >/dev/null 2>&1; then
+        fwd_ok=0
       fi
-    done <<<"$RICH_RULES"
+      if ! firewall-cmd --permanent --zone=drop "${remove_args[@]}" >/dev/null 2>&1; then
+        fwd_ok=0
+      fi
+    fi
   fi
 
-  _rundone "Mở khóa Firewalld hoàn tất"
-  CLEARED_LIST+="Firewalld, "
+  if ((fwd_ok == 1)); then
+    _rundone "$task_fwd"
+    cleared_services+=("Firewalld")
+  else
+    _runloi "$task_fwd"
+  fi
 fi
 
+
 # ==============================================================================
-# 5. MỞ KHÓA TRÊN OPENLITESPEED (Xả RAM OLS-Dynamic)
+# 6. MỞ KHÓA TRÊN OPENLITESPEED (XẢ BỘ NHỚ DYNAMIC ANTI-DDOS)
 # ==============================================================================
 if [[ -d /usr/local/lsws ]]; then
-  # Check an toàn: có file rtreport VÀ bên trong chứa dòng chữ BLOCKED_IP
-  if ls /tmp/lshttpd/.rtreport* 1>/dev/null 2>&1 && grep -h "BLOCKED_IP" /tmp/lshttpd/.rtreport* 2>/dev/null | grep -qE "$REGEX_IP"; then
-    _runing "Đang xả bộ nhớ OpenLiteSpeed (Dynamic Block)..."
-    # /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-		wptt_smart_reload_lsws
-    _rundone "Xả bộ nhớ OpenLiteSpeed hoàn tất"
-    CLEARED_LIST+="LiteSpeed, "
+  rtreport_files=(/tmp/lshttpd/.rtreport*)
+  if [[ -e "${rtreport_files[0]}" ]]; then
+    # Dùng 1 lệnh awk duy nhất kiểm tra xem có IP nào đang nằm trong BLOCKED_IP không
+    if awk '
+      /^BLOCKED_IP:/ {
+        line = $0
+        sub(/^BLOCKED_IP:[[:space:]]*/, "", line)
+        if (line != "") { found = 1; exit }
+      }
+      END { exit !found }
+    ' /tmp/lshttpd/.rtreport* 2>/dev/null; then
+      task_ols="Xả bộ nhớ chặn IP tự động trên OpenLiteSpeed"
+      _runing "$task_ols"
+
+      if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+        wptt_smart_reload_lsws >/dev/null 2>&1
+      else
+        if ! /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1; then
+          /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+        fi
+      fi
+
+      _rundone "$task_ols"
+      cleared_services+=("DYNAMIC OpenLiteSpeed Anti-DDoS")
+    fi
   fi
 fi
 
 # ==============================================================================
-# BÁO CÁO KẾT QUẢ
+# 7. GHI LOG VÀ BÁO CÁO KẾT QUẢ
 # ==============================================================================
-if [[ -z "$CLEARED_LIST" ]]; then
-  echo -e "\n${C_YELLOW}Hệ thống hiện không có Tường lửa nào đang hoạt động để mở khóa!${C_RESET}\n"
-else
-  # Xóa dấu phẩy thừa ở cuối chuỗi
-  CLEARED_LIST=$(echo "$CLEARED_LIST" | sed 's/, $//')
+CLEARED_LIST=""
+for svc in "${cleared_services[@]+"${cleared_services[@]}"}"; do
+  if [[ -n "$svc" ]]; then
+    CLEARED_LIST+="${svc}, "
+  fi
+done
+CLEARED_LIST="${CLEARED_LIST%, }"
 
-  echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}HOÀN TẤT MỞ KHÓA TOÀN BỘ IP${C_RESET}"
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Các dịch vụ đã quét : ${C_YELLOW}${CLEARED_LIST}${C_RESET}" 2
-  left_text "Trạng thái          : ${C_BOLD_WHITE}Tất cả IP đã được cấp quyền truy cập lại.${C_RESET}" 2
-  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+if [[ -z "$CLEARED_LIST" ]]; then
+  echo -e "\n${C_YELLOW}ℹ Hệ thống hiện không có tường lửa nào đang hoạt động hoặc danh sách chặn đã trống!${C_RESET}\n"
+else
+  wptt_logs "INFO" "Đã mở khóa toàn bộ IP (Unban All) trên: $CLEARED_LIST"
+
+  echo ""
+  print_border_top "$C_GREEN"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT MỞ KHÓA TOÀN BỘ IP${C_RESET}" "$C_GREEN"
+  print_border_mid "$C_GREEN"
+  left_text "Các dịch vụ đã dọn  : ${C_YELLOW}${CLEARED_LIST}${C_RESET}" 2 "$C_GREEN"
+  left_text "Trạng thái          : ${C_BOLD_WHITE}Tất cả IP đã được cấp quyền truy cập lại.${C_RESET}" 2 "$C_GREEN"
+  print_border_bot "$C_GREEN"
 fi
 
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "$route_flag" 0 "enter"
