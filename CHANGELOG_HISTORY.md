@@ -1,3 +1,12 @@
+## Phiên bản 8.3.0.0
+
+🚀 **Tính năng mới & Nâng cấp**
+- **Đại tu và nâng cấp toàn diện WordPress Multisite:** Tối ưu hóa sâu sắc hệ thống quản lý và thiết lập mạng lưới website đa trang (WordPress Multisite) cho cả hai mô hình Subdomain và Sub-directory.
+- **Tự động hóa cấu hình chuyên sâu:** Tự động thiết lập listener ký tự đại diện (wildcard listener) trên OpenLiteSpeed kết hợp tinh chỉnh quy tắc `.htaccess` chuẩn xác, giúp quản trị viên dễ dàng triển khai, mở rộng và vận hành hệ thống mạng lưới website một cách ổn định, an toàn và tối ưu hiệu suất tuyệt đối.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## Phiên bản 8.3.0
 
 🚀 **Tính năng mới & Nâng cấp**
