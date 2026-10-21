@@ -1,11 +1,11 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Mở khóa toàn bộ địa chỉ IP (Unban All) đa tầng chuẩn Enterprise (O(1) Batching & 0-Subshell)
+# @description: Mở khóa toàn bộ địa chỉ IP (Unban All)
 
 function huong_dan() {
   cat <<'EOF'
-  Tính năng Mở khóa toàn bộ IP [Unban All] trong WPTangToc OLS giúp người quản trị xóa nhanh toàn bộ danh sách đen (Blacklist) đang bị khóa trên tất cả các lớp bảo vệ của máy chủ (Fail2ban, CSF, Nftables, Firewalld và OpenLiteSpeed Anti-DDoS).
+  Tính năng Mở khóa toàn bộ IP [Unban All] trong WPTangToc OLS giúp người quản trị xóa nhanh toàn bộ danh sách đen (Blacklist) đang bị khóa trên tất cả các lớp bảo vệ của máy chủ (Fail2ban, SSHGuard, CSF, Nftables, Firewalld và OpenLiteSpeed Anti-DDoS).
 
   Mục đích sử dụng:
   * Khắc phục sự cố chặn nhầm hàng loạt sau khi cấu hình sai ngưỡng bảo mật hoặc sau đợt kiểm thử chịu tải (Stress Test).
@@ -15,19 +15,18 @@ EOF
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
-stty iutf8 2>/dev/null
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
 
 # shellcheck source=/dev/null
-. /etc/wptt/.wptt.conf 2>/dev/null
-if [[ -z "${ngon_ngu:-}" ]]; then
-  ngon_ngu='vi'
-fi
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+if [[ -z "${ngon_ngu:-}" ]]; then ngon_ngu='vi'; fi
 # shellcheck source=/dev/null
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+if [[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]]; then . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null; fi
 # shellcheck source=/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
 # shellcheck source=/dev/null
-. /etc/wptt/core-functions 2>/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
 
 route_flag="${1:-}"
 
@@ -43,7 +42,7 @@ echo ""
 # ==============================================================================
 if ! wptt_xac_nhan "BẠN CÓ CHẮC CHẮN MUỐN MỞ KHÓA TOÀN BỘ IP?" \
   "Thao tác này sẽ xóa mọi danh sách đen (Blacklist) trên toàn hệ thống." \
-  "Bao gồm: Fail2ban, CSF, Firewalld, Nftables và bộ nhớ LiteSpeed." \
+  "Bao gồm: SSHGuard, Fail2ban, CSF, Firewalld, Nftables và bộ nhớ LiteSpeed." \
   "Đồng ý MỞ KHÓA" "Hủy thao tác"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
   wptt_quay_ve_menu "$route_flag" 0
@@ -53,7 +52,42 @@ echo ""
 declare -a cleared_services=()
 
 # ==============================================================================
-# 1. MỞ KHÓA TRÊN FAIL2BAN (0-SUBSHELL PARSING & KHÔNG RELOAD NẶNG NỀ)
+# 1. MỞ KHÓA TRÊN SSHGUARD (Xả RAM, IPSet và Blacklist)
+# ==============================================================================
+if systemctl is-active --quiet sshguard 2>/dev/null; then
+  task_sshg="Dọn dẹp danh sách đen và bộ nhớ điểm số trên SSHGuard"
+  _runing "$task_sshg"
+
+  sshg_ok=1
+
+  # Xóa sạch file Blacklist tĩnh
+  for bl_file in /var/db/sshguard/blacklist.db /etc/sshguard.blacklist /var/lib/sshguard/blacklist.db /etc/sshguard/blacklist; do
+    if [[ -f "$bl_file" ]]; then
+      : > "$bl_file"
+    fi
+  done
+
+  # Flush IPSet (Nếu SSHGuard cấu hình qua Firewalld)
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --ipset=sshguard4 --clear >/dev/null 2>&1 || true
+    firewall-cmd --ipset=sshguard6 --clear >/dev/null 2>&1 || true
+  fi
+
+  # Khởi động lại dịch vụ để Flush rules tạm trên Nftables và xả RAM
+  if ! systemctl restart sshguard >/dev/null 2>&1; then
+    sshg_ok=0
+  fi
+
+  if ((sshg_ok == 1)); then
+    _rundone "$task_sshg"
+    cleared_services+=("SSHGuard")
+  else
+    _runloi "$task_sshg"
+  fi
+fi
+
+# ==============================================================================
+# 2. MỞ KHÓA TRÊN FAIL2BAN (Fallback an toàn)
 # ==============================================================================
 if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
   task_f2b="Dọn dẹp danh sách đen trên Fail2ban"
@@ -63,12 +97,11 @@ if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-clien
   if fail2ban-client unban --all >/dev/null 2>&1; then
     f2b_ok=1
   else
-    # Fallback cho phiên bản Fail2ban cũ: tách danh sách Jail bằng Pure Bash (0 Subshell)
-    jail_raw="$(fail2ban-client status 2>/dev/null)"
+    jail_raw=""
+    jail_raw="$(fail2ban-client status 2>/dev/null || true)"
     if [[ "$jail_raw" =~ Jail[[:space:]]list:[[:space:]]*([^\n\r]+) ]]; then
       for jail in ${BASH_REMATCH[1]//,/ }; do
-        [[ -n "$jail" ]] || continue
-        fail2ban-client set "$jail" unbanall >/dev/null 2>&1
+        [[ -n "$jail" ]] && fail2ban-client set "$jail" unbanall >/dev/null 2>&1
       done
       f2b_ok=1
     fi
@@ -83,19 +116,15 @@ if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-clien
 fi
 
 # ==============================================================================
-# 2. MỞ KHÓA TRÊN CSF FIREWALL (XÓA CẢ TEMPORARY VÀ PERMANENT DENY)
+# 3. MỞ KHÓA TRÊN CSF FIREWALL (XÓA CẢ TEMPORARY VÀ PERMANENT DENY)
 # ==============================================================================
 if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
   task_csf="Dọn dẹp danh sách đen trên CSF Firewall"
   _runing "$task_csf"
 
   csf_ok=0
-  if csf -tf >/dev/null 2>&1; then
-    csf_ok=1
-  fi
-  if csf -df >/dev/null 2>&1; then
-    csf_ok=1
-  fi
+  if csf -tf >/dev/null 2>&1; then csf_ok=1; fi
+  if csf -df >/dev/null 2>&1; then csf_ok=1; fi
 
   if ((csf_ok == 1)); then
     _rundone "$task_csf"
@@ -106,7 +135,7 @@ if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
 fi
 
 # ==============================================================================
-# 3. MỞ KHÓA TRÊN NFTABLES
+# 4. MỞ KHÓA TRÊN NFTABLES
 # ==============================================================================
 if systemctl is-active --quiet nftables 2>/dev/null; then
   task_nft="Dọn dẹp danh sách đen trên Nftables"
@@ -128,7 +157,7 @@ if systemctl is-active --quiet nftables 2>/dev/null; then
 fi
 
 # ==============================================================================
-# 4. MỞ KHÓA TRÊN FIREWALLD (THUẬT TOÁN GOM MẢNG O(1) - CHỈ GỌI 2 LỆNH DUY NHẤT)
+# 5. MỞ KHÓA TRÊN FIREWALLD (THUẬT TOÁN GOM MẢNG O(1))
 # ==============================================================================
 if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd >/dev/null 2>&1; then
   task_fwd="Dọn dẹp danh sách đen trên Firewalld (Zone Drop)"
@@ -143,12 +172,8 @@ if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd 
     done
 
     if ((${#remove_args[@]} > 0)); then
-      if ! firewall-cmd --zone=drop "${remove_args[@]}" >/dev/null 2>&1; then
-        fwd_ok=0
-      fi
-      if ! firewall-cmd --permanent --zone=drop "${remove_args[@]}" >/dev/null 2>&1; then
-        fwd_ok=0
-      fi
+      if ! firewall-cmd --zone=drop "${remove_args[@]}" >/dev/null 2>&1; then fwd_ok=0; fi
+      if ! firewall-cmd --permanent --zone=drop "${remove_args[@]}" >/dev/null 2>&1; then fwd_ok=0; fi
     fi
   fi
 
@@ -160,31 +185,25 @@ if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd 
   fi
 fi
 
-
 # ==============================================================================
 # 6. MỞ KHÓA TRÊN OPENLITESPEED (XẢ BỘ NHỚ DYNAMIC ANTI-DDOS)
 # ==============================================================================
 if [[ -d /usr/local/lsws ]]; then
+  shopt -s nullglob
   rtreport_files=(/tmp/lshttpd/.rtreport*)
-  if [[ -e "${rtreport_files[0]}" ]]; then
-    # Chỉ xác nhận có IP bị chặn khi mảng (NF) thực sự chứa dữ liệu, bỏ qua dấu phẩy rác
-    if awk '
-      /^BLOCKED_IP:/ {
-        gsub(/BLOCKED_IP:[[:space:]]*/, "")
-        gsub(/,/, " ")
-        if (NF > 0) { found = 1; exit }
-      }
-      END { exit !found }
-    ' /tmp/lshttpd/.rtreport* 2>/dev/null; then
+  shopt -u nullglob
+  
+  if ((${#rtreport_files[@]} > 0)); then
+    if awk '/^BLOCKED_IP:/ { sub(/^BLOCKED_IP:[ \t]*/, ""); gsub(/,/, " "); if (NF > 0) { found=1; exit } } END { exit !found }' "${rtreport_files[@]}" 2>/dev/null; then
       
       task_ols="Xả bộ nhớ chặn IP tự động trên OpenLiteSpeed"
       _runing "$task_ols"
 
       if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
-        wptt_smart_reload_lsws >/dev/null 2>&1
+        wptt_smart_reload_lsws >/dev/null 2>&1 3>&-
       else
-        if ! /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1; then
-          /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+        if ! /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 3>&-; then
+          /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1 3>&-
         fi
       fi
 

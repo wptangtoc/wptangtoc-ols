@@ -193,6 +193,36 @@ wptt_scan_all_blocked_ips() {
     ' < <(firewall-cmd --zone=drop --list-sources 2>/dev/null) >>"$out_file" 2>/dev/null
   fi
 
+
+	# ==========================================
+  # Quét SSHGuard (Cả Blacklist DB & Ipset Firewalld)
+  # ==========================================
+  if systemctl is-active --quiet sshguard 2>/dev/null; then
+    # A. Quét từ Database vĩnh viễn (Định dạng: timestamp|service|type|IP)
+    if [[ -f /var/lib/sshguard/blacklist.db ]]; then
+      awk -F'\x7c' '
+        {
+          cand = ""
+          if (NF >= 4) cand = $4
+          else if (NF == 1) cand = $1
+
+          gsub(/[, \t]/, "", cand)
+          if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) print "SSHGuard-DB", cand
+          else if (index(cand, ":") > 0) print "SSHGuard-DB", cand
+        }
+      ' /var/lib/sshguard/blacklist.db >>"$out_file" 2>/dev/null
+    fi
+    
+    # B. Quét từ Ipset đang chạy trên RAM của Firewalld
+    if systemctl is-active --quiet firewalld 2>/dev/null; then
+      for iset in sshguard4 sshguard6; do
+        firewall-cmd --ipset="$iset" --get-entries 2>/dev/null | awk -v sn="SSHGuard-FW" '
+          { if ($1 != "") print sn, $1 }
+        ' >>"$out_file" 2>/dev/null
+      done
+    fi
+  fi
+
   # 4. Quét Fail2ban
 	# 4. Quét Fail2ban (Đã vá lỗi lọc bỏ từ khóa 'list:', 'Banned', v.v.)
   if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
@@ -300,10 +330,15 @@ while true; do
 
     wptt_scan_all_blocked_ips "$TMP_LIST"
 
-    awk '
+		awk '
       NF >= 2 {
         src = $1
         addr = $2
+        
+        # CHUẨN HÓA IP: Tự động loại bỏ /32 (của IPv4) và /128 (của IPv6) để chống trùng lặp
+        sub(/\/32$/, "", addr)
+        sub(/\/128$/, "", addr)
+
         if (map[addr] == "") {
           map[addr] = src
         } else if (index(", " map[addr] ", ", ", " src ", ") == 0) {
@@ -419,6 +454,42 @@ if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-clien
   fi
 fi
 
+
+# ==========================================
+# Mở khóa trên SSHGuard
+# ==========================================
+if systemctl is-active --quiet sshguard 2>/dev/null; then
+  sshg_unbanned=0
+
+  # 1. Xóa tận gốc khỏi Blacklist Database (để không bị chặn lại khi restart)
+  if [[ -f /var/lib/sshguard/blacklist.db ]] && grep -qF "$ip" /var/lib/sshguard/blacklist.db 2>/dev/null; then
+    sed -i "/$ip/d" /var/lib/sshguard/blacklist.db
+    sshg_unbanned=1
+  fi
+
+  # 2. Xóa khỏi Ipset của Firewalld (Gỡ lệnh cấm tức thì ở tầng Network)
+  if systemctl is-active --quiet firewalld 2>/dev/null; then
+    if [[ "$ip" == *":"* ]]; then
+      # Xử lý IPv6
+      if firewall-cmd --ipset=sshguard6 --query-entry="$ip" >/dev/null 2>&1; then
+        firewall-cmd --ipset=sshguard6 --remove-entry="$ip" >/dev/null 2>&1
+        sshg_unbanned=1
+      fi
+    else
+      # Xử lý IPv4
+      if firewall-cmd --ipset=sshguard4 --query-entry="$ip" >/dev/null 2>&1; then
+        firewall-cmd --ipset=sshguard4 --remove-entry="$ip" >/dev/null 2>&1
+        sshg_unbanned=1
+      fi
+    fi
+  fi
+
+  # 3. Khởi động lại dịch vụ nếu có thao tác mở khóa để xả bộ đệm RAM
+  if (( sshg_unbanned == 1 )); then
+    systemctl restart sshguard >/dev/null 2>&1
+    cleared_services+=("SSHGuard")
+  fi
+fi
 
 # 2. Mở khóa trên CSF Firewall
 if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then

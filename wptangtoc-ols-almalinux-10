@@ -1390,34 +1390,51 @@ else
 fi
 
 # 14B. CẤU HÌNH BẢO MẬT SSH VÀ FAIL2BAN
-_step "Cấu hình bảo mật SSH (Port $port_ssh) và Fail2Ban"
+_step "Cấu hình bảo mật SSH (Port $port_ssh) và SSHGuard"
+
+# 1. Đổi Port SSH và cập nhật SELinux
 if [[ "$port_ssh" != "22" ]]; then
   wptt_run dnf -y install policycoreutils-python-utils || true
-  sed -i "/Port/d" /etc/ssh/sshd_config || true
-  sed -i "1 i Port $port_ssh" /etc/ssh/sshd_config || true
+  sed -i "/Port/d" /etc/ssh/sshd_config
+  sed -i "1 i Port $port_ssh" /etc/ssh/sshd_config
   semanage port -a -t ssh_port_t -p tcp "$port_ssh" >>"$LOG_FILE" 2>&1 || true
   systemctl reload sshd.service >>"$LOG_FILE" 2>&1 || true
 fi
-firewall-cmd --zone=public --add-port="${port_ssh}"/tcp --permanent >>"$LOG_FILE" 2>&1 || true
+
+# 2. Mở Port trên Firewalld
+firewall-cmd --zone=public --add-port="${port_ssh:-22}"/tcp --permanent >>"$LOG_FILE" 2>&1 || true
 firewall-cmd --reload >>"$LOG_FILE" 2>&1 || true
 
-wptt_run dnf install fail2ban fail2ban-systemd fail2ban-firewalld -y
-wptt_run dnf remove esmtp -y
-cp -pf /etc/fail2ban/jail.conf /etc/fail2ban/jail.local || true
-cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
-[sshd]
-enabled = true
-port = ${port_ssh}
-backend = systemd
-logpath = %(sshd_log)s
-maxretry = 5
-bantime = 3600
+# Cài đặt SSHGuard lõi VÀ Gói trung gian giao tiếp với Firewalld
+wptt_run dnf install sshguard sshguard-firewalld -y
+
+# Dò đường dẫn backend theo từng bản đóng gói
+SSHG_BACKEND=""
+for p in /usr/libexec/sshguard/sshg-fw-firewalld /usr/libexec/sshg-fw-firewalld; do
+  [[ -x "$p" ]] && SSHG_BACKEND="$p" && break
+done
+[[ -z "$SSHG_BACKEND" ]] && SSHG_BACKEND="$(rpm -ql sshguard-firewalld 2>/dev/null | grep 'sshg-fw-firewalld$' | head -1)"
+
+mkdir -p /var/lib/sshguard
+
+cat > /etc/sshguard.conf <<EOF
+# Đọc log từ journald; OpenSSH >= 9.8 ghi log qua sshd-session
+LOGREADER="LANG=C /usr/bin/journalctl -afb -p info -n1 -t sshd -t sshd-session -o cat"
+BACKEND="$SSHG_BACKEND"
+THRESHOLD=30
+BLOCK_TIME=900
+DETECTION_TIME=43200
+WHITELIST_FILE=/etc/sshguard.whitelist
+BLACKLIST_FILE=30:/var/lib/sshguard/blacklist.db
 EOF
-if [[ -f /etc/fail2ban/jail.local ]]; then
-  sed -i -E 's/^[# \t]*banaction[ \t]*=.*/banaction = firewallcmd-ipset/g' /etc/fail2ban/jail.local
-  sed -i -E 's/^[# \t]*banaction_allports[ \t]*=.*/banaction_allports = firewallcmd-allports/g' /etc/fail2ban/jail.local
-  sed -i -E 's/^[#[:space:]]*usedns[[:space:]]*=.*/usedns = no/g' /etc/fail2ban/jail.local
-fi
+
+# WHITELIST_FILE phải tồn tại nếu được khai báo
+touch /etc/sshguard.whitelist
+echo "127.0.0.1" > /etc/sshguard.whitelist
+
+systemctl enable --now sshguard >>"$LOG_FILE" 2>&1 || true
+
+# 4. Cấu hình cô lập bảo mật SFTP (Chroot)
 sed -i "/Subsystem/d" /etc/ssh/sshd_config || true
 echo 'Subsystem sftp internal-sftp' >>/etc/ssh/sshd_config
 sed -i -e "/^#begin-WPTT_JAIL_$USER/,/^#end-WPTT_JAIL_$USER$/d" /etc/ssh/sshd_config 2>/dev/null || true
@@ -1430,8 +1447,10 @@ Match User $USER
     X11Forwarding no
 #end-WPTT_JAIL_$USER
 EOF
-systemctl enable --now fail2ban >>"$LOG_FILE" 2>&1 || true
-_success "Tường lửa (Fail2Ban) & SSH đã được bảo vệ hoàn chỉnh"
+systemctl reload sshd >>"$LOG_FILE" 2>&1 || true
+
+_success "SSH và Tường lửa (SSHGuard) đã được bảo vệ hoàn chỉnh"
+
 
 # ==============================================================================
 # 15. KẾT XUẤT CẤU HÌNH BẢO MẬT AES VÀ SYMLINK
