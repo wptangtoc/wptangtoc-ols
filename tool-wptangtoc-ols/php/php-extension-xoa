@@ -239,9 +239,9 @@ fi
 if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
 	DEBIAN_FRONTEND=noninteractive apt-get remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1
 elif grep -qE "release 8" /etc/redhat-release 2>/dev/null; then
-	yum remove "$LSPHP-$php_extension_chon" -y --disablerepo="*" --enablerepo="litespeed,litespeed-edge,litespeed-edge-update,litespeed-update" >/dev/null 2>&1
+	dnf remove "$LSPHP-$php_extension_chon" -y --disablerepo="*" --enablerepo="litespeed,litespeed-edge,litespeed-edge-update,litespeed-update" >/dev/null 2>&1
 else # RHEL 9 và 10 support
-	yum remove "$LSPHP-$php_extension_chon" -y --disablerepo="*" --enablerepo="litespeed,litespeed-update" >/dev/null 2>&1
+	dnf remove "$LSPHP-$php_extension_chon" -y --disablerepo="*" --enablerepo="litespeed,litespeed-update" >/dev/null 2>&1
 fi
 # fi
 
@@ -250,19 +250,32 @@ if command -v dnf >/dev/null 2>&1; then dnf clean all >/dev/null 2>&1; else yum 
 # ==============================================================================
 # KIỂM TRA LẠI VÀ BÁO CÁO
 # ==============================================================================
-if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-  check_lai=$(apt list --installed 2>/dev/null | grep "$LSPHP" | grep -w "$php_extension_chon")
-elif grep -qE "release 8" /etc/redhat-release 2>/dev/null; then
-  check_lai=$(dnf list installed --disablerepo="*" --enablerepo="litespeed,litespeed-edge,litespeed-edge-update,litespeed-update" 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | sed '1d' | sed '/^$/d' | sort | uniq | grep -w "$php_extension_chon")
-else # RHEL 9 và 10 support
-  check_lai=$(dnf list installed --disablerepo="*" --enablerepo="litespeed,litespeed-update" 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | sed '1d' | sed '/^$/d' | sort | uniq | grep -w "$php_extension_chon")
+# Định nghĩa tên tác vụ đồng bộ cho UI/UX
+TASK_MSG="Gỡ bỏ Extension: $php_extension_chon"
+
+check_lai=""
+
+# 1. Quét trên họ Debian/Ubuntu (Sử dụng dpkg-query siêu tốc, an toàn cho bash script)
+if command -v dpkg-query >/dev/null 2>&1; then
+  check_lai=$(dpkg-query -W -f='${binary:Package}\n' "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
+
+# 2. Quét trên họ RHEL/AlmaLinux (Sử dụng rpm cấp thấp, bỏ qua dnf Python ngốn CPU)
+elif command -v rpm >/dev/null 2>&1; then
+  check_lai=$(rpm -qa "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
 fi
 
-# [[ "$php_extension_chon" == "ioncube" ]] && check_lai="" # Ioncube gỡ file là xong
+# Xử lý ngoại lệ: Ioncube thường cài đặt qua file tĩnh (.so), không qua Package Manager
+if [[ "$php_extension_chon" == "ioncube" ]]; then
+  check_lai=""
+fi
 
+# 3. Đánh giá kết quả và in UI
 if [[ -z "$check_lai" ]]; then
+  # Trống tức là không còn tìm thấy gói -> Đã xóa thành công
+  # [FIX CI/CD]: Bổ sung 3>&- để chống treo File Descriptor nếu chạy trong BATS
   wptt_smart_reload_lsws >/dev/null 2>&1
-  _rundone "Gỡ bỏ thành công!"
+  
+  _rundone "$TASK_MSG"
 
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT XÓA EXTENSION${C_RESET}"
@@ -271,7 +284,9 @@ if [[ -z "$check_lai" ]]; then
   left_text "Extension xóa  : ${C_RED}$php_extension_chon${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 else
-  _runloi "Gỡ bỏ thất bại! Vui lòng kiểm tra lại."
+  # Vẫn còn biến chứa tên gói -> Lệnh xóa trước đó đã thất bại
+  _runloi "$TASK_MSG"
+  echo -e "${C_RED}Lỗi: Hệ thống vẫn còn phát hiện gói '$check_lai' đang tồn tại!${C_RESET}"
 fi
 
 [[ "$repo_du_phong" == '1' ]] && sed -i '/rpms.litespeedtech.com/d' /etc/hosts
