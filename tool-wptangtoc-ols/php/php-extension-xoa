@@ -19,11 +19,30 @@ function huong_dan() {
 EOF
 }
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 2>/dev/null || true
+
+# shellcheck source=/dev/null
+. /etc/wptt/.wptt.conf 2>/dev/null || true
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+. /etc/wptt/echo-color 2>/dev/null || true
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null || true
+
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  /bin/rm -f -- /etc/wptt/tmp/php_extension.txt 2>/dev/null || true
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -35,70 +54,53 @@ echo -e "${C_CYAN}╰───────────────────�
 # ==============================================================================
 /bin/bash /etc/wptt/php/wptt-php-version-domain
 echo -e "${C_YELLOW}Vui lòng chọn Phiên bản PHP bạn muốn GỠ BỎ Extension:${C_RESET}"
-. /etc/wptt/php/tenmien-php 2>/dev/null
+# shellcheck source=/dev/null
+. /etc/wptt/php/tenmien-php 2>/dev/null || true
 
-if [[ -z "$LSPHP" || "$LSPHP" == "0" ]]; then
+if [[ -z "${LSPHP:-}" || "$LSPHP" == "0" ]]; then
   wptt_quay_ve_menu "${1:-}" 0
 fi
 
 if [[ ! -d "/usr/local/lsws/$LSPHP" ]]; then
   echo -e "\n${C_RED}❌ Lỗi: Phiên bản $LSPHP chưa được cài đặt trên máy chủ!${C_RESET}"
-  sleep 3
-  exit 1
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
 php_ver_hien_thi=$(echo "$LSPHP" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g')
 
 # ==============================================================================
-# BƯỚC 2: QUÉT DANH SÁCH EXTENSION ĐÃ CÀI
+# BƯỚC 2: QUÉT DANH SÁCH EXTENSION ĐÃ CÀI (SIÊU TỐC QUA C-BINARY)
 # ==============================================================================
 echo ""
-_runing "Đang quét danh sách Extensions ĐÃ CÀI ĐẶT trên $php_ver_hien_thi..."
+SCAN_MSG="Đang quét danh sách Extensions ĐÃ CÀI ĐẶT trên $php_ver_hien_thi..."
+_runing "$SCAN_MSG"
 
-if command -v dnf >/dev/null 2>&1; then dnf clean all >/dev/null 2>&1; else yum clean all >/dev/null 2>&1; fi
+/bin/mkdir -p /etc/wptt/tmp
+chmod 700 /etc/wptt/tmp
+/bin/rm -f -- /etc/wptt/tmp/php_extension.txt
 
-if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-  php_extension_da_cai_dat=($(apt list --installed 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | cut -f1 -d '/' | sed '/installed/d' | sed '1d' | sed '/^$/d' | sort | uniq))
-elif grep -qE "release 8" /etc/redhat-release 2>/dev/null; then
-  php_extension_da_cai_dat=($(yum list installed --disablerepo="*" --enablerepo="litespeed,litespeed-edge,litespeed-edge-update,litespeed-update" 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | sed '1d' | sed '/^$/d' | sort | uniq))
-else
-  php_extension_da_cai_dat=($(yum list installed --disablerepo="*" --enablerepo="litespeed,litespeed-update" 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | sed '1d' | sed '/^$/d' | sort | uniq))
+declare -a php_extension_da_cai_dat=()
+
+# TẦNG 1: Lấy danh sách qua Package Manager Core (0.01 giây)
+if command -v dpkg-query >/dev/null 2>&1; then
+  mapfile -t php_extension_da_cai_dat < <(dpkg-query -W -f='${binary:Package}\n' "${LSPHP}-*" 2>/dev/null | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
+elif command -v rpm >/dev/null 2>&1; then
+  mapfile -t php_extension_da_cai_dat < <(rpm -qa --qf "%{NAME}\n" "${LSPHP}-*" 2>/dev/null | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
 fi
 
-# Fallback nếu quét thất bại (Bơm Repo)
-if [[ -z "${php_extension_da_cai_dat[*]}" ]]; then
-  sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-  echo -e '\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
-  if command -v dnf >/dev/null 2>&1; then dnf clean all >/dev/null 2>&1; else yum clean all >/dev/null 2>&1; fi
-  repo_du_phong=1
-
-  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-    php_extension_da_cai_dat=($(apt list --installed 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | cut -f1 -d '/' | sed '/installed/d' | sed '1d' | sed '/^$/d' | sort | uniq))
-  elif grep -qE "release 8" /etc/redhat-release 2>/dev/null; then
-    php_extension_da_cai_dat=($(yum list installed --disablerepo="*" --enablerepo="litespeed,litespeed-edge,litespeed-edge-update,litespeed-update" 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | sed '1d' | sed '/^$/d' | sort | uniq))
-  else
-    php_extension_da_cai_dat=($(yum list installed --disablerepo="*" --enablerepo="litespeed,litespeed-update" 2>/dev/null | grep "$LSPHP" | cut -f2-10 -d '-' | cut -f1 -d '.' | sed '1d' | sed '/^$/d' | sort | uniq))
-  fi
-fi
-
-rm -f /etc/wptt/tmp/php_extension.txt
+# Loại trừ gói base php (ví dụ: lsphp81) khỏi danh sách xóa
 for phpexe in "${php_extension_da_cai_dat[@]}"; do
-  echo "$phpexe" >>/etc/wptt/tmp/php_extension.txt
+  if [[ -n "$phpexe" && "$phpexe" != "$LSPHP" ]]; then
+    echo "$phpexe" >>/etc/wptt/tmp/php_extension.txt
+  fi
 done
 
-# # Kiểm tra Ioncube (Manual check vì nó không cài qua package manager)
-# if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-#   [[ -d "/usr/local/lsws/$LSPHP/lib/php" && -n $(ls "/usr/local/lsws/$LSPHP/lib/php" | grep 'ioncube') ]] && echo "ioncube" >>/etc/wptt/tmp/php_extension.txt
-# else
-#   [[ -d "/usr/local/lsws/$LSPHP/lib64/php/modules" && -n $(ls "/usr/local/lsws/$LSPHP/lib64/php/modules" | grep 'ioncube') ]] && echo "ioncube" >>/etc/wptt/tmp/php_extension.txt
-# fi
-
-_rundone "Đã quét xong danh sách Extensions"
+_rundone "$SCAN_MSG"
 
 # ==============================================================================
 # BƯỚC 3: GIAO DIỆN CHỌN EXTENSION ĐỂ XÓA (LAYOUT 2 CỘT + FZF)
 # ==============================================================================
-mapfile -t selects < <(sort -u /etc/wptt/tmp/php_extension.txt | sed '/^$/d')
+mapfile -t selects < <(sort -u /etc/wptt/tmp/php_extension.txt | sed '/^$/d' || true)
 
 if [[ ${#selects[@]} -eq 0 ]]; then
   echo -e "\n${C_RED}❌ Phiên bản $php_ver_hien_thi của bạn chưa cài đặt Extension nào!${C_RESET}"
@@ -110,17 +112,15 @@ echo -e "\n${C_CYAN}╭───────────────────
 center_text "${C_BOLD_WHITE}DANH SÁCH EXTENSIONS ĐÃ CÀI TRÊN: ${C_YELLOW}$php_ver_hien_thi${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-# HỆ THỐNG IN DANH SÁCH 2 CỘT CỰC ĐẸP
 total=${#selects[@]}
 for ((i = 0; i < total; i += 2)); do
   idx1=$((i + 1))
   val1="${selects[$i]}"
-  # Cố định độ rộng cột 1 là 28 khoảng trắng để đẩy cột 2 sang ngang bằng nhau
   pad_val1=$(printf "%-28s" "$val1")
   str_col1="  ${C_CYAN}$(printf "%2d" $idx1))${C_RESET} ${C_BOLD_WHITE}${pad_val1}${C_RESET}"
 
   idx2=$((i + 2))
-  if [ $idx2 -le "$total" ]; then
+  if ((idx2 <= total)); then
     val2="${selects[$((i + 1))]}"
     str_col2="${C_CYAN}$(printf "%2d" $idx2))${C_RESET} ${C_BOLD_WHITE}${val2}${C_RESET}"
     left_text "${str_col1}${str_col2}" 0
@@ -141,7 +141,7 @@ while true; do
   read -r REPLY
 
   if [[ "$REPLY" == "0" ]]; then
-    exit 0
+    wptt_quay_ve_menu "${1:-}" 0
   elif [[ "$REPLY" == "00" && -x $(command -v fzf) ]]; then
     fzf_result=$(printf "%s\n" "${selects[@]}" | fzf \
       --prompt="Nhập extension cần XÓA > " \
@@ -157,7 +157,7 @@ while true; do
     else
       echo -e "${C_YELLOW}Đã hủy tìm kiếm FZF.${C_RESET}"
     fi
-  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "${#selects[@]}" ]; then
+  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && ((REPLY >= 1)) && ((REPLY <= ${#selects[@]})); then
     php_extension_chon="${selects[$((REPLY - 1))]}"
     break
   else
@@ -211,6 +211,15 @@ ioncube)
   ;;
 esac
 
+
+#xóa extension opcache là webserver litespeed sẽ ngỏm luôn, cảnh báo stop người dùng
+if [[ "$php_extension_chon" == "opcache" ]]; then
+	echoDo "Bạn không thể xóa opcache extension"
+	echo "Nếu xóa máy chủ webserver LiteSpeed sẽ gặp sự cố ngay lập tức"
+	echo "Nếu bạn có nhu cầu tắt opcache để dev test hãy truy cập vào menu Quản Lý Cache => để tắt Opcache Cache PHP"
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
+fi
+
 if ! wptt_xac_nhan "Bạn có chắc chắn muốn XÓA $php_ver_hien_thi Extension này trên không?" \
   "Extension bị gỡ bỏ : ${C_RED}$php_extension_chon${C_RESET}" \
   "$thong_bao_2" \
@@ -219,62 +228,45 @@ if ! wptt_xac_nhan "Bạn có chắc chắn muốn XÓA $php_ver_hien_thi Extens
   wptt_quay_ve_menu "${1:-}" 0
 fi
 
+# ==============================================================================
+# BƯỚC 4: THỰC THI GỠ BỎ EXTENSION
+# ==============================================================================
 echo ""
-_runing "Đang gỡ bỏ Extension: $php_extension_chon..."
+TASK_MSG="Gỡ bỏ Extension: $php_extension_chon"
+_runing "$TASK_MSG"
 
 phien_ban_php_co_cham=$(echo "$LSPHP" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
 
-# 1. Gỡ bỏ IONCUBE (Thủ công) #vấn đề code cũ tương thích ngược với version cũ ngày xưa một thời OLS repo nó không support tốt với ioncube phải cài nhị phân thủ công, còn giờ repo OLS support rất tốt với ioncube rồi không còn nát như ngày xưa nữa
+# 1. Dọn dẹp tàn dư IONCUBE trong php.ini
 if [[ "$php_extension_chon" == 'ioncube' ]]; then
-  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
+  if [[ -f "/usr/local/lsws/$LSPHP/etc/php/$phien_ban_php_co_cham/litespeed/php.ini" ]]; then
     duong_dan_php_ini_ioncube="/usr/local/lsws/$LSPHP/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
   else
     duong_dan_php_ini_ioncube="/usr/local/lsws/$LSPHP/etc/php.ini"
   fi
+
 	[[ -f "${duong_dan_php_ini_ioncube:-}" ]] && grep -qF "ioncube_loader_lin" "$duong_dan_php_ini_ioncube" && sed -i '/ioncube_loader_lin/d' "$duong_dan_php_ini_ioncube"
 fi
 
-# # 2. Gỡ bỏ Package thông thường (CÓ CHIA RHEL 8 vs 9/10)
-# else
-if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-	DEBIAN_FRONTEND=noninteractive apt-get remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1
-elif grep -qE "release 8" /etc/redhat-release 2>/dev/null; then
-	dnf remove "$LSPHP-$php_extension_chon" -y --disablerepo="*" --enablerepo="litespeed,litespeed-edge,litespeed-edge-update,litespeed-update" >/dev/null 2>&1
-else # RHEL 9 và 10 support
-	dnf remove "$LSPHP-$php_extension_chon" -y --disablerepo="*" --enablerepo="litespeed,litespeed-update" >/dev/null 2>&1
+# 2. Xóa gói qua Package Manager
+if command -v apt-get >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1 || true
+elif command -v dnf >/dev/null 2>&1; then
+  dnf remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1 || true
+elif command -v yum >/dev/null 2>&1; then
+  yum remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1 || true
 fi
-# fi
-
-if command -v dnf >/dev/null 2>&1; then dnf clean all >/dev/null 2>&1; else yum clean all >/dev/null 2>&1; fi
-
-# ==============================================================================
-# KIỂM TRA LẠI VÀ BÁO CÁO
-# ==============================================================================
-# Định nghĩa tên tác vụ đồng bộ cho UI/UX
-TASK_MSG="Gỡ bỏ Extension: $php_extension_chon"
 
 check_lai=""
-
-# 1. Quét trên họ Debian/Ubuntu (Sử dụng dpkg-query siêu tốc, an toàn cho bash script)
 if command -v dpkg-query >/dev/null 2>&1; then
   check_lai=$(dpkg-query -W -f='${binary:Package}\n' "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
-
-# 2. Quét trên họ RHEL/AlmaLinux (Sử dụng rpm cấp thấp, bỏ qua dnf Python ngốn CPU)
 elif command -v rpm >/dev/null 2>&1; then
   check_lai=$(rpm -qa "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
 fi
 
-# Xử lý ngoại lệ: Ioncube thường cài đặt qua file tĩnh (.so), không qua Package Manager
-if [[ "$php_extension_chon" == "ioncube" ]]; then
-  check_lai=""
-fi
 
-# 3. Đánh giá kết quả và in UI
 if [[ -z "$check_lai" ]]; then
-  # Trống tức là không còn tìm thấy gói -> Đã xóa thành công
-  # [FIX CI/CD]: Bổ sung 3>&- để chống treo File Descriptor nếu chạy trong BATS
-  wptt_smart_reload_lsws >/dev/null 2>&1
-  
+  wptt_smart_reload_lsws >/dev/null 2>&1 3>&- || true
   _rundone "$TASK_MSG"
 
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
@@ -283,12 +275,11 @@ if [[ -z "$check_lai" ]]; then
   left_text "Phiên bản PHP  : ${C_YELLOW}$php_ver_hien_thi ($LSPHP)${C_RESET}" 2
   left_text "Extension xóa  : ${C_RED}$php_extension_chon${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  wptt_status_ma_loi=0
 else
-  # Vẫn còn biến chứa tên gói -> Lệnh xóa trước đó đã thất bại
   _runloi "$TASK_MSG"
   echo -e "${C_RED}Lỗi: Hệ thống vẫn còn phát hiện gói '$check_lai' đang tồn tại!${C_RESET}"
+  wptt_status_ma_loi=1
 fi
 
-[[ "$repo_du_phong" == '1' ]] && sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "${1:-}" "${wptt_status_ma_loi:-0}" "enter"
