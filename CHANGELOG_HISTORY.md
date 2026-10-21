@@ -1,3 +1,15 @@
+## WPTangToc OLS 8.3.0.1
+
+🚀 **Tính năng mới**
+* **Nâng cấp WordPress Multisite:** Tối ưu hóa khả năng tương thích và quản lý cho hệ thống WordPress Multisite, giúp vận hành mượt mà và ổn định hơn.
+
+🛠️ **Tối ưu hệ thống & Bảo mật**
+* **Tương thích Python mới:** Cải tiến hệ thống Fail2Ban hoạt động hoàn hảo với Python từ phiên bản 3.11 trở lên.
+* **Cải thiện quản lý IP:** Nâng cấp các tính năng khóa, mở khóa, liệt kê danh sách và gỡ chặn toàn bộ (unban all) đối với các IP độc hại, giúp quản trị viên kiểm soát bảo mật máy chủ nhanh chóng và chính xác hơn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## Phiên bản 8.3.0.0
 
 🚀 **Tính năng mới & Nâng cấp**
