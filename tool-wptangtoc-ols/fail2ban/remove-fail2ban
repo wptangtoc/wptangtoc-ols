@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# ==============================================================================
+# HÀM KIỂM TRA & GỠ BỎ FAIL2BAN NẾU KHÔNG CÒN SỬ DỤNG (LIVE STATUS GC)
+# ==============================================================================
+wptt_fail2ban_garbage_collector() {
+  # 1. Bypass ngay nếu máy chủ không có Fail2ban
+  if ! command -v fail2ban-client >/dev/null 2>&1 || [[ ! -d /etc/fail2ban ]]; then
+    return 0
+  fi
+
+  local has_active_rules=0
+
+  # ============================================================================
+  # KIỂM TRA LỚP 1: TRUY VẤN TRẠNG THÁI THỰC TẾ TRÊN RAM (LIVE DAEMON STATUS)
+  # ============================================================================
+  if systemctl is-active --quiet fail2ban 2>/dev/null; then
+    local jail_count
+    # Lấy chính xác con số ở dòng "Number of jail:" và lọc bỏ mọi ký tự thừa
+    jail_count="$(fail2ban-client status 2>/dev/null | awk '/Number of jail:/ {print $NF}' | tr -d -c '0-9')"
+    
+    if [[ "$jail_count" == "0" ]]; then
+      # Chắc chắn 100% không có Jail nào đang chạy -> XÓA
+      has_active_rules=0
+    else
+      has_active_rules=1
+    fi
+  fi
+
+  # ============================================================================
+  # QUYẾT ĐỊNH THỰC THI
+  # ============================================================================
+  if (( has_active_rules == 1 )); then
+    return 0
+  else
+    # ==========================================
+    # KHÔNG CÒN GIÁ TRỊ -> PURGE SẠCH SẼ MỌI THỨ
+    # ==========================================
+    if declare -F wptt_logs >/dev/null 2>&1; then
+      wptt_logs "INFO" "Fail2ban báo cáo 0 Jails hoạt động -> Tự động gỡ bỏ để giải phóng RAM."
+    fi
+
+    systemctl stop fail2ban >/dev/null 2>&1 || true
+    systemctl disable fail2ban >/dev/null 2>&1 || true
+
+    # Nhận diện Package Manager 0-Subshell để gỡ cài đặt
+    if command -v apt-get >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get purge -y fail2ban >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1 || true
+    elif command -v dnf >/dev/null 2>&1; then
+      dnf remove -y fail2ban fail2ban-firewalld fail2ban-systemd >/dev/null 2>&1 || true
+    elif command -v yum >/dev/null 2>&1; then
+      yum remove -y fail2ban fail2ban-systemd >/dev/null 2>&1 || true
+    fi
+
+    # Dọn dẹp tàn dư rác cấu hình và Database cũ
+    /bin/rm -rf -- /etc/fail2ban /var/lib/fail2ban 2>/dev/null
+    return 0
+  fi
+}
+
+wptt_fail2ban_garbage_collector
