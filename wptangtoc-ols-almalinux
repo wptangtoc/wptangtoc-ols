@@ -338,7 +338,7 @@ wptt_init_temp_swap_install
 _success "Tối ưu DNF hoàn tất"
 
 _step "Dọn dẹp các dịch vụ rác và xung đột"
-rbb_services=(apache apache2 httpd nginx postfix acpid Sendmail Xfs Autofs Isdn Nfslock Apmd yum-cron php-fpm php-common)
+rbb_services=(apache apache2 httpd nginx postfix acpid Sendmail Xfs Autofs Isdn Nfslock Apmd yum-cron php-fpm php-common fail2ban fail2ban-firewalld fail2ban-systemd)
 for svc in "${rbb_services[@]}"; do
   systemctl stop "$svc" >>"$LOG_FILE" 2>&1 || true
   systemctl disable "$svc" >>"$LOG_FILE" 2>&1 || true
@@ -1358,6 +1358,7 @@ wptt_run bash -c '
     bash /etc/wptt/wptt-chronyd-dong-bo-times >/dev/null 2>&1 || true
 	bash /etc/wptt/logs/wptt-journald-optimize >/dev/null 2>&1 || true
 	bash /etc/wptt/update/thiet-lap-cron-check-phien-ban-cache-wptangtoc-ols >/dev/null 2>&1 || true
+	bash /etc/wptt/fail2ban/install-sshguard >/dev/null 2>&1 || true
 		chronyc makestep >/dev/null 2>&1 || true
 '
 _success "Cấu hình tối ưu nâng cao hoàn tất"
@@ -1409,9 +1410,8 @@ else
   _success "Bỏ qua tạo Database do sử dụng tên miền mặc định"
 fi
 
-# 14B. CẤU HÌNH BẢO MẬT SSH VÀ SSHGUARD (ZERO-OVERHEAD IPS)
-# 14B. CẤU HÌNH BẢO MẬT SSH VÀ SSHGUARD (ZERO-OVERHEAD IPS)
-_step "Cấu hình bảo mật SSH (Port $port_ssh) và SSHGuard"
+# 14B. CẤU HÌNH BẢO MẬT SSH
+_step "Cấu hình bảo mật SSH (Port $port_ssh)"
 
 # 1. Đổi Port SSH và cập nhật SELinux
 if [[ "$port_ssh" != "22" ]]; then
@@ -1425,37 +1425,6 @@ fi
 # 2. Mở Port trên Firewalld
 firewall-cmd --zone=public --add-port="${port_ssh:-22}"/tcp --permanent >>"$LOG_FILE" 2>&1 || true
 firewall-cmd --reload >>"$LOG_FILE" 2>&1 || true
-
-# Cài đặt SSHGuard lõi VÀ Gói trung gian giao tiếp với Firewalld
-wptt_run dnf install sshguard sshguard-firewalld -y
-
-# Dò đường dẫn backend theo từng bản đóng gói
-SSHG_BACKEND=""
-for p in /usr/libexec/sshguard/sshg-fw-firewalld /usr/libexec/sshg-fw-firewalld; do
-  [[ -x "$p" ]] && SSHG_BACKEND="$p" && break
-done
-[[ -z "$SSHG_BACKEND" ]] && SSHG_BACKEND="$(rpm -ql sshguard-firewalld 2>/dev/null | grep 'sshg-fw-firewalld$' | head -1)"
-
-mkdir -p /var/lib/sshguard
-
-cat > /etc/sshguard.conf <<EOF
-# Đọc log từ journald; OpenSSH >= 9.8 ghi log qua sshd-session
-LOGREADER="LANG=C /usr/bin/journalctl -afb -p info -n1 -t sshd -t sshd-session -o cat"
-BACKEND="$SSHG_BACKEND"
-THRESHOLD=30
-BLOCK_TIME=900
-DETECTION_TIME=43200
-WHITELIST_FILE=/etc/sshguard.whitelist
-BLACKLIST_FILE=30:/var/lib/sshguard/blacklist.db
-EOF
-
-# WHITELIST_FILE phải tồn tại nếu được khai báo
-touch /etc/sshguard.whitelist
-echo "127.0.0.1" > /etc/sshguard.whitelist
-echo "::1" >> /etc/sshguard.whitelist
-
-systemctl enable --now sshguard >>"$LOG_FILE" 2>&1 || true
-
 # 4. Cấu hình cô lập bảo mật SFTP (Chroot)
 sed -i "/Subsystem/d" /etc/ssh/sshd_config || true
 echo 'Subsystem sftp internal-sftp' >>/etc/ssh/sshd_config
@@ -1471,7 +1440,7 @@ Match User $USER
 EOF
 systemctl reload sshd >>"$LOG_FILE" 2>&1 || true
 
-_success "SSH và Tường lửa (SSHGuard) đã được bảo vệ hoàn chỉnh"
+_success "SSH và Tường lửa đã được bảo vệ hoàn chỉnh"
 
 # ==============================================================================
 # 15. KẾT XUẤT CẤU HÌNH BẢO MẬT AES VÀ SYMLINK

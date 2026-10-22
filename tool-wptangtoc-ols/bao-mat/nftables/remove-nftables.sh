@@ -55,13 +55,15 @@ fi
 # Vá lỗi SC2086
 rm -f "${path_nftables_config:?}"
 
-sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
-sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
-sed -i "s/^banaction_allports = .*/banaction_allports = firewallcmd-allports/" /etc/fail2ban/jail.local
-systemctl unmask fail2ban
-systemctl start fail2ban
-systemctl enable fail2ban
-systemctl restart fail2ban
+if [[ -f /etc/fail2ban/jail.local ]];then
+	sed -i '/%(action_)s/!s/^action = .*/action = firewallcmd-allports/' /etc/fail2ban/jail.local
+	sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = firewallcmd-allports/' /etc/fail2ban/jail.local
+	sed -i "s/^banaction_allports = .*/banaction_allports = firewallcmd-allports/" /etc/fail2ban/jail.local
+	systemctl unmask fail2ban
+	systemctl start fail2ban
+	systemctl enable fail2ban
+	systemctl restart fail2ban
+fi
 
 cat <(crontab -l) | sed "/bao-mat/d" | crontab -
 cat <(crontab -l) | sed "/truncate/d" | crontab -
@@ -84,5 +86,28 @@ if [[ -f /etc/systemd/system/layer7-lsws-litmit-ddos-blocker-nftables.service ]]
 fi
 
 . /etc/wptt/logs/warn-log-chuyen-error-log
+
+
+if command -v sshguard >/dev/null 2>&1 && [[ -f /etc/sshguard.conf ]]; then
+	_runing "Đồng bộ cấu hình sshguard với firewalld..."
+	# Bổ sung gói backend cho RHEL nếu thiếu
+	if command -v dnf >/dev/null 2>&1; then
+		dnf install -y sshguard-firewalld >/dev/null 2>&1 || true
+	fi
+
+	# Truy tìm vị trí Backend của Nftables
+	SSHG_BACKEND=""
+	for p in /usr/libexec/sshguard/sshg-fw-firewalld /usr/lib/x86_64-linux-gnu/sshg-fw-firewalld; do
+		[[ -x "$p" ]] && SSHG_BACKEND="$p" && break
+	done
+
+	# Đổi cấu hình và Restart lại người gác cổng
+	if [[ -n "$SSHG_BACKEND" ]]; then
+		sed -i "s|^BACKEND=.*|BACKEND=\"$SSHG_BACKEND\"|" /etc/sshguard.conf
+		systemctl restart sshguard >/dev/null 2>&1 || true
+	fi
+	_rundone "Đồng bộ cấu hình sshguard với firewalld..."
+fi
+
 firewall-cmd --reload
 echo "Hoàn tất remove nftables và bật lại firewalld"

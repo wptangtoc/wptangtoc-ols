@@ -5,7 +5,7 @@
 
 function huong_dan() {
   cat <<'EOF'
-  Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hoặc dải mạng (CIDR) hiện đang bị ngăn chặn truy cập vào máy chủ trên mọi lớp bảo mật (Fail2ban, CSF, Nftables, Firewalld và OpenLiteSpeed).
+  Tính năng Xem toàn bộ danh sách IP bị chặn trong WPTangToc OLS là một công cụ quản trị cho phép người dùng kiểm tra và theo dõi tất cả các địa chỉ IP hoặc dải mạng (CIDR) hiện đang bị ngăn chặn truy cập vào máy chủ trên mọi lớp bảo mật (SSHGuard, Fail2ban, CSF, Nftables, Firewalld và OpenLiteSpeed).
 EOF
 }
 
@@ -199,7 +199,49 @@ if systemctl is-active --quiet nftables 2>/dev/null && command -v nft >/dev/null
   ' < <(nft list ruleset 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
 fi
 
+# ==============================================================================
+# 6. QUÉT SSHGUARD (CHẶN VĨNH VIỄN VÀ CHẶN TẠM THỜI)
+# ==============================================================================
+if systemctl is-active --quiet sshguard 2>/dev/null; then
+  # 6.1 Lấy IP chặn vĩnh viễn (Blacklist DB)
+  if [[ -f /var/lib/sshguard/blacklist.db ]]; then
+    awk -F'|' '
+      NF >= 4 {
+        # Cột số 4 chứa địa chỉ IP
+        ip = $4
+        if (ip != "" && ip != "127.0.0.1" && ip != "::1") {
+          print "SSHGuard-DB", ip
+        }
+      }
+    ' /var/lib/sshguard/blacklist.db >>"$TMP_LIST" 2>/dev/null
+  fi
 
+  # 6.2 Lấy IP chặn tạm thời từ Tường lửa lõi (Vì SSHGuard lưu IP tạm trên RAM của Tường lửa)
+  # Firewalld: Ipset
+  if systemctl is-active --quiet firewalld 2>/dev/null; then
+    for ipset_name in sshguard4 sshguard6; do
+      if firewall-cmd --info-ipset="$ipset_name" >/dev/null 2>&1; then
+        awk -v tag="SSHGuard-FW" '
+          /^[0-9a-fA-F]/ { print tag, $1 }
+        ' < <(firewall-cmd --ipset="$ipset_name" --get-entries 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+      fi
+    done
+  fi
+  # Nftables: Set
+  if systemctl is-active --quiet nftables 2>/dev/null; then
+    awk '
+      /^table (ip|ip6) sshguard/ { in_table = 1 }
+      in_table && /set attackers/ { in_set = 1 }
+      in_set && /elements = \{/ { in_elem = 1; next }
+      in_elem && /\}/ { in_elem = 0; in_set = 0; in_table = 0; next }
+      in_elem {
+        cand = $1
+        gsub(/[,]/, "", cand)
+        if (cand != "") print "SSHGuard-FW", cand
+      }
+    ' < <(nft list ruleset 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+  fi
+fi
 
 # ==============================================================================
 # 7. GOM NHÓM DEDUPLICATE & SẮP XẾP TỰ NHIÊN (SORT -V)
@@ -208,6 +250,11 @@ awk '
   NF >= 2 {
     src = $1
     addr = $2
+
+    # CHUẨN HÓA IP: Cắt bỏ /32 và /128 để chống lặp dòng
+    sub(/\/32$/, "", addr)
+    sub(/\/128$/, "", addr)
+
     if (map[addr] == "") {
       map[addr] = src
     } else if (index(", " map[addr] ", ", ", " src ", ") == 0) {
@@ -273,7 +320,7 @@ else
   TMP_SORTED=""
 
   echo -e "${C_CYAN}╰───────┴─────────────────────────────────────────┴───────────────────────────────╯${C_RESET}"
-  echo -e "  ${C_BOLD_WHITE}Tổng cộng:${C_RESET} Đang có ${C_RED}${COUNT:-0}${C_RESET} địa chỉ IP / dải mạng bị cách ly khỏi hệ thống.\n"
+  echo -e "${C_BOLD_WHITE}Tổng cộng:${C_RESET} Đang có ${C_RED}${COUNT:-0}${C_RESET} địa chỉ IP / dải mạng bị cách ly khỏi hệ thống.\n"
 fi
 
 wptt_quay_ve_menu "$route_flag" 0 "enter"
