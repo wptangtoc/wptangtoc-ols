@@ -16,6 +16,7 @@ EOF
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 stty iutf8 2>/dev/null
 
 # shellcheck source=/dev/null
@@ -29,7 +30,6 @@ fi
 . /etc/wptt/echo-color 2>/dev/null
 # shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null
-
 
 TMP_LIST=""
 TMP_SORTED=""
@@ -139,22 +139,32 @@ wptt_scan_all_blocked_ips() {
   local out_file="$1"
   : >"$out_file"
 
-  # 1. Quét CSF Firewall (/etc/csf/csf.deny)
-  if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.deny ]]; then
-    awk '
-      /^[ \t]*#/ { next }
-      /^[ \t]*$/ { next }
-      {
-        if (index($1, "\x7c") == 0) print "CSF", $1
-      }
-    ' /etc/csf/csf.deny >>"$out_file" 2>/dev/null
+  # 1. Quét CSF Firewall (Chặn vĩnh viễn & Chặn tạm thời)
+  if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
+    if [[ -f /etc/csf/csf.deny ]]; then
+      awk '
+        /^[ \t]*#/ { next }
+        /^[ \t]*$/ { next }
+        {
+          if (index($1, "\x7c") == 0) print "CSF", $1
+        }
+      ' /etc/csf/csf.deny >>"$out_file" 2>/dev/null
+    fi
+    if [[ -s /var/lib/csf/csf.tempban ]]; then
+      awk -F '\x7c' '
+        /^[ \t]*#/ { next }
+        NF >= 1 && $1 != "" {
+          gsub(/[[:space:]]/, "", $1)
+          if ($1 != "") print "CSF-Temp", $1
+        }
+      ' /var/lib/csf/csf.tempban >>"$out_file" 2>/dev/null
+    fi
   fi
 
-	# 2. Quét Nftables (Đã vá lỗi loại trừ hoàn toàn 0.0.0.0 và ::)
+  # 2. Quét Nftables (Đã vá lỗi loại trừ hoàn toàn 0.0.0.0 và ::)
   if systemctl is-active --quiet nftables 2>/dev/null && command -v nft >/dev/null 2>&1; then
     awk '
       function is_ip(val) {
-        # Loại bỏ các địa chỉ rác hệ thống
         if (val == "0.0.0.0" || val == "::" || val ~ /^0(\.0){3}/) return 0
         if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) return 1
         if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}\/[0-9]{1,2}$/) return 1
@@ -183,7 +193,7 @@ wptt_scan_all_blocked_ips() {
   fi
 
   # 3. Quét Firewalld (Zone Drop)
-  if systemctl is-active --quiet firewalld 2>/dev/null; then
+  if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd >/dev/null 2>&1; then
     awk '
       {
         for (i = 1; i <= NF; i++) {
@@ -193,10 +203,7 @@ wptt_scan_all_blocked_ips() {
     ' < <(firewall-cmd --zone=drop --list-sources 2>/dev/null) >>"$out_file" 2>/dev/null
   fi
 
-
-	# ==========================================
-  # Quét SSHGuard (Cả Blacklist DB & Ipset Firewalld)
-  # ==========================================
+  # 4. Quét SSHGuard (Toàn diện: DB, Firewalld Ipset, Nftables Set, Iptables Chain)
   if systemctl is-active --quiet sshguard 2>/dev/null; then
     # A. Quét từ Database vĩnh viễn (Định dạng: timestamp|service|type|IP)
     if [[ -f /var/lib/sshguard/blacklist.db ]]; then
@@ -207,24 +214,69 @@ wptt_scan_all_blocked_ips() {
           else if (NF == 1) cand = $1
 
           gsub(/[, \t]/, "", cand)
-          if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) print "SSHGuard-DB", cand
-          else if (index(cand, ":") > 0) print "SSHGuard-DB", cand
+          if (cand != "" && cand != "127.0.0.1" && cand != "::1") {
+            if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}/ || index(cand, ":") > 0) {
+              print "SSHGuard-DB", cand
+            }
+          }
         }
       ' /var/lib/sshguard/blacklist.db >>"$out_file" 2>/dev/null
     fi
-    
+
     # B. Quét từ Ipset đang chạy trên RAM của Firewalld
-    if systemctl is-active --quiet firewalld 2>/dev/null; then
+    if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd >/dev/null 2>&1; then
       for iset in sshguard4 sshguard6; do
         firewall-cmd --ipset="$iset" --get-entries 2>/dev/null | awk -v sn="SSHGuard-FW" '
           { if ($1 != "") print sn, $1 }
         ' >>"$out_file" 2>/dev/null
       done
     fi
+
+    # C. Quét từ Set attackers của Nftables (Khi dùng backend sshg-fw-nft-sets)
+    if systemctl is-active --quiet nftables 2>/dev/null && command -v nft >/dev/null 2>&1; then
+      awk '
+        /^table (ip|ip6|inet) sshguard/ { in_table = 1 }
+        in_table && /set attackers/ { in_set = 1 }
+        in_set && /elements[ \t]*=[ \t]*\{/ { in_elem = 1 }
+        in_elem {
+          for (i = 1; i <= NF; i++) {
+            cand = $i
+            gsub(/[,{}]/, "", cand)
+            if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}/ || (index(cand, ":") > 0 && cand ~ /^[0-9a-fA-F:\/]+$/)) {
+              print "SSHGuard-FW", cand
+            }
+          }
+          if (index($0, "}") > 0) { in_elem = 0; in_set = 0; in_table = 0 }
+        }
+      ' < <(nft list ruleset 2>/dev/null) >>"$out_file" 2>/dev/null
+    fi
+
+    # D. Quét từ Chain sshguard của Iptables/CSF (Khi dùng backend sshg-fw-iptables)
+    if command -v iptables >/dev/null 2>&1; then
+      iptables -w -S sshguard 2>/dev/null | awk '
+        /^-A sshguard/ && /-s / {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "-s" && (i + 1) <= NF) {
+              print "SSHGuard-FW", $(i + 1)
+            }
+          }
+        }
+      ' >>"$out_file" 2>/dev/null
+    fi
+    if command -v ip6tables >/dev/null 2>&1; then
+      ip6tables -w -S sshguard 2>/dev/null | awk '
+        /^-A sshguard/ && /-s / {
+          for (i = 1; i <= NF; i++) {
+            if ($i == "-s" && (i + 1) <= NF) {
+              print "SSHGuard-FW", $(i + 1)
+            }
+          }
+        }
+      ' >>"$out_file" 2>/dev/null
+    fi
   fi
 
-  # 4. Quét Fail2ban
-	# 4. Quét Fail2ban (Đã vá lỗi lọc bỏ từ khóa 'list:', 'Banned', v.v.)
+  # 5. Quét Fail2ban
   if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
     local jail_raw jail_list jail
     jail_raw="$(fail2ban-client status 2>/dev/null)"
@@ -237,7 +289,6 @@ wptt_scan_all_blocked_ips() {
             for (i = 4; i <= NF; i++) {
               cand = $i
               gsub(/[,]/, "", cand)
-              # Bỏ qua các từ khóa hệ thống nếu bị dính cột
               if (cand != "" && cand !~ /^(list:|Banned|IP|is:|none)$/ && (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/ || index(cand, ":") > 0)) {
                 print j, cand
               }
@@ -248,7 +299,7 @@ wptt_scan_all_blocked_ips() {
     fi
   fi
 
-  # 5. Quét OpenLiteSpeed Dynamic Anti-DDoS (/tmp/lshttpd/.rtreport*)
+  # 6. Quét OpenLiteSpeed Dynamic Anti-DDoS (/tmp/lshttpd/.rtreport*)
   local rtreport_files=(/tmp/lshttpd/.rtreport*)
   if [[ -e "${rtreport_files[0]}" ]]; then
     awk '
@@ -330,7 +381,7 @@ while true; do
 
     wptt_scan_all_blocked_ips "$TMP_LIST"
 
-		awk '
+    awk '
       NF >= 2 {
         src = $1
         addr = $2
@@ -370,7 +421,7 @@ while true; do
 
     CHON_IP="$(fzf \
       --prompt="Chọn IP cần Mở khóa > " \
-      --header="ĐỊA CHỈ IP / DẢI MẠNG                      ➜ NGUỒN CHẶN (Nhấn ESC để hủy)" \
+      --header="ĐỊA CHỈ IP / DẢI MẠNG                     ➜ NGUỒN CHẶN (Nhấn ESC để hủy)" \
       --layout=reverse --border=rounded --color=border:cyan --height=65% <"$TMP_SORTED")"
 
     /bin/rm -f -- "${TMP_SORTED:?}"
@@ -411,11 +462,20 @@ echo ""
 task_msg="Mở khóa địa chỉ IP $ip trên hệ thống"
 _runing "$task_msg"
 
+# Tách biệt dạng IP trần (không đuôi /32, /128) và dạng có CIDR để đối chiếu chính xác ở mọi tầng
+ip_bare="${ip%/32}"
+ip_bare="${ip_bare%/128}"
+if [[ "$ip_bare" == *":"* ]]; then
+  ip_host_cidr="${ip_bare}/128"
+else
+  ip_host_cidr="${ip_bare}/32"
+fi
+
 declare -a cleared_services=()
 
+# ------------------------------------------------------------------------------
 # 1. Mở khóa trên Fail2ban
-
-# 1. Mở khóa trên Fail2ban
+# ------------------------------------------------------------------------------
 if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
   f2b_unbanned=0
   jail_raw="$(fail2ban-client status 2>/dev/null)"
@@ -426,27 +486,26 @@ if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-clien
     for jail in $jail_list; do
       [[ -n "$jail" ]] || continue
 
-      # Chỉ xử lý jail nếu IP có mặt chính xác trong danh sách bị chặn.
       jail_status="$(fail2ban-client status "$jail" 2>/dev/null)"
 
       if printf '%s\n' "$jail_status" |
-        awk -v target="$ip" '
+        awk -v t1="$ip" -v t2="$ip_bare" '
           /Banned IP list:/ {
             for (i = 1; i <= NF; i++) {
               value = $i
               gsub(/,/, "", value)
-              if (value == target) found = 1
+              if (value == t1 || value == t2) found = 1
             }
           }
           END { exit !found }
         '; then
 
-        if fail2ban-client set "$jail" unbanip "$ip" >/dev/null 2>&1; then
+        if fail2ban-client set "$jail" unbanip "$ip_bare" >/dev/null 2>&1 ||
+           fail2ban-client set "$jail" unbanip "$ip" >/dev/null 2>&1; then
           f2b_unbanned=1
         fi
       fi
     done
-
   fi
 
   if (( f2b_unbanned == 1 )); then
@@ -454,69 +513,122 @@ if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-clien
   fi
 fi
 
-
-# ==========================================
-# Mở khóa trên SSHGuard
-# ==========================================
-if systemctl is-active --quiet sshguard 2>/dev/null; then
+# ------------------------------------------------------------------------------
+# 2. Mở khóa trên SSHGuard (Hỗ trợ toàn diện: DB, Firewalld, Nftables, Iptables/CSF)
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 2. Mở khóa trên SSHGuard (Surgical Unban - Chỉ gỡ đúng IP chỉ định, bảo toàn RAM)
+# ------------------------------------------------------------------------------
+if systemctl is-active --quiet sshguard 2>/dev/null || [[ -f /var/lib/sshguard/blacklist.db ]]; then
   sshg_unbanned=0
 
-  # 1. Xóa tận gốc khỏi Blacklist Database (để không bị chặn lại khi restart)
-	
-  sshg_db=/var/lib/sshguard/blacklist.db
-  if [[ -f "$sshg_db" ]] && awk -F'|' -v t="$ip" '$4 == t { f = 1 } END { exit !f }' "$sshg_db"; then
-    # sshg_tmp="$(mktemp "${sshg_db}.XXXXXX")"
-		sshg_tmp="$(/bin/mktemp -p "/etc/wptt/tmp" "sshguard_blacklist_XXXXXX.tmp")"
-    if awk -F'|' -v t="$ip" '$4 != t' "$sshg_db" >"$sshg_tmp" && cat "$sshg_tmp" >"$sshg_db"; then
-      sshg_unbanned=1
+  # 2.1. Xóa tận gốc khỏi Blacklist Database (Khóa vĩnh viễn)
+  sshg_db="/var/lib/sshguard/blacklist.db"
+  if [[ -f "$sshg_db" ]] && awk -F'|' -v t1="$ip" -v t2="$ip_bare" '
+    {
+      cand = (NF >= 4) ? $4 : $1
+      gsub(/[[:space:]]/, "", cand)
+      if (cand == t1 || cand == t2) f = 1
+    }
+    END { exit !f }
+  ' "$sshg_db" 2>/dev/null; then
+    mkdir -p /etc/wptt/tmp 2>/dev/null
+    sshg_tmp="$(/bin/mktemp -p "/etc/wptt/tmp" "sshguard_blacklist_XXXXXX.tmp")"
+    if [[ -n "$sshg_tmp" ]]; then
+      if awk -F'|' -v t1="$ip" -v t2="$ip_bare" '
+        {
+          cand = (NF >= 4) ? $4 : $1
+          gsub(/[[:space:]]/, "", cand)
+          if (cand != t1 && cand != t2) print $0
+        }
+      ' "$sshg_db" >"$sshg_tmp" && cat "$sshg_tmp" >"$sshg_db"; then
+        sshg_unbanned=1
+      fi
+      /bin/rm -f -- "${sshg_tmp:?}"
     fi
-    /bin/rm -f -- "$sshg_tmp"
   fi
 
-  # if [[ -f /var/lib/sshguard/blacklist.db ]] && grep -qF "$ip" /var/lib/sshguard/blacklist.db 2>/dev/null; then
-  #   sed -i "/$ip/d" /var/lib/sshguard/blacklist.db
-  #   sshg_unbanned=1
-  # fi
-
-  # 2. Xóa khỏi Ipset của Firewalld (Gỡ lệnh cấm tức thì ở tầng Network)
+  # 2.2. Xóa đích danh IP khỏi Firewalld (Tự động quét cả IP trần, IP/32, IP/128 VÀ Kernel set)
   if systemctl is-active --quiet firewalld 2>/dev/null; then
-    if [[ "$ip" == *":"* ]]; then
-      # Xử lý IPv6
-      if firewall-cmd --ipset=sshguard6 --query-entry="$ip" >/dev/null 2>&1; then
-        firewall-cmd --ipset=sshguard6 --remove-entry="$ip" >/dev/null 2>&1
-        sshg_unbanned=1
+    fw_ipset="sshguard4"
+    [[ "$ip_bare" == *":"* ]] && fw_ipset="sshguard6"
+
+    for cand_entry in "$ip" "$ip_bare" "$ip_host_cidr"; do
+      if firewall-cmd --ipset="$fw_ipset" --query-entry="$cand_entry" >/dev/null 2>&1; then
+        if firewall-cmd --ipset="$fw_ipset" --remove-entry="$cand_entry" >/dev/null 2>&1; then
+          sshg_unbanned=1
+        fi
+        firewall-cmd --permanent --ipset="$fw_ipset" --remove-entry="$cand_entry" >/dev/null 2>&1 || true
       fi
-    else
-      # Xử lý IPv4
-      if firewall-cmd --ipset=sshguard4 --query-entry="$ip" >/dev/null 2>&1; then
-        firewall-cmd --ipset=sshguard4 --remove-entry="$ip" >/dev/null 2>&1
+    done
+
+    # Gỡ trực tiếp phần tử đó trong bảng 'inet firewalld' của Nftables
+    if command -v nft >/dev/null 2>&1; then
+      if nft delete element inet firewalld "$fw_ipset" "{ $ip_bare }" >/dev/null 2>&1 ||
+         nft delete element inet firewalld "$fw_ipset" "{ $ip }" >/dev/null 2>&1; then
         sshg_unbanned=1
       fi
     fi
   fi
 
-  # 3. Khởi động lại dịch vụ nếu có thao tác mở khóa để xả bộ đệm RAM
+  # 2.3. Xóa đích danh IP khỏi Nftables (Khi dùng backend sshg-fw-nft-sets)
+  if command -v nft >/dev/null 2>&1; then
+    nft_family="ip"
+    [[ "$ip_bare" == *":"* ]] && nft_family="ip6"
+
+    for tbl in "$nft_family" "inet"; do
+      if nft delete element "$tbl" sshguard attackers "{ $ip_bare }" >/dev/null 2>&1 ||
+         nft delete element "$tbl" sshguard attackers "{ $ip }" >/dev/null 2>&1; then
+        sshg_unbanned=1
+      fi
+    done
+  fi
+
+  # 2.4. Xóa đích danh IP khỏi Iptables / Ip6tables (Khi chạy cùng CSF hoặc sshg-fw-iptables)
+  if [[ "$ip_bare" == *":"* ]]; then
+    if command -v ip6tables >/dev/null 2>&1; then
+      while ip6tables -w -D sshguard -s "$ip_bare" -j DROP >/dev/null 2>&1 ||
+            ip6tables -w -D sshguard -s "$ip_host_cidr" -j DROP >/dev/null 2>&1 ||
+            ip6tables -w -D sshguard -s "$ip" -j DROP >/dev/null 2>&1; do
+        sshg_unbanned=1
+      done
+    fi
+  else
+    if command -v iptables >/dev/null 2>&1; then
+      while iptables -w -D sshguard -s "$ip_bare" -j DROP >/dev/null 2>&1 ||
+            iptables -w -D sshguard -s "$ip_host_cidr" -j DROP >/dev/null 2>&1 ||
+            iptables -w -D sshguard -s "$ip" -j DROP >/dev/null 2>&1; do
+        sshg_unbanned=1
+      done
+    fi
+  fi
+
+  # 2.5. Ghi nhận trạng thái (TUYỆT ĐỐI KHÔNG RESTART SSHGUARD ĐỂ BẢO TOÀN CÁC IP KHÁC TRÊN RAM)
   if (( sshg_unbanned == 1 )); then
-    systemctl restart sshguard >/dev/null 2>&1
     cleared_services+=("SSHGuard")
   fi
 fi
-
-# 2. Mở khóa trên CSF Firewall
+# ------------------------------------------------------------------------------
+# 3. Mở khóa trên CSF Firewall (Cả Vĩnh viễn & Tempban)
+# ------------------------------------------------------------------------------
 if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
-  if [[ -f /etc/csf/csf.deny ]] && grep -qF "$ip" /etc/csf/csf.deny 2>/dev/null; then
-    if csf -dr "$ip" >/dev/null 2>&1; then
-      cleared_services+=("CSF Firewall")
-    fi
-  else
-    csf_out="$(csf -dr "$ip" 2>/dev/null)"
-    if [[ "$csf_out" == *"Removing"* || "$csf_out" == *"csf.deny"* ]]; then
-      cleared_services+=("CSF Firewall")
-    fi
+  csf_cleared=0
+  csf_out="$(csf -dr "$ip" 2>/dev/null)"
+  if [[ "$csf_out" == *"Removing"* || "$csf_out" == *"csf.deny"* ]]; then
+    csf_cleared=1
+  fi
+  csf_temp_out="$(csf -tr "$ip" 2>/dev/null)"
+  if [[ "$csf_temp_out" == *"Removing"* || "$csf_temp_out" == *"tempban"* ]]; then
+    csf_cleared=1
+  fi
+  if (( csf_cleared == 1 )); then
+    cleared_services+=("CSF Firewall")
   fi
 fi
 
-# 3. Mở khóa trên Nftables
+# ------------------------------------------------------------------------------
+# 4. Mở khóa trên Nftables (Rule riêng của WPTangToc)
+# ------------------------------------------------------------------------------
 if systemctl is-active --quiet nftables 2>/dev/null; then
   if [[ -f /etc/wptt/bao-mat/nftables/unban.sh ]]; then
     if /bin/bash /etc/wptt/bao-mat/nftables/unban.sh "$ip" >/dev/null 2>&1; then
@@ -525,19 +637,29 @@ if systemctl is-active --quiet nftables 2>/dev/null; then
   fi
 fi
 
-# 4. Mở khóa trên Firewalld
+# ------------------------------------------------------------------------------
+# 5. Mở khóa trên Firewalld (Zone Drop)
+# ------------------------------------------------------------------------------
 if systemctl is-active --quiet firewalld 2>/dev/null; then
-  if firewall-cmd --zone=drop --query-source="$ip" >/dev/null 2>&1; then
-    firewall-cmd --zone=drop --remove-source="$ip" >/dev/null 2>&1
-    firewall-cmd --permanent --zone=drop --remove-source="$ip" >/dev/null 2>&1
+  fw_zone_cleared=0
+  for cand_src in "$ip" "$ip_bare" "$ip_host_cidr"; do
+    if firewall-cmd --zone=drop --query-source="$cand_src" >/dev/null 2>&1; then
+      firewall-cmd --zone=drop --remove-source="$cand_src" >/dev/null 2>&1
+      firewall-cmd --permanent --zone=drop --remove-source="$cand_src" >/dev/null 2>&1
+      fw_zone_cleared=1
+    fi
+  done
+  if (( fw_zone_cleared == 1 )); then
     cleared_services+=("Firewalld")
   fi
 fi
 
-# 5. Mở khóa trên OpenLiteSpeed Dynamic Anti-DDoS
+# ------------------------------------------------------------------------------
+# 6. Mở khóa trên OpenLiteSpeed Dynamic Anti-DDoS
+# ------------------------------------------------------------------------------
 rtreport_list=(/tmp/lshttpd/.rtreport*)
 if [[ -e "${rtreport_list[0]}" ]]; then
-  if awk -v target="$ip" '/^BLOCKED_IP:/ && index($0, target) > 0 { found=1; exit } END { exit !found }' /tmp/lshttpd/.rtreport* 2>/dev/null; then
+  if awk -v target="$ip_bare" '/^BLOCKED_IP:/ && index($0, target) > 0 { found=1; exit } END { exit !found }' /tmp/lshttpd/.rtreport* 2>/dev/null; then
     if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
       wptt_smart_reload_lsws >/dev/null 2>&1
     else
