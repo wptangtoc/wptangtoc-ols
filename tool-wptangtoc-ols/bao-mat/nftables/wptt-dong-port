@@ -1,0 +1,105 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Đóng Port (TCP/UDP) trên Nftables thuần (Có chốt chặn bảo vệ Port SSH)
+
+# Ví dụ Đóng Port WebAdmin 7080: /bin/bash /etc/wptt/bao-mat/nftables/wptt-dong-port 7080 tcp
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null
+    printf '\n'
+    nft list table inet filter 2>/dev/null
+  } > "$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+route_flag="${1:-}"
+PORT_IN="${1:-}"
+PROTO_IN="${2:-both}"
+
+if [[ "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+  PORT_IN=""
+fi
+
+if [[ -z "$PORT_IN" ]]; then
+  clear
+  echo ""
+  print_border_top "$C_CYAN"
+  center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Đóng Cổng Kết Nối (Close Port)${C_RESET}" "$C_CYAN"
+  print_border_bot "$C_CYAN"
+  echo ""
+
+  open_tcp="$(nft list set inet filter tcp_ports 2>/dev/null | awk '/elements =/ {sub(/.*elements = \{ */, ""); sub(/ *\}.*/, ""); print}')"
+  open_udp="$(nft list set inet filter udp_ports 2>/dev/null | awk '/elements =/ {sub(/.*elements = \{ */, ""); sub(/ *\}.*/, ""); print}')"
+  echo -e "Port TCP đang mở: ${C_GREEN}${open_tcp:-Trống}${C_RESET}"
+  echo -e "Port UDP đang mở: ${C_GREEN}${open_udp:-Trống}${C_RESET}\n"
+
+  echo -en "${C_CYAN}Nhập số Port cần ĐÓNG (VD: 7080, 3306) [0=Thoát]: ${C_RESET}"
+  read -r PORT_IN
+  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && wptt_quay_ve_menu "$route_flag" 0
+fi
+
+PORT_IN="${PORT_IN//[[:space:]]/}"
+if [[ ! "$PORT_IN" =~ ^[0-9]{1,5}$ ]] || ((10#$PORT_IN < 1 || 10#$PORT_IN > 65535)); then
+  echo -e "\n${C_RED}❌ Lỗi: Số Port '$PORT_IN' không hợp lệ!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# [CHỐT CHẶN AN TOÀN]: Không cho phép đóng Port SSH đang hoạt động
+active_ssh_port="$(awk '/^[ \t]*Port[ \t]+[0-9]+/ {print $2; exit}' /etc/ssh/sshd_config 2>/dev/null)"
+[[ -z "$active_ssh_port" ]] && active_ssh_port="${port_ssh:-22}"
+
+if ((10#$PORT_IN == 10#$active_ssh_port)); then
+  echo -e "\n${C_RED}🛡️ CẢNH BÁO TỬ HUYỆT: Port $PORT_IN đang là cổng kết nối SSH hiện tại của máy chủ!${C_RESET}"
+  echo -e "${C_YELLOW}Hệ thống từ chối đóng Port này để bảo vệ bạn khỏi nguy cơ mất quyền điều khiển VPS.${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+task_close="Đóng cổng $PORT_IN trên tường lửa Nftables"
+_runing "$task_close"
+
+# Thực hiện xóa khỏi Set (Dùng || true vì có thể port chỉ nằm ở TCP mà không nằm ở UDP)
+if [[ "$PROTO_IN" == "tcp" || "$PROTO_IN" == "both" ]]; then
+  nft delete element inet filter tcp_ports "{ $PORT_IN }" >/dev/null 2>&1 || true
+fi
+if [[ "$PROTO_IN" == "udp" || "$PROTO_IN" == "both" ]]; then
+  nft delete element inet filter udp_ports "{ $PORT_IN }" >/dev/null 2>&1 || true
+fi
+
+if wptt_nft_save_persistent; then
+  _rundone "$task_close"
+  wptt_logs "INFO" "Nftables: Đã đóng Port $PORT_IN"
+  if [[ -z "${1:-}" || "${1:-}" == "98" || "${1:-}" == "99" ]]; then
+    echo -e "\n${C_GREEN}✔ Đã đóng thành công Port $PORT_IN và lưu cấu hình vĩnh viễn!${C_RESET}"
+    wptt_quay_ve_menu "$route_flag" 0 "enter"
+  fi
+else
+  _runloi "$task_close"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi

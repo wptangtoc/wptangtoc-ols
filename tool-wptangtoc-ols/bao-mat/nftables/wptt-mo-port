@@ -1,0 +1,118 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Mở Port (TCP/UDP) trên Nftables thuần chuẩn Enterprise (Atomic & Persistent)
+
+
+# Ví dụ Mở Port WebAdmin 7080: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 7080 tcp
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+# ==============================================================================
+# HÀM LÕI: LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
+# ==============================================================================
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    # Chỉ lưu 2 bảng chuẩn của WPTangToc, không lưu nhầm bảng động của sshguard/fail2ban
+    nft list table inet blackblock 2>/dev/null
+    printf '\n'
+    nft list table inet filter 2>/dev/null
+  } > "$tmp_nft"
+
+  # Kiểm tra cú pháp file tạm trước khi ghi đè nguyên tử
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+route_flag="${1:-}"
+PORT_IN="${1:-}"
+PROTO_IN="${2:-tcp}" # Mặc định mở TCP, có thể truyền: tcp, udp, hoặc both
+
+if [[ "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+  PORT_IN=""
+fi
+
+if [[ -z "$PORT_IN" ]]; then
+  clear
+  echo ""
+  print_border_top "$C_CYAN"
+  center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Mở Cổng Kết Nối (Open Port)${C_RESET}" "$C_CYAN"
+  print_border_bot "$C_CYAN"
+  echo ""
+
+  # Hiển thị danh sách Port đang mở hiện tại
+  open_tcp="$(nft list set inet filter tcp_ports 2>/dev/null | awk '/elements =/ {sub(/.*elements = \{ */, ""); sub(/ *\}.*/, ""); print}')"
+  open_udp="$(nft list set inet filter udp_ports 2>/dev/null | awk '/elements =/ {sub(/.*elements = \{ */, ""); sub(/ *\}.*/, ""); print}')"
+  echo -e "Port TCP đang mở: ${C_GREEN}${open_tcp:-Trống}${C_RESET}"
+  echo -e "Port UDP đang mở: ${C_GREEN}${open_udp:-Trống}${C_RESET}\n"
+
+  echo -en "${C_CYAN}Nhập số Port cần MỞ (VD: 7080, 3306) [0=Thoát]: ${C_RESET}"
+  read -r PORT_IN
+  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && wptt_quay_ve_menu "$route_flag" 0
+
+  echo -en "${C_CYAN}Chọn giao thức (1=TCP, 2=UDP, 3=Cả TCP & UDP) [Mặc định=1]: ${C_RESET}"
+  read -r chon_proto
+  case "${chon_proto:-1}" in
+    2) PROTO_IN="udp" ;;
+    3) PROTO_IN="both" ;;
+    *) PROTO_IN="tcp" ;;
+  esac
+fi
+
+# Validate số Port (1 -> 65535) bằng Pure Bash
+PORT_IN="${PORT_IN//[[:space:]]/}"
+if [[ ! "$PORT_IN" =~ ^[0-9]{1,5}$ ]] || ((10#$PORT_IN < 1 || 10#$PORT_IN > 65535)); then
+  echo -e "\n${C_RED}❌ Lỗi: Số Port '$PORT_IN' không hợp lệ (Phải từ 1 đến 65535)!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+PROTO_IN="${PROTO_IN,,}"
+task_open="Mở cổng $PORT_IN (${PROTO_IN^^}) trên tường lửa Nftables"
+_runing "$task_open"
+
+err_flag=0
+if [[ "$PROTO_IN" == "tcp" || "$PROTO_IN" == "both" ]]; then
+  if ! nft add element inet filter tcp_ports "{ $PORT_IN }" >/dev/null 2>&1; then
+    err_flag=1
+  fi
+fi
+
+if [[ "$PROTO_IN" == "udp" || "$PROTO_IN" == "both" ]]; then
+  if ! nft add element inet filter udp_ports "{ $PORT_IN }" >/dev/null 2>&1; then
+    err_flag=1
+  fi
+fi
+
+if ((err_flag == 0)) && wptt_nft_save_persistent; then
+  _rundone "$task_open"
+  wptt_logs "INFO" "Nftables: Đã mở Port $PORT_IN (${PROTO_IN^^})"
+  if [[ -z "${1:-}" || "${1:-}" == "98" || "${1:-}" == "99" ]]; then
+    echo -e "\n${C_GREEN}✔ Đã mở thành công Port $PORT_IN (${PROTO_IN^^}) và lưu cấu hình vĩnh viễn!${C_RESET}"
+    wptt_quay_ve_menu "$route_flag" 0 "enter"
+  fi
+else
+  _runloi "$task_open"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể cập nhật cấu hình Nftables!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
