@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.3.1
+
+🛡️ **Bảo mật & Tối ưu hệ thống**
+- **Tích hợp SSHGuard:** Bổ sung và thay thế hoàn hảo cho Fail2Ban bằng SSHGuard, giúp khắc phục triệt để các điểm yếu về hiệu suất và khả năng xử lý, mang lại lớp phòng thủ mạnh mẽ, ổn định và an toàn hơn trước các cuộc tấn công quét cổng, brute-force vào dịch vụ SSH.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.3.0.2
 
 🛠️ Tối ưu hệ thống:
