@@ -51,11 +51,33 @@ if [[ $port_mariadb_remote ]]; then
   sed -i "/chain input /a\ \ tcp dport $port_mariadb_remote accept #port remote mariadb" $path_nftables_config
 fi
 
+if [[ -f /etc/fail2ban/jail.local ]];then
 sed -i '/%(action_)s/!s/^action = .*/action = nftables-allports/' /etc/fail2ban/jail.local
 sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = nftables-allports/' /etc/fail2ban/jail.local
 sed -i "s/^banaction_allports = .*/banaction_allports = nftables-allports/" /etc/fail2ban/jail.local
-
 systemctl restart fail2ban
+fi
+
+
+if command -v sshguard >/dev/null 2>&1 && [[ -f /etc/sshguard.conf ]]; then
+	# Bổ sung gói backend cho RHEL nếu thiếu
+	if command -v dnf >/dev/null 2>&1; then
+		dnf install -y sshguard-nftables >/dev/null 2>&1 || true
+	fi
+
+	# Truy tìm vị trí Backend của Nftables
+	SSHG_BACKEND=""
+	for p in /usr/libexec/sshguard/sshg-fw-nft-sets /usr/lib/x86_64-linux-gnu/sshg-fw-nft-sets; do
+		[[ -x "$p" ]] && SSHG_BACKEND="$p" && break
+	done
+
+	# Đổi cấu hình và Restart lại người gác cổng
+	if [[ -n "$SSHG_BACKEND" ]]; then
+		sed -i "s|^BACKEND=.*|BACKEND=\"$SSHG_BACKEND\"|" /etc/sshguard.conf
+		systemctl restart sshguard >/dev/null 2>&1 || true
+	fi
+fi
+
 echo "hoàn tất cài nftables"
 
 #file config /etc/sysconfig/nftables.conf

@@ -1,0 +1,175 @@
+#!/bin/bash
+wptt_ensure_sshguard() {
+  # ============================================================================
+  # 1. KIỂM TRA LŨY ĐẲNG (IDEMPOTENCY BYPASS)
+  # ============================================================================
+  # Nếu SSHGuard đã được cài đặt, đang chạy ổn định và có file cấu hình -> Bỏ qua 100%
+  if command -v sshguard >/dev/null 2>&1 && systemctl is-active --quiet sshguard 2>/dev/null && [[ -f /etc/sshguard.conf ]]; then
+    return 0
+  fi
+
+  local task_msg="Chuyển đổi bảo vệ System-level từ Fail2Ban sang SSHGuard"
+  if declare -F _runing >/dev/null 2>&1; then
+    _runing "$task_msg"
+  fi
+
+  # ============================================================================
+  # 2. XÓA SẠCH FAIL2BAN (PURGE) NẾU TỒN TẠI
+  # ============================================================================
+	if systemctl is-active --quiet fail2ban 2>/dev/null || [[ -d /etc/fail2ban ]]; then
+
+		# Lấy chính xác con số ở dòng "Number of jail:" và lọc bỏ mọi ký tự thừa
+    jail_count="$(fail2ban-client status 2>/dev/null | awk '/Number of jail:/ {print $NF}' | tr -d -c '0-9')"
+    
+    if [[ "$jail_count" == "0" ]]; then
+      # Chắc chắn 100% không có Jail nào đang chạy -> XÓA
+      has_active_rules=0
+    elif [[ "$jail_count" -gt 0 ]]; then
+      # [TỐI ƯU CỦA BẠN]: Nếu có chạy, kiểm tra xem có phải CHỈ CÓ MỖI sshd không?
+      # Vì ta đã dùng SSHGuard cho SSH, nếu Fail2ban chỉ chạy mỗi sshd thì vẫn là RÁC -> XÓA
+      jail_list="$(fail2ban-client status 2>/dev/null | awk -F"Jail list:[ \t]*" '/Jail list:/ {print $2}' | tr -d ' ')"
+      
+      if [[ "$jail_list" == "sshd" ]]; then
+        has_active_rules=0
+      else
+        has_active_rules=1
+      fi
+    fi
+
+
+		if [[ "$has_active_rules" = '0' ]];then
+			systemctl stop fail2ban >/dev/null 2>&1 || true
+			systemctl disable fail2ban >/dev/null 2>&1 || true
+
+			if command -v apt-get >/dev/null 2>&1; then
+				DEBIAN_FRONTEND=noninteractive apt-get purge -y fail2ban >/dev/null 2>&1 || true
+				DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1 || true
+			elif command -v dnf >/dev/null 2>&1; then
+				dnf remove -y fail2ban fail2ban-firewalld fail2ban-systemd >/dev/null 2>&1 || true
+			elif command -v yum >/dev/null 2>&1; then
+				yum remove -y fail2ban fail2ban-systemd >/dev/null 2>&1 || true
+			fi
+
+		# Dọn sạch tận gốc tàn dư cấu hình và Database để tiết kiệm Disk
+		/bin/rm -rf -- /etc/fail2ban /var/lib/fail2ban 2>/dev/null
+		fi
+	fi
+
+  # ============================================================================
+  # 3. NHẬN DIỆN MÔI TRƯỜNG & TƯỜNG LỬA BẰNG PURE BASH (0-SUBSHELL)
+  # ============================================================================
+  local is_debian=0
+  if grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
+    is_debian=1
+  fi
+
+  local fw_type="iptables"
+  if [[ -f /etc/csf/csf.conf ]] && command -v csf >/dev/null 2>&1; then
+    fw_type="iptables" # CSF bắt buộc dùng backend iptables
+  elif systemctl is-active --quiet nftables.service 2>/dev/null; then
+    fw_type="nftables"
+  elif systemctl is-active --quiet firewalld.service 2>/dev/null; then
+    fw_type="firewalld"
+  fi
+
+  # ============================================================================
+  # 4. CÀI ĐẶT GÓI SSHGUARD TƯƠNG ỨNG MÔI TRƯỜNG
+  # ============================================================================
+  if ((is_debian == 1)); then
+    # Họ Debian/Ubuntu: Gói 'sshguard' gốc tự chứa đủ các file libexec backend
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y sshguard >/dev/null 2>&1 || true
+  else
+    # Họ RHEL/AlmaLinux: Các Backend mở rộng thường chia thành package con
+    if [[ "$fw_type" == "nftables" ]]; then
+      dnf install -y sshguard sshguard-nftables >/dev/null 2>&1 || true
+    elif [[ "$fw_type" == "firewalld" ]]; then
+      dnf install -y sshguard sshguard-firewalld >/dev/null 2>&1 || true
+    else
+      dnf install -y sshguard sshguard-iptables >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if ! command -v sshguard >/dev/null 2>&1; then
+    if declare -F _runloi >/dev/null 2>&1; then _runloi "$task_msg"; fi
+    echo -e "${C_RED:-}❌ Lỗi: Cài đặt SSHGuard từ kho lưu trữ thất bại!${C_RESET:-}"
+    return 1
+  fi
+
+  # ============================================================================
+  # 5. DÒ ĐƯỜNG DẪN BACKEND ĐỘNG DỰA THEO TƯỜNG LỬA CHÍNH
+  # ============================================================================
+  local SSHG_BACKEND=""
+  local possible_paths=()
+
+  # Cung cấp danh sách đường dẫn khả dĩ theo chuẩn gói RHEL và Debian
+  if [[ "$fw_type" == "firewalld" ]]; then
+    possible_paths=("/usr/libexec/sshguard/sshg-fw-firewalld" "/usr/libexec/sshg-fw-firewalld")
+  elif [[ "$fw_type" == "nftables" ]]; then
+    possible_paths=("/usr/libexec/sshguard/sshg-fw-nft-sets" "/usr/lib/x86_64-linux-gnu/sshg-fw-nft-sets")
+  else
+    possible_paths=("/usr/libexec/sshguard/sshg-fw-iptables" "/usr/lib/x86_64-linux-gnu/sshg-fw-iptables")
+  fi
+
+  # Quét siêu tốc trong bộ nhớ
+  local p
+  for p in "${possible_paths[@]}"; do
+    if [[ -x "$p" ]]; then
+      SSHG_BACKEND="$p"
+      break
+    fi
+  done
+
+  # Dự phòng: Bóc tách bằng Package Manager nếu OS cấu hình thư mục dị biệt
+  if [[ -z "$SSHG_BACKEND" ]]; then
+    if ((is_debian == 1)); then
+      SSHG_BACKEND="$(dpkg -L sshguard 2>/dev/null | grep -E "sshg-fw-${fw_type}$|sshg-fw-nft-sets$" | head -n 1)"
+    else
+      SSHG_BACKEND="$(rpm -ql sshguard sshguard-firewalld sshguard-nftables sshguard-iptables 2>/dev/null | grep -E "sshg-fw-${fw_type}$|sshg-fw-nft-sets$" | head -n 1)"
+    fi
+  fi
+
+  if [[ -z "$SSHG_BACKEND" ]]; then
+    if declare -F _runloi >/dev/null 2>&1; then _runloi "$task_msg"; fi
+    echo -e "${C_RED:-}❌ Lỗi: Không thể định vị Backend '${fw_type}' cho SSHGuard trên HĐH này!${C_RESET:-}"
+    return 1
+  fi
+
+  # ============================================================================
+  # 6. KHỞI TẠO CẤU HÌNH, WHITELIST VÀ KÍCH HOẠT DỊCH VỤ
+  # ============================================================================
+  /bin/mkdir -p /var/lib/sshguard
+
+  cat > /etc/sshguard.conf <<EOF
+# Đọc log từ journald; OpenSSH >= 9.8 ghi log qua sshd-session
+LOGREADER="LANG=C /usr/bin/journalctl -afb -p info -n1 -t sshd -t sshd-session -o cat"
+BACKEND="$SSHG_BACKEND"
+THRESHOLD=30
+BLOCK_TIME=900
+DETECTION_TIME=43200
+WHITELIST_FILE=/etc/sshguard.whitelist
+BLACKLIST_FILE=120:/var/lib/sshguard/blacklist.db
+EOF
+
+  # Lũy đẳng tạo Whitelist (Không ghi đè nếu user đã tự thêm IP)
+  if [[ ! -f /etc/sshguard.whitelist ]]; then
+    touch /etc/sshguard.whitelist
+    echo "127.0.0.1" > /etc/sshguard.whitelist
+    echo "::1" >> /etc/sshguard.whitelist
+  fi
+
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now sshguard >/dev/null 2>&1 || true
+
+  if declare -F _rundone >/dev/null 2>&1; then
+    _rundone "$task_msg"
+  fi
+
+  if declare -F wptt_logs >/dev/null 2>&1; then
+    wptt_logs "INFO" "Chuyển đổi thành công sang SSHGuard (Backend: $fw_type)"
+  fi
+
+  return 0
+}
+
+wptt_ensure_sshguard

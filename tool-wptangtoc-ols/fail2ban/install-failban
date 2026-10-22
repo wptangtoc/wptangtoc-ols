@@ -1,0 +1,178 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Thư viện khởi tạo & Auto-Tune Fail2ban Lũy Đẳng
+
+# ==============================================================================
+# HÀM 1: TỰ ĐỘNG CẬP NHẬT BANACTION TOÀN CỤC TRONG jail.local / jail.d
+# ==============================================================================
+# shellcheck source=/dev/null
+. /etc/wptt/echo-color 2>/dev/null || true
+
+wptt_configure_fail2ban_banaction() {
+  if [[ -f /etc/fail2ban/jail.local ]]; then
+    local target_file="/etc/fail2ban/jail.local"
+  fi
+
+	[[ ! -f "$target_file" ]] && return 0
+
+
+  # Nhận diện tường lửa hiện hành và áp dụng cú pháp sed
+  if [[ -f /etc/csf/csf.conf ]] && command -v csf >/dev/null 2>&1; then
+    # Cấu hình cho CSF
+    sed -i '/%(action_)s/!s/^action = .*/action = iptables-allports/' "$target_file" 2>/dev/null || true
+    sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = iptables-allports/' "$target_file" 2>/dev/null || true
+    sed -i "s/^banaction_allports = .*/banaction_allports = iptables-allports/" "$target_file" 2>/dev/null || true
+  elif systemctl is-active --quiet nftables.service 2>/dev/null; then
+    # Cấu hình cho Nftables
+    sed -i '/%(action_)s/!s/^action = .*/action = nftables-allports/' "$target_file" 2>/dev/null || true
+    sed -i '/%(banaction_allports)s/!s/^banaction = .*/banaction = nftables-allports/' "$target_file" 2>/dev/null || true
+    sed -i "s/^banaction_allports = .*/banaction_allports = nftables-allports/" "$target_file" 2>/dev/null || true
+  elif systemctl is-active --quiet firewalld.service 2>/dev/null; then
+    # Cấu hình cho Firewalld
+    sed -i -E 's/^[# \t]*banaction[ \t]*=.*/banaction = firewallcmd-ipset/g' "$target_file" 2>/dev/null || true
+    sed -i -E 's/^[# \t]*banaction_allports[ \t]*=.*/banaction_allports = firewallcmd-allports/g' "$target_file" 2>/dev/null || true
+  else
+    # Fallback mặc định an toàn
+    sed -i -E 's/^[# \t]*banaction[ \t]*=.*/banaction = iptables-multiport/g' "$target_file" 2>/dev/null || true
+    sed -i -E 's/^[# \t]*banaction_allports[ \t]*=.*/banaction_allports = iptables-allports/g' "$target_file" 2>/dev/null || true
+  fi
+
+  # Ép buộc usedns = no để tránh nghẽn DNS lookup khi bị DDoS
+  sed -i -E 's/^[#[:space:]]*usedns[[:space:]]*=.*/usedns = no/g' "$target_file" 2>/dev/null || true
+
+	if [[ -f "$target_file" ]]; then
+      sed -i '/^\[sshd\]/,/^\[/ s/^[ \t]*enabled[ \t]*=.*/enabled = false/' "$target_file" 2>/dev/null || true
+  fi
+
+}
+
+# ==============================================================================
+# HÀM 2: HÀM AUTO-TUNE FAIL2BAN (CHỈ CHẠY KHI CÀI MỚI LẦN ĐẦU)
+# ==============================================================================
+wptt_autotune_fail2ban() {
+  # Tính toán lượng RAM bằng Pure Bash thay vì gọi lệnh bên ngoài
+  if [[ -z "${TOTAL_RAM:-}" || ! "${TOTAL_RAM:-}" =~ ^[0-9]+$ ]]; then
+    TOTAL_RAM=1024
+    if [[ -r /proc/meminfo ]]; then
+      TOTAL_RAM="$(awk '/^MemTotal:/{print int($2/1024); exit}' /proc/meminfo 2>/dev/null)"
+      [[ -z "$TOTAL_RAM" ]] && TOTAL_RAM=1024
+    fi
+  fi
+
+  if [[ -d "/etc/fail2ban" ]] && command -v fail2ban-client >/dev/null 2>&1; then
+    /bin/mkdir -p /etc/systemd/system/fail2ban.service.d /etc/fail2ban/fail2ban.d /etc/fail2ban/jail.d
+
+    # [QUAN TRỌNG] Tạo file jail.local từ jail.conf gốc để làm móng cấu hình chuẩn
+    if [[ -f /etc/fail2ban/jail.conf && ! -f /etc/fail2ban/jail.local ]]; then
+      /bin/cp -pf /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
+    fi
+
+    local F2B_MEM_HIGH F2B_MEM_MAX F2B_DBFILE F2B_MAXMATCHES
+    if ((TOTAL_RAM <= 1200)); then
+      F2B_MEM_HIGH="48M"
+      F2B_MEM_MAX="96M"
+      F2B_DBFILE=":memory:" # VPS RAM nhỏ không nên ghi log DB để tiết kiệm IO
+      F2B_MAXMATCHES="20"
+    else
+      F2B_MEM_HIGH="128M"
+      F2B_MEM_MAX="256M"
+      F2B_DBFILE="/var/lib/fail2ban/fail2ban.sqlite3"
+      F2B_MAXMATCHES="50"
+    fi
+
+    # Cấu hình giới hạn RAM qua Systemd
+    cat <<EOF >/etc/systemd/system/fail2ban.service.d/wptt-autotune.conf
+[Service]
+LimitSTACK=512K
+MemoryHigh=$F2B_MEM_HIGH
+MemoryMax=$F2B_MEM_MAX
+EOF
+
+    # Cấu hình tối ưu SQLite Database
+    cat <<EOF >/etc/fail2ban/fail2ban.d/wptt-autotune.local
+[Definition]
+dbfile = $F2B_DBFILE
+dbpurgeage = 86400
+dbmaxmatches = $F2B_MAXMATCHES
+EOF
+
+
+    # Dọn sạch các file cấu hình SSHD rác sinh ra từ gói cài đặt của OS
+    /bin/rm -f -- /etc/fail2ban/jail.d/sshd.local /etc/fail2ban/jail.d/defaults-debian.conf 2>/dev/null
+
+    # Tắt cấu hình SSHD trong file jail.local nếu OS tự động chèn vào
+    if [[ -f /etc/fail2ban/jail.local ]]; then
+      sed -i '/^\[sshd\]/,/^\[/ s/^[ \t]*enabled[ \t]*=[ \t]*true/enabled = false/' /etc/fail2ban/jail.local 2>/dev/null || true
+    fi
+
+    # Áp dụng Banaction tương ứng với tường lửa
+    wptt_configure_fail2ban_banaction
+
+    # Áp dụng thay đổi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if systemctl is-active --quiet fail2ban 2>/dev/null; then
+      systemctl restart fail2ban >/dev/null 2>&1 || true
+    fi
+
+    if declare -F wptt_logs >/dev/null 2>&1; then
+      local current_time=""
+      printf -v current_time '%(%d-%m-%Y %H:%M)T' -1
+      wptt_logs "INFO" "${current_time} - Fail2Ban Auto-Tuned: Stack 512K, DB=${F2B_DBFILE}"
+    fi
+  fi
+}
+
+# ==============================================================================
+# 3. HÀM KIỂM TRA & BYPASS LŨY ĐẲNG (LOAD-ON-DEMAND)
+# ==============================================================================
+wptt_ensure_fail2ban() {
+  # [LŨY ĐẲNG (IDEMPOTENCY)]: Nếu đã cài đặt -> Bỏ qua 100%, nhảy ra ngay.
+  if command -v fail2ban-client >/dev/null 2>&1 && [[ -d "/etc/fail2ban" ]]; then
+    if ! systemctl is-active --quiet fail2ban 2>/dev/null; then
+      systemctl enable --now fail2ban >/dev/null 2>&1 || true
+    fi
+    return 0
+  fi
+
+  # [LẦN ĐẦU GỌI (LAZY LOADING)]: Cài đặt và cấu hình Fail2Ban
+  local task_f2b="Cài đặt bổ sung dịch vụ Fail2Ban (Bảo vệ Web Layer-7)"
+  if declare -F _runing >/dev/null 2>&1; then
+    _runing "$task_f2b"
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get remove -y esmtp >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    if systemctl is-active --quiet firewalld.service 2>/dev/null; then
+      dnf install -y fail2ban fail2ban-systemd fail2ban-firewalld >/dev/null 2>&1 || true
+    else
+      dnf install -y fail2ban fail2ban-systemd >/dev/null 2>&1 || true
+    fi
+    dnf remove -y esmtp >/dev/null 2>&1 || true
+  fi
+
+  if ! command -v fail2ban-client >/dev/null 2>&1; then
+    if declare -F _runloi >/dev/null 2>&1; then
+      _runloi "$task_f2b"
+    fi
+    echo -e "${C_RED:-}❌ Lỗi: Không thể cài đặt Fail2Ban từ kho lưu trữ hệ điều hành!${C_RESET:-}"
+    return 1
+  fi
+
+  # Thực thi Auto-Tune và khởi động dịch vụ
+  wptt_autotune_fail2ban
+  systemctl enable --now fail2ban >/dev/null 2>&1 || true
+
+  if declare -F _rundone >/dev/null 2>&1; then
+    _rundone "$task_f2b"
+  fi
+
+  return 0
+}
+
+# Lệnh kích hoạt khi source vào script khác
+wptt_ensure_fail2ban
