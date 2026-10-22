@@ -16,22 +16,44 @@ wptt_ensure_sshguard() {
   # ============================================================================
   # 2. XÓA SẠCH FAIL2BAN (PURGE) NẾU TỒN TẠI
   # ============================================================================
-  if systemctl is-active --quiet fail2ban 2>/dev/null || [[ -d /etc/fail2ban ]]; then
-    systemctl stop fail2ban >/dev/null 2>&1 || true
-    systemctl disable fail2ban >/dev/null 2>&1 || true
+	if systemctl is-active --quiet fail2ban 2>/dev/null || [[ -d /etc/fail2ban ]]; then
 
-    if command -v apt-get >/dev/null 2>&1; then
-      DEBIAN_FRONTEND=noninteractive apt-get purge -y fail2ban >/dev/null 2>&1 || true
-      DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1 || true
-    elif command -v dnf >/dev/null 2>&1; then
-      dnf remove -y fail2ban fail2ban-firewalld fail2ban-systemd >/dev/null 2>&1 || true
-    elif command -v yum >/dev/null 2>&1; then
-      yum remove -y fail2ban fail2ban-systemd >/dev/null 2>&1 || true
+		# Lấy chính xác con số ở dòng "Number of jail:" và lọc bỏ mọi ký tự thừa
+    jail_count="$(fail2ban-client status 2>/dev/null | awk '/Number of jail:/ {print $NF}' | tr -d -c '0-9')"
+    
+    if [[ "$jail_count" == "0" ]]; then
+      # Chắc chắn 100% không có Jail nào đang chạy -> XÓA
+      has_active_rules=0
+    elif [[ "$jail_count" -gt 0 ]]; then
+      # [TỐI ƯU CỦA BẠN]: Nếu có chạy, kiểm tra xem có phải CHỈ CÓ MỖI sshd không?
+      # Vì ta đã dùng SSHGuard cho SSH, nếu Fail2ban chỉ chạy mỗi sshd thì vẫn là RÁC -> XÓA
+      jail_list="$(fail2ban-client status 2>/dev/null | awk -F"Jail list:[ \t]*" '/Jail list:/ {print $2}' | tr -d ' ')"
+      
+      if [[ "$jail_list" == "sshd" ]]; then
+        has_active_rules=0
+      else
+        has_active_rules=1
+      fi
     fi
 
-    # Dọn sạch tận gốc tàn dư cấu hình và Database để tiết kiệm Disk
-    /bin/rm -rf -- /etc/fail2ban /var/lib/fail2ban 2>/dev/null
-  fi
+
+		if [[ "$has_active_rules" = '0' ]];then
+			systemctl stop fail2ban >/dev/null 2>&1 || true
+			systemctl disable fail2ban >/dev/null 2>&1 || true
+
+			if command -v apt-get >/dev/null 2>&1; then
+				DEBIAN_FRONTEND=noninteractive apt-get purge -y fail2ban >/dev/null 2>&1 || true
+				DEBIAN_FRONTEND=noninteractive apt-get autoremove -y >/dev/null 2>&1 || true
+			elif command -v dnf >/dev/null 2>&1; then
+				dnf remove -y fail2ban fail2ban-firewalld fail2ban-systemd >/dev/null 2>&1 || true
+			elif command -v yum >/dev/null 2>&1; then
+				yum remove -y fail2ban fail2ban-systemd >/dev/null 2>&1 || true
+			fi
+
+		# Dọn sạch tận gốc tàn dư cấu hình và Database để tiết kiệm Disk
+		/bin/rm -rf -- /etc/fail2ban /var/lib/fail2ban 2>/dev/null
+		fi
+	fi
 
   # ============================================================================
   # 3. NHẬN DIỆN MÔI TRƯỜNG & TƯỜNG LỬA BẰNG PURE BASH (0-SUBSHELL)
