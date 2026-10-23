@@ -21,7 +21,7 @@ const (
 	blockDuration = 8 * time.Hour
 )
 
-// Regex bắt IP từ Log OpenLiteSpeed
+// Regex bắt IP từ Log OpenLiteSpeed (Bao gồm cả trường hợp có kèm Port bên trong ngoặc)
 var logRegex = regexp.MustCompile(`\[(?P<ip>[0-9a-fA-F:\.]+)\]\s.*(?:close connection|Drop connection|abort request)`)
 
 // Danh sách Miễn trừ (Bypass)
@@ -61,7 +61,7 @@ func main() {
 	setV4 := &nftables.Set{Table: table, Name: nftSetV4}
 	setV6 := &nftables.Set{Table: table, Name: nftSetV6}
 
-	// 3. Khởi tạo Channel hàng đợi IP (Xử lý hàng vạn IP cùng lúc không nghẽn)
+	// 3. Khởi tạo Channel hàng đợi IP
 	ipChan := make(chan string, 100000)
 
 	// Worker Goroutine: Chuyên giao tiếp với Kernel
@@ -76,7 +76,6 @@ func main() {
 			var targetSet *nftables.Set
 
 			if ip.To4() != nil {
-				// Cấu trúc Interval Element [IP, IP+1)
 				elements = []nftables.SetElement{{
 					Key:     ip.To4(),
 					KeyEnd:  incIP(ip.To4()),
@@ -100,12 +99,12 @@ func main() {
 
 			// Thực thi Atomic Syscall
 			if err := conn.Flush(); err != nil {
-				// Kernel báo 'file exists' nghĩa là IP đã bị chặn trước đó -> Bỏ qua im lặng
+				// Bỏ qua lỗi báo trùng lặp (IP đã bị chặn)
 				if !strings.Contains(err.Error(), "file exists") && !strings.Contains(err.Error(), "exist") {
 					log.Printf("[!] Lỗi Syscall chặn IP %s: %v", ipStr, err)
 				}
 			} else {
-				log.Printf("[+] DDoS Blocker (Netlink): Khóa mõm IP %s", ipStr)
+				log.Printf("[+] DDoS Blocker (Netlink): Khóa họng IP %s", ipStr)
 			}
 		}
 	}()
@@ -126,16 +125,18 @@ func main() {
 		if matches != nil {
 			ipStr := matches[logRegex.SubexpIndex("ip")]
 			
-			// Làm sạch (Bỏ Port nếu dính vào IPv4)
-			if !strings.Contains(ipStr, ":") {
+			// --- VÁ LỖI LOGIC: XỬ LÝ CHUẨN XÁC IP CÓ KÈM PORT ---
+			// Nếu chuỗi có đúng 1 dấu ":", đó 100% là IPv4 có kèm Port (VD: 1.2.3.4:56789)
+			if strings.Count(ipStr, ":") == 1 {
 				ipStr = strings.Split(ipStr, ":")[0]
-			} else if strings.Count(ipStr, ":") > 1 {
-				// Khôi phục lại nếu là IPv6 chuẩn
-				ipStr = matches[logRegex.SubexpIndex("ip")]
+			}
+			
+			// Lọc rác và xác thực chuẩn định dạng IP ngay lập tức
+			if net.ParseIP(ipStr) == nil {
+				continue
 			}
 
 			if !whitelistIPs[ipStr] {
-				// Tống IP vào hàng đợi
 				ipChan <- ipStr
 			}
 		}
