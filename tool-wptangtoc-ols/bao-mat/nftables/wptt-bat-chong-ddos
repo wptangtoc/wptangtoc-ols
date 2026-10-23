@@ -1,0 +1,77 @@
+#!/bin/bash
+# @description: Biên dịch và kích hoạt WPTangToc Anti-DDoS Golang
+
+export LANG=en_US.UTF-8
+stty iutf8 2>/dev/null || true
+
+. /etc/wptt/echo-color 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+
+task_msg="Biên dịch và kích hoạt Anti-DDoS Golang"
+_runing "$task_msg"
+
+# 1. Kiểm tra môi trường Nftables
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet blackblock >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Máy chủ chưa kích hoạt kiến trúc Nftables của WPTangToc!${C_RESET}"
+  exit 1
+fi
+
+# 2. Cài đặt Golang nếu chưa có
+if ! command -v go >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y golang >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y golang >/dev/null 2>&1 || true
+  fi
+fi
+
+# 3. Chuẩn bị mã nguồn
+src_file="/etc/wptt/bao-mat/nftables/anti.go"
+build_dir="/etc/wptt/tmp/anti_ddos_build"
+mkdir -p "$build_dir"
+cp -f "$src_file" "$build_dir/anti.go"
+
+# Tự động lấy IP của VPS để nạp vào Whitelist chống tự khóa
+vps_ip="$(curl -sfL --connect-timeout 3 https://ipv4.icanhazip.com || curl -sfL --connect-timeout 3 https://checkip.amazonaws.com)"
+if [[ -n "$vps_ip" ]]; then
+  sed -i "s|// IP_VPS_HERE|\"$vps_ip\",|g" "$build_dir/anti.go"
+fi
+
+# 4. Biên dịch (Build)
+cd "$build_dir" || exit 1
+go build -ldflags="-s -w" -o wptt-anti-ddos anti.go >/dev/null 2>&1
+if [[ ! -f wptt-anti-ddos ]]; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Biên dịch mã nguồn Golang thất bại!${C_RESET}"
+  exit 1
+fi
+
+# 5. Triển khai Binary và Systemd Service
+/bin/rm -f /usr/local/bin/wptt-anti-ddos
+/bin/mv -f wptt-anti-ddos /usr/local/bin/
+chmod +x /usr/local/bin/wptt-anti-ddos
+
+cat > /etc/systemd/system/wptt-anti-ddos.service <<'EOF'
+[Unit]
+Description=WPTangToc OLS Golang Anti-DDoS
+After=network.target nftables.service lsws.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wptt-anti-ddos
+Restart=always
+RestartSec=5
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload >/dev/null 2>&1
+systemctl enable --now wptt-anti-ddos.service >/dev/null 2>&1
+
+_rundone "$task_msg"
+wptt_logs "WARN" "Đã BẬT hệ thống quét Log OLS chặn DDoS bằng Golang."
+echo -e "\n${C_GREEN}✔ Thành công! Hệ thống phòng ngự DDoS tốc độ cao đã được kích hoạt.${C_RESET}"

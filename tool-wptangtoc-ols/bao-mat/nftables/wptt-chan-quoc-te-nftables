@@ -1,0 +1,198 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Chỉ cho phép IP Việt Nam, Cloudflare, Google (Nftables)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 2>/dev/null || true
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+tmp_dir=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]] && /bin/rm -rf -- "${tmp_dir:?}"
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# HÀM LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ
+# ==============================================================================
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null
+    printf '\n'
+    nft list table inet filter 2>/dev/null
+  } > "$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+route_flag="${1:-}"
+
+clear
+echo ""
+print_border_top "$C_CYAN"
+center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Chế Độ 'Bế Quan Tỏa Cảng' (Geo-Blocking)${C_RESET}" "$C_CYAN"
+print_border_bot "$C_CYAN"
+echo ""
+
+# Kiểm tra trạng thái hiện tại
+is_active=0
+if nft list set inet filter geo_allow_v4 >/dev/null 2>&1; then
+  is_active=1
+  echo -e "Trạng thái hiện tại: ${C_RED}ĐANG BẬT (Đã chặn quốc tế)${C_RESET}\n"
+else
+  echo -e "Trạng thái hiện tại: ${C_GREEN}ĐANG TẮT (Cho phép toàn cầu)${C_RESET}\n"
+fi
+
+echo -e "1. BẬT chế độ (Chỉ cho phép Việt Nam, Cloudflare, Google)"
+echo -e "2. TẮT chế độ (Hoàn nguyên - Mở lại toàn cầu)"
+echo -e "0. Thoát\n"
+echo -en "${C_CYAN}Nhập lựa chọn của bạn: ${C_RESET}"
+read -r choice
+
+case "$choice" in
+  0|"")
+    wptt_quay_ve_menu "$route_flag" 0
+    ;;
+  1)
+    if ((is_active == 1)); then
+      echo -e "\n${C_YELLOW}⚠️ Chế độ này đã được bật từ trước!${C_RESET}"
+      wptt_quay_ve_menu "$route_flag" 0 "enter"
+    fi
+    ;;
+  2)
+    if ((is_active == 0)); then
+      echo -e "\n${C_YELLOW}⚠️ Chế độ này đang tắt sẵn!${C_RESET}"
+      wptt_quay_ve_menu "$route_flag" 0 "enter"
+    fi
+    ;;
+  *)
+    echo -e "\n${C_RED}❌ Lỗi: Lựa chọn không hợp lệ!${C_RESET}"
+    wptt_quay_ve_menu "$route_flag" 1 "enter"
+    ;;
+esac
+
+tmp_dir="$(mktemp -d -p /etc/wptt/tmp wptt_geoblock_XXXXXX 2>/dev/null || mktemp -d /tmp/wptt_geoblock_XXXXXX)"
+
+# ==============================================================================
+# TIẾN TRÌNH TẮT (HOÀN NGUYÊN)
+# ==============================================================================
+if [[ "$choice" == "2" ]]; then
+  task_off="Tắt chế độ Geo-Blocking và mở lại truy cập quốc tế"
+  _runing "$task_off"
+
+  err=0
+  # Xóa Rule Drop và các Set danh sách trắng
+  nft delete rule inet filter input handle $(nft -a list chain inet filter input | awk '/geo_allow_v4/ {print $NF}') >/dev/null 2>&1 || true
+  nft delete rule inet filter input handle $(nft -a list chain inet filter input | awk '/geo_allow_v6/ {print $NF}') >/dev/null 2>&1 || true
+  
+  nft delete set inet filter geo_allow_v4 >/dev/null 2>&1 || true
+  nft delete set inet filter geo_allow_v6 >/dev/null 2>&1 || true
+
+  if wptt_nft_save_persistent; then
+    _rundone "$task_off"
+    wptt_logs "INFO" "Đã TẮT chế độ Geo-Blocking."
+    echo -e "\n${C_GREEN}✔ Đã hoàn nguyên tường lửa! Truy cập quốc tế đã được mở lại.${C_RESET}"
+    wptt_quay_ve_menu "$route_flag" 0 "enter"
+  else
+    _runloi "$task_off"
+    wptt_quay_ve_menu "$route_flag" 1 "enter"
+  fi
+fi
+
+# ==============================================================================
+# TIẾN TRÌNH BẬT (CHẶN QUỐC TẾ)
+# ==============================================================================
+task_on="Thiết lập chỉ cho phép Việt Nam, Cloudflare và Google"
+_runing "$task_on"
+
+# 1. Tải danh sách IP Việt Nam
+if ! curl -sfL --connect-timeout 5 --max-time 15 "https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv4/vn.cidr" > "$tmp_dir/vn_v4.txt"; then
+  _runloi "$task_on"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể tải danh sách IPv4 Việt Nam!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+curl -sfL --connect-timeout 5 --max-time 15 "https://raw.githubusercontent.com/herrbischoff/country-ip-blocks/master/ipv6/vn.cidr" > "$tmp_dir/vn_v6.txt" || true
+
+# 2. Tải danh sách IP Cloudflare (Từ script có sẵn)
+if ! curl -sfL --connect-timeout 5 --max-time 15 "https://www.cloudflare.com/ips-v4" > "$tmp_dir/cf_v4.txt"; then
+  _runloi "$task_on"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể tải danh sách IPv4 Cloudflare!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+curl -sfL --connect-timeout 5 --max-time 15 "https://www.cloudflare.com/ips-v6" > "$tmp_dir/cf_v6.txt" || true
+
+# 3. Tải danh sách IP Google
+curl -sfL --connect-timeout 5 --max-time 15 "https://www.gstatic.com/ipranges/goog.json" > "$tmp_dir/goog.json" || true
+if [[ -f "$tmp_dir/goog.json" && -s "$tmp_dir/goog.json" ]]; then
+  grep -oE '"ipv4Prefix":[[:space:]]*"[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}"' "$tmp_dir/goog.json" | cut -d'"' -f4 > "$tmp_dir/gg_v4.txt"
+  grep -oE '"ipv6Prefix":[[:space:]]*"[a-fA-F0-9:]+/[0-9]{1,3}"' "$tmp_dir/goog.json" | cut -d'"' -f4 > "$tmp_dir/gg_v6.txt"
+else
+  touch "$tmp_dir/gg_v4.txt" "$tmp_dir/gg_v6.txt"
+fi
+
+# 4. Gộp mảng (Dùng Bash để đổi \n thành dấu phẩy nhanh chóng)
+v4_raw="$(cat "$tmp_dir/vn_v4.txt" "$tmp_dir/cf_v4.txt" "$tmp_dir/gg_v4.txt" 2>/dev/null | sed '/^$/d')"
+v6_raw="$(cat "$tmp_dir/vn_v6.txt" "$tmp_dir/cf_v6.txt" "$tmp_dir/gg_v6.txt" 2>/dev/null | sed '/^$/d')"
+
+v4_elements="{ ${v4_raw//$'\n'/, } }"
+v6_elements="{ ${v6_raw//$'\n'/, } }"
+
+# 5. Tiêm cấu trúc Set vào Kernel
+nft add set inet filter geo_allow_v4 '{ type ipv4_addr; flags interval; }' >/dev/null 2>&1
+nft flush set inet filter geo_allow_v4 >/dev/null 2>&1
+nft add element inet filter geo_allow_v4 "$v4_elements" >/dev/null 2>&1
+
+nft add set inet filter geo_allow_v6 '{ type ipv6_addr; flags interval; }' >/dev/null 2>&1
+nft flush set inet filter geo_allow_v6 >/dev/null 2>&1
+if [[ "$v6_elements" != "{  }" ]]; then
+  nft add element inet filter geo_allow_v6 "$v6_elements" >/dev/null 2>&1
+fi
+
+# 6. Chèn Rule: "Nếu không thuộc danh sách này, và Port đích là 80 hoặc 443 -> CHẶN"
+# Chỉ chặn traffic web, không chặn bừa bãi kẻo mất kết nối SSH
+nft insert rule inet filter input tcp dport \{ 80, 443 \} ip saddr != @geo_allow_v4 drop >/dev/null 2>&1
+nft insert rule inet filter input udp dport 443 ip saddr != @geo_allow_v4 drop >/dev/null 2>&1
+
+if [[ "$v6_elements" != "{  }" ]]; then
+  nft insert rule inet filter input tcp dport \{ 80, 443 \} ip6 saddr != @geo_allow_v6 drop >/dev/null 2>&1
+  nft insert rule inet filter input udp dport 443 ip6 saddr != @geo_allow_v6 drop >/dev/null 2>&1
+fi
+
+# 7. Lưu cấu hình
+if wptt_nft_save_persistent; then
+  _rundone "$task_on"
+  wptt_logs "INFO" "Đã BẬT chế độ Geo-Blocking (VN, Cloudflare, Google)."
+  echo -e "\n${C_GREEN}✔ Thành công! Website hiện chỉ nhận traffic từ Việt Nam, Cloudflare và Google.${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 0 "enter"
+else
+  _runloi "$task_on"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
