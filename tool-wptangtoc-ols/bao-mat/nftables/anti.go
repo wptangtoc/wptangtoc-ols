@@ -29,12 +29,12 @@ var whitelistIPs = map[string]bool{
 	// IP_VPS_HERE
 }
 
-// Tự động quét và nạp toàn bộ IP nội bộ/card mạng vào Whitelist khi khởi động
 func init() {
 	addrs, err := net.InterfaceAddrs()
 	if err == nil {
 		for _, addr := range addrs {
 			if ipnet, ok := addr.(*net.IPNet); ok {
+				// Chuẩn hóa IP nội bộ ngay khi khởi động
 				whitelistIPs[ipnet.IP.String()] = true
 			}
 		}
@@ -126,16 +126,23 @@ func main() {
 		if matches != nil {
 			ipStr := matches[logRegex.SubexpIndex("ip")]
 			
+			// Bóc tách Port khỏi IPv4
 			if strings.Count(ipStr, ":") == 1 {
 				ipStr = strings.Split(ipStr, ":")[0]
 			}
 			
-			if net.ParseIP(ipStr) == nil {
+			// Parse để loại rác và chuẩn bị định dạng
+			parsedIP := net.ParseIP(ipStr)
+			if parsedIP == nil {
 				continue
 			}
 
-			if !whitelistIPs[ipStr] {
-				ipChan <- ipStr
+			// CHUẨN HÓA TUYỆT ĐỐI (Ép mọi biến thể như 0:0...1 hay ::ffff:127.0.0.1 về chuẩn)
+			normalizedIP := parsedIP.String()
+
+			if !whitelistIPs[normalizedIP] {
+				// Truyền chuỗi đã chuẩn hóa vào Worker
+				ipChan <- normalizedIP
 			}
 		}
 	}
