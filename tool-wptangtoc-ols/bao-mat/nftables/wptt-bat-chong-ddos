@@ -1,5 +1,5 @@
 #!/bin/bash
-# @description: Biên dịch và kích hoạt Anti-DDoS Golang (Netlink API Engine)
+# @description: Biên dịch và kích hoạt Anti-DDoS Golang (Netlink API Engine) - Hỗ trợ Dual-Stack
 
 export LANG=en_US.UTF-8
 stty iutf8 2>/dev/null || true
@@ -9,17 +9,14 @@ stty iutf8 2>/dev/null || true
 
 task_msg="Biên dịch Engine Golang và nạp vào Kernel"
 _runing "$task_msg"
-
 route_flag="${1:-}"
 
-# 1. Kiểm tra môi trường Nftables
 if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet blackblock >/dev/null 2>&1; then
   _runloi "$task_msg"
   echo -e "\n${C_RED}❌ Lỗi: Máy chủ chưa kích hoạt kiến trúc Nftables của WPTangToc!${C_RESET}"
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
 
-# 2. Cài đặt Golang nếu chưa có
 if ! command -v go >/dev/null 2>&1; then
   if command -v dnf >/dev/null 2>&1; then
     dnf install -y golang >/dev/null 2>&1 || true
@@ -28,20 +25,24 @@ if ! command -v go >/dev/null 2>&1; then
   fi
 fi
 
-# 3. Chuẩn bị môi trường Build
 src_file="/etc/wptt/bao-mat/nftables/anti.go"
 build_dir="/etc/wptt/tmp/anti_ddos_build"
 /bin/rm -rf "$build_dir" 2>/dev/null
 mkdir -p "$build_dir"
 cp -f "$src_file" "$build_dir/anti.go"
 
-# Bypass IP VPS
-vps_ip="$(curl -sfL --connect-timeout 3 https://ipv4.icanhazip.com || curl -sfL --connect-timeout 3 https://checkip.amazonaws.com)"
-if [[ -n "$vps_ip" ]]; then
-  sed -i "s|// IP_VPS_HERE|\"$vps_ip\": true,|g" "$build_dir/anti.go"
+# Lấy Public IP an toàn cho cả 2 kiến trúc mạng
+vps_ipv4="$(curl -4 -sfL --connect-timeout 3 https://ipv4.icanhazip.com || curl -4 -sfL --connect-timeout 3 https://checkip.amazonaws.com || true)"
+vps_ipv6="$(curl -6 -sfL --connect-timeout 3 https://ipv6.icanhazip.com || true)"
+
+inject_ips=""
+[[ -n "$vps_ipv4" ]] && inject_ips+="\"$vps_ipv4\": true,\n\t"
+[[ -n "$vps_ipv6" ]] && inject_ips+="\"$vps_ipv6\": true,\n\t"
+
+if [[ -n "$inject_ips" ]]; then
+  sed -i "s|// IP_VPS_HERE|${inject_ips}// IP_VPS_HERE|g" "$build_dir/anti.go"
 fi
 
-# 4. Tải thư viện Netlink API của Google và Biên dịch (Build)
 cd "$build_dir" || exit 1
 export GOPATH="/etc/wptt/tmp/go_path"
 
@@ -54,14 +55,12 @@ if ! go build -ldflags="-s -w" -o wptt-anti-ddos anti.go >/dev/null 2>&1; then
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
 
-# 5. Triển khai Binary
 systemctl stop wptt-anti-ddos.service >/dev/null 2>&1 || true
 /bin/rm -f /usr/local/bin/wptt-anti-ddos
 /bin/mv -f wptt-anti-ddos /usr/local/bin/
 chmod +x /usr/local/bin/wptt-anti-ddos
 /bin/rm -rf "$build_dir" "$GOPATH" 2>/dev/null
 
-# 6. Triển khai Systemd Service
 cat >/etc/systemd/system/wptt-anti-ddos.service <<'EOF'
 [Unit]
 Description=WPTangToc OLS Golang Anti-DDoS (Netlink)
