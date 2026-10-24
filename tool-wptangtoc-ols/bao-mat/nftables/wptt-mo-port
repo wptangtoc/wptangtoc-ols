@@ -2,12 +2,16 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Mở Port (TCP/UDP) trên Nftables thuần chuẩn Enterprise (Atomic & Persistent)
+# @description: Mở Port / Dải Port (TCP/UDP) trên Nftables (Atomic & Persistent)
 
-
-# Ví dụ Mở Port WebAdmin 7080: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 7080 tcp
+# Cách gọi CLI: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 7080 tcp
+# Hoặc mở dải:  /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 30000-35000 tcp
+# mở phát 2 port: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port "7080,7081" tcp
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 077
 
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
@@ -23,20 +27,18 @@ wptt_nft_save_persistent() {
   /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
   chmod 700 /etc/wptt/tmp 2>/dev/null
   local tmp_nft=""
-  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
 
   {
     printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
-    # Chỉ lưu 2 bảng chuẩn của WPTangToc, không lưu nhầm bảng động của sshguard/fail2ban
-    nft list table inet blackblock 2>/dev/null
+    nft list table inet blackblock 2>/dev/null || true
     printf '\n'
-    nft list table inet filter 2>/dev/null
-  } > "$tmp_nft"
+    nft list table inet filter 2>/dev/null || true
+  } >"$tmp_nft"
 
-  # Kiểm tra cú pháp file tạm trước khi ghi đè nguyên tử
   if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
     chmod 600 "$tmp_nft"
-    /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
     [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
     return 0
   else
@@ -45,15 +47,161 @@ wptt_nft_save_persistent() {
   fi
 }
 
-route_flag="${1:-}"
-PORT_IN="${1:-}"
-PROTO_IN="${2:-tcp}" # Mặc định mở TCP, có thể truyền: tcp, udp, hoặc both
+# ==============================================================================
+# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (HỖ TRỢ MULTI-LINE ELEMENTS)
+# ==============================================================================
+wptt_get_open_ports() {
+  local set_name="$1"
+  nft list set inet filter "$set_name" 2>/dev/null | awk '
+    /elements = \{/ { in_elem = 1; sub(/.*elements = \{[ \t]*/, "") }
+    in_elem {
+      if ($0 ~ /\}/) {
+        sub(/[ \t]*\}.*/, "")
+        buf = buf " " $0
+        in_elem = 0
+      } else {
+        buf = buf " " $0
+      }
+    }
+    END {
+      gsub(/[ \t\r\n]+/, " ", buf)
+      sub(/^ +/, "", buf)
+      sub(/ +$/, "", buf)
+      print buf
+    }
+  '
+}
 
-if [[ "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+# ==============================================================================
+# HÀM XÁC THỰC & CHUẨN HÓA DANH SÁCH PORT / DẢI PORT BẰNG PURE BASH
+# ==============================================================================
+wptt_validate_and_normalize_ports() {
+  local raw_input="${1//[[:space:]]/}"
+  [[ -z "$raw_input" ]] && return 1
+
+  local IFS=','
+  local -a tokens=()
+  read -ra tokens <<<"$raw_input"
+
+  local -a clean_list=()
+  local token="" p_start="" p_end=""
+  for token in "${tokens[@]}"; do
+    [[ -z "$token" ]] && continue
+    if [[ "$token" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+      p_start="$((10#${BASH_REMATCH[1]}))"
+      p_end="$((10#${BASH_REMATCH[2]}))"
+      if ((p_start < 1 || p_end > 65535 || p_start > p_end)); then
+        return 1
+      fi
+      if ((p_start == p_end)); then
+        clean_list+=("$p_start")
+      else
+        clean_list+=("${p_start}-${p_end}")
+      fi
+    elif [[ "$token" =~ ^[0-9]{1,5}$ ]]; then
+      p_start="$((10#$token))"
+      if ((p_start < 1 || p_start > 65535)); then
+        return 1
+      fi
+      clean_list+=("$p_start")
+    else
+      return 1
+    fi
+  done
+
+  ((${#clean_list[@]} == 0)) && return 1
+
+  local out="" item=""
+  for item in "${clean_list[@]}"; do
+    out+="${out:+, }${item}"
+  done
+  printf '%s' "$out"
+  return 0
+}
+
+# ==============================================================================
+# HÀM NẠP & GỘP PORT VÀO SET INTERVAL AN TOÀN (CHỐNG LỖI OVERLAP KERNEL)
+# ==============================================================================
+wptt_add_ports_to_set() {
+  local set_name="$1"
+  local new_elements="$2"
+  local current_elements=""
+  current_elements="$(wptt_get_open_ports "$set_name")"
+
+  local combined="$new_elements"
+  [[ -n "$current_elements" ]] && combined="${current_elements}, ${new_elements}"
+
+  # Dùng awk hợp nhất các khoảng giao nhau/liền kề (Interval Merging)
+  local merged_elements=""
+  merged_elements="$(awk -v raw="$combined" '
+    BEGIN {
+      n = split(raw, arr, ",")
+      for (i = 1; i <= n; i++) {
+        gsub(/^[ \t]+|[ \t]+$/, "", arr[i])
+        if (arr[i] == "") continue
+        if (index(arr[i], "-") > 0) {
+          split(arr[i], r, "-")
+          s = r[1] + 0; e = r[2] + 0
+        } else {
+          s = arr[i] + 0; e = s
+        }
+        for (p = s; p <= e; p++) port_map[p] = 1
+      }
+      out = ""
+      in_range = 0
+      for (p = 1; p <= 65536; p++) {
+        if (port_map[p] == 1) {
+          if (!in_range) { start_p = p; in_range = 1 }
+        } else if (in_range) {
+          end_p = p - 1
+          seg = (start_p == end_p) ? start_p : (start_p "-" end_p)
+          out = (out == "") ? seg : (out ", " seg)
+          in_range = 0
+        }
+      }
+      print out
+    }
+  ')"
+
+  [[ -z "$merged_elements" ]] && return 1
+
+  nft -f - >/dev/null 2>&1 <<EOF
+flush set inet filter ${set_name}
+add element inet filter ${set_name} { ${merged_elements} }
+EOF
+}
+
+# ==============================================================================
+# PHÂN TÁCH CHẾ ĐỘ MENU TƯƠNG TÁC VS CLI TỰ ĐỘNG
+# ==============================================================================
+is_interactive=0
+route_flag=""
+PORT_IN="${1:-}"
+PROTO_IN="${2:-tcp}"
+
+if [[ -z "$PORT_IN" || "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+  is_interactive=1
+  route_flag="$PORT_IN"
   PORT_IN=""
 fi
 
-if [[ -z "$PORT_IN" ]]; then
+finish_script() {
+  local code="$1"
+  local wait_mode="${2:-enter}"
+  if ((is_interactive == 1)); then
+    wptt_quay_ve_menu "$route_flag" "$code" "$wait_mode"
+  else
+    exit "$code"
+  fi
+}
+
+# Kiểm tra điều kiện tiên quyết (Preflight Check)
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet filter >/dev/null 2>&1; then
+  echo -e "\n${C_RED}❌ Lỗi: Kiến trúc Nftables của WPTangToc chưa được kích hoạt!${C_RESET}"
+  finish_script 1 "enter"
+fi
+
+if ((is_interactive == 1)); then
   clear
   echo ""
   print_border_top "$C_CYAN"
@@ -61,58 +209,65 @@ if [[ -z "$PORT_IN" ]]; then
   print_border_bot "$C_CYAN"
   echo ""
 
-  # Hiển thị danh sách Port đang mở hiện tại
-  open_tcp="$(nft list set inet filter tcp_ports 2>/dev/null | awk '/elements =/ {sub(/.*elements = \{ */, ""); sub(/ *\}.*/, ""); print}')"
-  open_udp="$(nft list set inet filter udp_ports 2>/dev/null | awk '/elements =/ {sub(/.*elements = \{ */, ""); sub(/ *\}.*/, ""); print}')"
+  open_tcp="$(wptt_get_open_ports "tcp_ports")"
+  open_udp="$(wptt_get_open_ports "udp_ports")"
   echo -e "Port TCP đang mở: ${C_GREEN}${open_tcp:-Trống}${C_RESET}"
   echo -e "Port UDP đang mở: ${C_GREEN}${open_udp:-Trống}${C_RESET}\n"
 
-  echo -en "${C_CYAN}Nhập số Port cần MỞ (VD: 7080, 3306) [0=Thoát]: ${C_RESET}"
+  echo -en "${C_CYAN}Nhập Port hoặc dải Port cần MỞ (VD: 7080, 8080 hoặc 30000-35000) [0=Thoát]: ${C_RESET}"
   read -r PORT_IN
-  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && wptt_quay_ve_menu "$route_flag" 0
+  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && finish_script 0 ""
 
   echo -en "${C_CYAN}Chọn giao thức (1=TCP, 2=UDP, 3=Cả TCP & UDP) [Mặc định=1]: ${C_RESET}"
   read -r chon_proto
   case "${chon_proto:-1}" in
-    2) PROTO_IN="udp" ;;
-    3) PROTO_IN="both" ;;
-    *) PROTO_IN="tcp" ;;
+  2) PROTO_IN="udp" ;;
+  3) PROTO_IN="both" ;;
+  *) PROTO_IN="tcp" ;;
   esac
 fi
 
-# Validate số Port (1 -> 65535) bằng Pure Bash
-PORT_IN="${PORT_IN//[[:space:]]/}"
-if [[ ! "$PORT_IN" =~ ^[0-9]{1,5}$ ]] || ((10#$PORT_IN < 1 || 10#$PORT_IN > 65535)); then
-  echo -e "\n${C_RED}❌ Lỗi: Số Port '$PORT_IN' không hợp lệ (Phải từ 1 đến 65535)!${C_RESET}"
-  wptt_quay_ve_menu "$route_flag" 1 "enter"
+# Chuẩn hóa và kiểm tra hợp lệ của Port
+NORMALIZED_PORTS=""
+if ! NORMALIZED_PORTS="$(wptt_validate_and_normalize_ports "$PORT_IN")"; then
+  echo -e "\n${C_RED}❌ Lỗi: Số Port '$PORT_IN' không hợp lệ (Phải từ 1 đến 65535, VD: 7080 hoặc 30000-35000)!${C_RESET}"
+  finish_script 1 "enter"
 fi
 
 PROTO_IN="${PROTO_IN,,}"
-task_open="Mở cổng $PORT_IN (${PROTO_IN^^}) trên tường lửa Nftables"
+case "$PROTO_IN" in
+tcp | udp | both) ;;
+*)
+  echo -e "\n${C_RED}❌ Lỗi: Giao thức '$PROTO_IN' không hợp lệ (Chỉ hỗ trợ: tcp, udp, both)!${C_RESET}"
+  finish_script 1 "enter"
+  ;;
+esac
+
+task_open="Mở cổng $NORMALIZED_PORTS (${PROTO_IN^^}) trên tường lửa Nftables"
 _runing "$task_open"
 
 err_flag=0
 if [[ "$PROTO_IN" == "tcp" || "$PROTO_IN" == "both" ]]; then
-  if ! nft add element inet filter tcp_ports "{ $PORT_IN }" >/dev/null 2>&1; then
+  if ! wptt_add_ports_to_set "tcp_ports" "$NORMALIZED_PORTS"; then
     err_flag=1
   fi
 fi
 
 if [[ "$PROTO_IN" == "udp" || "$PROTO_IN" == "both" ]]; then
-  if ! nft add element inet filter udp_ports "{ $PORT_IN }" >/dev/null 2>&1; then
+  if ! wptt_add_ports_to_set "udp_ports" "$NORMALIZED_PORTS"; then
     err_flag=1
   fi
 fi
 
 if ((err_flag == 0)) && wptt_nft_save_persistent; then
   _rundone "$task_open"
-  wptt_logs "INFO" "Nftables: Đã mở Port $PORT_IN (${PROTO_IN^^})"
-  if [[ -z "${1:-}" || "${1:-}" == "98" || "${1:-}" == "99" ]]; then
-    echo -e "\n${C_GREEN}✔ Đã mở thành công Port $PORT_IN (${PROTO_IN^^}) và lưu cấu hình vĩnh viễn!${C_RESET}"
-    wptt_quay_ve_menu "$route_flag" 0 "enter"
+  wptt_logs "INFO" "Nftables: Đã mở Port $NORMALIZED_PORTS (${PROTO_IN^^})"
+  if ((is_interactive == 1)); then
+    echo -e "\n${C_GREEN}✔ Đã mở thành công Port $NORMALIZED_PORTS (${PROTO_IN^^}) và lưu cấu hình vĩnh viễn!${C_RESET}"
   fi
+  finish_script 0 "enter"
 else
   _runloi "$task_open"
   echo -e "\n${C_RED}❌ Lỗi: Không thể cập nhật cấu hình Nftables!${C_RESET}"
-  wptt_quay_ve_menu "$route_flag" 1 "enter"
+  finish_script 1 "enter"
 fi
