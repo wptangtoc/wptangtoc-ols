@@ -1,56 +1,89 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
-# shellcheck disable=SC2317
+# @description: Mở khóa IP thủ công bằng Nftables (Bản Enterprise)
 
-ip="$1"
+export LANG=en_US.UTF-8
 
-if [[ -z "$ip" ]]; then
-  # Vá lỗi SC2162: Thêm cờ -r để đọc chuỗi thô (raw)
-  read -rp "Nhập địa chỉ IP bạn muốn unblock: " ip
+# Hàm kiểm tra IP hợp lệ bằng Pure Bash (IPv4 & IPv6 & CIDR)
+wptt_validate_ip() {
+  local raw_input="$1"
+  local addr="${raw_input%%/*}"
+  local cidr="${raw_input#*/}"
+  [[ "$cidr" == "$raw_input" ]] && cidr=""
+
+  if [[ -n "$cidr" && ! "$cidr" =~ ^[0-9]{1,3}$ ]]; then return 1; fi
+
+  if [[ "$addr" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+    if ((10#${BASH_REMATCH[1]} <= 255 && 10#${BASH_REMATCH[2]} <= 255 && 10#${BASH_REMATCH[3]} <= 255 && 10#${BASH_REMATCH[4]} <= 255)); then
+      if [[ -n "$cidr" ]] && ((10#$cidr < 8 || 10#$cidr > 32)); then return 1; fi
+      return 0
+    fi
+  elif [[ "$addr" == *":"* && "$addr" != *":::"* && ! "$addr" =~ ^:[0-9a-fA-F] && ! "$addr" =~ [0-9a-fA-F]:$ && "${addr/::/@}" != *"::"* ]]; then
+    local IFS=':'
+    local -a hextets=(); read -r -a hextets <<<"$addr"
+    if ((${#hextets[@]} <= 8)); then
+      local valid_v6=1
+      for h in "${hextets[@]}"; do
+        [[ -z "$h" ]] && continue
+        if [[ ! "$h" =~ ^[0-9a-fA-F]{1,4}$ && ! "$h" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then valid_v6=0; break; fi
+      done
+      if ((valid_v6 == 1)); then
+        if [[ -n "$cidr" ]] && ((10#$cidr < 16 || 10#$cidr > 128)); then return 1; fi
+        return 0
+      fi
+    fi
+  fi
+  return 1
+}
+
+target_ip="${1:-}"
+
+# 1. Bẫy lỗi: Kiểm tra đầu vào
+if [[ -z "$target_ip" ]]; then
+  echo "Lỗi: Vui lòng cung cấp một địa chỉ IP." >&2
+  exit 1
 fi
 
-error_block_ipv4='1'
-error_block_ipv6='1'
-
-# Vá lỗi SC2143: Dùng grep -qE thay vì so sánh output chuỗi
-if echo "$ip" | grep -qE '(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)'; then
-  error_block_ipv4='0'
+if ! wptt_validate_ip "$target_ip"; then
+  echo "Lỗi: Địa chỉ IP '$target_ip' không hợp lệ." >&2
+  exit 1
 fi
 
-if echo "$ip" | grep -qxE '([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]{1,}|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])\.){3,3}(25[0-5]|(2[0-4]|1{0,1}[0-9]){0,1}[0-9])'; then
-  error_block_ipv6='0'
-fi
-
-if [[ "$error_block_ipv6" == '1' && "$error_block_ipv4" == '1' ]]; then
-  echo "Bạn không nhập đúng định dạng IP"
-  # Vá lỗi SC2317: Bỏ lệnh 'exec' để script tiếp tục chạy xuống dòng return/exit
-  /etc/wptt/wptt-khoa-ip-main 1
-  return 2>/dev/null || exit 0
-fi
-
-# nft delete element blackblock blackaction "{ $ip }" 2>/dev/null
-
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-  path_nftables_config="/etc/nftables.conf"
+# 2. Xử lý logic Nftables
+if [[ "$target_ip" == *":"* ]]; then
+  if ! nft delete element inet blackblock blackaction_v6 "{ $target_ip }" >/dev/null 2>&1; then
+    echo "Lỗi: Không tìm thấy hoặc không thể mở khóa IPv6 '$target_ip'." >&2
+    exit 1
+  fi
 else
-  path_nftables_config="/etc/sysconfig/nftables.conf"
+  if ! nft delete element inet blackblock blackaction_v4 "{ $target_ip }" >/dev/null 2>&1; then
+    echo "Lỗi: Không tìm thấy hoặc không thể mở khóa IPv4 '$target_ip'." >&2
+    exit 1
+  fi
 fi
 
-# nft list ruleset > "$path_nftables_config"
-
-if ! nft delete element blackblock blackaction "{ $ip }" 2>/etc/wptt/tmp/nft_err.log; then
-  echo "Lỗi: Không thể thêm IP vào blacklist (xem /etc/wptt/tmp/nft_err.log)"
-  cat /etc/wptt/tmp/nft_err.log
-  return 1 2>/dev/null || exit 1
+# 3. Lưu vĩnh viễn cấu hình
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+tmp_nft="$(mktemp -p /etc/wptt/tmp nft_unban_XXXXXX.conf 2>/dev/null || mktemp /tmp/nft_unban_XXXXXX.conf)"
+if [[ -z "$tmp_nft" ]]; then
+  echo "Lỗi: Không thể tạo file tạm để lưu cấu hình." >&2
+  exit 1
 fi
 
-tmp_conf=$(mktemp -p "/etc/wptt/tmp" wptt_nftables_XXXXXX.txt)
-if nft list ruleset > "$tmp_conf" && [[ -s "$tmp_conf" ]]; then
-  mv -f "$tmp_conf" "$path_nftables_config"
-  chmod 600 "$path_nftables_config"
+{
+  printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+  nft list table inet blackblock 2>/dev/null
+  printf '\n'
+  nft list table inet filter 2>/dev/null
+} > "$tmp_nft"
+
+if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+  chmod 600 "$tmp_nft"
+  /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+  [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+  echo "Thành công: Đã gỡ chặn và lưu vĩnh viễn IP $target_ip"
+  exit 0
 else
-  echo "Lỗi: Không thể xuất ruleset — GIỮ NGUYÊN file cấu hình cũ để tránh mất firewall khi reboot!"
-  rm -f "$tmp_conf"
+  /bin/rm -f -- "${tmp_nft:?}"
+  echo "Lỗi: Lưu cấu hình thất bại do sai cú pháp." >&2
+  exit 1
 fi
-
-

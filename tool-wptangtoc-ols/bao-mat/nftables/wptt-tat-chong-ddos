@@ -1,0 +1,66 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Tắt và gỡ bỏ WPTangToc Anti-DDoS Golang
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 2>/dev/null || true
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null
+    printf '\n'
+    nft list table inet filter 2>/dev/null
+  } >"$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+route_flag="${1:-}"
+task_msg="Gỡ bỏ hệ thống quét Log chặn DDoS Golang"
+_runing "$task_msg"
+
+# 1. Dừng và gỡ bỏ Service
+if systemctl is-active --quiet wptt-anti-ddos.service 2>/dev/null || systemctl is-enabled --quiet wptt-anti-ddos.service 2>/dev/null; then
+  systemctl stop wptt-anti-ddos.service >/dev/null 2>&1 || true
+  systemctl disable wptt-anti-ddos.service >/dev/null 2>&1 || true
+fi
+
+/bin/rm -f /etc/systemd/system/wptt-anti-ddos.service
+systemctl daemon-reload >/dev/null 2>&1 || true
+/bin/rm -f /usr/local/bin/wptt-anti-ddos
+
+# 2. Xả danh sách đen trong blackaction_v4 và blackaction_v6
+if command -v nft >/dev/null 2>&1; then
+  nft flush set inet blackblock blackaction_v4 >/dev/null 2>&1 || true
+  nft flush set inet blackblock blackaction_v6 >/dev/null 2>&1 || true
+  wptt_nft_save_persistent || true
+fi
+
+_rundone "$task_msg"
+wptt_logs "INFO" "Đã TẮT hệ thống quét Log OLS chặn DDoS bằng Golang."
+echo -e "\n${C_GREEN}✔ Đã tắt hệ thống Anti-DDoS và xả bộ đệm danh sách đen thành công.${C_RESET}"
+wptt_quay_ve_menu "$route_flag" 0 "enter"

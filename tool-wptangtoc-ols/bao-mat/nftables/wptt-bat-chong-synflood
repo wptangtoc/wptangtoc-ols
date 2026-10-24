@@ -1,0 +1,222 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Kích hoạt Khiên chống SYN Flood / HTTP Flood (Nftables Dynamic Per-IP)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 077
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+tmp_dir=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]]; then
+    case "$tmp_dir" in
+    /etc/wptt/tmp/wptt_synflood_* | /tmp/wptt_synflood_*)
+      /bin/rm -rf -- "${tmp_dir:?}"
+      ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# THÔNG SỐ TÙY CHỈNH & TỰ ĐỘNG CO GIÃN THEO DUNG LƯỢNG RAM (ZERO-SUBSHELL)
+# ==============================================================================
+RATE_LIMIT="40/second"
+BURST_PKTS="50 packets"
+TRACK_TIME="1m"  # Thời gian theo dõi hành vi IP
+BLOCK_TIME="30m" # Thời gian phạt (Giam vào denylist)
+
+mem_total_kb=0
+if [[ -r /proc/meminfo ]]; then
+  while IFS=': ' read -r key val _; do
+    if [[ "$key" == "MemTotal" ]]; then
+      mem_total_kb="$val"
+      break
+    fi
+  done </proc/meminfo
+fi
+
+# Bảo vệ bộ nhớ Kernel Slab cho VPS 512MB - 1GB RAM
+if ((mem_total_kb > 0 && mem_total_kb <= 1048576)); then
+  TRACK_SIZE=65536
+  DENY_SIZE=32768
+else
+  TRACK_SIZE=262144
+  DENY_SIZE=131072
+fi
+
+# ==============================================================================
+# HÀM LƯU CẤU HÌNH VĨNH VIỄN NGUYÊN TỬ (ATOMIC SAVE)
+# ==============================================================================
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null || true
+    printf '\n'
+    nft list table inet filter 2>/dev/null || true
+  } >"$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+# ==============================================================================
+# HÀM DỌN SẠCH CHAIN & SET SYNFLOOD CŨ TRƯỚC KHI NẠP MỚI (IDEMPOTENT)
+# ==============================================================================
+wptt_synflood_teardown() {
+  if nft list chain inet blackblock synflood_chain >/dev/null 2>&1; then
+    nft flush chain inet blackblock synflood_chain >/dev/null 2>&1 || true
+    nft delete chain inet blackblock synflood_chain >/dev/null 2>&1 || true
+  fi
+
+  local s=""
+  for s in httpdlist_v4 denylist_v4 httpdlist_v6 denylist_v6; do
+    if nft list set inet blackblock "$s" >/dev/null 2>&1; then
+      nft flush set inet blackblock "$s" >/dev/null 2>&1 || true
+      nft delete set inet blackblock "$s" >/dev/null 2>&1 || true
+    fi
+  done
+}
+
+route_flag="${1:-}"
+task_msg="Kích hoạt khiên chắn DDoS / SYN Flood trên Nftables"
+_runing "$task_msg"
+
+# 1. Kiểm tra điều kiện tiên quyết (Preflight Check)
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet blackblock >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Máy chủ chưa kích hoạt kiến trúc Nftables của WPTangToc!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 2. Kích hoạt TCP SYN Cookies ở tầng Kernel để chống tràn hàng đợi SYN Backlog
+sysctl -w net.ipv4.tcp_syncookies=1 >/dev/null 2>&1 || true
+
+# 3. Chuẩn bị file giao dịch Nftables nguyên tử (1 Syscall duy nhất)
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
+tmp_dir="$(mktemp -d -p /etc/wptt/tmp wptt_synflood_XXXXXX 2>/dev/null || mktemp -d /tmp/wptt_synflood_XXXXXX)"
+batch_file="$tmp_dir/synflood_enable.nft"
+
+# Đảm bảo 2 tập Whitelist tồn tại sẵn mà không làm mất IP đã lưu bên trong
+nft add set inet blackblock whiteaction_v4 '{ type ipv4_addr; flags interval; auto-merge; comment "Danh sach IPv4 Bypass"; }' >/dev/null 2>&1 || true
+nft add set inet blackblock whiteaction_v6 '{ type ipv6_addr; flags interval; auto-merge; comment "Danh sach IPv6 Bypass"; }' >/dev/null 2>&1 || true
+
+# Dọn sạch cấu trúc synflood cũ (nếu đang bật) để cập nhật thông số mới không bị xung đột
+wptt_synflood_teardown
+
+cat >"$batch_file" <<EOF
+add set inet blackblock httpdlist_v4 {
+  type ipv4_addr
+  size ${TRACK_SIZE}
+  flags dynamic,timeout
+  timeout ${TRACK_TIME}
+  comment "Theo doi toc do ket noi IPv4"
+}
+
+add set inet blackblock denylist_v4 {
+  type ipv4_addr
+  size ${DENY_SIZE}
+  flags dynamic,timeout
+  timeout ${BLOCK_TIME}
+  comment "Danh sach phat SYN/HTTP Flood IPv4"
+}
+
+add set inet blackblock httpdlist_v6 {
+  type ipv6_addr
+  size ${TRACK_SIZE}
+  flags dynamic,timeout
+  timeout ${TRACK_TIME}
+  comment "Theo doi toc do ket noi IPv6"
+}
+
+add set inet blackblock denylist_v6 {
+  type ipv6_addr
+  size ${DENY_SIZE}
+  flags dynamic,timeout
+  timeout ${BLOCK_TIME}
+  comment "Danh sach phat SYN/HTTP Flood IPv6"
+}
+
+add chain inet blackblock synflood_chain {
+  type filter hook input priority filter - 5; policy accept;
+}
+
+flush chain inet blackblock synflood_chain
+
+# 1. Fast-Path: Cho qua lập tức 99% lưu lượng đã thiết lập và Loopback nội bộ
+add rule inet blackblock synflood_chain ct state established,related accept
+add rule inet blackblock synflood_chain iifname "lo" accept
+
+# 2. Miễn trừ tuyệt đối cho các IP trong Whitelist (Cloudflare, Google, IP Quản trị)
+add rule inet blackblock synflood_chain ip saddr @whiteaction_v4 accept
+add rule inet blackblock synflood_chain ip6 saddr @whiteaction_v6 accept
+
+# 3. Khóa ngay từ vòng gửi xe các IP đang trong thời gian thụ án (Chỉ chặn cổng Web 80/443 để không bao giờ khóa nhầm SSH)
+add rule inet blackblock synflood_chain meta l4proto { tcp, udp } th dport { 80, 443 } ip saddr @denylist_v4 counter drop
+add rule inet blackblock synflood_chain meta l4proto { tcp, udp } th dport { 80, 443 } ip6 saddr @denylist_v6 counter drop
+
+# 4. Lõi Per-IP Rate Limiting cho TCP (HTTP/HTTPS) và UDP (QUIC/HTTP3)
+add rule inet blackblock synflood_chain tcp dport { 80, 443 } ct state new update @httpdlist_v4 { ip saddr limit rate over ${RATE_LIMIT} burst ${BURST_PKTS} } add @denylist_v4 { ip saddr } counter drop
+add rule inet blackblock synflood_chain udp dport 443 ct state new update @httpdlist_v4 { ip saddr limit rate over ${RATE_LIMIT} burst ${BURST_PKTS} } add @denylist_v4 { ip saddr } counter drop
+
+add rule inet blackblock synflood_chain tcp dport { 80, 443 } ct state new update @httpdlist_v6 { ip6 saddr limit rate over ${RATE_LIMIT} burst ${BURST_PKTS} } add @denylist_v6 { ip6 saddr } counter drop
+add rule inet blackblock synflood_chain udp dport 443 ct state new update @httpdlist_v6 { ip6 saddr limit rate over ${RATE_LIMIT} burst ${BURST_PKTS} } add @denylist_v6 { ip6 saddr } counter drop
+EOF
+
+# 4. Kiểm tra cú pháp (Dry-run) và nạp nguyên tử vào Kernel
+if ! nft -c -f "$batch_file" >/dev/null 2>&1 || ! nft -f "$batch_file" >/dev/null 2>&1; then
+  wptt_synflood_teardown
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể nạp cấu trúc chống SYN/HTTP Flood vào Kernel!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 5. Xác thực Chain đã thực sự hoạt động trước khi lưu
+if ! nft list chain inet blackblock synflood_chain 2>/dev/null | grep -q '@denylist_v4'; then
+  wptt_synflood_teardown
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Kiểm chứng trạng thái synflood_chain thất bại!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 6. Lưu vĩnh viễn vào /etc/nftables.conf
+if wptt_nft_save_persistent; then
+  _rundone "$task_msg"
+  wptt_logs "WARN" "Đã BẬT khiên chống DDoS/SYN Flood (Ngưỡng: $RATE_LIMIT, Khóa: $BLOCK_TIME, SetSize: $TRACK_SIZE)."
+  echo -e "\n${C_GREEN}✔ Thành công! Hệ thống chống SYN/HTTP Flood đã kích hoạt (Ngưỡng: ${RATE_LIMIT}, Phạt: ${BLOCK_TIME}).${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 0 "enter"
+else
+  wptt_synflood_teardown
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Lưu cấu hình vào /etc/nftables.conf thất bại! Đã tự động Rollback.${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi

@@ -1,0 +1,127 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Biên dịch và kích hoạt Anti-DDoS Golang (Netlink Engine)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+stty iutf8 2>/dev/null || true
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+route_flag="${1:-}"
+task_msg="Biên dịch Engine Golang Netlink và kích hoạt khiên chống DDoS"
+_runing "$task_msg"
+
+# 1. Kiểm tra kiến trúc Nftables (bảng blackblock và set blackaction_v4/v6 từ wptt-setup-nftables)
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list set inet blackblock blackaction_v4 >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Máy chủ chưa kích hoạt kiến trúc Nftables của WPTangToc!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 2. Cài đặt Golang nếu chưa có
+if ! command -v go >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y golang >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y golang >/dev/null 2>&1 || true
+  fi
+fi
+
+if ! command -v go >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể cài đặt trình biên dịch Golang!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 3. Chuẩn bị thư mục Build an toàn
+src_file="/etc/wptt/bao-mat/nftables/anti.go"
+if [[ ! -f "$src_file" ]]; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy file mã nguồn $src_file!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
+build_dir="$(mktemp -d -p /etc/wptt/tmp anti_ddos_build_XXXXXX)"
+cp -f "$src_file" "$build_dir/anti.go"
+
+# Phát hiện Public IPv4 & IPv6 của VPS để đưa vào Whitelist
+vps_ipv4="$(curl -4 -sfL --connect-timeout 3 --max-time 5 https://ipv4.icanhazip.com || curl -4 -sfL --connect-timeout 3 --max-time 5 https://checkip.amazonaws.com || true)"
+vps_ipv6="$(curl -6 -sfL --connect-timeout 3 --max-time 5 https://ipv6.icanhazip.com || true)"
+vps_ipv4="${vps_ipv4//[[:space:]]/}"
+vps_ipv6="${vps_ipv6//[[:space:]]/}"
+
+inject_ips=""
+[[ -n "$vps_ipv4" ]] && inject_ips+="\"$vps_ipv4\": true,\n\t"
+[[ -n "$vps_ipv6" ]] && inject_ips+="\"$vps_ipv6\": true,\n\t"
+
+if [[ -n "$inject_ips" ]]; then
+  sed -i "s|// IP_VPS_HERE|${inject_ips}// IP_VPS_HERE|g" "$build_dir/anti.go"
+fi
+
+# Đảm bảo file error.log của OLS tồn tại
+/bin/mkdir -p /usr/local/lsws/logs 2>/dev/null
+[[ ! -f /usr/local/lsws/logs/error.log ]] && touch /usr/local/lsws/logs/error.log
+
+# 4. Biên dịch Binary tối ưu với độ ưu tiên CPU thấp (nhường tài nguyên cho Web Server)
+cd "$build_dir" || exit 1
+export GOPATH="$build_dir/gopath"
+export GOCACHE="$build_dir/gocache"
+
+nice -n 19 ionice -c3 go mod init wptt-anti-ddos >/dev/null 2>&1
+nice -n 19 ionice -c3 go get github.com/google/nftables >/dev/null 2>&1
+
+if ! nice -n 19 ionice -c3 go build -ldflags="-s -w" -o wptt-anti-ddos anti.go >/dev/null 2>&1; then
+  /bin/rm -rf -- "${build_dir:?}"
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Biên dịch mã nguồn Golang thất bại. Vui lòng kiểm tra kết nối mạng!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 5. Cài đặt Binary nguyên tử và khởi chạy Systemd Service
+chmod 755 "$build_dir/wptt-anti-ddos"
+/bin/mv -fT "$build_dir/wptt-anti-ddos" /usr/local/bin/wptt-anti-ddos
+/bin/rm -rf -- "${build_dir:?}"
+
+cat >/etc/systemd/system/wptt-anti-ddos.service <<'EOF'
+[Unit]
+Description=WPTangToc OLS Golang Anti-DDoS (Netlink Engine)
+After=network.target nftables.service lsws.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wptt-anti-ddos
+Restart=always
+RestartSec=3
+User=root
+Group=root
+LimitNOFILE=1000000
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload >/dev/null 2>&1
+systemctl enable wptt-anti-ddos.service >/dev/null 2>&1
+systemctl restart wptt-anti-ddos.service >/dev/null 2>&1
+
+if systemctl is-active --quiet wptt-anti-ddos.service; then
+  _rundone "$task_msg"
+  wptt_logs "WARN" "Đã BẬT hệ thống chặn DDoS bằng Golang Netlink."
+  echo -e "\n${C_GREEN}✔ Thành công! Cỗ máy chống DDoS cấp Kernel đã đi vào hoạt động.${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 0 "enter"
+else
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Service wptt-anti-ddos không thể khởi động. Kiểm tra bằng: journalctl -u wptt-anti-ddos${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi

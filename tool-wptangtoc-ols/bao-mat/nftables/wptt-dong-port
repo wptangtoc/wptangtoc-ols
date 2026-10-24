@@ -1,0 +1,348 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Đóng Port / Dải Port (TCP/UDP) trên Nftables thuần (Bảo vệ SSH Đa Tầng & Tự Tách Interval)
+
+# Cách gọi CLI: /bin/bash /etc/wptt/bao-mat/nftables/wptt-dong-port 7080 tcp
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 077
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+# ==============================================================================
+# HÀM LÕI: LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
+# ==============================================================================
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null || true
+    printf '\n'
+    nft list table inet filter 2>/dev/null || true
+  } >"$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+# ==============================================================================
+# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (HỖ TRỢ MULTI-LINE ELEMENTS)
+# ==============================================================================
+wptt_get_open_ports() {
+  local set_name="$1"
+  nft list set inet filter "$set_name" 2>/dev/null | awk '
+    /elements = \{/ { in_elem = 1; sub(/.*elements = \{[ \t]*/, "") }
+    in_elem {
+      if ($0 ~ /\}/) {
+        sub(/[ \t]*\}.*/, "")
+        buf = buf " " $0
+        in_elem = 0
+      } else {
+        buf = buf " " $0
+      }
+    }
+    END {
+      gsub(/[ \t\r\n]+/, " ", buf)
+      sub(/^ +/, "", buf)
+      sub(/ +$/, "", buf)
+      print buf
+    }
+  '
+}
+
+# ==============================================================================
+# HÀM XÁC THỰC & CHUẨN HÓA PORT / DẢI PORT BẰNG PURE BASH
+# ==============================================================================
+wptt_validate_and_normalize_ports() {
+  local raw_input="${1//[[:space:]]/}"
+  [[ -z "$raw_input" ]] && return 1
+
+  local IFS=','
+  local -a tokens=()
+  read -ra tokens <<<"$raw_input"
+
+  local -a clean_list=()
+  local token="" p_start="" p_end=""
+  for token in "${tokens[@]}"; do
+    [[ -z "$token" ]] && continue
+    if [[ "$token" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+      p_start="$((10#${BASH_REMATCH[1]}))"
+      p_end="$((10#${BASH_REMATCH[2]}))"
+      if ((p_start < 1 || p_end > 65535 || p_start > p_end)); then
+        return 1
+      fi
+      if ((p_start == p_end)); then
+        clean_list+=("$p_start")
+      else
+        clean_list+=("${p_start}-${p_end}")
+      fi
+    elif [[ "$token" =~ ^[0-9]{1,5}$ ]]; then
+      p_start="$((10#$token))"
+      if ((p_start < 1 || p_start > 65535)); then
+        return 1
+      fi
+      clean_list+=("$p_start")
+    else
+      return 1
+    fi
+  done
+
+  ((${#clean_list[@]} == 0)) && return 1
+
+  local out="" item=""
+  for item in "${clean_list[@]}"; do
+    out+="${out:+, }${item}"
+  done
+  printf '%s' "$out"
+  return 0
+}
+
+# ==============================================================================
+# HÀM KIỂM TRA CÓ CHẠM PORT BẢO VỆ (SSH) HAY KHÔNG (ĐA TẦNG)
+# ==============================================================================
+wptt_check_protected_ssh_ports() {
+  local target_ranges="$1"
+  local -a ssh_ports=()
+
+  # 1. Lấy từ biến cấu hình WPTangToc (.wptt.conf)
+  if [[ -n "${port_ssh:-}" && "${port_ssh}" =~ ^[0-9]+$ ]]; then
+    ssh_ports+=("$((10#$port_ssh))")
+  fi
+
+  # 2. Lấy từ kết nối phiên SSH thực tế đang điều khiển ($SSH_CONNECTION)
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    local conn_port="${SSH_CONNECTION##* }"
+    if [[ "$conn_port" =~ ^[0-9]+$ ]]; then
+      ssh_ports+=("$((10#$conn_port))")
+    fi
+  fi
+
+  # 3. Quét toàn bộ /etc/ssh/sshd_config và /etc/ssh/sshd_config.d/*.conf
+  local p=""
+  while IFS= read -r p; do
+    [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] && ssh_ports+=("$((10#$p))")
+  done < <(awk 'tolower($1) == "port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null)
+
+  ((${#ssh_ports[@]} == 0)) && ssh_ports=(22)
+
+  # Kiểm tra xem target_ranges có chứa bất kỳ port SSH nào không
+  local IFS=','
+  local -a tokens=()
+  read -ra tokens <<<"${target_ranges//[[:space:]]/}"
+
+  local token="" s="" e="" sp=""
+  for token in "${tokens[@]}"; do
+    if [[ "$token" == *"-"* ]]; then
+      s="${token%-*}"
+      e="${token#*-}"
+    else
+      s="$token"
+      e="$token"
+    fi
+    for sp in "${ssh_ports[@]}"; do
+      if ((sp >= s && sp <= e)); then
+        printf '%s' "$sp"
+        return 0
+      fi
+    done
+  done
+
+  return 1
+}
+
+# ==============================================================================
+# HÀM XÓA PORT KHỎI SET INTERVAL AN TOÀN (TỰ ĐỘNG TÁCH DẢI NẾU ĐANG GỘP)
+# ==============================================================================
+wptt_remove_ports_from_set() {
+  local set_name="$1"
+  local remove_elements="$2"
+  local current_elements=""
+  current_elements="$(wptt_get_open_ports "$set_name")"
+
+  # Nếu Set đang trống sẵn thì coi như hoàn tất
+  [[ -z "$current_elements" ]] && return 0
+
+  local remaining_elements=""
+  remaining_elements="$(awk -v cur="$current_elements" -v rem="$remove_elements" '
+    BEGIN {
+      n = split(cur, a, ",")
+      for (i = 1; i <= n; i++) {
+        gsub(/^[ \t]+|[ \t]+$/, "", a[i])
+        if (a[i] == "") continue
+        if (index(a[i], "-") > 0) {
+          split(a[i], r, "-")
+          s = r[1] + 0; e = r[2] + 0
+        } else {
+          s = a[i] + 0; e = s
+        }
+        for (p = s; p <= e; p++) port_map[p] = 1
+      }
+
+      m = split(rem, b, ",")
+      for (i = 1; i <= m; i++) {
+        gsub(/^[ \t]+|[ \t]+$/, "", b[i])
+        if (b[i] == "") continue
+        if (index(b[i], "-") > 0) {
+          split(b[i], r, "-")
+          s = r[1] + 0; e = r[2] + 0
+        } else {
+          s = b[i] + 0; e = s
+        }
+        for (p = s; p <= e; p++) delete port_map[p]
+      }
+
+      out = ""
+      in_range = 0
+      for (p = 1; p <= 65536; p++) {
+        if (port_map[p] == 1) {
+          if (!in_range) { start_p = p; in_range = 1 }
+        } else if (in_range) {
+          end_p = p - 1
+          seg = (start_p == end_p) ? start_p : (start_p "-" end_p)
+          out = (out == "") ? seg : (out ", " seg)
+          in_range = 0
+        }
+      }
+      print out
+    }
+  ')"
+
+  if [[ -z "$remaining_elements" ]]; then
+    nft flush set inet filter "$set_name" >/dev/null 2>&1
+  else
+    nft -f - >/dev/null 2>&1 <<EOF
+flush set inet filter ${set_name}
+add element inet filter ${set_name} { ${remaining_elements} }
+EOF
+  fi
+}
+
+# ==============================================================================
+# PHÂN TÁCH CHẾ ĐỘ MENU TƯƠNG TÁC VS CLI TỰ ĐỘNG
+# ==============================================================================
+is_interactive=0
+route_flag=""
+PORT_IN="${1:-}"
+PROTO_IN="${2:-both}"
+
+if [[ -z "$PORT_IN" || "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+  is_interactive=1
+  route_flag="$PORT_IN"
+  PORT_IN=""
+fi
+
+finish_script() {
+  local code="$1"
+  local wait_mode="${2:-enter}"
+  if ((is_interactive == 1)); then
+    wptt_quay_ve_menu "$route_flag" "$code" "$wait_mode"
+  else
+    exit "$code"
+  fi
+}
+
+# Kiểm tra điều kiện tiên quyết (Preflight Check)
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet filter >/dev/null 2>&1; then
+  echo -e "\n${C_RED}❌ Lỗi: Kiến trúc Nftables của WPTangToc chưa được kích hoạt!${C_RESET}"
+  finish_script 1 "enter"
+fi
+
+if ((is_interactive == 1)); then
+  clear
+  echo ""
+  print_border_top "$C_CYAN"
+  center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Đóng Cổng Kết Nối (Close Port)${C_RESET}" "$C_CYAN"
+  print_border_bot "$C_CYAN"
+  echo ""
+
+  open_tcp="$(wptt_get_open_ports "tcp_ports")"
+  open_udp="$(wptt_get_open_ports "udp_ports")"
+  echo -e "Port TCP đang mở: ${C_GREEN}${open_tcp:-Trống}${C_RESET}"
+  echo -e "Port UDP đang mở: ${C_GREEN}${open_udp:-Trống}${C_RESET}\n"
+
+  echo -en "${C_CYAN}Nhập số Port hoặc dải Port cần ĐÓNG (VD: 7080, 3306) [0=Thoát]: ${C_RESET}"
+  read -r PORT_IN
+  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && finish_script 0 ""
+
+  echo -en "${C_CYAN}Chọn giao thức cần đóng (1=Cả TCP & UDP, 2=Chỉ TCP, 3=Chỉ UDP) [Mặc định=1]: ${C_RESET}"
+  read -r chon_proto
+  case "${chon_proto:-1}" in
+  2) PROTO_IN="tcp" ;;
+  3) PROTO_IN="udp" ;;
+  *) PROTO_IN="both" ;;
+  esac
+fi
+
+NORMALIZED_PORTS=""
+if ! NORMALIZED_PORTS="$(wptt_validate_and_normalize_ports "$PORT_IN")"; then
+  echo -e "\n${C_RED}❌ Lỗi: Số Port '$PORT_IN' không hợp lệ (Phải từ 1 đến 65535)!${C_RESET}"
+  finish_script 1 "enter"
+fi
+
+PROTO_IN="${PROTO_IN,,}"
+case "$PROTO_IN" in
+tcp | udp | both) ;;
+*)
+  echo -e "\n${C_RED}❌ Lỗi: Giao thức '$PROTO_IN' không hợp lệ (Chỉ hỗ trợ: tcp, udp, both)!${C_RESET}"
+  finish_script 1 "enter"
+  ;;
+esac
+
+# [CHỐT CHẶN AN TOÀN]: Không cho phép đóng Port SSH đang hoạt động (trên TCP hoặc Both)
+if [[ "$PROTO_IN" == "tcp" || "$PROTO_IN" == "both" ]]; then
+  hit_ssh_port=""
+  if hit_ssh_port="$(wptt_check_protected_ssh_ports "$NORMALIZED_PORTS")"; then
+    echo -e "\n${C_RED}🛡️ CẢNH BÁO TỬ HUYỆT: Port $hit_ssh_port đang là cổng kết nối SSH của máy chủ!${C_RESET}"
+    echo -e "${C_YELLOW}Hệ thống từ chối đóng Port này để bảo vệ bạn khỏi nguy cơ mất quyền điều khiển VPS.${C_RESET}"
+    finish_script 1 "enter"
+  fi
+fi
+
+task_close="Đóng cổng $NORMALIZED_PORTS (${PROTO_IN^^}) trên tường lửa Nftables"
+_runing "$task_close"
+
+err_flag=0
+if [[ "$PROTO_IN" == "tcp" || "$PROTO_IN" == "both" ]]; then
+  if ! wptt_remove_ports_from_set "tcp_ports" "$NORMALIZED_PORTS"; then
+    err_flag=1
+  fi
+fi
+
+if [[ "$PROTO_IN" == "udp" || "$PROTO_IN" == "both" ]]; then
+  if ! wptt_remove_ports_from_set "udp_ports" "$NORMALIZED_PORTS"; then
+    err_flag=1
+  fi
+fi
+
+if ((err_flag == 0)) && wptt_nft_save_persistent; then
+  _rundone "$task_close"
+  wptt_logs "INFO" "Nftables: Đã đóng Port $NORMALIZED_PORTS (${PROTO_IN^^})"
+  if ((is_interactive == 1)); then
+    echo -e "\n${C_GREEN}✔ Đã đóng thành công Port $NORMALIZED_PORTS (${PROTO_IN^^}) và lưu cấu hình vĩnh viễn!${C_RESET}"
+  fi
+  finish_script 0 "enter"
+else
+  _runloi "$task_close"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể cập nhật cấu hình Nftables!${C_RESET}"
+  finish_script 1 "enter"
+fi

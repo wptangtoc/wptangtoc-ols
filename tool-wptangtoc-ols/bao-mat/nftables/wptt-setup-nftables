@@ -1,0 +1,130 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Khởi tạo Nftables thuần (Zero-Overhead)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+# 1. Tự động phát hiện Port SSH hiện hành (Chống tự khóa chính mình - Anti Lockout)
+current_ssh_port="${port_ssh:-}"
+if [[ -z "$current_ssh_port" || ! "$current_ssh_port" =~ ^[0-9]+$ ]]; then
+  current_ssh_port="$(awk '/^[ \t]*Port[ \t]+[0-9]+/ {print $2; exit}' /etc/ssh/sshd_config 2>/dev/null)"
+fi
+if [[ -z "$current_ssh_port" || ! "$current_ssh_port" =~ ^[0-9]+$ ]]; then
+  current_ssh_port=22
+fi
+
+# 2. Cài đặt gói nftables
+if command -v apt-get >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -y nftables >/dev/null 2>&1 || true
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y nftables >/dev/null 2>&1 || true
+fi
+
+# 3. Tắt và gỡ bỏ hoàn toàn Firewalld (Thu hồi ~35MB RAM Python Daemon)
+if systemctl is-active --quiet firewalld 2>/dev/null || systemctl is-enabled --quiet firewalld 2>/dev/null; then
+  systemctl stop firewalld >/dev/null 2>&1 || true
+  systemctl disable firewalld >/dev/null 2>&1 || true
+  systemctl mask firewalld >/dev/null 2>&1 || true
+fi
+
+# 4. Tạo file cấu hình /etc/nftables.conf chuẩn Enterprise (O(1) Set Lookup)
+cat >/etc/nftables.conf <<EOF
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+# ==============================================================================
+# BẢNG 1: KHIÊN CHẮN BLACKLIST TẦNG THẤP (Chặn sớm ở Priority -10)
+# ==============================================================================
+table inet blackblock {
+	set blackaction_v4 {
+		type ipv4_addr
+		flags interval,timeout
+		comment "Danh sach chan IPv4 & CIDR"
+	}
+
+	set blackaction_v6 {
+		type ipv6_addr
+		flags interval,timeout
+		comment "Danh sach chan IPv6 & CIDR"
+	}
+
+	chain blackblock-chain-input {
+		type filter hook input priority filter - 10; policy accept;
+		ip saddr @blackaction_v4 counter drop
+		ip6 saddr @blackaction_v6 counter drop
+	}
+}
+
+# ==============================================================================
+# BẢNG 2: BỘ LỌC TƯỜNG LỬA CHÍNH (Quản lý Port bằng Set O(1))
+# ==============================================================================
+table inet filter {
+	set tcp_ports {
+		type inet_service
+		flags interval
+		comment "Danh sach Port TCP duoc phep mo"
+		elements = { ${current_ssh_port}, 80, 443 }
+	}
+
+	set udp_ports {
+		type inet_service
+		flags interval
+		comment "Danh sach Port UDP duoc phep mo (QUIC/HTTP3)"
+		elements = { 443 }
+	}
+
+	chain input {
+		type filter hook input priority filter; policy drop;
+
+		# 1. Fast-Path: Cho qua ngay lập tức các kết nối đã thiết lập (99% traffic)
+		ct state established,related accept
+
+		# 2. Cho phép giao tiếp Loopback nội bộ (PHP-LSAPI, MariaDB, Redis Socket)
+		iifname "lo" accept
+
+		# 3. Loại bỏ sớm các gói tin dị dạng / không hợp lệ
+		ct state invalid drop
+
+		# 4. Cho phép ICMPv4 và ICMPv6 thiết yếu (Chống đứt mạng IPv6 NDP & PMTU)
+		ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded } limit rate 10/second accept
+		ip6 nexthdr icmpv6 icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+
+		# 5. Mở Port động siêu tốc qua Set O(1)
+		tcp dport @tcp_ports ct state new accept
+		udp dport @udp_ports ct state new accept
+	}
+
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority filter; policy accept;
+	}
+}
+EOF
+
+chmod 600 /etc/nftables.conf
+
+# Đồng bộ đường dẫn cấu hình giữa RHEL/AlmaLinux (/etc/sysconfig/nftables.conf) và Ubuntu (/etc/nftables.conf)
+if [[ -d /etc/sysconfig ]]; then
+  ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+fi
+
+# 5. Kiểm tra cú pháp nguyên tử và kích hoạt Nftables
+if nft -c -f /etc/nftables.conf >/dev/null 2>&1; then
+  systemctl unmask nftables >/dev/null 2>&1 || true
+  systemctl enable --now nftables >/dev/null 2>&1 || true
+  nft -f /etc/nftables.conf >/dev/null 2>&1 || true
+fi
