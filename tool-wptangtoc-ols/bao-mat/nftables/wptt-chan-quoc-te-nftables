@@ -2,10 +2,11 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Chỉ cho phép IP Việt Nam, Cloudflare, Google
+# @description: Chỉ cho phép IP Việt Nam, Cloudflare, Google, Bing
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 stty iutf8 2>/dev/null || true
 umask 077
 
@@ -75,10 +76,10 @@ wptt_geoblock_remove_rules() {
 }
 
 # ==============================================================================
-# HÀM CHUẨN HÓA & XÁC THỰC CIDR BẰNG AWK (ZERO-SUBSHELL, MAWK/GAWK COMPATIBLE)
+# HÀM CHUẨN HÓA & XÁC THỰC CIDR BẰNG AWK (BỌC NICE/IONICE TRỰC TIẾP TRÊN BINARY AWK)
 # ==============================================================================
 sanitize_ipv4_cidr() {
-  awk '
+  nice -n 19 ionice -c3 awk '
   {
     sub(/#.*/, "")
     gsub(/^[ \t\r]+|[ \t\r]+$/, "")
@@ -97,7 +98,7 @@ sanitize_ipv4_cidr() {
 }
 
 sanitize_ipv6_cidr() {
-  awk '
+  nice -n 19 ionice -c3 awk '
   {
     sub(/#.*/, "")
     gsub(/^[ \t\r]+|[ \t\r]+$/, "")
@@ -110,6 +111,103 @@ sanitize_ipv6_cidr() {
       }
     }
   }' "$@"
+}
+
+# ==============================================================================
+# HÀM BÓC TÁCH JSON CIDR (DÙNG CHUNG CHO GOOGLE, GOOGLEBOT & MICROSOFT BINGBOT)
+# ==============================================================================
+extract_json_prefixes() {
+  local json_file="$1"
+  local v4_out="$2"
+  local v6_out="$3"
+
+  [[ -s "$json_file" ]] || return 0
+
+  awk -F'"' -v v4_f="$v4_out" -v v6_f="$v6_out" '
+  {
+    for (i = 1; i < NF; i++) {
+      if ($i == "ipv4Prefix") {
+        for (j = i + 1; j <= i + 3 && j <= NF; j++) {
+          if ($j ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
+            print $j >> v4_f
+            break
+          }
+        }
+      } else if ($i == "ipv6Prefix") {
+        for (j = i + 1; j <= i + 3 && j <= NF; j++) {
+          if ($j ~ /^[0-9a-fA-F:]+\/[0-9]+$/ && index($j, ":") > 0) {
+            print $j >> v6_f
+            break
+          }
+        }
+      }
+    }
+  }' "$json_file"
+}
+
+collect_active_ssh_client_ips() {
+  local v4_out="$1"
+  local v6_out="$2"
+  local detected_out="$3"
+
+  {
+    # 1. Lấy từ biến môi trường của phiên SSH hiện tại
+    [[ -n "${SSH_CONNECTION:-}" ]] && printf '%s\n' "${SSH_CONNECTION%% *}"
+    [[ -n "${SSH_CLIENT:-}" ]] && printf '%s\n' "${SSH_CLIENT%% *}"
+
+    # 2. Quét trực tiếp Socket đang kết nối vào tiến trình sshd (Bắt được cả khi đang ở trong tmux/screen/su)
+    if command -v ss >/dev/null 2>&1; then
+      ss -tnpH state established 2>/dev/null | awk '/"sshd"/ {print $4}'
+    fi
+
+    # 3. Dự phòng từ bảng utmp (who)
+    if command -v who >/dev/null 2>&1; then
+      who 2>/dev/null | awk -F'[()]' 'NF >= 2 && $2 != "" {print $2}'
+    fi
+  } | awk -v f4="$v4_out" -v f6="$v6_out" -v f_det="$detected_out" '
+  function clean_ip(raw,    ip, n, a, i, ok) {
+    ip = raw
+    gsub(/^[ \t\r]+|[ \t\r]+$/, "", ip)
+    if (ip == "" || ip == "-" || ip ~ /^:/) return
+
+    # Gỡ bỏ :port từ đầu ra của lệnh ss (VD: [2001:db8::1]:54321 hoặc 1.2.3.4:54321)
+    if (ip ~ /^\[.*\]:[0-9]+$/) {
+      sub(/^\[/, "", ip)
+      sub(/\]:[0-9]+$/, "", ip)
+    } else if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$/) {
+      sub(/:[0-9]+$/, "", ip)
+    } else if (tolower(ip) ~ /^::ffff:[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$/) {
+      sub(/:[0-9]+$/, "", ip)
+    }
+
+    sub(/^\[/, "", ip)
+    sub(/\]$/, "", ip)
+    sub(/%.*/, "", ip)
+    if (tolower(ip) ~ /^::ffff:[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+      sub(/^::[fF][fF][fF][fF]:/, "", ip)
+    }
+
+    if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+      n = split(ip, a, ".")
+      if (n == 4) {
+        ok = 1
+        for (i = 1; i <= 4; i++) {
+          if (a[i] + 0 < 0 || a[i] + 0 > 255) ok = 0
+        }
+        if (ok && ip != "127.0.0.1" && ip != "0.0.0.0" && !seen[ip]++) {
+          print ip "/32" >> f4
+          print ip >> f_det
+        }
+      }
+    } else if (ip ~ /^[0-9a-fA-F:]+$/ && index(ip, ":") > 0) {
+      ip = tolower(ip)
+      if (ip != "::1" && ip != "::" && ip !~ /^fe80:/ && !seen[ip]++) {
+        print ip "/128" >> f6
+        print ip >> f_det
+      }
+    }
+  }
+  { clean_ip($0) }'
 }
 
 # ==============================================================================
@@ -208,7 +306,7 @@ else
   echo -e "Trạng thái hiện tại: ${C_GREEN}ĐANG TẮT (Cho phép toàn cầu)${C_RESET}\n"
 fi
 
-echo -e "1. BẬT chế độ (Chỉ cho phép Việt Nam, Cloudflare, Google)"
+echo -e "1. BẬT chế độ (Chỉ cho phép Việt Nam, Cloudflare, Google, Bing & IP SSH hiện tại)"
 echo -e "2. TẮT chế độ (Hoàn nguyên - Mở lại toàn cầu)"
 echo -e "0. Thoát\n"
 echo -en "${C_CYAN}Nhập lựa chọn của bạn: ${C_RESET}"
@@ -270,7 +368,7 @@ fi
 # ==============================================================================
 # TIẾN TRÌNH BẬT (CHẶN QUỐC TẾ)
 # ==============================================================================
-task_on="Thiết lập chỉ cho phép Việt Nam, Cloudflare và Google"
+task_on="Thiết lập chỉ cho phép Việt Nam, Cloudflare, Google và Bing"
 _runing "$task_on"
 
 # 1. Tải và kiểm chứng cả IPv4 lẫn IPv6 của Việt Nam (Đa tầng dự phòng)
@@ -297,23 +395,27 @@ if [[ ! -s "$tmp_dir/cf_v4.txt" || ! -s "$tmp_dir/cf_v6.txt" ]]; then
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
 
-# 3. Tải danh sách IP Google & Googlebot (Xử lý 1 lần bằng awk, không dùng grep | cut)
-: >"$tmp_dir/gg_v4_raw.txt"
-: >"$tmp_dir/gg_v6_raw.txt"
+# 3. Tải danh sách IP Google, Googlebot & Microsoft Bingbot
+: >"$tmp_dir/bot_v4_raw.txt"
+: >"$tmp_dir/bot_v6_raw.txt"
 
-for gg_url in "https://www.gstatic.com/ipranges/goog.json" "https://developers.google.com/static/search/apis/ipranges/googlebot.json"; do
-  if curl -sfL --connect-timeout 5 --max-time 15 "$gg_url" -o "$tmp_dir/goog_part.json" 2>/dev/null && [[ -s "$tmp_dir/goog_part.json" ]]; then
-    awk -F'"' -v v4_out="$tmp_dir/gg_v4_raw.txt" -v v6_out="$tmp_dir/gg_v6_raw.txt" '
-      $2 == "ipv4Prefix" { print $4 >> v4_out }
-      $2 == "ipv6Prefix" { print $4 >> v6_out }
-    ' "$tmp_dir/goog_part.json"
+bot_urls=(
+  "https://www.gstatic.com/ipranges/goog.json"
+  "https://developers.google.com/static/search/apis/ipranges/googlebot.json"
+  "https://www.bing.com/toolbox/bingbot.json"
+)
+
+for bot_url in "${bot_urls[@]}"; do
+  if curl -sfL --connect-timeout 5 --max-time 15 --retry 1 "$bot_url" -o "$tmp_dir/bot_part.json" 2>/dev/null && [[ -s "$tmp_dir/bot_part.json" ]]; then
+    extract_json_prefixes "$tmp_dir/bot_part.json" "$tmp_dir/bot_v4_raw.txt" "$tmp_dir/bot_v6_raw.txt"
+    /bin/rm -f -- "$tmp_dir/bot_part.json"
   fi
 done
 
-sanitize_ipv4_cidr "$tmp_dir/gg_v4_raw.txt" >"$tmp_dir/gg_v4.txt"
-sanitize_ipv6_cidr "$tmp_dir/gg_v6_raw.txt" >"$tmp_dir/gg_v6.txt"
+sanitize_ipv4_cidr "$tmp_dir/bot_v4_raw.txt" >"$tmp_dir/bot_v4.txt"
+sanitize_ipv6_cidr "$tmp_dir/bot_v6_raw.txt" >"$tmp_dir/bot_v6.txt"
 
-# 4. Bổ sung dải IP Nội bộ (Loopback/RFC1918) và IP Card mạng VPS để không bao giờ chặn WP-Cron / REST API nội bộ
+# 4. Bổ sung dải IP Nội bộ (Loopback/RFC1918), IP Card mạng VPS và IP người đang kết nối SSH
 cat >"$tmp_dir/local_v4.txt" <<'EOF'
 127.0.0.0/8
 10.0.0.0/8
@@ -332,9 +434,27 @@ if command -v ip >/dev/null 2>&1; then
   ip -6 -o addr show scope global 2>/dev/null | awk '{split($4, a, "/"); if (a[1] != "") print a[1] "/128"}' >>"$tmp_dir/local_v6.txt"
 fi
 
-# 5. Gộp và khử trùng lặp toàn bộ CIDR với độ ưu tiên CPU thấp (Bảo vệ VPS 512MB RAM)
-nice -n 19 ionice -c3 sanitize_ipv4_cidr "$tmp_dir/local_v4.txt" "$tmp_dir/vn_v4.txt" "$tmp_dir/cf_v4.txt" "$tmp_dir/gg_v4.txt" >"$tmp_dir/final_v4.txt"
-nice -n 19 ionice -c3 sanitize_ipv6_cidr "$tmp_dir/local_v6.txt" "$tmp_dir/vn_v6.txt" "$tmp_dir/cf_v6.txt" "$tmp_dir/gg_v6.txt" >"$tmp_dir/final_v6.txt"
+# Thu thập và bảo vệ IP của quản trị viên đang điều khiển SSH (Kể cả IP nước ngoài / VPN)
+: >"$tmp_dir/ssh_admin_ips.txt"
+collect_active_ssh_client_ips "$tmp_dir/local_v4.txt" "$tmp_dir/local_v6.txt" "$tmp_dir/ssh_admin_ips.txt"
+
+# Đồng bộ luôn IP quản trị SSH vào tập whiteaction_v4 / whiteaction_v6 của bảng blackblock (nếu có)
+if [[ -s "$tmp_dir/ssh_admin_ips.txt" ]] && nft list table inet blackblock >/dev/null 2>&1; then
+  nft add set inet blackblock whiteaction_v4 '{ type ipv4_addr; flags interval; auto-merge; comment "Danh sach IPv4 Bypass"; }' >/dev/null 2>&1 || true
+  nft add set inet blackblock whiteaction_v6 '{ type ipv6_addr; flags interval; auto-merge; comment "Danh sach IPv6 Bypass"; }' >/dev/null 2>&1 || true
+  while IFS= read -r admin_ip; do
+    [[ -z "$admin_ip" ]] && continue
+    if [[ "$admin_ip" == *":"* ]]; then
+      nft add element inet blackblock whiteaction_v6 "{ ${admin_ip}/128 }" >/dev/null 2>&1 || true
+    else
+      nft add element inet blackblock whiteaction_v4 "{ ${admin_ip}/32 }" >/dev/null 2>&1 || true
+    fi
+  done <"$tmp_dir/ssh_admin_ips.txt"
+fi
+
+# 5. Gộp và khử trùng lặp toàn bộ CIDR (nice/ionice đã được bọc bên trong hàm sanitize)
+sanitize_ipv4_cidr "$tmp_dir/local_v4.txt" "$tmp_dir/vn_v4.txt" "$tmp_dir/cf_v4.txt" "$tmp_dir/bot_v4.txt" >"$tmp_dir/final_v4.txt"
+sanitize_ipv6_cidr "$tmp_dir/local_v6.txt" "$tmp_dir/vn_v6.txt" "$tmp_dir/cf_v6.txt" "$tmp_dir/bot_v6.txt" >"$tmp_dir/final_v6.txt"
 
 if [[ ! -s "$tmp_dir/final_v4.txt" || ! -s "$tmp_dir/final_v6.txt" ]]; then
   _runloi "$task_on"
@@ -342,18 +462,18 @@ if [[ ! -s "$tmp_dir/final_v4.txt" || ! -s "$tmp_dir/final_v6.txt" ]]; then
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
 
-# 6. Tạo file giao dịch Nftables nguyên tử (Tránh lỗi tràn bộ đệm tham số MAX_ARG_STRLEN 128KB)
+# 6. Tạo file giao dịch Nftables nguyên tử (Dùng \t thay cho dấu cách để chống lỗi Unicode NBSP khi copy-paste)
 nft_batch_file="$tmp_dir/geo_apply.nft"
 {
-  printf 'add set inet filter geo_allow_v4 { type ipv4_addr; flags interval; auto-merge; comment "Geo-Allow VN, CF, GG IPv4"; }\n'
+  printf 'add set inet filter geo_allow_v4 { type ipv4_addr; flags interval; auto-merge; comment "Geo-Allow VN, CF, GG, Bing IPv4"; }\n'
   printf 'flush set inet filter geo_allow_v4\n'
   printf 'add element inet filter geo_allow_v4 {\n'
-  awk 'NR > 1 { printf ",\n" } { printf "  %s", $0 } END { printf "\n}\n\n" }' "$tmp_dir/final_v4.txt"
+  awk 'NR > 1 { printf ",\n" } { printf "\t%s", $0 } END { printf "\n}\n\n" }' "$tmp_dir/final_v4.txt"
 
-  printf 'add set inet filter geo_allow_v6 { type ipv6_addr; flags interval; auto-merge; comment "Geo-Allow VN, CF, GG IPv6"; }\n'
+  printf 'add set inet filter geo_allow_v6 { type ipv6_addr; flags interval; auto-merge; comment "Geo-Allow VN, CF, GG, Bing IPv6"; }\n'
   printf 'flush set inet filter geo_allow_v6\n'
   printf 'add element inet filter geo_allow_v6 {\n'
-  awk 'NR > 1 { printf ",\n" } { printf "  %s", $0 } END { printf "\n}\n" }' "$tmp_dir/final_v6.txt"
+  awk 'NR > 1 { printf ",\n" } { printf "\t%s", $0 } END { printf "\n}\n" }' "$tmp_dir/final_v6.txt"
 } >"$nft_batch_file"
 
 # Kiểm tra cú pháp file Batch trước khi nạp vào Kernel
@@ -372,8 +492,14 @@ if ! nice -n 19 ionice -c3 nft -f "$nft_batch_file" >/dev/null 2>&1; then
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
 
-# 7. Chèn Rule chặn kết nối mới (ct state new) ngoài danh sách trên Port 80/443
-# Dùng 'ct state new' để 99.9% gói tin đã thiết lập (established) đi qua Fast-Path không cần tra cứu lại Set
+# 7. Chèn Rule: Cho phép cả các IP nằm trong danh sách Bypass thủ công (whiteaction_v4/v6) nếu có
+if nft list set inet blackblock whiteaction_v4 >/dev/null 2>&1; then
+  while IFS= read -r wip4; do
+    [[ -n "$wip4" ]] && nft add element inet filter geo_allow_v4 "{ $wip4 }" >/dev/null 2>&1 || true
+  done < <(nft list set inet blackblock whiteaction_v4 2>/dev/null | awk '/elements = \{/,/\}/ {gsub(/.*elements = \{|\}|,/, " "); for(i=1;i<=NF;i++) if($i ~ /^[0-9.\/]+$/) print $i}')
+fi
+
+# 8. Chèn Rule chặn kết nối mới (ct state new) ngoài danh sách trên Port 80/443
 if ! nft insert rule inet filter input ct state new tcp dport \{ 80, 443 \} ip saddr != @geo_allow_v4 counter drop >/dev/null 2>&1 ||
   ! nft insert rule inet filter input ct state new udp dport 443 ip saddr != @geo_allow_v4 counter drop >/dev/null 2>&1 ||
   ! nft insert rule inet filter input ct state new tcp dport \{ 80, 443 \} ip6 saddr != @geo_allow_v6 counter drop >/dev/null 2>&1 ||
@@ -384,13 +510,17 @@ if ! nft insert rule inet filter input ct state new tcp dport \{ 80, 443 \} ip s
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
 
-# 8. Lưu cấu hình vĩnh viễn
+# 9. Lưu cấu hình vĩnh viễn
 if wptt_nft_save_persistent; then
   v4_total="$(wc -l <"$tmp_dir/final_v4.txt" 2>/dev/null || printf '0')"
   v6_total="$(wc -l <"$tmp_dir/final_v6.txt" 2>/dev/null || printf '0')"
+  ssh_ips_str="$(awk 'NR > 1 { printf ", " } { printf "%s", $0 }' "$tmp_dir/ssh_admin_ips.txt" 2>/dev/null)"
   _rundone "$task_on"
-  wptt_logs "INFO" "Đã BẬT chế độ Geo-Blocking (IPv4: ${v4_total} dải, IPv6: ${v6_total} dải)."
-  echo -e "\n${C_GREEN}✔ Thành công! Đã nạp ${v4_total} dải IPv4 và ${v6_total} dải IPv6 (VN, Cloudflare, Google).${C_RESET}"
+  wptt_logs "INFO" "Đã BẬT chế độ Geo-Blocking (IPv4: ${v4_total} dải, IPv6: ${v6_total} dải, Admin SSH: ${ssh_ips_str:-Local})."
+  echo -e "\n${C_GREEN}✔ Thành công! Đã nạp ${v4_total} dải IPv4 và ${v6_total} dải IPv6 (VN, Cloudflare, Google, Bing).${C_RESET}"
+  if [[ -n "$ssh_ips_str" ]]; then
+    echo -e "${C_CYAN}🛡️ Đã tự động bảo vệ IP quản trị SSH hiện tại: ${C_YELLOW}${ssh_ips_str}${C_RESET}"
+  fi
   wptt_quay_ve_menu "$route_flag" 0 "enter"
 else
   wptt_geoblock_remove_rules
