@@ -1,11 +1,14 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Gỡ bỏ khiên chống SYN Flood / HTTP Flood khỏi Nftables
+# @since: 2026
+# @description: Gỡ bỏ khiên chống SYN Flood / HTTP Flood
 
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 stty iutf8 2>/dev/null || true
+umask 077
 
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
@@ -18,18 +21,18 @@ wptt_nft_save_persistent() {
   /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
   chmod 700 /etc/wptt/tmp 2>/dev/null
   local tmp_nft=""
-  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
 
   {
     printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
-    nft list table inet blackblock 2>/dev/null
+    nft list table inet blackblock 2>/dev/null || true
     printf '\n'
-    nft list table inet filter 2>/dev/null
-  } > "$tmp_nft"
+    nft list table inet filter 2>/dev/null || true
+  } >"$tmp_nft"
 
   if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
     chmod 600 "$tmp_nft"
-    /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
     [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
     return 0
   else
@@ -42,21 +45,48 @@ route_flag="${1:-}"
 task_msg="Gỡ bỏ khiên chắn DDoS / SYN Flood khỏi hệ thống"
 _runing "$task_msg"
 
-# Xóa Chain bảo vệ
-nft delete chain inet blackblock synflood_chain >/dev/null 2>&1 || true
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet blackblock >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Dịch vụ Nftables hoặc bảng blackblock không tồn tại!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
 
-# Xóa các bộ nhớ chứa IP đang bị giam lỏng
-nft delete set inet blackblock httpdlist_v4 >/dev/null 2>&1 || true
-nft delete set inet blackblock denylist_v4 >/dev/null 2>&1 || true
-nft delete set inet blackblock httpdlist_v6 >/dev/null 2>&1 || true
-nft delete set inet blackblock denylist_v6 >/dev/null 2>&1 || true
+# 1. Làm rỗng quy tắc (Flush) trước khi xóa Chain để giải phóng tham chiếu (Refcount) tới các Set
+if nft list chain inet blackblock synflood_chain >/dev/null 2>&1; then
+  if ! nft flush chain inet blackblock synflood_chain >/dev/null 2>&1 ||
+    ! nft delete chain inet blackblock synflood_chain >/dev/null 2>&1; then
+    _runloi "$task_msg"
+    echo -e "\n${C_RED}❌ Lỗi: Không thể làm rỗng và xóa chuỗi synflood_chain khỏi Kernel!${C_RESET}"
+    wptt_quay_ve_menu "$route_flag" 1 "enter"
+  fi
+fi
 
+# 2. Xả và xóa từng Set theo dõi / phạt sau khi không còn quy tắc nào tham chiếu
+leftover_err=0
+for set_name in httpdlist_v4 denylist_v4 httpdlist_v6 denylist_v6; do
+  if nft list set inet blackblock "$set_name" >/dev/null 2>&1; then
+    nft flush set inet blackblock "$set_name" >/dev/null 2>&1 || true
+    if ! nft delete set inet blackblock "$set_name" >/dev/null 2>&1; then
+      leftover_err=1
+    fi
+  fi
+done
+
+# 3. Kiểm chứng hậu điều kiện (Post-condition Verification)
+if ((leftover_err != 0)) || nft list chain inet blackblock synflood_chain >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Một số Set hoặc Chain chống SYN Flood vẫn còn bị khóa tham chiếu trong Kernel!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 4. Lưu cấu hình vĩnh viễn sau khi đã xác nhận gỡ sạch 100%
 if wptt_nft_save_persistent; then
   _rundone "$task_msg"
-  wptt_logs "INFO" "Đã TẮT khiên chống DDoS/SYN Flood và xả các IP đang bị phạt."
-  echo -e "\n${C_GREEN}✔ Thành công! Đã tắt tính năng chống DDoS.${C_RESET}"
+  wptt_logs "INFO" "Đã TẮT khiên chống DDoS/SYN Flood và giải phóng hoàn toàn bộ nhớ Set."
+  echo -e "\n${C_GREEN}✔ Thành công! Đã tắt khiên chống SYN/HTTP Flood và giải phóng toàn bộ IP đang bị phạt.${C_RESET}"
   wptt_quay_ve_menu "$route_flag" 0 "enter"
 else
   _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể lưu trạng thái mới vào /etc/nftables.conf!${C_RESET}"
   wptt_quay_ve_menu "$route_flag" 1 "enter"
 fi
