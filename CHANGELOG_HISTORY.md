@@ -1,3 +1,10 @@
+## 📌 Lịch sử cập nhật WPTangToc OLS 8.3.2
+
+- Không có thay đổi cụ thể nào được ghi nhận.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.3.2
 
 ### 🚀 Tính năng mới
