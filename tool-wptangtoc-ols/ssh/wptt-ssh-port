@@ -2,13 +2,22 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
+# @description: Thay đổi Port SSH chuẩn Enterprise (Dual-Port Transition & Nftables Set Native)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # Nạp thư viện WPTangToc
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
 
 function huong_dan() {
   cat <<'EOF'
@@ -28,15 +37,28 @@ EOF
 }
 
 # ==============================================================================
-# KHỞI TẠO MÔI TRƯỜNG & KHÓA TIẾN TRÌNH CONCURRENCY CONTROL
+# KHỞI TẠO MÔI TRƯỜNG & DỌN DẸP AN TOÀN (TRAP CLEANUP)
 # ==============================================================================
 /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
 
-TMP_WORKSPACE=$(mktemp -d -p "/etc/wptt/tmp" ssh_port.XXXXXX) || {
-  echo -e "${C_RED}Lỗi: Không thể tạo thư mục tạm an toàn${C_RESET}"
+TMP_WORKSPACE=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${TMP_WORKSPACE:-}" && -d "$TMP_WORKSPACE" ]]; then
+    /bin/rm -rf -- "${TMP_WORKSPACE:?}"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+TMP_WORKSPACE="$(mktemp -d -p "/etc/wptt/tmp" ssh_port.XXXXXX)" || {
+  echo -e "${C_RED}❌ Lỗi: Không thể tạo thư mục tạm an toàn!${C_RESET}"
   exit 1
 }
-trap '/bin/rm -rf -- "$TMP_WORKSPACE"' EXIT INT TERM
 
 # Khử lỗi terminal 'unknown' trên môi trường CI Runner
 if [[ -t 1 ]] && [[ "${TERM:-unknown}" != "unknown" && "${TERM:-}" != "dumb" ]]; then
@@ -61,12 +83,11 @@ if systemctl list-unit-files ssh.service 2>/dev/null | grep -q "^ssh\.service"; 
   SSH_SERVICE="ssh"
 fi
 
-# Kiểm tra xem SSH đang chạy (hỗ trợ cả standalone daemon lẫn socket activation)
 ssh_dang_chay=0
 if systemctl is-active --quiet "$SSH_SERVICE" 2>/dev/null ||
-  systemctl is-active --quiet sshd 2>/dev/null ||
-  systemctl is-active --quiet ssh 2>/dev/null ||
-  systemctl is-active --quiet ssh.socket 2>/dev/null; then
+   systemctl is-active --quiet sshd 2>/dev/null ||
+   systemctl is-active --quiet ssh 2>/dev/null ||
+   systemctl is-active --quiet ssh.socket 2>/dev/null; then
   ssh_dang_chay=1
 fi
 
@@ -78,12 +99,13 @@ fi
 # ==============================================================================
 # LẤY PORT HIỆN TẠI VÀ INPUT
 # ==============================================================================
-port_checkssh=$(grep -E '^[[:space:]]*Port[[:space:]]+[0-9]+' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n 1)
-port_checkssh=${port_checkssh:-22}
+port_checkssh="$(awk '/^[ \t]*[Pp]ort[ \t]+[0-9]+/ {print $2; exit}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null)"
+port_checkssh="${port_checkssh:-${port_ssh:-22}}"
 port_checkssh="${port_checkssh//[[:space:]]/}"
+[[ ! "$port_checkssh" =~ ^[0-9]+$ ]] && port_checkssh=22
 
 port="${1:-}"
-[[ "$port" == '98' ]] && port=''
+[[ "$port" == "98" || "$port" == "99" ]] && port=""
 
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 left_text "Cổng SSH hiện tại: ${C_GREEN}$port_checkssh${C_RESET}"
@@ -94,28 +116,32 @@ if [[ -z "$port" ]]; then
   read -r port
 
   if [[ "$port" == "0" || -z "$port" ]]; then
-    wptt_quay_ve_menu "${1:-}" 1
+    wptt_quay_ve_menu "${1:-}" 0
   fi
 fi
 
 port="${port//[[:space:]]/}"
 
 # ==============================================================================
-# VALIDATION ĐIỀU KIỆN
+# VALIDATION ĐIỀU KIỆN (CHỐNG LỖI OCTAL BẰNG 10#)
 # ==============================================================================
-if ! [[ "$port" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
+if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
   echo -e "\n${C_RED}❌ Lỗi: Cổng (Port) không hợp lệ! Vui lòng nhập số nguyên từ 1 đến 65535.${C_RESET}"
   sleep 2
   wptt_quay_ve_menu "${1:-}" 1
 fi
 
-if [[ "$port" == "$port_checkssh" ]]; then
+# Chuẩn hóa loại bỏ số 0 ở đầu (VD: 0222 -> 222)
+port="$((10#$port))"
+port_checkssh="$((10#$port_checkssh))"
+
+if ((port == port_checkssh)); then
   echo -e "\n${C_YELLOW}⚠ Cổng $port chính là cổng SSH hiện tại. Không cần thay đổi!${C_RESET}"
   sleep 2
   wptt_quay_ve_menu "${1:-}" 1
 fi
 
-if [[ "$port" == "80" || "$port" == "443" ]]; then
+if ((port == 80 || port == 443)); then
   echo -e "\n${C_RED}❌ Lỗi: Cổng $port dành riêng cho máy chủ web HTTP/HTTPS!${C_RESET}"
   sleep 2
   wptt_quay_ve_menu "${1:-}" 1
@@ -123,7 +149,7 @@ fi
 
 # Kiểm tra trùng OpenLiteSpeed WebGUI
 if [[ ! -f /usr/local/lsws/conf/disablewebconsole ]] && [[ -f /usr/local/lsws/admin/conf/admin_config.conf ]]; then
-  port_webgui_ols=$(grep "address" /usr/local/lsws/admin/conf/admin_config.conf 2>/dev/null | grep -o '[0-9]\+$' || true)
+  port_webgui_ols="$(awk '/address/ {if (match($0, /[0-9]+$/)) print substr($0, RSTART, RLENGTH); exit}' /usr/local/lsws/admin/conf/admin_config.conf 2>/dev/null)"
   if [[ -n "$port_webgui_ols" && "$port" == "$port_webgui_ols" ]]; then
     echo -e "\n${C_RED}❌ Lỗi: Cổng $port đang được gán cho OpenLiteSpeed WebAdmin GUI!${C_RESET}"
     sleep 2
@@ -136,7 +162,7 @@ duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
 grep -q -i "ubuntu\|debian" /etc/os-release 2>/dev/null && duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
 
 if [[ -f "$duong_dan_cau_hinh_mariadb" ]]; then
-  port_mariadb_remote=$(grep -i 'port=' "$duong_dan_cau_hinh_mariadb" 2>/dev/null | grep -o '[0-9]\+$' | head -n 1 || true)
+  port_mariadb_remote="$(awk -F'=' '/^[ \t]*[Pp]ort[ \t]*=/ {gsub(/[^0-9]/, "", $2); if ($2 != "") {print $2; exit}}' "$duong_dan_cau_hinh_mariadb" 2>/dev/null)"
   if [[ -n "$port_mariadb_remote" && "$port" == "$port_mariadb_remote" ]]; then
     echo -e "\n${C_RED}❌ Lỗi: Cổng $port đang được MariaDB sử dụng!${C_RESET}"
     sleep 2
@@ -150,7 +176,6 @@ fi
 check_port_listen() {
   local target_port="$1"
 
-  # 1. Tự động cài đặt iproute2 nếu hệ thống thiếu lệnh ss
   if ! command -v ss >/dev/null 2>&1; then
     if command -v dnf >/dev/null 2>&1; then
       dnf install -y -q iproute >/dev/null 2>&1 || true
@@ -160,7 +185,6 @@ check_port_listen() {
     fi
   fi
 
-  # 2. Kiểm tra bằng ss
   if command -v ss >/dev/null 2>&1; then
     if ss -tln 2>/dev/null | grep -qE ":${target_port}\b"; then
       return 0
@@ -168,25 +192,31 @@ check_port_listen() {
     return 1
   fi
 
-  # 3. Fallback đọc trực tiếp từ kernel /proc/net/tcp và tcp6 (Mã Hex)
-  local hex_port
-  hex_port=$(printf '%04X' "$target_port")
+  local hex_port=""
+  printf -v hex_port '%04X' "$target_port"
   if grep -qE ":${hex_port}[[:space:]]+[0-9A-Fa-f:]+:0000[[:space:]]+0A\b" /proc/net/tcp 2>/dev/null ||
-    grep -qE ":${hex_port}[[:space:]]+[0-9A-Fa-f:]+:0000[[:space:]]+0A\b" /proc/net/tcp6 2>/dev/null; then
+     grep -qE ":${hex_port}[[:space:]]+[0-9A-Fa-f:]+:0000[[:space:]]+0A\b" /proc/net/tcp6 2>/dev/null; then
     return 0
   fi
   return 1
 }
 
+# Không cho phép đổi sang một cổng đang có dịch vụ khác lắng nghe (trừ chính sshd)
+if check_port_listen "$port"; then
+  echo -e "\n${C_RED}❌ Lỗi: Cổng $port hiện đang bị chiếm dụng bởi một tiến trình khác trên hệ thống!${C_RESET}"
+  sleep 2
+  wptt_quay_ve_menu "${1:-}" 1
+fi
+
 # ==============================================================================
-# CÁC HÀM HELPER XỬ LÝ CSF
+# CÁC HÀM HELPER XỬ LÝ CSF & NFTABLES
 # ==============================================================================
 csf_has_port() {
   local var_name="$1"
   local target_port="$2"
   local file="$3"
   local line_val
-  line_val=$(grep -E "^${var_name}[[:space:]]*=" "$file" 2>/dev/null | head -n 1 | sed -E 's/^[^"]*"([^"]*)".*/\1/' || true)
+  line_val="$(grep -E "^${var_name}[[:space:]]*=" "$file" 2>/dev/null | head -n 1 | sed -E 's/^[^"]*"([^"]*)".*/\1/' || true)"
   [[ ",$line_val," == *",$target_port,"* ]]
 }
 
@@ -205,46 +235,67 @@ csf_remove_port() {
   local target_port="$2"
   local file="$3"
   local line_val
-  line_val=$(grep -E "^${var_name}[[:space:]]*=" "$file" 2>/dev/null | head -n 1 | sed -E 's/^[^"]*"([^"]*)".*/\1/' || true)
+  line_val="$(grep -E "^${var_name}[[:space:]]*=" "$file" 2>/dev/null | head -n 1 | sed -E 's/^[^"]*"([^"]*)".*/\1/' || true)"
   if [[ -n "$line_val" ]]; then
     local new_val
-    new_val=$(printf '%s\n' "$line_val" | tr ',' '\n' | grep -v -E "^[[:space:]]*${target_port}[[:space:]]*$" | paste -sd, -)
+    new_val="$(printf '%s\n' "$line_val" | tr ',' '\n' | grep -v -E "^[[:space:]]*${target_port}[[:space:]]*$" | paste -sd, -)"
     /bin/sed -i -E "/^${var_name}[[:space:]]*=/ s/\"[^\"]*\"/\"${new_val}\"/" "$file"
+  fi
+}
+
+# Helper mở Port Nftables chuẩn kiến trúc Set (tương thích cả wptt-mo-port lẫn fallback)
+wptt_nft_open_ssh_port() {
+  local target_p="$1"
+  if [[ -f /etc/wptt/bao-mat/nftables/wptt-mo-port ]]; then
+    /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port "$target_p" tcp >/dev/null 2>&1 && return 0
+  fi
+  # Fallback nếu không có script wptt-mo-port nhưng có Set tcp_ports trong Kernel
+  if nft list set inet filter tcp_ports >/dev/null 2>&1; then
+    nft add element inet filter tcp_ports "{ $target_p }" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
+# Helper đóng Port Nftables chuẩn kiến trúc Set
+wptt_nft_close_ssh_port() {
+  local target_p="$1"
+  if [[ -f /etc/wptt/bao-mat/nftables/wptt-dong-port ]]; then
+    /bin/bash /etc/wptt/bao-mat/nftables/wptt-dong-port "$target_p" tcp >/dev/null 2>&1 || true
+  elif nft list set inet filter tcp_ports >/dev/null 2>&1; then
+    nft delete element inet filter tcp_ports "{ $target_p }" >/dev/null 2>&1 || true
+  fi
+
+  # Dọn dẹp tàn dư rule lẻ từ phiên bản cũ (nếu có)
+  if [[ -f /etc/nftables.conf ]] && grep -q "tcp dport ${target_p} accept" /etc/nftables.conf 2>/dev/null; then
+    /bin/sed -i "/tcp dport ${target_p} accept/d" /etc/nftables.conf 2>/dev/null || true
   fi
 }
 
 # ==============================================================================
 # HÀM ROLLBACK TOÀN DIỆN (TRANSACTIONAL FAIL-SAFE ROLLBACK)
 # ==============================================================================
-path_nftables_config=""
-if systemctl is-active --quiet nftables 2>/dev/null; then
-  if grep -q -i "ubuntu\|debian" /etc/os-release 2>/dev/null; then
-    path_nftables_config="/etc/nftables.conf"
-  else
-    path_nftables_config="/etc/sysconfig/nftables.conf"
-  fi
-fi
+CURRENT_TASK="Nạp lại dịch vụ SSH và Tường lửa"
 
 thuc_hien_rollback_toan_dien() {
   local ly_do="$1"
-  echo -en "\033[1A\033[2K\r"
-  _runloi "Nạp lại dịch vụ SSH và Tường lửa"
+  _runloi "$CURRENT_TASK"
 
   echo -e "\n${C_RED}❌ PHÁT HIỆN SỰ CỐ: $ly_do${C_RESET}"
   echo -e "${C_CYAN}➜ Kích hoạt Rollback: Đang khôi phục cấu hình SSH về cổng $port_checkssh...${C_RESET}"
 
-  # 1. Khôi phục sshd_config nguyên bản
+  # 1. Khôi phục sshd_config nguyên bản & biến cấu hình WPTangToc
   if [[ -f "$TMP_WORKSPACE/sshd_config.bkwptt" ]]; then
     /bin/cp -fp -- "$TMP_WORKSPACE/sshd_config.bkwptt" /etc/ssh/sshd_config
   fi
+  wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "port_ssh=$port_checkssh" 2>/dev/null || true
 
   # 2. Hoàn nguyên SELinux
   if command -v semanage >/dev/null 2>&1; then
-    semanage port -d -t ssh_port_t -p tcp "$port" >/dev/null 2>&1 || true
-    semanage port -a -t ssh_port_t -p tcp "$port_checkssh" >/dev/null 2>&1 || true
+    ((port != 22)) && semanage port -d -t ssh_port_t -p tcp "$port" >/dev/null 2>&1 || true
+    ((port_checkssh != 22)) && semanage port -a -t ssh_port_t -p tcp "$port_checkssh" >/dev/null 2>&1 || true
   fi
 
-  # 3. Hoàn nguyên Firewalld: Đảm bảo mở lại cổng cũ
+  # 3. Hoàn nguyên Firewalld
   if systemctl is-active --quiet firewalld 2>/dev/null; then
     firewall-cmd --permanent --zone=public --add-port="${port_checkssh}/tcp" >/dev/null 2>&1 || true
     firewall-cmd --permanent --zone=public --remove-port="${port}/tcp" >/dev/null 2>&1 || true
@@ -253,29 +304,28 @@ thuc_hien_rollback_toan_dien() {
 
   # 4. Hoàn nguyên UFW
   if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
-    ufw delete allow "${port}/tcp" >/dev/null 2>&1 || true
     ufw allow "${port_checkssh}/tcp" >/dev/null 2>&1 || true
+    ufw delete allow "${port}/tcp" >/dev/null 2>&1 || true
   fi
 
-  # 5. Hoàn nguyên CSF: Trả lại bản snapshot gốc
+  # 5. Hoàn nguyên CSF
   if [[ -f "$TMP_WORKSPACE/csf.conf.bak" ]]; then
     /bin/cp -fp -- "$TMP_WORKSPACE/csf.conf.bak" /etc/csf/csf.conf
     csf -r >/dev/null 2>&1 || true
   fi
 
-  # 6. Hoàn nguyên NFTables
-  if [[ -n "$path_nftables_config" && -f "$TMP_WORKSPACE/nftables.conf.bak" ]]; then
-    /bin/cp -fp -- "$TMP_WORKSPACE/nftables.conf.bak" "$path_nftables_config"
-    systemctl reload nftables >/dev/null 2>&1 || systemctl restart nftables >/dev/null 2>&1 || true
+  # 6. Hoàn nguyên Nftables (Đảm bảo mở lại port cũ và đóng port mới lỗi trên Set @tcp_ports)
+  if systemctl is-active --quiet nftables 2>/dev/null; then
+    wptt_nft_open_ssh_port "$port_checkssh" || true
+    wptt_nft_close_ssh_port "$port" || true
   fi
 
- 
- # 7. Hoàn nguyên Fail2ban, tương thích ngược những VPS đang dùng fail2ban ssh, giờ đã chuyển qua sshguard rồi
- if command -v fail2ban-client >/dev/null 2>&1 && [[  -f /etc/fail2ban/jail.d/sshd.local ]]; then
-	 if [[ -f "$TMP_WORKSPACE/fail2ban_sshd.local.bak" ]]; then
-		 /bin/cp -fp -- "$TMP_WORKSPACE/fail2ban_sshd.local.bak" /etc/fail2ban/jail.d/sshd.local
-	 else
-		 cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
+  # 7. Hoàn nguyên Fail2ban (Tương thích ngược với các VPS cũ dùng jail sshd.local)
+  if command -v fail2ban-client >/dev/null 2>&1 && [[ -f /etc/fail2ban/jail.d/sshd.local ]]; then
+    if [[ -f "$TMP_WORKSPACE/fail2ban_sshd.local.bak" ]]; then
+      /bin/cp -fp -- "$TMP_WORKSPACE/fail2ban_sshd.local.bak" /etc/fail2ban/jail.d/sshd.local
+    else
+      cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
 [sshd]
 enabled = true
 port = $port_checkssh
@@ -284,11 +334,11 @@ logpath = %(sshd_log)s
 maxretry = 5
 bantime = 3600
 EOF
-	 fi
-	 fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
- fi
+    fi
+    fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
+  fi
 
-  # 8. Restart dịch vụ SSH về cổng cũ (Bảo đảm tiến trình chạy ở chế độ standalone)
+  # 8. Restart dịch vụ SSH về cổng cũ
   /bin/mkdir -p /run/sshd 2>/dev/null || true
   if systemctl list-unit-files ssh.socket 2>/dev/null | grep -q 'ssh\.socket'; then
     systemctl stop ssh.socket >/dev/null 2>&1 || true
@@ -325,10 +375,12 @@ wptt_logs "INFO" "Bắt đầu chuyển đổi port SSH từ $port_checkssh sang
 # ==============================================================================
 # BƯỚC 1: SAO LƯU TOÀN DIỆN VÀ CHỈNH SỬA SSHD_CONFIG TRÊN CANDIDATE
 # ==============================================================================
-_runing "Kiểm tra và tiền xử lý cấu hình SSHD"
+CURRENT_TASK="Kiểm tra và tiền xử lý cấu hình SSHD"
+_runing "$CURRENT_TASK"
 
 TMP_SSHD_CONF="$TMP_WORKSPACE/sshd_config"
 /bin/cp -fp /etc/ssh/sshd_config "$TMP_WORKSPACE/sshd_config.bkwptt" || {
+  _runloi "$CURRENT_TASK"
   echo -e "${C_RED}Không thể sao lưu file sshd_config!${C_RESET}"
   exit 1
 }
@@ -340,21 +392,21 @@ TMP_SSHD_CONF="$TMP_WORKSPACE/sshd_config"
 
 # Validate cú pháp SSHD bằng binary
 if ! /usr/sbin/sshd -t -f "$TMP_SSHD_CONF" >/dev/null 2>&1; then
-  echo -en "\033[1A\033[2K\r"
-  _runloi "Cập nhật cấu hình và kiểm tra SSHD"
+  _runloi "$CURRENT_TASK"
   echo -e "${C_RED}Lỗi cú pháp SSHD phát hiện trên bản tạm! Đã hủy thao tác.${C_RESET}"
   sleep 3
   wptt_quay_ve_menu "${1:-}" 1
 fi
-_rundone "Kiểm tra và tiền xử lý cấu hình SSHD"
+_rundone "$CURRENT_TASK"
 
 # ==============================================================================
 # BƯỚC 2: CHUYỂN TIẾP TƯỜNG LỬA (MỞ CỔNG MỚI, BẢO TOÀN CỔNG CŨ)
 # ==============================================================================
-_runing "Mở cổng $port trên hệ thống tường lửa (Dual-Port Transition)"
+CURRENT_TASK="Mở cổng $port trên hệ thống tường lửa (Dual-Port Transition)"
+_runing "$CURRENT_TASK"
 
 # 2.1. Cấp phép SELinux trước
-if command -v semanage >/dev/null 2>&1; then
+if command -v semanage >/dev/null 2>&1 && ((port != 22)); then
   if ! semanage port -a -t ssh_port_t -p tcp "$port" >/dev/null 2>&1; then
     semanage port -m -t ssh_port_t -p tcp "$port" >/dev/null 2>&1 || true
   fi
@@ -363,7 +415,7 @@ fi
 # 2.2. Firewalld: Mở cổng mới
 if systemctl is-active --quiet firewalld 2>/dev/null; then
   if ! firewall-cmd --permanent --zone=public --add-port="${port}/tcp" >/dev/null 2>&1 ||
-    ! firewall-cmd --reload >/dev/null 2>&1; then
+     ! firewall-cmd --reload >/dev/null 2>&1; then
     thuc_hien_rollback_toan_dien "Firewalld từ chối nạp port mới ($port)"
   fi
 fi
@@ -374,7 +426,7 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: a
 fi
 
 # 2.4. CSF: Phẫu thuật chính xác TCP_IN & TCP6_IN theo Token
-if [[ -f /etc/csf/csf.conf ]]; then
+if [[ -f /etc/csf/csf.conf ]] && command -v csf >/dev/null 2>&1; then
   /bin/cp -fp /etc/csf/csf.conf "$TMP_WORKSPACE/csf.conf.bak"
   TMP_CSF="$TMP_WORKSPACE/csf.conf"
   /bin/cp -fp /etc/csf/csf.conf "$TMP_CSF"
@@ -394,17 +446,11 @@ if [[ -f /etc/csf/csf.conf ]]; then
   fi
 fi
 
-# 2.5. NFTables: Thêm rule chấp nhận cổng mới
-if [[ -n "$path_nftables_config" && -f "$path_nftables_config" ]]; then
-  /bin/cp -fp "$path_nftables_config" "$TMP_WORKSPACE/nftables.conf.bak"
-  TMP_NFT="$TMP_WORKSPACE/nftables.conf"
-  /bin/cp -fp "$path_nftables_config" "$TMP_NFT"
-
-  /bin/sed -i "/chain input /a\    tcp dport $port accept #port ssh new" "$TMP_NFT"
-  /bin/cp -fp "$TMP_NFT" "$path_nftables_config"
-
-  if ! (systemctl reload nftables >/dev/null 2>&1 || systemctl restart nftables >/dev/null 2>&1); then
-    thuc_hien_rollback_toan_dien "NFTables không thể nạp cấu hình mới!"
+# 2.5. Nftables Thuần: Mở cổng mới trực tiếp vào Set @tcp_ports (Zero-Downtime, bảo toàn SSHGuard)
+if systemctl is-active --quiet nftables 2>/dev/null; then
+  [[ -f /etc/nftables.conf ]] && /bin/cp -fp /etc/nftables.conf "$TMP_WORKSPACE/nftables.conf.bak"
+  if ! wptt_nft_open_ssh_port "$port"; then
+    thuc_hien_rollback_toan_dien "Nftables không thể mở cổng mới ($port) trong Set @tcp_ports!"
   fi
 fi
 
@@ -413,15 +459,26 @@ if [[ -f /etc/fail2ban/jail.d/sshd.local ]]; then
   /bin/cp -fp /etc/fail2ban/jail.d/sshd.local "$TMP_WORKSPACE/fail2ban_sshd.local.bak"
 fi
 
-_rundone "Mở cổng $port trên hệ thống tường lửa (Dual-Port Transition)"
+_rundone "$CURRENT_TASK"
 
 # ==============================================================================
 # BƯỚC 3: COMMIT CẤU HÌNH SSHD VÀ KIỂM TRA HEALTH CHECK LISTENER THẬT
 # ==============================================================================
-_runing "Áp dụng cấu hình SSHD và xác thực Socket Listener"
+CURRENT_TASK="Áp dụng cấu hình SSHD và xác thực Socket Listener"
+_runing "$CURRENT_TASK"
 
-# Tráo đổi cấu hình sshd_config nguyên tử
+# Tráo đổi cấu hình sshd_config
 /bin/cp -fp "$TMP_SSHD_CONF" /etc/ssh/sshd_config
+
+# Đồng bộ port_ssh vào cấu hình trên các file drop-in nếu cloud image tạo sẵn
+if [[ -d /etc/ssh/sshd_config.d ]]; then
+  for dropin_file in /etc/ssh/sshd_config.d/*.conf; do
+    [[ -f "$dropin_file" ]] || continue
+    if grep -qE '^[[:space:]]*[Pp]ort[[:space:]]+[0-9]+' "$dropin_file" 2>/dev/null; then
+      /bin/sed -i -E "s/^[[:space:]]*[Pp]ort[[:space:]]+[0-9]+/Port $port/g" "$dropin_file"
+    fi
+  done
+fi
 
 # Bảo đảm thư mục phân tách đặc quyền tồn tại trên Ubuntu/Debian
 /bin/mkdir -p /run/sshd 2>/dev/null || true
@@ -438,7 +495,7 @@ systemctl unmask "$SSH_SERVICE" >/dev/null 2>&1 || true
 systemctl enable "$SSH_SERVICE" >/dev/null 2>&1 || true
 
 if ! (systemctl restart "$SSH_SERVICE" >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || systemctl restart ssh >/dev/null 2>&1); then
-  thuc_hien_rollback_toan_dien "Dịch vụ $SSH_SERVICE không thể khởi động với port mới!"
+  thuc_hien_rollback_toan_dien "Dịch vụ $SSH_SERVICE không thể khởi động với port mới ($port)!"
 fi
 
 # HEALTH CHECK: Xác minh cổng thực sự ở trạng thái LISTEN (chờ tối đa 5 giây)
@@ -455,12 +512,16 @@ if ((is_listening == 0)); then
   thuc_hien_rollback_toan_dien "Dịch vụ SSH đã chạy nhưng không tìm thấy Socket lắng nghe trên cổng $port!"
 fi
 
-_rundone "Áp dụng cấu hình SSHD và xác thực Socket Listener"
+# Lưu ngay metadata WPTangToc để wptt-dong-port ở Bước 4 nhận diện đúng Port SSH mới
+wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "port_ssh=$port" 2>/dev/null || true
+
+_rundone "$CURRENT_TASK"
 
 # ==============================================================================
 # BƯỚC 4: DỌN DẸP CỔNG CŨ TRÊN TƯỜNG LỬA (CHỈ CHẠY KHI ĐÃ XÁC THỰC CỔNG MỚI)
 # ==============================================================================
-_runing "Thu hồi cổng SSH cũ ($port_checkssh) trên tường lửa"
+CURRENT_TASK="Thu hồi cổng SSH cũ ($port_checkssh) trên tường lửa"
+_runing "$CURRENT_TASK"
 
 # 4.1. Gỡ cổng cũ trên Firewalld
 if systemctl is-active --quiet firewalld 2>/dev/null; then
@@ -474,7 +535,7 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: a
 fi
 
 # 4.3. Gỡ cổng cũ khỏi TCP_IN & TCP6_IN trong CSF
-if [[ -f /etc/csf/csf.conf ]]; then
+if [[ -f /etc/csf/csf.conf ]] && command -v csf >/dev/null 2>&1; then
   TMP_CSF="$TMP_WORKSPACE/csf_clean.conf"
   /bin/cp -fp /etc/csf/csf.conf "$TMP_CSF"
 
@@ -487,21 +548,19 @@ if [[ -f /etc/csf/csf.conf ]]; then
   csf -r >/dev/null 2>&1 || true
 fi
 
-# 4.4. Dọn dẹp rule cũ trong NFTables
-if [[ -n "$path_nftables_config" && -f "$path_nftables_config" ]]; then
-  TMP_NFT="$TMP_WORKSPACE/nft_clean.conf"
-  /bin/cp -fp "$path_nftables_config" "$TMP_NFT"
-
-  /bin/sed -i "/tcp dport ${port_checkssh} accept/d" "$TMP_NFT"
-  /bin/sed -i 's/#port ssh new/#port ssh/' "$TMP_NFT"
-  /bin/cp -fp "$TMP_NFT" "$path_nftables_config"
-
-  systemctl reload nftables >/dev/null 2>&1 || systemctl restart nftables >/dev/null 2>&1 || true
+# 4.4. Thu hồi cổng cũ trong Set @tcp_ports của Nftables (và lưu cấu hình vĩnh viễn)
+if systemctl is-active --quiet nftables 2>/dev/null; then
+  wptt_nft_close_ssh_port "$port_checkssh"
 fi
 
-# 4.5. Cập nhật Fail2ban bảo vệ cổng mới tương thích ngược với những hệ thống dùng fail2ban từ ngày xưa
-if command -v fail2ban-client >/dev/null 2>&1 && [[  -f /etc/fail2ban/jail.d/sshd.local ]]; then
-	cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
+# 4.5. Thu hồi quyền SELinux của cổng cũ (nếu cổng cũ không phải cổng 22 mặc định)
+if command -v semanage >/dev/null 2>&1 && ((port_checkssh != 22)); then
+  semanage port -d -t ssh_port_t -p tcp "$port_checkssh" >/dev/null 2>&1 || true
+fi
+
+# 4.6. Cập nhật Fail2ban bảo vệ cổng mới (Tương thích ngược với các hệ thống cũ dùng fail2ban sshd)
+if command -v fail2ban-client >/dev/null 2>&1 && [[ -f /etc/fail2ban/jail.d/sshd.local ]]; then
+  cat >"/etc/fail2ban/jail.d/sshd.local" <<EOF
 [sshd]
 enabled = true
 port = $port
@@ -510,14 +569,11 @@ logpath = %(sshd_log)s
 maxretry = 5
 bantime = 3600
 EOF
-fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
+  fail2ban-client reload >/dev/null 2>&1 || systemctl restart fail2ban >/dev/null 2>&1 || true
 fi
 
-# Lưu metadata WPTangToc
-wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "port_ssh=$port" 2>/dev/null || true
-
-_rundone "Thu hồi cổng SSH cũ ($port_checkssh) trên tường lửa"
-wptt_logs "INFO" "Hoàn tất thay đổi cổng SSH sang $port thành công"
+_rundone "$CURRENT_TASK"
+wptt_logs "INFO" "Hoàn tất thay đổi cổng SSH từ $port_checkssh sang $port thành công"
 
 # ==============================================================================
 # THÔNG BÁO HOÀN TẤT

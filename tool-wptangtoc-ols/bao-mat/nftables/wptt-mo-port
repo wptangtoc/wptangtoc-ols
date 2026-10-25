@@ -2,16 +2,15 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Mở Port / Dải Port (TCP/UDP) trên Nftables (Atomic & Persistent)
+# @description: Mở Port & Dải Port (TCP/UDP) trên Nftables thuần chuẩn Enterprise (Atomic & Range Merge)
 
-# Cách gọi CLI: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 7080 tcp
-# Hoặc mở dải:  /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 30000-35000 tcp
-# Mở nhiều port: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port "7080,7081" tcp
+# Sử dụng:
+# /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 7000 tcp
+# /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port "7000-8000" tcp
+
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-stty iutf8 2>/dev/null || true
-umask 077
 
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
@@ -20,277 +19,370 @@ if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
 
-tmp_nft=""
-cleanup() {
-  local rc=$?
-  trap - EXIT INT TERM HUP
-  if [[ -n "${tmp_nft:-}" && -f "$tmp_nft" ]]; then
-    case "$tmp_nft" in
-    /etc/wptt/tmp/nftables_save_*)
-      /bin/rm -f -- "${tmp_nft:?}"
-      ;;
-    esac
+# ==============================================================================
+# HÀM 1: TỰ ĐỘNG KHỞI TẠO / NÂNG CẤP SET LÊN INTERVAL (AUTO-HEAL)
+# ==============================================================================
+wptt_ensure_nft_ready() {
+  local need_init=0
+  if ! nft list set inet filter tcp_ports >/dev/null 2>&1; then
+    need_init=1
+  elif ! nft list set inet filter udp_ports >/dev/null 2>&1; then
+    need_init=1
+  elif ! nft list table inet blackblock >/dev/null 2>&1; then
+    need_init=1
+  elif ! nft list set inet filter tcp_ports 2>/dev/null | grep -q "flags interval"; then
+    # Tự động nâng cấp Set cũ lên flags interval để hỗ trợ mở dải port (7000-8000)
+    need_init=1
   fi
-  exit "$rc"
+
+  if ((need_init == 1)); then
+    if [[ -f /etc/wptt/bao-mat/nftables/wptt-setup-nftables ]]; then
+      /bin/bash /etc/wptt/bao-mat/nftables/wptt-setup-nftables >/dev/null 2>&1 || true
+    fi
+
+    # Nếu file setup cũ chưa có flags interval, tự động nâng cấp trực tiếp trong Kernel
+    if ! nft list set inet filter tcp_ports 2>/dev/null | grep -q "flags interval"; then
+      local cur_ssh="${port_ssh:-}"
+      if [[ -z "$cur_ssh" || ! "$cur_ssh" =~ ^[0-9]+$ ]]; then
+        cur_ssh="$(awk '/^[ \t]*[Pp]ort[ \t]+[0-9]+/ {print $2; exit}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null)"
+      fi
+      [[ -z "$cur_ssh" || ! "$cur_ssh" =~ ^[0-9]+$ ]] && cur_ssh=22
+      local tcp_init="80, 443"
+      ((10#$cur_ssh != 80 && 10#$cur_ssh != 443)) && tcp_init="${cur_ssh}, ${tcp_init}"
+
+      nft -f - >/dev/null 2>&1 <<EOF || return 1
+table inet blackblock
+delete table inet blackblock
+table inet filter
+delete table inet filter
+
+table inet blackblock {
+	set blackaction_v4 {
+		type ipv4_addr
+		flags interval
+		auto-merge
+	}
+	set blackaction_v6 {
+		type ipv6_addr
+		flags interval
+		auto-merge
+	}
+	chain blackblock-chain-input {
+		type filter hook input priority -10; policy accept;
+		ip saddr @blackaction_v4 counter drop
+		ip6 saddr @blackaction_v6 counter drop
+	}
 }
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
 
-# ==============================================================================
-# HÀM LÕI: LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
-# ==============================================================================
-wptt_nft_save_persistent() {
-  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
-  chmod 700 /etc/wptt/tmp 2>/dev/null
-  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
-
-  {
-    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
-    nft list table inet blackblock 2>/dev/null || true
-    printf '\n'
-    nft list table inet filter 2>/dev/null || true
-  } >"$tmp_nft"
-
-  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
-    chmod 600 "$tmp_nft"
-    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
-    tmp_nft=""
-    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
-    return 0
-  else
-    /bin/rm -f -- "${tmp_nft:?}"
-    tmp_nft=""
-    return 1
+table inet filter {
+	set tcp_ports {
+		type inet_service
+		flags interval
+		auto-merge
+		elements = { ${tcp_init} }
+	}
+	set udp_ports {
+		type inet_service
+		flags interval
+		auto-merge
+		elements = { 443 }
+	}
+	chain input {
+		type filter hook input priority 0; policy drop;
+		ct state established,related accept
+		iifname "lo" accept
+		ct state invalid drop
+		icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } limit rate 15/second accept
+		icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect } accept
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		tcp dport @tcp_ports ct state new accept
+		udp dport @udp_ports ct state new accept
+	}
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}
+EOF
+    fi
   fi
+  return 0
 }
 
 # ==============================================================================
-# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (DÙNG -nn ĐỂ ÉP SỐ PORT 100%)
+# HÀM 2: KIỂM TRA ĐỊNH DẠNG PORT ĐƠN HOẶC DẢI PORT (PURE BASH 0-SUBSHELL)
 # ==============================================================================
-wptt_get_open_ports() {
-  local set_name="$1"
-  nft -nn list set inet filter "$set_name" 2>/dev/null | awk '
-    /elements = \{/ { in_elem = 1; sub(/.*elements = \{[ \t]*/, "") }
-    in_elem {
-      if ($0 ~ /\}/) {
-        sub(/[ \t]*\}.*/, "")
-        buf = buf " " $0
-        in_elem = 0
-      } else {
-        buf = buf " " $0
-      }
-    }
-    END {
-      gsub(/[ \t\r\n]+/, " ", buf)
-      sub(/^ +/, "", buf)
-      sub(/ +$/, "", buf)
-      print buf
-    }
-  '
-}
+NORMALIZED_PORT_SPEC=""
 
-# ==============================================================================
-# HÀM XÁC THỰC & CHUẨN HÓA DANH SÁCH PORT / DẢI PORT BẰNG PURE BASH
-# ==============================================================================
-wptt_validate_and_normalize_ports() {
-  local raw_input="${1//[[:space:]]/}"
-  [[ -z "$raw_input" ]] && return 1
+wptt_validate_port_spec() {
+  local raw="${1//[[:space:]]/}"
+  raw="${raw//:/-}"
+  [[ -z "$raw" ]] && return 1
 
   local IFS=','
   local -a tokens=()
-  read -ra tokens <<<"$raw_input"
+  read -r -a tokens <<<"$raw"
+  ((${#tokens[@]} == 0)) && return 1
 
-  local -a clean_list=()
-  local token="" p_start="" p_end=""
-  for token in "${tokens[@]}"; do
-    [[ -z "$token" ]] && continue
-    if [[ "$token" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
-      p_start="$((10#${BASH_REMATCH[1]}))"
-      p_end="$((10#${BASH_REMATCH[2]}))"
+  local tok p_start p_end
+  local result_spec=""
+
+  for tok in "${tokens[@]}"; do
+    [[ -z "$tok" ]] && return 1
+    if [[ "$tok" =~ ^([0-9]{1,5})$ ]]; then
+      p_start=$((10#${BASH_REMATCH[1]}))
+      if ((p_start < 1 || p_start > 65535)); then
+        return 1
+      fi
+      result_spec+="${p_start},"
+    elif [[ "$tok" =~ ^([0-9]{1,5})-([0-9]{1,5})$ ]]; then
+      p_start=$((10#${BASH_REMATCH[1]}))
+      p_end=$((10#${BASH_REMATCH[2]}))
       if ((p_start < 1 || p_end > 65535 || p_start > p_end)); then
         return 1
       fi
       if ((p_start == p_end)); then
-        clean_list+=("$p_start")
+        result_spec+="${p_start},"
       else
-        clean_list+=("${p_start}-${p_end}")
+        result_spec+="${p_start}-${p_end},"
       fi
-    elif [[ "$token" =~ ^[0-9]{1,5}$ ]]; then
-      p_start="$((10#$token))"
-      if ((p_start < 1 || p_start > 65535)); then
-        return 1
-      fi
-      clean_list+=("$p_start")
     else
       return 1
     fi
   done
 
-  ((${#clean_list[@]} == 0)) && return 1
-
-  local out="" item=""
-  for item in "${clean_list[@]}"; do
-    out+="${out:+, }${item}"
-  done
-  printf '%s' "$out"
+  NORMALIZED_PORT_SPEC="${result_spec%,}"
   return 0
 }
 
 # ==============================================================================
-# HÀM NẠP & GỘP PORT VÀO SET INTERVAL AN TOÀN (CHỐNG LỖI OVERLAP KERNEL)
+# HÀM 3: CẬP NHẬT BITMAP PORT & GỘP DẢI NGUYÊN TỬ (CHỐNG LỖI OVERLAP 100%)
 # ==============================================================================
-wptt_add_ports_to_set() {
+wptt_modify_port_set() {
   local set_name="$1"
-  local new_elements="$2"
-  local current_elements=""
-  current_elements="$(wptt_get_open_ports "$set_name")"
+  local action="$2" # add hoặc del
+  local spec="$3"
 
-  local combined="$new_elements"
-  [[ -n "$current_elements" ]] && combined="${current_elements}, ${new_elements}"
+  local current_set_out=""
+  current_set_out="$(nft list set inet filter "$set_name" 2>/dev/null)" || return 1
 
-  # Dùng awk hợp nhất các khoảng giao nhau/liền kề (Chỉ nhận số hợp lệ 1..65535)
-  local merged_elements=""
-  merged_elements="$(awk -v raw="$combined" '
-    BEGIN {
-      n = split(raw, arr, ",")
-      for (i = 1; i <= n; i++) {
-        gsub(/^[ \t]+|[ \t]+$/, "", arr[i])
-        if (arr[i] == "") continue
-        if (arr[i] ~ /^[0-9]+-[0-9]+$/) {
-          split(arr[i], r, "-")
-          s = r[1] + 0; e = r[2] + 0
-        } else if (arr[i] ~ /^[0-9]+$/) {
-          s = arr[i] + 0; e = s
-        } else {
-          continue
+  local new_elements=""
+  new_elements="$(awk -v act="$action" -v spec="$spec" '
+    function apply_token(tok, val,   n, arr, s, e, k) {
+      gsub(/[ \t,]/, "", tok)
+      if (tok == "") return
+      n = split(tok, arr, "-")
+      if (n == 1 && arr[1] ~ /^[0-9]+$/) {
+        s = arr[1] + 0
+        if (s >= 1 && s <= 65535) p[s] = val
+      } else if (n == 2 && arr[1] ~ /^[0-9]+$/ && arr[2] ~ /^[0-9]+$/) {
+        s = arr[1] + 0
+        e = arr[2] + 0
+        if (s >= 1 && e <= 65535 && s <= e) {
+          for (k = s; k <= e; k++) p[k] = val
         }
-        if (s < 1) s = 1
-        if (e > 65535) e = 65535
-        for (p = s; p <= e; p++) port_map[p] = 1
       }
+    }
+    /elements[ \t]*=[ \t]*\{/ {
+      in_elem = 1
+      sub(/.*elements[ \t]*=[ \t]*\{[ \t]*/, "")
+    }
+    in_elem {
+      if (index($0, "}") > 0) {
+        sub(/[ \t]*\}.*/, "")
+        in_elem = 0
+      }
+      gsub(/,/, " ")
+      for (i = 1; i <= NF; i++) {
+        apply_token($i, 1)
+      }
+    }
+    END {
+      m = split(spec, sp, ",")
+      target_val = (act == "add") ? 1 : 0
+      for (i = 1; i <= m; i++) {
+        apply_token(sp[i], target_val)
+      }
+
       out = ""
-      in_range = 0
-      for (p = 1; p <= 65536; p++) {
-        if (port_map[p] == 1) {
-          if (!in_range) { start_p = p; in_range = 1 }
-        } else if (in_range) {
-          end_p = p - 1
-          seg = (start_p == end_p) ? start_p : (start_p "-" end_p)
-          out = (out == "") ? seg : (out ", " seg)
-          in_range = 0
+      in_run = 0
+      run_start = 0
+      for (k = 1; k <= 65536; k++) {
+        if (k <= 65535 && p[k] == 1) {
+          if (!in_run) {
+            in_run = 1
+            run_start = k
+          }
+        } else {
+          if (in_run) {
+            run_end = k - 1
+            if (run_start == run_end) {
+              seg = run_start
+            } else {
+              seg = run_start "-" run_end
+            }
+            out = (out == "") ? seg : out ", " seg
+            in_run = 0
+          }
         }
       }
       print out
     }
-  ')"
+  ' <<<"$current_set_out")"
 
-  [[ -z "$merged_elements" ]] && return 1
-
-  nft -f - >/dev/null 2>&1 <<EOF
-add set inet filter ${set_name} { type inet_service; flags interval; }
+  if [[ -n "$new_elements" ]]; then
+    nft -f - >/dev/null 2>&1 <<EOF || return 1
 flush set inet filter ${set_name}
-add element inet filter ${set_name} { ${merged_elements} }
+add element inet filter ${set_name} { ${new_elements} }
 EOF
+  else
+    nft flush set inet filter "$set_name" >/dev/null 2>&1 || return 1
+  fi
+  return 0
 }
 
 # ==============================================================================
-# PHÂN TÁCH CHẾ ĐỘ MENU TƯƠNG TÁC VS CLI TỰ ĐỘNG
+# HÀM 4: LƯU TRẠNG THÁI KERNEL XUỐNG /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
 # ==============================================================================
-is_interactive=0
-route_flag=""
-PORT_IN="${1:-}"
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)"
+
+  local tbl_black=""
+  local tbl_filter=""
+  tbl_black="$(nft list table inet blackblock 2>/dev/null)" || true
+  tbl_filter="$(nft list table inet filter 2>/dev/null)" || true
+
+  if [[ -z "$tbl_filter" ]]; then
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    if [[ -n "$tbl_black" ]]; then
+      printf '%s\n\n' "$tbl_black"
+    fi
+    printf '%s\n' "$tbl_filter"
+  } > "$tmp_nft"
+
+  chmod 600 "$tmp_nft"
+  /bin/mv -fT "$tmp_nft" /etc/nftables.conf
+  if [[ -d /etc/sysconfig ]]; then
+    ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+  fi
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -F /etc/nftables.conf /etc/sysconfig/nftables.conf >/dev/null 2>&1 || true
+  fi
+  return 0
+}
+
+# Lấy danh sách Port đang mở trên 1 dòng gọn gàng để hiển thị Menu
+wptt_get_open_ports_display() {
+  local set_name="$1"
+  nft list set inet filter "$set_name" 2>/dev/null | awk '
+    /elements[ \t]*=[ \t]*\{/ { in_e = 1; sub(/.*elements[ \t]*=[ \t]*\{[ \t]*/, "") }
+    in_e {
+      if (index($0, "}") > 0) { sub(/[ \t]*\}.*/, ""); in_e = 0 }
+      gsub(/[ \t]+/, " ")
+      out = out $0 " "
+    }
+    END {
+      gsub(/^[ \t]+|[ \t]+$/, "", out)
+      gsub(/ ,[ \t]*/, ", ", out)
+      print out
+    }
+  '
+}
+
+IS_CLI_MODE=0
+route_flag="${1:-}"
+PORT_IN=""
 PROTO_IN="${2:-tcp}"
 
-if [[ -z "$PORT_IN" ]] || { [[ -z "${2:-}" ]] && [[ "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; }; then
-  is_interactive=1
-  route_flag="$PORT_IN"
-  PORT_IN=""
+if [[ -n "${1:-}" && "${1:-}" != "98" && "${1:-}" != "99" ]]; then
+  IS_CLI_MODE=1
+  PORT_IN="$1"
+  route_flag=""
 fi
 
-finish_script() {
-  local code="$1"
-  local wait_mode="${2:-enter}"
-  if ((is_interactive == 1)); then
-    wptt_quay_ve_menu "$route_flag" "$code" "$wait_mode"
-  else
+wptt_exit_handler() {
+  local code="${1:-0}"
+  local wait_mode="${2:-}"
+  if ((IS_CLI_MODE == 1)); then
     exit "$code"
+  else
+    wptt_quay_ve_menu "$route_flag" "$code" "$wait_mode"
   fi
 }
 
-# Kiểm tra điều kiện tiên quyết (Preflight Check)
-if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet filter >/dev/null 2>&1; then
-  echo -e "\n${C_RED}❌ Lỗi: Kiến trúc Nftables của WPTangToc chưa được kích hoạt!${C_RESET}"
-  finish_script 1 "enter"
-fi
+wptt_ensure_nft_ready || {
+  echo -e "\n${C_RED}❌ Lỗi: Không thể khởi tạo cấu trúc bảng Nftables trong Kernel!${C_RESET}"
+  wptt_exit_handler 1 "enter"
+}
 
-if ((is_interactive == 1)); then
+if [[ -z "$PORT_IN" ]]; then
   clear
   echo ""
   print_border_top "$C_CYAN"
-  center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Mở Cổng Kết Nối (Open Port)${C_RESET}" "$C_CYAN"
+  center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Mở Cổng Kết Nối (Open Port / Range)${C_RESET}" "$C_CYAN"
   print_border_bot "$C_CYAN"
   echo ""
 
-  open_tcp="$(wptt_get_open_ports "tcp_ports")"
-  open_udp="$(wptt_get_open_ports "udp_ports")"
+  open_tcp="$(wptt_get_open_ports_display tcp_ports)"
+  open_udp="$(wptt_get_open_ports_display udp_ports)"
   echo -e "Port TCP đang mở: ${C_GREEN}${open_tcp:-Trống}${C_RESET}"
   echo -e "Port UDP đang mở: ${C_GREEN}${open_udp:-Trống}${C_RESET}\n"
 
-  echo -en "${C_CYAN}Nhập Port hoặc dải Port cần MỞ (VD: 7080, 8080 hoặc 30000-35000) [0=Thoát]: ${C_RESET}"
+  echo -en "${C_CYAN}Nhập Port hoặc Dải Port cần MỞ (VD: 7080 hoặc 7000-8000) [0=Thoát]: ${C_RESET}"
   read -r PORT_IN
-  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && finish_script 0 ""
+  [[ -z "$PORT_IN" || "$PORT_IN" == "0" ]] && wptt_exit_handler 0
 
   echo -en "${C_CYAN}Chọn giao thức (1=TCP, 2=UDP, 3=Cả TCP & UDP) [Mặc định=1]: ${C_RESET}"
   read -r chon_proto
   case "${chon_proto:-1}" in
-  2) PROTO_IN="udp" ;;
-  3) PROTO_IN="both" ;;
-  *) PROTO_IN="tcp" ;;
+    2) PROTO_IN="udp" ;;
+    3) PROTO_IN="both" ;;
+    *) PROTO_IN="tcp" ;;
   esac
 fi
 
-# Chuẩn hóa và kiểm tra hợp lệ của Port
-NORMALIZED_PORTS=""
-if ! NORMALIZED_PORTS="$(wptt_validate_and_normalize_ports "$PORT_IN")"; then
-  echo -e "\n${C_RED}❌ Lỗi: Số Port '$PORT_IN' không hợp lệ (Phải từ 1 đến 65535, VD: 7080 hoặc 30000-35000)!${C_RESET}"
-  finish_script 1 "enter"
+if ! wptt_validate_port_spec "$PORT_IN"; then
+  echo -e "\n${C_RED}❌ Lỗi: Cú pháp Port '$PORT_IN' không hợp lệ! (VD đúng: 7080 hoặc 7000-8000, trong khoảng 1-65535)${C_RESET}"
+  wptt_exit_handler 1 "enter"
 fi
 
+PORT_SPEC="$NORMALIZED_PORT_SPEC"
 PROTO_IN="${PROTO_IN,,}"
-case "$PROTO_IN" in
-tcp | udp | both) ;;
-*)
-  echo -e "\n${C_RED}❌ Lỗi: Giao thức '$PROTO_IN' không hợp lệ (Chỉ hỗ trợ: tcp, udp, both)!${C_RESET}"
-  finish_script 1 "enter"
-  ;;
-esac
-
-task_open="Mở cổng $NORMALIZED_PORTS (${PROTO_IN^^}) trên tường lửa Nftables"
+task_open="Mở cổng $PORT_SPEC (${PROTO_IN^^}) trên tường lửa Nftables"
 _runing "$task_open"
 
 err_flag=0
 if [[ "$PROTO_IN" == "tcp" || "$PROTO_IN" == "both" ]]; then
-  if ! wptt_add_ports_to_set "tcp_ports" "$NORMALIZED_PORTS"; then
+  if ! wptt_modify_port_set "tcp_ports" "add" "$PORT_SPEC"; then
     err_flag=1
   fi
 fi
 
 if [[ "$PROTO_IN" == "udp" || "$PROTO_IN" == "both" ]]; then
-  if ! wptt_add_ports_to_set "udp_ports" "$NORMALIZED_PORTS"; then
+  if ! wptt_modify_port_set "udp_ports" "add" "$PORT_SPEC"; then
     err_flag=1
   fi
 fi
 
 if ((err_flag == 0)) && wptt_nft_save_persistent; then
   _rundone "$task_open"
-  wptt_logs "INFO" "Nftables: Đã mở Port $NORMALIZED_PORTS (${PROTO_IN^^})"
-  if ((is_interactive == 1)); then
-    echo -e "\n${C_GREEN}✔ Đã mở thành công Port $NORMALIZED_PORTS (${PROTO_IN^^}) và lưu cấu hình vĩnh viễn!${C_RESET}"
+  if declare -F wptt_logs >/dev/null 2>&1; then
+    wptt_logs "INFO" "Nftables: Đã mở Port $PORT_SPEC (${PROTO_IN^^})"
   fi
-  finish_script 0 "enter"
+  echo -e "\n${C_GREEN}✔ Đã mở thành công Port $PORT_SPEC (${PROTO_IN^^}) và lưu cấu hình vĩnh viễn!${C_RESET}"
+  wptt_exit_handler 0 "enter"
 else
   _runloi "$task_open"
   echo -e "\n${C_RED}❌ Lỗi: Không thể cập nhật cấu hình Nftables!${C_RESET}"
-  finish_script 1 "enter"
+  wptt_exit_handler 1 "enter"
 fi

@@ -39,23 +39,22 @@ if [[ -z "$current_ssh_port" || ! "$current_ssh_port" =~ ^[0-9]+$ ]] || ((10#$cu
   current_ssh_port=22
 fi
 
-# Xây dựng danh sách Port TCP mở mặc định (Chống trùng lặp nếu SSH port là 80/443)
 tcp_elements="80, 443"
 if ((10#$current_ssh_port != 80 && 10#$current_ssh_port != 443)); then
   tcp_elements="${current_ssh_port}, ${tcp_elements}"
 fi
 
-# Bảo vệ thêm Port của phiên SSH đang kết nối trực tiếp (nếu khác với port trong file config)
+# Bảo vệ thêm Port của phiên SSH đang kết nối trực tiếp
 if [[ -n "${SSH_CONNECTION:-}" ]]; then
   active_session_port="${SSH_CONNECTION##* }"
   if [[ "$active_session_port" =~ ^[0-9]+$ ]] &&
-    ((10#$active_session_port != 10#$current_ssh_port && 10#$active_session_port != 80 && 10#$active_session_port != 443)); then
+     ((10#$active_session_port != 10#$current_ssh_port && 10#$active_session_port != 80 && 10#$active_session_port != 443)); then
     tcp_elements="${active_session_port}, ${tcp_elements}"
   fi
 fi
 
 # ==============================================================================
-# 2. ĐẢM BẢO GÓI NFTABLES ĐÃ ĐƯỢC CÀI ĐẶT (LŨY ĐẲNG)
+# 2. ĐẢM BẢO GÓI NFTABLES ĐÃ ĐƯỢC CÀI ĐẶT
 # ==============================================================================
 if ! command -v nft >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
@@ -69,12 +68,12 @@ if ! command -v nft >/dev/null 2>&1; then
 fi
 
 if ! command -v nft >/dev/null 2>&1; then
-  echo -e "${C_RED:-}❌ Lỗi: Không tìm thấy công cụ 'nft'. Giữ nguyên tường lửa hiện tại để đảm bảo an toàn!${C_RESET:-}" >&2
+  echo -e "${C_RED:-}❌ Lỗi: Không tìm thấy công cụ 'nft'. Giữ nguyên tường lửa hiện tại!${C_RESET:-}" >&2
   exit 1
 fi
 
 # ==============================================================================
-# 3. TẠO FILE CẤU HÌNH NGUYÊN TỬ (ATOMIC) & KIỂM TRA CÚ PHÁP TRƯỚC KHI ÁP DỤNG
+# 3. TẠO FILE CẤU HÌNH CHUẨN (HASH SET CHO PORT, INTERVAL AUTO-MERGE CHO IP)
 # ==============================================================================
 /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
 chmod 700 /etc/wptt/tmp 2>/dev/null
@@ -86,55 +85,41 @@ umask 022
 cat >"$TMP_NFT" <<EOF
 #!/usr/sbin/nft -f
 
-# Làm mới cô lập 2 bảng của WPTangToc (Không làm mất bảng của SSHGuard / Fail2ban)
-table inet blackblock
-delete table inet blackblock
-table inet filter
-delete table inet filter
+flush ruleset
 
-# ==============================================================================
-# BẢNG 1: KHIÊN CHẮN BLACKLIST TẦNG THẤP (Chặn sớm ở Priority -10)
-# ==============================================================================
 table inet blackblock {
 	set blackaction_v4 {
 		type ipv4_addr
-		flags interval,timeout
+		flags interval
 		auto-merge
-		comment "Danh sach chan IPv4 & CIDR"
 	}
 
 	set blackaction_v6 {
 		type ipv6_addr
-		flags interval,timeout
+		flags interval
 		auto-merge
-		comment "Danh sach chan IPv6 & CIDR"
 	}
 
 	chain blackblock-chain-input {
-		type filter hook input priority filter - 10; policy accept;
+		type filter hook input priority -10; policy accept;
 		ip saddr @blackaction_v4 counter drop
 		ip6 saddr @blackaction_v6 counter drop
 	}
 }
 
-# ==============================================================================
-# BẢNG 2: BỘ LỌC TƯỜNG LỬA CHÍNH (Quản lý Port bằng Hash Set O(1))
-# ==============================================================================
 table inet filter {
 	set tcp_ports {
 		type inet_service
-		comment "Danh sach Port TCP duoc phep mo"
 		elements = { ${tcp_elements} }
 	}
 
 	set udp_ports {
 		type inet_service
-		comment "Danh sach Port UDP duoc phep mo (QUIC/HTTP3)"
 		elements = { 443 }
 	}
 
 	chain input {
-		type filter hook input priority filter; policy drop;
+		type filter hook input priority 0; policy drop;
 
 		# 1. Fast-Path: Cho qua ngay lập tức các kết nối đã thiết lập (99% traffic)
 		ct state established,related accept
@@ -146,11 +131,10 @@ table inet filter {
 		ct state invalid drop
 
 		# 4. Cho phép ICMPv4 và ICMPv6 thiết yếu (Chống đứt mạng IPv6 NDP & PMTU)
-		ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } limit rate 15/second accept
-		ip6 nexthdr icmpv6 icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect } accept
+		icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } limit rate 15/second accept
+		icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect } accept
 
 		# 5. Cho phép gia hạn IP tự động trên Cloud VPS (DHCPv4 & DHCPv6 Client)
-		ip protocol udp udp sport 67 udp dport 68 accept
 		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
 
 		# 6. Mở Port động siêu tốc qua Hash Set O(1)
@@ -159,51 +143,43 @@ table inet filter {
 	}
 
 	chain forward {
-		type filter hook forward priority filter; policy drop;
+		type filter hook forward priority 0; policy drop;
 	}
 
 	chain output {
-		type filter hook output priority filter; policy accept;
+		type filter hook output priority 0; policy accept;
 	}
 }
 EOF
 
-# Kiểm tra cú pháp và khả năng hỗ trợ Kernel Netfilter trước khi tắt Firewalld
-if ! nft -c -f "$TMP_NFT" >/dev/null 2>&1; then
-  echo -e "${C_RED:-}❌ Lỗi: Kernel hoặc cú pháp Nftables không tương thích. Đã hủy chuyển đổi để an toàn!${C_RESET:-}" >&2
-  exit 1
-fi
-
 # ==============================================================================
-# 4. TẮT FIREWALLD & KÍCH HOẠT NFTABLES THUẦN
+# 4. TẮT FIREWALLD & NẠP TRỰC TIẾP VÀO KERNEL
 # ==============================================================================
 if systemctl is-active --quiet firewalld 2>/dev/null || systemctl is-enabled --quiet firewalld 2>/dev/null; then
   systemctl stop firewalld >/dev/null 2>&1 || true
   systemctl disable firewalld >/dev/null 2>&1 || true
   systemctl mask firewalld >/dev/null 2>&1 || true
-  # Dọn sạch bảng tàn dư của firewalld trong Kernel (nếu còn sót)
-  nft delete table inet firewalld >/dev/null 2>&1 || true
-  nft delete table ip firewalld >/dev/null 2>&1 || true
-  nft delete table ip6 firewalld >/dev/null 2>&1 || true
+fi
+
+if ! nft -f "$TMP_NFT" >/dev/null 2>&1; then
+  echo -e "${C_RED:-}❌ Lỗi: Kernel không thể nạp cấu hình Nftables!${C_RESET:-}" >&2
+  exit 1
 fi
 
 chmod 600 "$TMP_NFT"
 /bin/mv -fT "$TMP_NFT" /etc/nftables.conf
 TMP_NFT=""
 
-# Đồng bộ đường dẫn cấu hình giữa RHEL/AlmaLinux (/etc/sysconfig/nftables.conf) và Ubuntu (/etc/nftables.conf)
 if [[ -d /etc/sysconfig ]]; then
   ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
 fi
 
-# Khôi phục nhãn SELinux chuẩn trên họ RHEL để systemd đọc được khi boot
 if command -v restorecon >/dev/null 2>&1; then
   restorecon -F /etc/nftables.conf /etc/sysconfig/nftables.conf >/dev/null 2>&1 || true
 fi
 
 systemctl unmask nftables >/dev/null 2>&1 || true
 systemctl enable --now nftables >/dev/null 2>&1 || true
-nft -f /etc/nftables.conf >/dev/null 2>&1 || true
 
 if declare -F wptt_logs >/dev/null 2>&1; then
   wptt_logs "INFO" "Đã kích hoạt Nftables thuần (Zero-Overhead), mở sẵn TCP Port: ${tcp_elements}"
