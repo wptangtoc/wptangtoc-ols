@@ -18,17 +18,17 @@ import (
 )
 
 const (
-	logFile         = "/usr/local/lsws/logs/error.log"
-	nftTableName    = "blackblock"
-	nftSetV4        = "blackaction_v4"
-	nftSetV6        = "blackaction_v6"
-	blockDuration   = 8 * time.Hour
+	logFile          = "/usr/local/lsws/logs/error.log"
+	nftTableName     = "blackblock"
+	nftSetV4         = "ddos_v4"
+	nftSetV6         = "ddos_v6"
+	blockDuration    = 8 * time.Hour
 	blockDurationStr = "8h"
-	dedupTTL        = 30 * time.Minute       // Thời gian nhớ IP trong RAM để không gọi Syscall lặp lại
-	batchSize       = 100                    // Gom tối đa 100 IP mới mỗi lần Flush
-	flushInterval   = 150 * time.Millisecond // Chu kỳ xả Batch xuống Kernel
-	cleanupInterval = 5 * time.Minute        // Chu kỳ dọn dẹp bộ nhớ đệm Dedup
-	maxCacheSize    = 100000                 // Giới hạn cứng bộ nhớ đệm (~5MB RAM)
+	dedupTTL         = 30 * time.Minute       // Thời gian nhớ IP trong RAM để không gọi Syscall lặp lại
+	batchSize        = 100                    // Gom tối đa 100 IP mới mỗi lần Flush
+	flushInterval    = 150 * time.Millisecond // Chu kỳ xả Batch xuống Kernel
+	cleanupInterval  = 5 * time.Minute        // Chu kỳ dọn dẹp bộ nhớ đệm Dedup
+	maxCacheSize     = 100000                 // Giới hạn cứng bộ nhớ đệm (~5MB RAM)
 )
 
 // Các từ khóa nhận diện kết nối bất thường từ OpenLiteSpeed error.log
@@ -75,20 +75,6 @@ func init() {
 	whitelistIPs = normalizedMap
 }
 
-// Tịnh tiến địa chỉ IP lên +1 để tạo mốc đóng IntervalEnd cho tập flags interval,timeout
-func incIP(ip net.IP) net.IP {
-	inc := make(net.IP, len(ip))
-	copy(inc, ip)
-	for j := len(inc) - 1; j >= 0; j-- {
-		inc[j]++
-		if inc[j] > 0 {
-			break
-		}
-	}
-	return inc
-}
-
-// Kiểm tra IP có phải toàn bit 1 (255.255.255.255 hoặc ffff:...) để tránh tràn số khi incIP
 func isAllOnesIP(ip net.IP) bool {
 	for _, b := range ip {
 		if b != 0xff {
@@ -98,24 +84,6 @@ func isAllOnesIP(ip net.IP) bool {
 	return len(ip) > 0
 }
 
-// Khởi tạo mốc gốc 0.0.0.0 và :: (IntervalEnd) cho cây rbtree của blackaction_v4 / blackaction_v6
-func ensureIntervalRoot(setV4, setV6 *nftables.Set) {
-	c4 := &nftables.Conn{}
-	_ = c4.SetAddElements(setV4, []nftables.SetElement{{
-		Key:         net.IPv4zero.To4(),
-		IntervalEnd: true,
-	}})
-	_ = c4.Flush()
-
-	c6 := &nftables.Conn{}
-	_ = c6.SetAddElements(setV6, []nftables.SetElement{{
-		Key:         net.IPv6zero.To16(),
-		IntervalEnd: true,
-	}})
-	_ = c6.Flush()
-}
-
-// Kiểm tra nhanh dòng log có chứa dấu hiệu tấn công không
 func hasTriggerKeyword(line string) bool {
 	for _, kw := range triggerKeywords {
 		if strings.Contains(line, kw) {
@@ -125,8 +93,7 @@ func hasTriggerKeyword(line string) bool {
 	return false
 }
 
-// Bóc tách IP từ một cụm trong ngoặc vuông của OLS, ví dụ:
-// "1.2.3.4:54321", "1.2.3.4:54321#domain.com", "[2001:db8::1]:54321", "2001:db8::1:54321"
+// Bóc tách IP từ cụm ngoặc vuông OLS: "1.2.3.4:54321#domain.com", "[2001:db8::1]:54321", "2001:db8::1:54321"
 func parseOLSBracketToken(token string) net.IP {
 	if hashIdx := strings.IndexByte(token, '#'); hashIdx != -1 {
 		token = token[:hashIdx]
@@ -221,8 +188,7 @@ func extractIPFromOLSLog(line string) string {
 	return ""
 }
 
-// Fallback gộp dải (Interval Merge) khi 2 IP liền kề nhau chạm biên trên cây rbtree
-func fallbackMergeCLI(setName string, ips []string) {
+func fallbackCLI(setName string, ips []string) {
 	if len(ips) == 0 {
 		return
 	}
@@ -233,11 +199,10 @@ func fallbackMergeCLI(setName string, ips []string) {
 	elemExpr := fmt.Sprintf("{ %s }", strings.Join(parts, ", "))
 	cmd := exec.Command("nft", "add", "element", "inet", nftTableName, setName, elemExpr)
 	if err := cmd.Run(); err == nil {
-		log.Printf("[+] DDoS Blocker (Interval-Merge %s): Đã hợp nhất & khóa %d IP", setName, len(ips))
+		log.Printf("[+] DDoS Blocker (Fallback %s): Đã khóa %d IP (%s)", setName, len(ips), blockDurationStr)
 	}
 }
 
-// Đẩy lô IP xuống blackaction_v4 / blackaction_v6 (flags interval,timeout) qua Netlink
 func flushBatch(setV4, setV6 *nftables.Set, batch []string) {
 	if len(batch) == 0 {
 		return
@@ -258,42 +223,25 @@ func flushBatch(setV4, setV6 *nftables.Set, batch []string) {
 				continue
 			}
 			listV4 = append(listV4, ip4.String())
-			// Cặp phần tử chuẩn cho tập flags interval,timeout (nft_set_rbtree)
-			elemsV4 = append(elemsV4,
-				nftables.SetElement{
-					Key:     ip4,
-					Timeout: blockDuration,
-				},
-				nftables.SetElement{
-					Key:         incIP(ip4),
-					IntervalEnd: true,
-					Timeout:     blockDuration,
-				},
-			)
+			elemsV4 = append(elemsV4, nftables.SetElement{
+				Key:     ip4,
+				Timeout: blockDuration,
+			})
 		} else if ip16 := ip.To16(); ip16 != nil {
 			if isAllOnesIP(ip16) {
 				continue
 			}
 			listV6 = append(listV6, ip16.String())
-			elemsV6 = append(elemsV6,
-				nftables.SetElement{
-					Key:     ip16,
-					Timeout: blockDuration,
-				},
-				nftables.SetElement{
-					Key:         incIP(ip16),
-					IntervalEnd: true,
-					Timeout:     blockDuration,
-				},
-			)
+			elemsV6 = append(elemsV6, nftables.SetElement{
+				Key:     ip16,
+				Timeout: blockDuration,
+			})
 		}
 	}
 
 	if len(elemsV4) == 0 && len(elemsV6) == 0 {
 		return
 	}
-
-	ensureIntervalRoot(setV4, setV6)
 
 	conn := &nftables.Conn{}
 	if len(elemsV4) > 0 {
@@ -304,25 +252,23 @@ func flushBatch(setV4, setV6 *nftables.Set, batch []string) {
 	}
 
 	if err := conn.Flush(); err != nil {
-		// Nếu trong Batch có 2 IP liền kề (VD: 1.2.3.4 và 1.2.3.5) cần gộp khoảng rbtree
 		if len(listV4) > 0 {
-			fallbackMergeCLI(nftSetV4, listV4)
+			fallbackCLI(nftSetV4, listV4)
 		}
 		if len(listV6) > 0 {
-			fallbackMergeCLI(nftSetV6, listV6)
+			fallbackCLI(nftSetV6, listV6)
 		}
 		return
 	}
 
-	log.Printf("[+] DDoS Blocker (Netlink): Đã khóa %d IP vào %s (v4: %d, v6: %d)",
-		len(listV4)+len(listV6), nftTableName, len(listV4), len(listV6))
+	log.Printf("[+] DDoS Blocker (Netlink O(1)): Đã khóa %d IP trong %s (v4: %d, v6: %d)",
+		len(listV4)+len(listV6), blockDurationStr, len(listV4), len(listV6))
 }
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// 1. Chờ file log xuất hiện
 	for {
 		if _, err := os.Stat(logFile); err == nil {
 			break
@@ -334,18 +280,26 @@ func main() {
 		}
 	}
 
-	log.Printf("[*] WPTangToc Anti-DDoS (Netlink Engine -> %s/%s) đang bảo vệ hệ thống...", nftSetV4, nftSetV6)
+	log.Printf("[*] WPTangToc Anti-DDoS (Netlink Hash O(1) -> %s/%s, Timeout: %s) đang bảo vệ hệ thống...",
+		nftSetV4, nftSetV6, blockDurationStr)
 
 	table := &nftables.Table{Name: nftTableName, Family: nftables.TableFamilyINet}
-	setV4 := &nftables.Set{Table: table, Name: nftSetV4, Interval: true}
-	setV6 := &nftables.Set{Table: table, Name: nftSetV6, Interval: true}
-
-	ensureIntervalRoot(setV4, setV6)
+	setV4 := &nftables.Set{
+		Table:      table,
+		Name:       nftSetV4,
+		HasTimeout: true,
+		Timeout:    blockDuration,
+	}
+	setV6 := &nftables.Set{
+		Table:      table,
+		Name:       nftSetV6,
+		HasTimeout: true,
+		Timeout:    blockDuration,
+	}
 
 	ipChan := make(chan string, 100000)
 	doneChan := make(chan struct{})
 
-	// 2. Worker Goroutine: Chống trùng lặp (Dedup Cache) + Gom lô Netlink (Batching)
 	go func() {
 		defer close(doneChan)
 
@@ -409,7 +363,6 @@ func main() {
 		}
 	}()
 
-	// 3. Vòng lặp đọc Log bất tử (Chống văng khi xoay vòng log & chống dòng > 64KB)
 	for {
 		if ctx.Err() != nil {
 			break
