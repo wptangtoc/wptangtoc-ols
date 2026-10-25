@@ -6,7 +6,7 @@
 
 # Cách gọi CLI: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 7080 tcp
 # Hoặc mở dải:  /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port 30000-35000 tcp
-# mở phát 2 port: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port "7080,7081" tcp
+# Mở nhiều port: /bin/bash /etc/wptt/bao-mat/nftables/wptt-mo-port "7080,7081" tcp
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -20,13 +20,29 @@ if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
 
+tmp_nft=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${tmp_nft:-}" && -f "$tmp_nft" ]]; then
+    case "$tmp_nft" in
+    /etc/wptt/tmp/nftables_save_*)
+      /bin/rm -f -- "${tmp_nft:?}"
+      ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
 # ==============================================================================
 # HÀM LÕI: LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
 # ==============================================================================
 wptt_nft_save_persistent() {
   /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
   chmod 700 /etc/wptt/tmp 2>/dev/null
-  local tmp_nft=""
   tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
 
   {
@@ -39,20 +55,22 @@ wptt_nft_save_persistent() {
   if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
     chmod 600 "$tmp_nft"
     /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
+    tmp_nft=""
     [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
     return 0
   else
     /bin/rm -f -- "${tmp_nft:?}"
+    tmp_nft=""
     return 1
   fi
 }
 
 # ==============================================================================
-# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (HỖ TRỢ MULTI-LINE ELEMENTS)
+# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (DÙNG -nn ĐỂ ÉP SỐ PORT 100%)
 # ==============================================================================
 wptt_get_open_ports() {
   local set_name="$1"
-  nft list set inet filter "$set_name" 2>/dev/null | awk '
+  nft -nn list set inet filter "$set_name" 2>/dev/null | awk '
     /elements = \{/ { in_elem = 1; sub(/.*elements = \{[ \t]*/, "") }
     in_elem {
       if ($0 ~ /\}/) {
@@ -131,7 +149,7 @@ wptt_add_ports_to_set() {
   local combined="$new_elements"
   [[ -n "$current_elements" ]] && combined="${current_elements}, ${new_elements}"
 
-  # Dùng awk hợp nhất các khoảng giao nhau/liền kề (Interval Merging)
+  # Dùng awk hợp nhất các khoảng giao nhau/liền kề (Chỉ nhận số hợp lệ 1..65535)
   local merged_elements=""
   merged_elements="$(awk -v raw="$combined" '
     BEGIN {
@@ -139,12 +157,16 @@ wptt_add_ports_to_set() {
       for (i = 1; i <= n; i++) {
         gsub(/^[ \t]+|[ \t]+$/, "", arr[i])
         if (arr[i] == "") continue
-        if (index(arr[i], "-") > 0) {
+        if (arr[i] ~ /^[0-9]+-[0-9]+$/) {
           split(arr[i], r, "-")
           s = r[1] + 0; e = r[2] + 0
-        } else {
+        } else if (arr[i] ~ /^[0-9]+$/) {
           s = arr[i] + 0; e = s
+        } else {
+          continue
         }
+        if (s < 1) s = 1
+        if (e > 65535) e = 65535
         for (p = s; p <= e; p++) port_map[p] = 1
       }
       out = ""
@@ -166,6 +188,7 @@ wptt_add_ports_to_set() {
   [[ -z "$merged_elements" ]] && return 1
 
   nft -f - >/dev/null 2>&1 <<EOF
+add set inet filter ${set_name} { type inet_service; flags interval; }
 flush set inet filter ${set_name}
 add element inet filter ${set_name} { ${merged_elements} }
 EOF
@@ -179,7 +202,7 @@ route_flag=""
 PORT_IN="${1:-}"
 PROTO_IN="${2:-tcp}"
 
-if [[ -z "$PORT_IN" || "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+if [[ -z "$PORT_IN" ]] || { [[ -z "${2:-}" ]] && [[ "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; }; then
   is_interactive=1
   route_flag="$PORT_IN"
   PORT_IN=""

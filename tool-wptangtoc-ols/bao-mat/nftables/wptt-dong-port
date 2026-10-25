@@ -18,13 +18,29 @@ if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
 
+tmp_nft=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${tmp_nft:-}" && -f "$tmp_nft" ]]; then
+    case "$tmp_nft" in
+    /etc/wptt/tmp/nftables_save_*)
+      /bin/rm -f -- "${tmp_nft:?}"
+      ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
 # ==============================================================================
 # HÀM LÕI: LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
 # ==============================================================================
 wptt_nft_save_persistent() {
   /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
   chmod 700 /etc/wptt/tmp 2>/dev/null
-  local tmp_nft=""
   tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
 
   {
@@ -37,20 +53,22 @@ wptt_nft_save_persistent() {
   if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
     chmod 600 "$tmp_nft"
     /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
+    tmp_nft=""
     [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
     return 0
   else
     /bin/rm -f -- "${tmp_nft:?}"
+    tmp_nft=""
     return 1
   fi
 }
 
 # ==============================================================================
-# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (HỖ TRỢ MULTI-LINE ELEMENTS)
+# HÀM TRÍCH XUẤT DANH SÁCH PORT ĐANG MỞ (DÙNG -nn ĐỂ ÉP SỐ PORT 100%)
 # ==============================================================================
 wptt_get_open_ports() {
   local set_name="$1"
-  nft list set inet filter "$set_name" 2>/dev/null | awk '
+  nft -nn list set inet filter "$set_name" 2>/dev/null | awk '
     /elements = \{/ { in_elem = 1; sub(/.*elements = \{[ \t]*/, "") }
     in_elem {
       if ($0 ~ /\}/) {
@@ -118,7 +136,7 @@ wptt_validate_and_normalize_ports() {
 }
 
 # ==============================================================================
-# HÀM KIỂM TRA CÓ CHẠM PORT BẢO VỆ (SSH) HAY KHÔNG (ĐA TẦNG)
+# HÀM KIỂM TRA CÓ CHẠM PORT BẢO VỆ (SSH) HAY KHÔNG (ĐA TẦNG + SOCKET KERNEL)
 # ==============================================================================
 wptt_check_protected_ssh_ports() {
   local target_ranges="$1"
@@ -137,8 +155,15 @@ wptt_check_protected_ssh_ports() {
     fi
   fi
 
-  # 3. Quét toàn bộ /etc/ssh/sshd_config và /etc/ssh/sshd_config.d/*.conf
+  # 3. Quét Socket thực tế đang lắng nghe của sshd / systemd ssh.socket trong Kernel
   local p=""
+  if command -v ss >/dev/null 2>&1; then
+    while IFS= read -r p; do
+      [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] && ssh_ports+=("$((10#$p))")
+    done < <(ss -tlnpH 2>/dev/null | awk '/"sshd"|ssh\.socket/ {sub(/.*:/, "", $4); if ($4 ~ /^[0-9]+$/) print $4}')
+  fi
+
+  # 4. Quét toàn bộ /etc/ssh/sshd_config và /etc/ssh/sshd_config.d/*.conf
   while IFS= read -r p; do
     [[ -n "$p" && "$p" =~ ^[0-9]+$ ]] && ssh_ports+=("$((10#$p))")
   done < <(awk 'tolower($1) == "port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null)
@@ -189,12 +214,16 @@ wptt_remove_ports_from_set() {
       for (i = 1; i <= n; i++) {
         gsub(/^[ \t]+|[ \t]+$/, "", a[i])
         if (a[i] == "") continue
-        if (index(a[i], "-") > 0) {
+        if (a[i] ~ /^[0-9]+-[0-9]+$/) {
           split(a[i], r, "-")
           s = r[1] + 0; e = r[2] + 0
-        } else {
+        } else if (a[i] ~ /^[0-9]+$/) {
           s = a[i] + 0; e = s
+        } else {
+          continue
         }
+        if (s < 1) s = 1
+        if (e > 65535) e = 65535
         for (p = s; p <= e; p++) port_map[p] = 1
       }
 
@@ -202,11 +231,13 @@ wptt_remove_ports_from_set() {
       for (i = 1; i <= m; i++) {
         gsub(/^[ \t]+|[ \t]+$/, "", b[i])
         if (b[i] == "") continue
-        if (index(b[i], "-") > 0) {
+        if (b[i] ~ /^[0-9]+-[0-9]+$/) {
           split(b[i], r, "-")
           s = r[1] + 0; e = r[2] + 0
-        } else {
+        } else if (b[i] ~ /^[0-9]+$/) {
           s = b[i] + 0; e = s
+        } else {
+          continue
         }
         for (p = s; p <= e; p++) delete port_map[p]
       }
@@ -231,6 +262,7 @@ wptt_remove_ports_from_set() {
     nft flush set inet filter "$set_name" >/dev/null 2>&1
   else
     nft -f - >/dev/null 2>&1 <<EOF
+add set inet filter ${set_name} { type inet_service; flags interval; }
 flush set inet filter ${set_name}
 add element inet filter ${set_name} { ${remaining_elements} }
 EOF
@@ -245,7 +277,7 @@ route_flag=""
 PORT_IN="${1:-}"
 PROTO_IN="${2:-both}"
 
-if [[ -z "$PORT_IN" || "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; then
+if [[ -z "$PORT_IN" ]] || { [[ -z "${2:-}" ]] && [[ "$PORT_IN" == "98" || "$PORT_IN" == "99" ]]; }; then
   is_interactive=1
   route_flag="$PORT_IN"
   PORT_IN=""
