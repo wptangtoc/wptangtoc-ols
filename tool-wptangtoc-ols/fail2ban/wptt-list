@@ -1,6 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
+# @since: 2026
 # @description: Xem toàn bộ danh sách IP và dải CIDR đang bị chặn (Blacklist)
 
 function huong_dan() {
@@ -12,20 +13,20 @@ EOF
 export LANG=en_US.UTF-8
 export LC_ALL=en_US.UTF-8
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-stty iutf8 2>/dev/null
+stty iutf8 2>/dev/null || true
+umask 077
 
 # shellcheck source=/dev/null
-. /etc/wptt/.wptt.conf 2>/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
 if [[ -z "${ngon_ngu:-}" ]]; then
   ngon_ngu='vi'
 fi
 # shellcheck source=/dev/null
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
 # shellcheck source=/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
 # shellcheck source=/dev/null
-. /etc/wptt/core-functions 2>/dev/null
-
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
 
 # Quản lý file tạm an toàn với trap
 TMP_LIST=""
@@ -57,7 +58,8 @@ echo ""
 task_msg="Thu thập dữ liệu IP bị chặn từ các lớp tường lửa"
 _runing "$task_msg"
 
-mkdir -p /etc/wptt/tmp 2>/dev/null
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
 TMP_LIST="$(mktemp -p /etc/wptt/tmp wptt_blacklist_raw_XXXXXX.tmp)"
 TMP_SORTED="$(mktemp -p /etc/wptt/tmp wptt_blacklist_sorted_XXXXXX.tmp)"
 
@@ -65,15 +67,14 @@ TMP_SORTED="$(mktemp -p /etc/wptt/tmp wptt_blacklist_sorted_XXXXXX.tmp)"
 # 1. QUÉT FAIL2BAN (0-SUBSHELL JAIL PARSING & LỌC SẠCH TỪ KHÓA HỆ THỐNG)
 # ==============================================================================
 if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-client >/dev/null 2>&1; then
-  jail_raw="$(fail2ban-client status 2>/dev/null)"
+  jail_raw="$(fail2ban-client status 2>/dev/null || true)"
   if [[ "$jail_raw" =~ Jail[[:space:]]list:[[:space:]]*([^\n\r]+) ]]; then
     for jail in ${BASH_REMATCH[1]//,/ }; do
       [[ -n "$jail" ]] || continue
       awk -v j="Fail2ban-${jail}" '
         function is_valid_ip(val) {
           if (val == "" || val == "list:" || val == "Banned" || val == "IP" || val == "none") return 0
-          if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) return 1
-          if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}\/[0-9]{1,2}$/) return 1
+          if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/) return 1
           if (index(val, ":") > 0 && val ~ /^[0-9a-fA-F:\/]+$/) return 1
           return 0
         }
@@ -84,7 +85,7 @@ if systemctl is-active --quiet fail2ban 2>/dev/null && command -v fail2ban-clien
             if (is_valid_ip(cand)) print j, cand
           }
         }
-      ' < <(fail2ban-client status "$jail" 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+      ' < <(fail2ban-client status "$jail" 2>/dev/null) >> "$TMP_LIST" 2>/dev/null || true
     done
   fi
 fi
@@ -100,10 +101,9 @@ if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
       {
         if (index($1, "\x7c") == 0) print "CSF", $1
       }
-    ' /etc/csf/csf.deny >>"$TMP_LIST" 2>/dev/null
+    ' /etc/csf/csf.deny >> "$TMP_LIST" 2>/dev/null || true
   fi
 
-  # Quét thêm danh sách khóa tạm thời của CSF/LFD (nếu có)
   if [[ -s /var/lib/csf/csf.tempban ]]; then
     awk -F '\x7c' '
       /^[ \t]*#/ { next }
@@ -111,7 +111,7 @@ if command -v csf >/dev/null 2>&1 && [[ -f /etc/csf/csf.conf ]]; then
         gsub(/[[:space:]]/, "", $1)
         if ($1 != "") print "CSF-Temp", $1
       }
-    ' /var/lib/csf/csf.tempban >>"$TMP_LIST" 2>/dev/null
+    ' /var/lib/csf/csf.tempban >> "$TMP_LIST" 2>/dev/null || true
   fi
 fi
 
@@ -132,7 +132,7 @@ if [[ -f /usr/local/lsws/conf/httpd_config.conf ]]; then
         }
       }
     }
-  ' /usr/local/lsws/conf/httpd_config.conf >>"$TMP_LIST" 2>/dev/null
+  ' /usr/local/lsws/conf/httpd_config.conf >> "$TMP_LIST" 2>/dev/null || true
 fi
 
 rtreport_files=(/tmp/lshttpd/.rtreport*)
@@ -150,7 +150,7 @@ if [[ -e "${rtreport_files[0]}" ]]; then
         }
       }
     }
-  ' /tmp/lshttpd/.rtreport* >>"$TMP_LIST" 2>/dev/null
+  ' /tmp/lshttpd/.rtreport* >> "$TMP_LIST" 2>/dev/null || true
 fi
 
 # ==============================================================================
@@ -163,83 +163,111 @@ if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd 
         if ($i != "") print "Firewalld", $i
       }
     }
-  ' < <(firewall-cmd --zone=drop --list-sources 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+  ' < <(firewall-cmd --zone=drop --list-sources 2>/dev/null) >> "$TMP_LIST" 2>/dev/null || true
 fi
 
 # ==============================================================================
-# 5. QUÉT NFTABLES (LOẠI TRỪ HOÀN TOÀN 0.0.0.0 VÀ ::)
+# 5. QUÉT NFTABLES (CHỈ QUÉT ĐÚNG SET CHẶN: blackaction, ddos, denylist)
+# Loại trừ 100%: whiteaction (Whitelist), httpdlist (Tracking), geo_allow (GeoIP)
 # ==============================================================================
 if systemctl is-active --quiet nftables 2>/dev/null && command -v nft >/dev/null 2>&1; then
   awk '
     function is_ip(val) {
-      if (val == "0.0.0.0" || val == "::" || val ~ /^0(\.0){3}/) return 0
-      if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}$/) return 1
-      if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}\/[0-9]{1,2}$/) return 1
-      if (index(val, ":") > 0 && val ~ /^[0-9a-fA-F:\/]+$/) return 1
+      if (val == "" || val == "0.0.0.0" || val == "::" || val ~ /^0(\.0){3}/) return 0
+      if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/) return 1
+      if (val ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}-([0-9]{1,3}\.){3}[0-9]{1,3}$/) return 1
+      if (index(val, ":") > 0 && val ~ /^[0-9a-fA-F:\/-]+$/) return 1
       return 0
     }
-    /elements[ \t]*=[ \t]*\{/ { in_elem = 1 }
+    function get_set_tag(t_name, s_name) {
+      if (t_name == "blackblock") {
+        if (s_name == "blackaction_v4" || s_name == "blackaction_v6") return "Nft-Ban"
+        if (s_name == "ddos_v4" || s_name == "ddos_v6") return "Nft-DDoS"
+        if (s_name == "denylist_v4" || s_name == "denylist_v6") return "Nft-Flood"
+      }
+      return ""
+    }
+    /^[ \t]*table[ \t]+/ {
+      cur_table = $3
+      cur_set = ""
+      in_elem = 0
+    }
+    /^[ \t]*set[ \t]+/ {
+      cur_set = $2
+      gsub(/\{/, "", cur_set)
+      in_elem = 0
+    }
+    /elements[ \t]*=[ \t]*\{/ {
+      tag = get_set_tag(cur_table, cur_set)
+      if (tag != "") {
+        in_elem = 1
+      }
+    }
     in_elem {
       for (i = 1; i <= NF; i++) {
         cand = $i
         gsub(/[,{}]/, "", cand)
-        if (is_ip(cand)) print "Nftables", cand
+        if (cand == "elements" || cand == "=" || cand == "timeout" || cand == "expires" || cand == "comment") continue
+        if (is_ip(cand)) print tag, cand
       }
       if (index($0, "}") > 0) in_elem = 0
     }
-    /saddr/ && /drop/ {
+    # Bắt thêm các rule drop trực tiếp IP tĩnh ngoài Set (loại trừ rule != @geo_allow)
+    /saddr/ && /drop/ && !/!=/ && !/@/ {
       for (i = 1; i <= NF; i++) {
         if ($i == "saddr" && (i + 1) <= NF) {
           cand = $(i + 1)
           gsub(/[,{}]/, "", cand)
-          if (is_ip(cand)) print "Nftables", cand
+          if (is_ip(cand)) print "Nft-Rule", cand
         }
       }
     }
-  ' < <(nft list ruleset 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+  ' < <(nft -nn list ruleset 2>/dev/null) >> "$TMP_LIST" 2>/dev/null || true
 fi
 
 # ==============================================================================
 # 6. QUÉT SSHGUARD (CHẶN VĨNH VIỄN VÀ CHẶN TẠM THỜI)
 # ==============================================================================
-if systemctl is-active --quiet sshguard 2>/dev/null; then
-  # 6.1 Lấy IP chặn vĩnh viễn (Blacklist DB)
+if systemctl is-active --quiet sshguard 2>/dev/null || [[ -f /var/lib/sshguard/blacklist.db ]]; then
   if [[ -f /var/lib/sshguard/blacklist.db ]]; then
     awk -F'|' '
       NF >= 4 {
-        # Cột số 4 chứa địa chỉ IP
         ip = $4
+        gsub(/[[:space:]]/, "", ip)
         if (ip != "" && ip != "127.0.0.1" && ip != "::1") {
           print "SSHGuard-DB", ip
         }
       }
-    ' /var/lib/sshguard/blacklist.db >>"$TMP_LIST" 2>/dev/null
+    ' /var/lib/sshguard/blacklist.db >> "$TMP_LIST" 2>/dev/null || true
   fi
 
-  # 6.2 Lấy IP chặn tạm thời từ Tường lửa lõi (Vì SSHGuard lưu IP tạm trên RAM của Tường lửa)
-  # Firewalld: Ipset
-  if systemctl is-active --quiet firewalld 2>/dev/null; then
+  if systemctl is-active --quiet firewalld 2>/dev/null && command -v firewall-cmd >/dev/null 2>&1; then
     for ipset_name in sshguard4 sshguard6; do
       if firewall-cmd --info-ipset="$ipset_name" >/dev/null 2>&1; then
         awk -v tag="SSHGuard-FW" '
           /^[0-9a-fA-F]/ { print tag, $1 }
-        ' < <(firewall-cmd --ipset="$ipset_name" --get-entries 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+        ' < <(firewall-cmd --ipset="$ipset_name" --get-entries 2>/dev/null) >> "$TMP_LIST" 2>/dev/null || true
       fi
     done
   fi
-  # Nftables: Set
-  if systemctl is-active --quiet nftables 2>/dev/null; then
+
+  if systemctl is-active --quiet nftables 2>/dev/null && command -v nft >/dev/null 2>&1; then
     awk '
-      /^table (ip|ip6) sshguard/ { in_table = 1 }
-      in_table && /set attackers/ { in_set = 1 }
-      in_set && /elements = \{/ { in_elem = 1; next }
-      in_elem && /\}/ { in_elem = 0; in_set = 0; in_table = 0; next }
+      /^[ \t]*table[ \t]+(ip|ip6|inet)[ \t]+sshguard/ { in_table = 1; in_set = 0; in_elem = 0 }
+      in_table && /^[ \t]*set[ \t]+attackers/ { in_set = 1 }
+      in_set && /elements[ \t]*=[ \t]*\{/ { in_elem = 1 }
       in_elem {
-        cand = $1
-        gsub(/[,]/, "", cand)
-        if (cand != "") print "SSHGuard-FW", cand
+        for (i = 1; i <= NF; i++) {
+          cand = $i
+          gsub(/[,{}]/, "", cand)
+          if (cand == "elements" || cand == "=" || cand == "timeout" || cand == "expires") continue
+          if (cand ~ /^([0-9]{1,3}\.){3}[0-9]{1,3}/ || (index(cand, ":") > 0 && cand ~ /^[0-9a-fA-F:\/]+$/)) {
+            print "SSHGuard-FW", cand
+          }
+        }
+        if (index($0, "}") > 0) { in_elem = 0; in_set = 0 }
       }
-    ' < <(nft list ruleset 2>/dev/null) >>"$TMP_LIST" 2>/dev/null
+    ' < <(nft -nn list ruleset 2>/dev/null) >> "$TMP_LIST" 2>/dev/null || true
   fi
 fi
 
@@ -266,9 +294,9 @@ awk '
       printf "%s\t%s\n", addr, map[addr]
     }
   }
-' "$TMP_LIST" >"$TMP_SORTED.unsorted"
+' "$TMP_LIST" > "$TMP_SORTED.unsorted"
 
-sort -V "$TMP_SORTED.unsorted" >"$TMP_SORTED" 2>/dev/null
+sort -V "$TMP_SORTED.unsorted" > "$TMP_SORTED" 2>/dev/null
 /bin/rm -f -- "$TMP_SORTED.unsorted" "${TMP_LIST:?}"
 TMP_LIST=""
 
@@ -286,7 +314,6 @@ else
   echo -e "${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}STT${C_RESET}   ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}ĐỊA CHỈ IP / DẢI MẠNG (BLACKLIST)${C_RESET}       ${C_CYAN}│${C_RESET} ${C_BOLD_WHITE}NGUỒN CHẶN (TAGS)${C_RESET}             ${C_CYAN}│${C_RESET}"
   echo -e "${C_CYAN}├───────┼─────────────────────────────────────────┼───────────────────────────────┤${C_RESET}"
 
-  # Render toàn bộ bảng qua 1 tiến trình awk duy nhất, tự động chống tràn cột
   COUNT="$(awk -F '\t' \
     -v c_cyan="$C_CYAN" \
     -v c_red="$C_RED" \

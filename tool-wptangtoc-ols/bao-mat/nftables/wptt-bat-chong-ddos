@@ -1,0 +1,210 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Biên dịch và kích hoạt Anti-DDoS Golang (Netlink Hash O(1) - Tự mở khóa sau 8h)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 077
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+build_dir=""
+tmp_nft=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${build_dir:-}" && -d "$build_dir" ]]; then
+    case "$build_dir" in
+      /etc/wptt/tmp/anti_ddos_build_*)
+        /bin/rm -rf -- "${build_dir:?}"
+        ;;
+    esac
+  fi
+  if [[ -n "${tmp_nft:-}" && -f "$tmp_nft" ]]; then
+    case "$tmp_nft" in
+      /etc/wptt/tmp/nftables_save_*)
+        /bin/rm -f -- "${tmp_nft:?}"
+        ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null || true
+    printf '\n'
+    nft list table inet filter 2>/dev/null || true
+  } > "$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
+    tmp_nft=""
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    tmp_nft=""
+    return 1
+  fi
+}
+
+route_flag="${1:-}"
+task_msg="Biên dịch Engine Golang Netlink O(1) và kích hoạt khiên chống DDoS"
+_runing "$task_msg"
+
+# 1. Kiểm tra kiến trúc Nftables
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet blackblock >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Máy chủ chưa kích hoạt kiến trúc Nftables của WPTangToc!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 2. Tự động co giãn kích thước Set theo dung lượng RAM thực tế (Bảo vệ VPS 512MB)
+mem_total_kb=0
+if [[ -r /proc/meminfo ]]; then
+  while IFS=': ' read -r key val _; do
+    if [[ "$key" == "MemTotal" ]]; then
+      mem_total_kb="$val"
+      break
+    fi
+  done < /proc/meminfo
+fi
+
+if ((mem_total_kb > 0 && mem_total_kb <= 1048576)); then
+  DDOS_SET_SIZE=65536
+else
+  DDOS_SET_SIZE=262144
+fi
+
+# 3. Khởi tạo Set Bảng băm O(1) ddos_v4 & ddos_v6 (Tự mở khóa sau 8h)
+nft add set inet blackblock ddos_v4 "{ type ipv4_addr; size ${DDOS_SET_SIZE}; flags timeout; timeout 8h; comment \"Danh sach chan DDoS 8h IPv4\"; }" >/dev/null 2>&1 || true
+nft add set inet blackblock ddos_v6 "{ type ipv6_addr; size ${DDOS_SET_SIZE}; flags timeout; timeout 8h; comment \"Danh sach chan DDoS 8h IPv6\"; }" >/dev/null 2>&1 || true
+
+if ! nft list chain inet blackblock blackblock-chain-input 2>/dev/null | grep -q '@ddos_v4'; then
+  nft add rule inet blackblock blackblock-chain-input ip saddr @ddos_v4 counter drop >/dev/null 2>&1 || true
+fi
+if ! nft list chain inet blackblock blackblock-chain-input 2>/dev/null | grep -q '@ddos_v6'; then
+  nft add rule inet blackblock blackblock-chain-input ip6 saddr @ddos_v6 counter drop >/dev/null 2>&1 || true
+fi
+
+wptt_nft_save_persistent || true
+
+# 4. Cài đặt trình biên dịch Golang nếu chưa có
+if ! command -v go >/dev/null 2>&1; then
+  if command -v dnf >/dev/null 2>&1; then
+    dnf install -y golang >/dev/null 2>&1 || true
+  elif command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y golang >/dev/null 2>&1 || true
+  fi
+fi
+
+if ! command -v go >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể cài đặt trình biên dịch Golang!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 5. Chuẩn bị thư mục Build an toàn
+src_file="/etc/wptt/bao-mat/nftables/anti.go"
+if [[ ! -f "$src_file" ]]; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy file mã nguồn $src_file!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
+build_dir="$(mktemp -d -p /etc/wptt/tmp anti_ddos_build_XXXXXX)"
+/bin/cp -f -- "$src_file" "$build_dir/anti.go"
+
+# Tự động nạp Public IPv4 & IPv6 của VPS vào Whitelist
+vps_ipv4="$(curl -4 -sfL --connect-timeout 3 --max-time 5 https://ipv4.icanhazip.com || curl -4 -sfL --connect-timeout 3 --max-time 5 https://checkip.amazonaws.com || true)"
+vps_ipv6="$(curl -6 -sfL --connect-timeout 3 --max-time 5 https://ipv6.icanhazip.com || true)"
+vps_ipv4="${vps_ipv4//[[:space:]]/}"
+vps_ipv6="${vps_ipv6//[[:space:]]/}"
+
+inject_ips=""
+[[ -n "$vps_ipv4" ]] && inject_ips+="\"$vps_ipv4\": true,\n\t"
+[[ -n "$vps_ipv6" ]] && inject_ips+="\"$vps_ipv6\": true,\n\t"
+
+if [[ -n "$inject_ips" ]]; then
+  sed -i "s|// IP_VPS_HERE|${inject_ips}// IP_VPS_HERE|g" "$build_dir/anti.go"
+fi
+
+# Đảm bảo file error.log của OLS tồn tại
+/bin/mkdir -p /usr/local/lsws/logs 2>/dev/null
+[[ ! -f /usr/local/lsws/logs/error.log ]] && touch /usr/local/lsws/logs/error.log
+
+# 6. Biên dịch Binary với độ ưu tiên I/O & CPU thấp (Nhường tài nguyên cho Web Server)
+cd "$build_dir" || exit 1
+export GOPATH="$build_dir/gopath"
+export GOCACHE="$build_dir/gocache"
+
+nice -n 19 ionice -c3 go mod init wptt-anti-ddos >/dev/null 2>&1
+nice -n 19 ionice -c3 go get github.com/google/nftables@latest >/dev/null 2>&1 || \
+  nice -n 19 ionice -c3 go get github.com/google/nftables >/dev/null 2>&1
+
+if ! nice -n 19 ionice -c3 go build -ldflags="-s -w" -o wptt-anti-ddos anti.go >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Biên dịch mã nguồn Golang thất bại. Vui lòng kiểm tra kết nối mạng!${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi
+
+# 7. Cài đặt Binary nguyên tử và kích hoạt Systemd Service
+chmod 755 "$build_dir/wptt-anti-ddos"
+/bin/mv -fT -- "$build_dir/wptt-anti-ddos" /usr/local/bin/wptt-anti-ddos
+/bin/rm -rf -- "${build_dir:?}"
+build_dir=""
+
+cat > /etc/systemd/system/wptt-anti-ddos.service <<'EOF'
+[Unit]
+Description=WPTangToc OLS Golang Anti-DDoS (Netlink Hash O(1) - 8h Timeout)
+After=network.target nftables.service lsws.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wptt-anti-ddos
+Restart=always
+RestartSec=3
+User=root
+Group=root
+LimitNOFILE=1000000
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload >/dev/null 2>&1
+systemctl enable wptt-anti-ddos.service >/dev/null 2>&1
+systemctl restart wptt-anti-ddos.service >/dev/null 2>&1
+
+if systemctl is-active --quiet wptt-anti-ddos.service; then
+  _rundone "$task_msg"
+  wptt_logs "WARN" "Đã BẬT hệ thống chặn DDoS bằng Golang Netlink O(1) (Tự mở khóa sau 8h)."
+  echo -e "\n${C_GREEN}✔ Thành công! Khiên chống DDoS cấp Kernel (Khóa 8 giờ trên ddos_v4/v6) đã đi vào hoạt động.${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 0 "enter"
+else
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Service wptt-anti-ddos không thể khởi động. Kiểm tra bằng: journalctl -u wptt-anti-ddos${C_RESET}"
+  wptt_quay_ve_menu "$route_flag" 1 "enter"
+fi

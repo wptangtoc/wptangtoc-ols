@@ -1,0 +1,186 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Khởi tạo Nftables thuần (Zero-Overhead)
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+TMP_NFT=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${TMP_NFT:-}" && -f "$TMP_NFT" ]]; then
+    /bin/rm -f -- "${TMP_NFT:?}"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# 1. PHÁT HIỆN PORT SSH ĐA TẦNG (CHỐNG TỰ KHÓA CHÍNH MÌNH - ANTI LOCKOUT 100%)
+# ==============================================================================
+current_ssh_port="${port_ssh:-}"
+if [[ -z "$current_ssh_port" || ! "$current_ssh_port" =~ ^[0-9]+$ ]]; then
+  current_ssh_port="$(awk '/^[ \t]*[Pp]ort[ \t]+[0-9]+/ {print $2; exit}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null)"
+fi
+if [[ -z "$current_ssh_port" || ! "$current_ssh_port" =~ ^[0-9]+$ ]] || ((10#$current_ssh_port < 1 || 10#$current_ssh_port > 65535)); then
+  current_ssh_port=22
+fi
+
+tcp_elements="80, 443"
+if ((10#$current_ssh_port != 80 && 10#$current_ssh_port != 443)); then
+  tcp_elements="${current_ssh_port}, ${tcp_elements}"
+fi
+
+# Bảo vệ thêm Port của phiên SSH đang kết nối trực tiếp
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+  active_session_port="${SSH_CONNECTION##* }"
+  if [[ "$active_session_port" =~ ^[0-9]+$ ]] &&
+     ((10#$active_session_port != 10#$current_ssh_port && 10#$active_session_port != 80 && 10#$active_session_port != 443)); then
+    tcp_elements="${active_session_port}, ${tcp_elements}"
+  fi
+fi
+
+# ==============================================================================
+# 2. ĐẢM BẢO GÓI NFTABLES ĐÃ ĐƯỢC CÀI ĐẶT
+# ==============================================================================
+if ! command -v nft >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nftables >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y nftables >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y nftables >/dev/null 2>&1 || true
+  fi
+fi
+
+if ! command -v nft >/dev/null 2>&1; then
+  echo -e "${C_RED:-}❌ Lỗi: Không tìm thấy công cụ 'nft'. Giữ nguyên tường lửa hiện tại!${C_RESET:-}" >&2
+  exit 1
+fi
+
+# ==============================================================================
+# 3. TẠO FILE CẤU HÌNH CHUẨN (HASH SET CHO PORT, INTERVAL AUTO-MERGE CHO IP)
+# ==============================================================================
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
+
+umask 077
+TMP_NFT="$(mktemp -p /etc/wptt/tmp nftables_init_XXXXXX.conf)"
+umask 022
+
+cat >"$TMP_NFT" <<EOF
+#!/usr/sbin/nft -f
+
+flush ruleset
+
+table inet blackblock {
+	set blackaction_v4 {
+		type ipv4_addr
+		flags interval
+		auto-merge
+	}
+
+	set blackaction_v6 {
+		type ipv6_addr
+		flags interval
+		auto-merge
+	}
+
+	chain blackblock-chain-input {
+		type filter hook input priority -10; policy accept;
+		ip saddr @blackaction_v4 counter drop
+		ip6 saddr @blackaction_v6 counter drop
+	}
+}
+
+table inet filter {
+	set tcp_ports {
+		type inet_service
+		elements = { ${tcp_elements} }
+	}
+
+	set udp_ports {
+		type inet_service
+		elements = { 443 }
+	}
+
+	chain input {
+		type filter hook input priority 0; policy drop;
+
+		# 1. Fast-Path: Cho qua ngay lập tức các kết nối đã thiết lập (99% traffic)
+		ct state established,related accept
+
+		# 2. Cho phép giao tiếp Loopback nội bộ (PHP-LSAPI, MariaDB, Redis Socket)
+		iifname "lo" accept
+
+		# 3. Loại bỏ sớm các gói tin dị dạng / không hợp lệ
+		ct state invalid drop
+
+		# 4. Cho phép ICMPv4 và ICMPv6 thiết yếu (Chống đứt mạng IPv6 NDP & PMTU)
+		icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } limit rate 15/second accept
+		icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, nd-redirect } accept
+
+		# 5. Cho phép gia hạn IP tự động trên Cloud VPS (DHCPv4 & DHCPv6 Client)
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+
+		# 6. Mở Port động siêu tốc qua Hash Set O(1)
+		tcp dport @tcp_ports ct state new accept
+		udp dport @udp_ports ct state new accept
+	}
+
+	chain forward {
+		type filter hook forward priority 0; policy drop;
+	}
+
+	chain output {
+		type filter hook output priority 0; policy accept;
+	}
+}
+EOF
+
+# ==============================================================================
+# 4. TẮT FIREWALLD & NẠP TRỰC TIẾP VÀO KERNEL
+# ==============================================================================
+if systemctl is-active --quiet firewalld 2>/dev/null || systemctl is-enabled --quiet firewalld 2>/dev/null; then
+  systemctl stop firewalld >/dev/null 2>&1 || true
+  systemctl disable firewalld >/dev/null 2>&1 || true
+  systemctl mask firewalld >/dev/null 2>&1 || true
+fi
+
+if ! nft -f "$TMP_NFT" >/dev/null 2>&1; then
+  echo -e "${C_RED:-}❌ Lỗi: Kernel không thể nạp cấu hình Nftables!${C_RESET:-}" >&2
+  exit 1
+fi
+
+chmod 600 "$TMP_NFT"
+/bin/mv -fT "$TMP_NFT" /etc/nftables.conf
+TMP_NFT=""
+
+if [[ -d /etc/sysconfig ]]; then
+  ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+fi
+
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon -F /etc/nftables.conf /etc/sysconfig/nftables.conf >/dev/null 2>&1 || true
+fi
+
+systemctl unmask nftables >/dev/null 2>&1 || true
+systemctl enable --now nftables >/dev/null 2>&1 || true
+
+if declare -F wptt_logs >/dev/null 2>&1; then
+  wptt_logs "INFO" "Đã kích hoạt Nftables thuần (Zero-Overhead), mở sẵn TCP Port: ${tcp_elements}"
+fi
