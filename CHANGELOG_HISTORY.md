@@ -1,3 +1,15 @@
+## WPTangToc OLS v8.3.2
+
+### 🚀 Tính năng mới
+- **Tích hợp NFtables mặc định:** Thay thế Firewalld bằng NFtables làm tường lửa mặc định, mang lại hiệu năng xử lý mạng vượt trội, tăng cường bảo mật và tiết kiệm đáng kể tài nguyên hệ thống cho máy chủ.
+
+### 🛠️ Tối ưu hệ thống
+- **Cải tiến NFtables:** Nâng cao độ ổn định, khả năng lọc gói tin và tối ưu hóa vận hành cho hệ thống tường lửa mới.
+- **Cải thiện cơ chế SSHGuard:** Tối ưu hóa tính năng mở khóa IP với SSHGuard, giúp quản trị viên thao tác linh hoạt, chính xác và nhanh chóng hơn khi xử lý các địa chỉ IP bị chặn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.3.1
 
 🛡️ **Bảo mật & Tối ưu hệ thống**
