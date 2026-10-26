@@ -183,15 +183,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.3.2
-
-🛠️ **Tối ưu hệ thống**
-- Tối ưu thứ tự `indexFiles` ưu tiên `index.php` cho WordPress, giúp giảm lượt gọi hệ thống (`stat() syscall`) và tăng tốc độ phản hồi của OpenLiteSpeed.
-- Tinh chỉnh cấu hình PHP mặc định bằng cách chuyển sang sử dụng thư viện `GD` thay vì `Imagick`, giúp tiết kiệm tài nguyên và tăng hiệu năng tổng thể; đồng thời cho phép quản trị viên chủ động cài đặt lại `Imagick` khi có nhu cầu chuyên biệt.
-
-🐛 **Sửa lỗi**
-- Khắc phục các vấn đề tương thích extension PHP, giúp hệ thống vận hành ổn định và tối ưu hơn trên các kiến trúc ARM, AlmaLinux 10 và RedHat 10.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
