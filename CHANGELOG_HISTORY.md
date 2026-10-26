@@ -1,3 +1,10 @@
+🛠️ Tối ưu hệ thống
+- Xử lý an toàn và tự động từ chối kết nối khi ngắt kết nối SSH đột ngột trong quá trình xác thực, nâng cao tính bảo mật và ổn định.
+- Vô hiệu hóa hiển thị ký tự (echo) và tự động làm sạch bộ đệm bàn phím trong thời gian chờ, ngăn chặn tình trạng nhập ký tự rác do vô tình thao tác.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## 📌 Lịch sử cập nhật WPTangToc OLS 8.3.2
 
 - Không có thay đổi cụ thể nào được ghi nhận.
