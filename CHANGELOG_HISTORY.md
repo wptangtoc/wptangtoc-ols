@@ -183,12 +183,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-### 🛠️ Tối ưu hệ thống
-- Tự động cấu hình và tinh chỉnh `fail2ban` dành riêng cho các máy chủ ảo (VPS) có dung lượng RAM nhỏ (512MB), giúp tiết kiệm tài nguyên hệ thống hiệu quả và nâng cao khả năng bảo mật.
-
-### 🐛 Sửa lỗi
-- Khắc phục sự cố và cải thiện độ ổn định của bộ cài đặt trên hệ điều hành Ubuntu, đảm bảo quá trình triển khai diễn ra mượt mà.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
