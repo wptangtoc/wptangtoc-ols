@@ -1,0 +1,445 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Quản lý & Phong tỏa Chiều Ra (Chain Output Egress Filtering)
+
+# Cách gọi CLI nhanh:
+#   Phong tỏa khẩn cấp (Khóa 100% chiều ra mới): /bin/bash /etc/wptt/bao-mat/nftables/wptt-quan-ly-output strict
+#   Phòng thủ chủ động (Chỉ mở 53, 80, 443, 123): /bin/bash /etc/wptt/bao-mat/nftables/wptt-quan-ly-output safe
+#   Mở lại bình thường (Hoàn nguyên mặc định):    /bin/bash /etc/wptt/bao-mat/nftables/wptt-quan-ly-output off
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 077
+
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+
+tmp_dir=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]]; then
+    case "$tmp_dir" in
+    /etc/wptt/tmp/wptt_output_* | /tmp/wptt_output_*)
+      /bin/rm -rf -- "${tmp_dir:?}"
+      ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# 1. HÀM LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ (ATOMIC)
+# ==============================================================================
+wptt_nft_save_persistent() {
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+  chmod 700 /etc/wptt/tmp 2>/dev/null
+  local tmp_nft=""
+  tmp_nft="$(mktemp -p /etc/wptt/tmp nftables_save_XXXXXX.conf)" || return 1
+
+  {
+    printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\n'
+    nft list table inet blackblock 2>/dev/null || true
+    printf '\n'
+    nft list table inet filter 2>/dev/null || true
+  } >"$tmp_nft"
+
+  if nft -c -f "$tmp_nft" >/dev/null 2>&1; then
+    chmod 600 "$tmp_nft"
+    /bin/mv -fT -- "$tmp_nft" /etc/nftables.conf
+    [[ -d /etc/sysconfig ]] && ln -sfn /etc/nftables.conf /etc/sysconfig/nftables.conf
+    return 0
+  else
+    /bin/rm -f -- "${tmp_nft:?}"
+    return 1
+  fi
+}
+
+# ==============================================================================
+# 2. HÀM THU THẬP TOÀN BỘ PORT SSH ĐANG HOẠT ĐỘNG (STATELESS FAIL-SAFE)
+# ==============================================================================
+wptt_get_active_ssh_ports_csv() {
+  {
+    if [[ -n "${port_ssh:-}" && "${port_ssh}" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "$((10#$port_ssh))"
+    fi
+
+    if [[ -n "${SSH_CONNECTION:-}" ]]; then
+      local conn_p="${SSH_CONNECTION##* }"
+      if [[ "$conn_p" =~ ^[0-9]+$ ]]; then
+        printf '%s\n' "$((10#$conn_p))"
+      fi
+    fi
+
+    if command -v ss >/dev/null 2>&1; then
+      ss -tlnpH 2>/dev/null | awk '/"sshd"|ssh\.socket/ {sub(/.*:/, "", $4); if ($4 ~ /^[0-9]+$/) print $4}'
+    fi
+
+    awk 'tolower($1) == "port" && $2 ~ /^[0-9]+$/ {print $2}' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf 2>/dev/null
+  } | awk '
+    /^[0-9]+$/ {
+      p = $1 + 0
+      if (p >= 1 && p <= 65535 && !seen[p]++) {
+        out = (out == "") ? p : (out ", " p)
+      }
+    }
+    END {
+      print (out == "") ? "22" : out
+    }
+  '
+}
+
+# ==============================================================================
+# 3. HÀM KIỂM TRA TRẠNG THÁI & SỐ GÓI TIN BỊ CHẶN TRÊN CHAIN OUTPUT
+# ==============================================================================
+wptt_get_output_status() {
+  local chain_raw=""
+  chain_raw="$(nft -nn list chain inet filter output 2>/dev/null || true)"
+
+  if [[ "$chain_raw" == *"WPTT_OUTPUT_STRICT"* ]]; then
+    printf 'STRICT'
+  elif [[ "$chain_raw" == *"WPTT_OUTPUT_SAFE"* ]]; then
+    printf 'SAFE'
+  elif [[ "$chain_raw" == *"policy drop"* ]]; then
+    printf 'STRICT'
+  else
+    printf 'OPEN'
+  fi
+}
+
+wptt_get_blocked_output_packets() {
+  nft -nn list chain inet filter output 2>/dev/null | awk '
+    /counter packets [0-9]+ bytes [0-9]+ (drop|reject)/ {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "packets") pkts += $(i + 1)
+      }
+    }
+    END { print pkts + 0 }
+  '
+}
+
+# ==============================================================================
+# 4. HÀM RADAR RÀ QUÉT TIẾN TRÌNH ĐANG TẠO KẾT NỐI RA NGOÀI (FORENSICS)
+# ==============================================================================
+wptt_scan_outbound_processes() {
+  local ssh_csv="$1"
+  echo ""
+  print_border_top "$C_CYAN"
+  center_text "${C_YELLOW}RADAR ĐIỀU TRA TIẾN TRÌNH KẾT NỐI RA NGOÀI (OUTBOUND FORENSICS)${C_RESET}" "$C_CYAN"
+  print_border_bot "$C_CYAN"
+  echo ""
+
+  if ! command -v ss >/dev/null 2>&1; then
+    echo -e "${C_RED}❌ Máy chủ chưa có công cụ 'ss' (iproute2) để quét Socket!${C_RESET}\n"
+    return 1
+  fi
+
+  local scan_out=""
+  scan_out="$(ss -tunapH 2>/dev/null | awk -v ssh_list="$ssh_csv" '
+    BEGIN {
+      n = split(ssh_list, a, ",")
+      for (i = 1; i <= n; i++) {
+        gsub(/[[:space:]]/, "", a[i])
+        if (a[i] != "") is_ssh[a[i]] = 1
+      }
+    }
+    $2 == "SYN-SENT" || $2 == "ESTAB" {
+      local_addr = $5
+      remote_addr = $6
+      proc_info = $7
+
+      # Bỏ qua kết nối Loopback nội bộ
+      if (remote_addr ~ /^127\./ || remote_addr ~ /^\[?::1\]?:/ || remote_addr ~ /^0\.0\.0\.0/) next
+
+      # Tách cổng nguồn (Local Port) để loại trừ phiên SSH và Web 80/443 trả lời khách
+      lport = local_addr
+      sub(/.*:/, "", lport)
+      if (is_ssh[lport] == 1 || lport == "80" || lport == "443") next
+
+      # Trích xuất tên tiến trình và PID
+      proc_name = "Unknown"
+      pid = "-"
+      if (match(proc_info, /"[^"]+"/)) {
+        proc_name = substr(proc_info, RSTART + 1, RLENGTH - 2)
+      }
+      if (match(proc_info, /pid=[0-9]+/)) {
+        pid = substr(proc_info, RSTART + 4, RLENGTH - 4)
+      }
+
+      printf "%-10s %-8s %-18s %-38s\n", $2, pid, proc_name, remote_addr
+    }
+  ')"
+
+  if [[ -z "$scan_out" ]]; then
+    echo -e "${C_GREEN}✔ SẠCH SẼ: Hiện không phát hiện tiến trình nào tự ý mở kết nối lạ ra ngoài Internet.${C_RESET}\n"
+  else
+    printf "${C_BOLD_WHITE}%-10s %-8s %-18s %-14s %-30s${C_RESET}\n" "TRẠNG THÁI" "PID" "TIẾN TRÌNH" "USER SỞ HỮU" "ĐÍCH KẾT NỐI (REMOTE IP:PORT)"
+    echo -e "${C_CYAN}──────────────────────────────────────────────────────────────────────────────────────${C_RESET}"
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      local st="" pid="" pname="" raddr="" owner_user="-"
+      read -r st pid pname raddr <<<"$line"
+      if [[ "$pid" =~ ^[0-9]+$ && -r "/proc/$pid/status" ]]; then
+        local uid=""
+        uid="$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+        if [[ -n "$uid" ]]; then
+          owner_user="$(awk -F: -v u="$uid" '$3 == u {print $1; exit}' /etc/passwd 2>/dev/null || printf '%s' "$uid")"
+        fi
+      fi
+      printf "${C_YELLOW}%-10s${C_RESET} %-8s ${C_RED}%-18s${C_RESET} ${C_CYAN}%-14s${C_RESET} %-30s\n" "$st" "$pid" "$pname" "$owner_user" "$raddr"
+    done <<<"$scan_out"
+    echo ""
+  fi
+}
+
+# ==============================================================================
+# 5. PHÂN TÁCH CHẾ ĐỘ MENU TƯƠNG TÁC VS CLI TỰ ĐỘNG
+# ==============================================================================
+is_interactive=0
+route_flag=""
+MODE_IN="${1:-}"
+
+if [[ -z "$MODE_IN" || "$MODE_IN" == "98" || "$MODE_IN" == "99" ]]; then
+  is_interactive=1
+  route_flag="$MODE_IN"
+  MODE_IN=""
+fi
+
+finish_script() {
+  local code="$1"
+  local wait_mode="${2:-enter}"
+  if ((is_interactive == 1)); then
+    wptt_quay_ve_menu "$route_flag" "$code" "$wait_mode"
+  else
+    exit "$code"
+  fi
+}
+
+if ! systemctl is-active --quiet nftables 2>/dev/null || ! nft list table inet filter >/dev/null 2>&1; then
+  echo -e "\n${C_RED}❌ Lỗi: Kiến trúc Nftables của WPTangToc chưa được kích hoạt!${C_RESET}"
+  finish_script 1 "enter"
+fi
+
+SSH_PORTS_CSV="$(wptt_get_active_ssh_ports_csv)"
+
+while true; do
+  current_status="$(wptt_get_output_status)"
+  blocked_count="$(wptt_get_blocked_output_packets)"
+
+  if ((is_interactive == 1)); then
+    clear
+    echo ""
+    print_border_top "$C_CYAN"
+    center_text "${C_YELLOW}TƯỜNG LỬA NFTABLES ➜ Kiểm Soát Chiều Ra (Chain Output Containment)${C_RESET}" "$C_CYAN"
+    print_border_bot "$C_CYAN"
+    echo ""
+
+    case "$current_status" in
+    STRICT)
+      echo -e "Trạng thái hiện tại : ${C_RED}ĐANG PHONG TỎA KHẨN CẤP (Khóa 100% kết nối mới chiều ra)${C_RESET}"
+      echo -e "Số gói lạ đã chặn   : ${C_YELLOW}${blocked_count} gói tin chiều ra${C_RESET}"
+      echo -e "Cổng SSH bất tử     : ${C_GREEN}TCP ${SSH_PORTS_CSV}${C_RESET}\n"
+      ;;
+    SAFE)
+      echo -e "Trạng thái hiện tại : ${C_YELLOW}PHÒNG THỦ CHỦ ĐỘNG (Chỉ mở DNS 53, Web 80/443, NTP 123)${C_RESET}"
+      echo -e "Số gói lạ đã chặn   : ${C_YELLOW}${blocked_count} gói tin chiều ra${C_RESET}"
+      echo -e "Cổng SSH bất tử     : ${C_GREEN}TCP ${SSH_PORTS_CSV}${C_RESET}\n"
+      ;;
+    *)
+      echo -e "Trạng thái hiện tại : ${C_GREEN}ĐANG MỞ TỰ DO (Mặc định - Policy Accept)${C_RESET}\n"
+      ;;
+    esac
+
+    echo -e "1. BẬT Phong Tỏa Khẩn Cấp (Khi bị Hack: Khóa 100% chiều ra mới, bảo toàn Web & SSH)"
+    echo -e "2. BẬT Phòng Thủ Chủ Động (Chặn cổng Đào Coin/Reverse Shell/Spam Mail, vẫn mở 80/443/53)"
+    echo -e "3. TẮT Khóa Output (Hoàn nguyên - Mở lại toàn bộ chiều ra như mặc định)"
+    echo -e "4. RADAR Điều Tra Tiến Trình (Xem PID/User nào đang cố tạo kết nối ra ngoài)"
+    echo -e "0. Thoát\n"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn: ${C_RESET}"
+    read -r choice
+
+    case "$choice" in
+    0 | "")
+      finish_script 0 ""
+      ;;
+    1)
+      MODE_IN="strict"
+      break
+      ;;
+    2)
+      MODE_IN="safe"
+      break
+      ;;
+    3)
+      MODE_IN="off"
+      break
+      ;;
+    4)
+      wptt_scan_outbound_processes "$SSH_PORTS_CSV"
+      echo -en "${C_CYAN}Nhấn [Enter] để quay lại bảng điều khiển...${C_RESET}"
+      read -r _
+      continue
+      ;;
+    *)
+      echo -e "\n${C_RED}❌ Lỗi: Lựa chọn không hợp lệ!${C_RESET}"
+      finish_script 1 "enter"
+      ;;
+    esac
+  else
+    break
+  fi
+done
+
+MODE_IN="${MODE_IN,,}"
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null
+chmod 700 /etc/wptt/tmp 2>/dev/null
+tmp_dir="$(mktemp -d -p /etc/wptt/tmp wptt_output_XXXXXX 2>/dev/null || mktemp -d /tmp/wptt_output_XXXXXX)"
+batch_file="$tmp_dir/output_mode.nft"
+
+# ==============================================================================
+# 6. XỬ LÝ 3 CHẾ ĐỘ QUA GIAO DỊCH NGUYÊN TỬ (ZERO-DOWNTIME TRANSACTION)
+# ==============================================================================
+case "$MODE_IN" in
+strict)
+  if [[ "$current_status" == "STRICT" ]] && ((is_interactive == 1)); then
+    echo -e "\n${C_YELLOW}⚠️ Chế độ Phong Tỏa Khẩn Cấp đã được bật từ trước!${C_RESET}"
+    finish_script 0 "enter"
+  fi
+
+  task_msg="Kích hoạt Phong Tỏa Khẩn Cấp Chain Output (Chống Hack/Reverse Shell)"
+  _runing "$task_msg"
+
+  cat >"$batch_file" <<EOF
+add chain inet filter output { type filter hook output priority filter; policy accept; }
+flush chain inet filter output
+
+# 1. Fast-Path: Bảo toàn tuyệt đối kết nối đang thiết lập (Khách xem Web & Phiên SSH)
+add rule inet filter output ct state established,related accept
+
+# 2. Chốt chặn BẤT TỬ cho SSH (Stateless Fail-safe): Dù Conntrack tràn vẫn không bao giờ rớt SSH
+add rule inet filter output tcp sport { ${SSH_PORTS_CSV} } accept
+
+# 3. Bảo toàn giao tiếp nội bộ Loopback (PHP <-> MariaDB, Redis, Memcached)
+add rule inet filter output oifname "lo" accept
+
+# 4. Loại bỏ gói tin lỗi trạng thái
+add rule inet filter output ct state invalid drop
+
+# 5. Duy trì gói tin gia hạn IP mạng của Cloud VPS (DHCPv6) và ICMPv6 NDP
+add rule inet filter output ip6 saddr fe80::/10 udp sport 546 udp dport 547 accept
+add rule inet filter output ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+add rule inet filter output ip6 nexthdr icmpv6 icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+
+# 6. Dùng 'counter reject' thay vì 'drop' để tiến trình nội bộ (sshd/lsphp) báo lỗi ngay, không bị treo chờ Timeout
+add rule inet filter output counter reject comment "WPTT_OUTPUT_STRICT"
+add chain inet filter output { type filter hook output priority filter; policy drop; }
+EOF
+  ;;
+
+safe)
+  if [[ "$current_status" == "SAFE" ]] && ((is_interactive == 1)); then
+    echo -e "\n${C_YELLOW}⚠️ Chế độ Phòng Thủ Chủ Động Chain Output đã được bật từ trước!${C_RESET}"
+    finish_script 0 "enter"
+  fi
+
+  task_msg="Kích hoạt Phòng Thủ Chủ Động Chain Output (Chỉ mở DNS, Web 80/443, NTP)"
+  _runing "$task_msg"
+
+  cat >"$batch_file" <<EOF
+add chain inet filter output { type filter hook output priority filter; policy accept; }
+flush chain inet filter output
+
+# 1. Fast-Path: Bảo toàn tuyệt đối kết nối đang thiết lập (Khách xem Web & Phiên SSH)
+add rule inet filter output ct state established,related accept
+
+# 2. Chốt chặn BẤT TỬ cho SSH (Stateless Fail-safe)
+add rule inet filter output tcp sport { ${SSH_PORTS_CSV} } accept
+
+# 3. Bảo toàn giao tiếp nội bộ Loopback (PHP <-> MariaDB, Redis)
+add rule inet filter output oifname "lo" accept
+
+# 4. Loại bỏ gói tin lỗi trạng thái
+add rule inet filter output ct state invalid drop
+
+# 5. Duy trì DHCPv6 và ICMP/ICMPv6 thiết yếu
+add rule inet filter output ip6 saddr fe80::/10 udp sport 546 udp dport 547 accept
+add rule inet filter output ip protocol icmp icmp type { echo-request, destination-unreachable, time-exceeded, parameter-problem } accept
+add rule inet filter output ip6 nexthdr icmpv6 icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
+
+# 6. Chỉ cho phép máy chủ chủ động gọi ra ngoài qua DNS (53), Web (80, 443) và đồng bộ giờ NTP (123)
+add rule inet filter output meta l4proto { tcp, udp } th dport { 53, 80, 443 } ct state new accept
+add rule inet filter output udp dport 123 ct state new accept
+
+# 7. Từ chối tức thì mọi kết nối chiều ra trái phép khác (Đào coin, Reverse Shell, Botnet, Spam SMTP)
+add rule inet filter output counter reject comment "WPTT_OUTPUT_SAFE"
+add chain inet filter output { type filter hook output priority filter; policy drop; }
+EOF
+  ;;
+
+off | open | unlock)
+  if [[ "$current_status" == "OPEN" ]] && ((is_interactive == 1)); then
+    echo -e "\n${C_YELLOW}⚠️ Chain Output hiện đang mở sẵn!${C_RESET}"
+    finish_script 0 "enter"
+  fi
+
+  task_msg="Mở lại toàn bộ kết nối chiều ra (Chain Output Policy Accept)"
+  _runing "$task_msg"
+
+  cat >"$batch_file" <<'EOF'
+add chain inet filter output { type filter hook output priority filter; policy accept; }
+flush chain inet filter output
+EOF
+  ;;
+
+*)
+  echo -e "\n${C_RED}❌ Lỗi: Tham số '$MODE_IN' không hợp lệ (Chỉ hỗ trợ: strict, safe, off)!${C_RESET}"
+  finish_script 1 "enter"
+  ;;
+esac
+
+# Kiểm tra cú pháp (Dry-run) và nạp nguyên tử vào Kernel
+if ! nft -c -f "$batch_file" >/dev/null 2>&1 || ! nft -f "$batch_file" >/dev/null 2>&1; then
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể áp dụng cấu hình Chain Output vào Kernel!${C_RESET}"
+  finish_script 1 "enter"
+fi
+
+if wptt_nft_save_persistent; then
+  _rundone "$task_msg"
+  wptt_logs "WARN" "Nftables: Đã chuyển trạng thái Chain Output sang chế độ [${MODE_IN^^}]."
+
+  if ((is_interactive == 1)); then
+    case "$MODE_IN" in
+    strict)
+      echo -e "\n${C_GREEN}✔ Đã BẬT Phong Tỏa Khẩn Cấp Chain Output (Đã gắn khóa bất tử cho SSH Port: ${SSH_PORTS_CSV})!${C_RESET}"
+      echo -e "${C_YELLOW}💡 Lưu ý: Mọi kết nối từ mã độc/Webshell gọi ra ngoài đã bị cắt đứt. Khi cần cài gói hệ thống hoặc cập nhật Plugin, hãy chuyển về chế độ 2 hoặc 3.${C_RESET}"
+      ;;
+    safe)
+      echo -e "\n${C_GREEN}✔ Đã BẬT Phòng Thủ Chủ Động Chain Output (Mở 53, 80, 443, 123 & Bảo vệ SSH Port: ${SSH_PORTS_CSV})!${C_RESET}"
+      echo -e "${C_CYAN}🛡️ Các cổng Reverse Shell và Spam Mail chiều ra đã bị khóa chặt.${C_RESET}"
+      ;;
+    *)
+      echo -e "\n${C_GREEN}✔ Đã MỞ lại hoàn toàn chiều ra (Chain Output) về mặc định!${C_RESET}"
+      ;;
+    esac
+  fi
+  finish_script 0 "enter"
+else
+  # Rollback về trạng thái an toàn nếu lưu file thất bại
+  nft add chain inet filter output '{ type filter hook output priority filter; policy accept; }' >/dev/null 2>&1 || true
+  nft flush chain inet filter output >/dev/null 2>&1 || true
+  _runloi "$task_msg"
+  echo -e "\n${C_RED}❌ Lỗi: Không thể lưu cấu hình vào /etc/nftables.conf! Đã tự động Rollback.${C_RESET}"
+  finish_script 1 "enter"
+fi
