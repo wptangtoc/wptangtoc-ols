@@ -380,146 +380,305 @@ fi
 # ==============================================================================
 # 5. KERNEL TCP & TỐI ƯU HIỆU SUẤT TẦNG THẤP
 # ==============================================================================
-_step "Tối ưu hóa Kernel Linux"
-if ! grep -qF '* hard nofile 524288' /etc/security/limits.conf 2>/dev/null; then
-  echo "* soft nofile 524288" >>/etc/security/limits.conf
-  echo "* hard nofile 524288" >>/etc/security/limits.conf
+_step "Tối ưu hóa Kernel Linux, Network Stack (BBR/HTTP3) & I/O"
 
-  if [[ ! -f /etc/rc.d/rc.local ]]; then
-    cat >/usr/lib/systemd/system/rc-local.service <<EOF
-[Unit]
-Description=/etc/rc.d/rc.local Compatibility
-ConditionFileIsExecutable=/etc/rc.d/rc.local
-After=network.target
-[Service]
-Type=forking
-ExecStart=/etc/rc.d/rc.local start
-TimeoutSec=0
-RemainAfterExit=yes
-EOF
-    cat >/etc/rc.d/rc.local <<EOF
-#!/bin/bash
-touch /var/lock/subsys/local
-EOF
-    chmod +x /etc/rc.d/rc.local
-    ln -sf /etc/rc.d/rc.local /etc/rc.local
-    systemctl daemon-reload
-    systemctl enable --now rc-local.service >>"$LOG_FILE" 2>&1 || true
-  fi
-  ulimit -n 524288 || true
-  echo "ulimit -n 524288" >>/etc/rc.local
+# 1. Tự động đo dung lượng RAM thực tế bằng Pure Bash (0-Subshell)
+mem_total_kb=0
+if [[ -r /proc/meminfo ]]; then
+  while IFS=': ' read -r key val _; do
+    if [[ "$key" == "MemTotal" && "$val" =~ ^[0-9]+$ ]]; then
+      mem_total_kb="$val"
+      break
+    fi
+  done </proc/meminfo
 fi
+mem_total_mb=$((mem_total_kb / 1024))
+((mem_total_mb <= 0)) && mem_total_mb=1024
+
+if ((mem_total_mb <= 768)); then
+  # VPS 512MB RAM: Giữ VFS_PRESSURE=100 để Slab dentry không chiếm RAM của MariaDB
+  CONNTRACK_MAX=65536
+  CONNTRACK_HASHSIZE=16384
+  MIN_FREE_KB=16384
+  MAX_TW_BUCKETS=65536
+  TCP_MAX_MEM=8388608
+  VFS_PRESSURE=100
+  DIRTY_BG_BYTES=16777216  # 16MB
+  DIRTY_MAX_BYTES=67108864 # 64MB
+elif ((mem_total_mb <= 1536)); then
+  # VPS 1GB RAM
+  CONNTRACK_MAX=131072
+  CONNTRACK_HASHSIZE=32768
+  MIN_FREE_KB=32768
+  MAX_TW_BUCKETS=131072
+  TCP_MAX_MEM=16777216
+  VFS_PRESSURE=100
+  DIRTY_BG_BYTES=33554432   # 32MB
+  DIRTY_MAX_BYTES=134217728 # 128MB
+elif ((mem_total_mb <= 4096)); then
+  # VPS 2GB - 4GB RAM: Giảm VFS_PRESSURE xuống 60 để ưu tiên giữ cache cây thư mục WordPress
+  CONNTRACK_MAX=262144
+  CONNTRACK_HASHSIZE=65536
+  MIN_FREE_KB=65536
+  MAX_TW_BUCKETS=262144
+  TCP_MAX_MEM=16777216
+  VFS_PRESSURE=60
+  DIRTY_BG_BYTES=67108864   # 64MB
+  DIRTY_MAX_BYTES=268435456 # 256MB
+else
+  # Máy chủ > 4GB RAM: Giữ chặt cấu trúc inode/dentry của WordPress trên RAM (VFS_PRESSURE=50)
+  CONNTRACK_MAX=524288
+  CONNTRACK_HASHSIZE=131072
+  MIN_FREE_KB=65536
+  MAX_TW_BUCKETS=1440000
+  TCP_MAX_MEM=33554432
+  VFS_PRESSURE=50
+  DIRTY_BG_BYTES=134217728  # 128MB
+  DIRTY_MAX_BYTES=536870912 # 512MB
+fi
+
+# Tự động nhận diện ZRAM (kể cả khi bước cài đặt ZRAM chạy ở phía sau trong bộ cài): kiểm tra xem hệ thống có support zram không
+if [[ -d /sys/block/zram0 ]] ||
+  [[ -f /etc/systemd/zram-generator.conf ]] ||
+  [[ -f /etc/default/zramswap ]] ||
+  grep -q '/dev/zram' /proc/swaps 2>/dev/null ||
+  modprobe -n zram >/dev/null 2>&1; then
+  SWAPPINESS_VAL=100
+  PAGE_CLUSTER_VAL=0
+else
+  SWAPPINESS_VAL=10
+  PAGE_CLUSTER_VAL=3
+fi
+
+# 2. Thiết lập giới hạn File Descriptor (nofile) & Process (nproc) chuẩn Systemd + PAM
+/bin/mkdir -p /etc/security/limits.d /etc/systemd/system.conf.d 2>/dev/null
+
+web_user="nobody"
+
+cat >/etc/security/limits.d/99-wptangtoc.conf <<EOF
+*          soft    nofile    524288
+*          hard    nofile    524288
+root       soft    nofile    524288
+root       hard    nofile    524288
+*          soft    nproc     16384
+*          hard    nproc     16384
+${web_user}     soft    nproc     32768
+${web_user}     hard    nproc     32768
+root       soft    nproc     unlimited
+root       hard    nproc     unlimited
+EOF
+chmod 644 /etc/security/limits.d/99-wptangtoc.conf
 
 if [[ -f /etc/security/limits.d/20-nproc.conf ]]; then
-  cat >"/etc/security/limits.d/20-nproc.conf" <<EOF
-*          soft    nproc     8192
-*          hard    nproc     8192
-nobody     soft    nproc     32278
-nobody     hard    nproc     32278
-root       soft    nproc     unlimited
-EOF
+  /bin/rm -f /etc/security/limits.d/20-nproc.conf
 fi
 
-if [[ ! -f /proc/user_beancounters ]]; then
-  if [ -d /etc/sysctl.d ]; then
-    if ! grep -q 'wptangtoc-ols' /etc/sysctl.d/101-sysctl.conf 2>/dev/null; then
-      touch /etc/sysctl.d/101-sysctl.conf
-      [[ -w /sys/module/nf_conntrack/parameters/hashsize ]] && echo 131072 >/sys/module/nf_conntrack/parameters/hashsize || true
-      # echo 131072 >/sys/module/nf_conntrack/parameters/hashsize >/dev/null 2>&1 || true
-      echo 'options nf_conntrack hashsize=131072' >/etc/modprobe.d/nf_conntrack.conf
-      if ! grep -q 'hashsize' /etc/rc.local 2>/dev/null; then
-        echo "echo 131072 > /sys/module/nf_conntrack/parameters/hashsize 2>/dev/null" >>/etc/rc.local
-      fi
-      cat >>"/etc/sysctl.d/101-sysctl.conf" <<EOF
-# wptangtoc-ols
-kernel.pid_max=65536
-kernel.printk=4 1 1 7
-fs.nr_open=12000000
-fs.file-max=9000000
-net.core.wmem_max=16777216
-net.core.rmem_max=16777216
-net.ipv4.tcp_rmem=8192 87380 16777216                                          
-net.ipv4.tcp_wmem=8192 65536 16777216
-net.core.netdev_max_backlog=65536
-net.core.somaxconn=65535
-net.core.optmem_max=8192
-net.ipv4.tcp_fin_timeout=10
-net.ipv4.tcp_keepalive_intvl=30
-net.ipv4.tcp_keepalive_probes=3
-net.ipv4.tcp_keepalive_time=240
-net.ipv4.tcp_max_syn_backlog=65536
-net.ipv4.tcp_sack=1
-net.ipv4.tcp_syn_retries=3
-net.ipv4.tcp_synack_retries = 2
-net.ipv4.tcp_tw_recycle = 0
-net.ipv4.tcp_tw_reuse = 0
-net.ipv4.tcp_max_tw_buckets = 1440000
-vm.swappiness=100
-vm.min_free_kbytes=65536
-vm.vfs_cache_pressure = 150
-net.ipv4.ip_local_port_range=1024 65535
-net.ipv4.tcp_slow_start_after_idle=0
-net.ipv4.tcp_limit_output_bytes=65536
-net.ipv4.tcp_rfc1337=1
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.conf.all.log_martians = 1
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.all.secure_redirects = 0
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.default.log_martians = 1
-net.ipv4.conf.default.rp_filter = 1
-net.ipv4.conf.default.secure_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
-net.ipv4.icmp_echo_ignore_broadcasts = 1
-net.ipv4.icmp_ignore_bogus_error_responses = 1
-net.netfilter.nf_conntrack_helper=0
-net.nf_conntrack_max = 524288
-net.netfilter.nf_conntrack_tcp_timeout_established = 28800
-net.netfilter.nf_conntrack_generic_timeout = 60
-net.ipv4.tcp_challenge_ack_limit = 999999999
-net.ipv4.tcp_mtu_probing = 1
-net.ipv4.tcp_base_mss = 1024
-net.unix.max_dgram_qlen = 4096
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_fastopen = 3
-kernel.panic = 10
+cat >/etc/systemd/system.conf.d/99-wptangtoc-limits.conf <<'EOF'
+[Manager]
+DefaultLimitNOFILE=524288
+DefaultLimitNPROC=32768
+EOF
+chmod 644 /etc/systemd/system.conf.d/99-wptangtoc-limits.conf
+ulimit -n 524288 2>/dev/null || true
+
+# 3. Tối ưu Sysctl, Conntrack Hashsize, TCP BBR, ZRAM VM & THP
+if [[ ! -f /proc/user_beancounters && -d /etc/sysctl.d ]]; then
+  modprobe tcp_bbr >/dev/null 2>&1 || true
+  modprobe sch_fq >/dev/null 2>&1 || true
+  modprobe nf_conntrack >/dev/null 2>&1 || true
+
+  /bin/mkdir -p /etc/modules-load.d /etc/modprobe.d 2>/dev/null
+  cat >/etc/modules-load.d/wptangtoc.conf <<'EOF'
+tcp_bbr
+sch_fq
+nf_conntrack
 EOF
 
-      cat >/etc/systemd/system/wptt-disable-thp.service <<'EOF'
+  printf 'options nf_conntrack hashsize=%s\n' "$CONNTRACK_HASHSIZE" >/etc/modprobe.d/nf_conntrack.conf
+  if [[ -w /sys/module/nf_conntrack/parameters/hashsize ]]; then
+    printf '%s\n' "$CONNTRACK_HASHSIZE" >/sys/module/nf_conntrack/parameters/hashsize 2>/dev/null || true
+  fi
+
+  avail_cc=""
+  if [[ -r /proc/sys/net/ipv4/tcp_available_congestion_control ]]; then
+    read -r avail_cc </proc/sys/net/ipv4/tcp_available_congestion_control || true
+  fi
+  if [[ "$avail_cc" == *"bbr"* ]]; then
+    TCP_CC="bbr"
+  else
+    TCP_CC="cubic"
+  fi
+
+  /bin/rm -f /etc/sysctl.d/101-sysctl.conf
+
+  cat >/etc/sysctl.d/99-wptangtoc-ols.conf <<EOF
+# ==============================================================================
+# WPTangToc OLS - Enterprise Kernel, ZRAM & Network Tuning (${mem_total_mb}MB RAM)
+# ==============================================================================
+
+# 1. Quản lý Tiến trình, Lập lịch Server & File System (MariaDB Native AIO)
+kernel.pid_max = 65536
+kernel.printk = 4 1 1 7
+kernel.panic = 10
+kernel.sched_autogroup_enabled = 0
+fs.nr_open = 12000000
+fs.file-max = 9000000
+fs.aio-max-nr = 1048576
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 1024
+
+# 2. Quản lý Bộ nhớ Ảo tối ưu chuyên biệt cho ZRAM, MariaDB & Redis/KeyDB/Valkey
+vm.swappiness = ${SWAPPINESS_VAL}
+vm.page-cluster = ${PAGE_CLUSTER_VAL}
+vm.vfs_cache_pressure = ${VFS_PRESSURE}
+vm.dirty_background_ratio = 0
+vm.dirty_ratio = 0
+vm.dirty_background_bytes = ${DIRTY_BG_BYTES}
+vm.dirty_bytes = ${DIRTY_MAX_BYTES}
+vm.dirty_expire_centisecs = 1500
+vm.dirty_writeback_centisecs = 300
+vm.min_free_kbytes = ${MIN_FREE_KB}
+vm.overcommit_memory = 1
+vm.panic_on_oom = 0
+vm.max_map_count = 262144
+
+# 3. Bộ đệm Socket Core & Mở rộng UDP cho QUIC / HTTP/3 (OpenLiteSpeed)
+net.core.wmem_max = ${TCP_MAX_MEM}
+net.core.rmem_max = ${TCP_MAX_MEM}
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.optmem_max = 65536
+net.core.netdev_max_backlog = 65536
+net.core.netdev_budget = 600
+net.core.netdev_budget_usecs = 8000
+net.core.somaxconn = 65535
+net.unix.max_dgram_qlen = 4096
+
+# 4. Hiệu năng TCP & Thuật toán chống nghẽn Google BBR
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = ${TCP_CC}
+net.ipv4.tcp_rmem = 4096 87380 ${TCP_MAX_MEM}
+net.ipv4.tcp_wmem = 4096 65536 ${TCP_MAX_MEM}
+net.ipv4.udp_rmem_min = 16384
+net.ipv4.udp_wmem_min = 16384
+net.ipv4.tcp_fastopen = 3
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_notsent_lowat = 16384
+net.ipv4.tcp_limit_output_bytes = 1048576
+net.ipv4.tcp_mtu_probing = 1
+net.ipv4.tcp_base_mss = 1024
+net.ipv4.tcp_sack = 1
+net.ipv4.tcp_window_scaling = 1
+
+# 5. Chống cạn kiệt Socket & DDoS Tầng TCP
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 65536
+net.ipv4.tcp_syn_retries = 2
+net.ipv4.tcp_synack_retries = 2
+net.ipv4.tcp_fin_timeout = 10
+net.ipv4.tcp_keepalive_time = 240
+net.ipv4.tcp_keepalive_intvl = 30
+net.ipv4.tcp_keepalive_probes = 3
+net.ipv4.tcp_tw_reuse = 2
+net.ipv4.tcp_max_tw_buckets = ${MAX_TW_BUCKETS}
+net.ipv4.tcp_max_orphans = 65536
+net.ipv4.ip_local_port_range = 1024 65535
+net.ipv4.tcp_rfc1337 = 1
+net.ipv4.tcp_challenge_ack_limit = 999999999
+
+# 6. Khóa Bảo mật Tầng IPv4 & IPv6 (Tắt log_martians chống tràn đĩa khi bị Spoof DDoS)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.conf.default.secure_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.log_martians = 0
+net.ipv4.conf.default.log_martians = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_source_route = 0
+net.ipv6.conf.default.accept_source_route = 0
+
+# 7. Tối ưu Bảng theo dõi kết nối Netfilter Conntrack (Đồng bộ với Nftables & HTTP/3 QUIC)
+net.netfilter.nf_conntrack_max = ${CONNTRACK_MAX}
+net.netfilter.nf_conntrack_buckets = ${CONNTRACK_HASHSIZE}
+net.netfilter.nf_conntrack_helper = 0
+net.netfilter.nf_conntrack_tcp_timeout_established = 1800
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+net.netfilter.nf_conntrack_tcp_timeout_close_wait = 15
+net.netfilter.nf_conntrack_tcp_timeout_fin_wait = 30
+net.netfilter.nf_conntrack_udp_timeout = 30
+net.netfilter.nf_conntrack_udp_timeout_stream = 60
+net.netfilter.nf_conntrack_generic_timeout = 60
+EOF
+
+  if grep -q 'AMD EPYC' /proc/cpuinfo 2>/dev/null; then
+    printf 'kernel.watchdog_thresh = 20\n' >>/etc/sysctl.d/99-wptangtoc-ols.conf
+  fi
+  chmod 644 /etc/sysctl.d/99-wptangtoc-ols.conf
+
+  # 4. Tắt Transparent Huge Pages (THP)
+  if [[ -w /sys/kernel/mm/transparent_hugepage/enabled ]]; then
+    printf 'never' >/sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
+  fi
+  if [[ -w /sys/kernel/mm/transparent_hugepage/defrag ]]; then
+    printf 'never' >/sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true
+  fi
+
+  cat >/etc/systemd/system/wptt-disable-thp.service <<'EOF'
 [Unit]
-Description=Disable THP for WPTangToc
+Description=Disable Transparent Huge Pages (THP) for WPTangToc OLS
+DefaultDependencies=no
 After=sysinit.target local-fs.target
-Before=mariadb.service
+Before=mariadb.service mysql.service redis.service keydb.service valkey.service lsws.service
+
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true'
-ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null || true'
+ExecStart=/bin/sh -c 'if [ -w /sys/kernel/mm/transparent_hugepage/enabled ]; then echo never > /sys/kernel/mm/transparent_hugepage/enabled; fi; if [ -w /sys/kernel/mm/transparent_hugepage/defrag ]; then echo never > /sys/kernel/mm/transparent_hugepage/defrag; fi'
+RemainAfterExit=yes
+
 [Install]
 WantedBy=basic.target
 EOF
-      systemctl daemon-reload
-      systemctl enable --now wptt-disable-thp.service >>"$LOG_FILE" 2>&1 || true
 
-      if grep -qo 'AMD EPYC' /proc/cpuinfo 2>/dev/null; then
-        echo "kernel.watchdog_thresh = 20" >>/etc/sysctl.d/101-sysctl.conf
-      fi
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now wptt-disable-thp.service >>"${LOG_FILE:-/dev/null}" 2>&1 || true
 
-      if [[ -f /usr/lib/tuned/virtual-guest/tuned.conf ]]; then
-        sed -i '/vm.swappiness/d' /usr/lib/tuned/virtual-guest/tuned.conf
-        echo 'vm.swappiness = 100' >>/usr/lib/tuned/virtual-guest/tuned.conf
-      fi
-      /sbin/sysctl --system >>"$LOG_FILE" 2>&1 || true
-    fi
+  # 5. Đồng bộ Tuned Profile: Ghi đè cả dirty_ratio=0 của latency-performance để bảo toàn dirty_bytes
+  if command -v tuned-adm >/dev/null 2>&1; then
+    /bin/mkdir -p /etc/tuned/wptangtoc-performance 2>/dev/null
+    cat >/etc/tuned/wptangtoc-performance/tuned.conf <<EOF
+[main]
+summary=WPTangToc OLS Latency Performance with ZRAM Optimization
+include=latency-performance
+
+[vm]
+transparent_hugepages=never
+
+[sysctl]
+vm.swappiness=${SWAPPINESS_VAL}
+vm.page-cluster=${PAGE_CLUSTER_VAL}
+vm.vfs_cache_pressure=${VFS_PRESSURE}
+vm.dirty_background_ratio=0
+vm.dirty_ratio=0
+vm.dirty_background_bytes=${DIRTY_BG_BYTES}
+vm.dirty_bytes=${DIRTY_MAX_BYTES}
+EOF
+    tuned-adm profile wptangtoc-performance >>"${LOG_FILE:-/dev/null}" 2>&1 || true
   fi
-  if command -v tuned-adm &>/dev/null; then
-    tuned-adm profile latency-performance >>"$LOG_FILE" 2>&1 || true
-  fi
+
+  # 6. Áp dụng toàn bộ thông số Sysctl sau cùng
+  /sbin/sysctl --system >>"${LOG_FILE:-/dev/null}" 2>&1 || true
 fi
-_success "Tối ưu Kernel Linux, Network & I/O hoàn tất"
+
+_success "Tối ưu Kernel Linux, ZRAM, Network (BBR/HTTP3) & I/O hoàn tất"
 
 # ==============================================================================
 # 6. TÍNH TOÁN CẤU HÌNH RAM/CPU THEO TỶ LỆ
