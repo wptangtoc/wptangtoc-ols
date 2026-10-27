@@ -1,3 +1,11 @@
+## 📌 Lịch sử cập nhật WPTangToc OLS 8.3.2.1
+
+- 6f7c65ab Cân bằng tải NUMA tối ưu
+- 4361aab5 optimize kernel linux cho wptangtoc ols
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.3.2.0
 
 ### 🚀 Tính năng mới
