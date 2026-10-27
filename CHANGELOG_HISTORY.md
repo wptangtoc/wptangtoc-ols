@@ -183,11 +183,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.3.5
-
-🛠️ **Tối ưu hệ thống**
-- Nâng cao hiệu suất hoạt động của thư viện giao diện cốt lõi (core UI), giúp thao tác quản trị phản hồi nhanh chóng, mượt mà và tiết kiệm tài nguyên hệ thống hơn.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
