@@ -1,3 +1,21 @@
+# WPTangToc OLS 8.3.2.1
+
+🚀 **Tính năng mới & Cải tiến**
+- Tích hợp cơ chế nhân Linux chuyên sâu chống DDoS, giúp bảo vệ webserver vững chắc trước các cuộc tấn công mạng quy mô lớn.
+- Tinh chỉnh trải nghiệm dòng lệnh, bổ sung cơ chế xử lý chờ thông minh cho tính năng tìm kiếm (`search wptangtoc`) giúp thao tác của quản trị viên mượt mà và chính xác ngay cả khi dữ liệu chưa tải xong.
+
+🛠️ **Tối ưu hệ thống**
+- Tối ưu hóa hiệu năng nhân Linux chuyên sâu dành riêng cho các dòng máy chủ sử dụng vi xử lý AMD Ryzen, khai thác tối đa sức mạnh phần cứng.
+- Nâng cấp thuật toán cân bằng tải NUMA, giúp cải thiện hiệu suất xử lý và phân phối tài nguyên trên hệ thống phần cứng đa socket.
+- Cải tiến hệ thống tường lửa `nftables` với khả năng quản lý traffic đầu ra (output) chặt chẽ và tối ưu hóa mạng lưới tốt hơn.
+
+🐛 **Sửa lỗi**
+- Khắc phục triệt để lỗi xung đột thông báo trong quá trình chạy bộ cài đặt WPTangToc OLS.
+- Sửa lỗi kiểm tra phiên bản `nftables` trong mô-đun quản lý dịch vụ, đảm bảo các service vận hành ổn định không bị gián đoạn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## 📌 Lịch sử cập nhật WPTangToc OLS 8.3.2.1
 
 - 6f7c65ab Cân bằng tải NUMA tối ưu
