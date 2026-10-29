@@ -2,13 +2,14 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
-# @since: 2025
+# @since: 2026
+# @description: Thay đổi phiên bản PHP riêng cho từng Website/Domain
 
 function huong_dan() {
   cat <<'EOF'
   Tính năng Thay đổi phiên bản PHP riêng cho domain là khả năng cho phép bạn chọn và áp dụng một phiên bản PHP cụ thể [ví dụ: PHP 8.1, PHP 8.2, PHP 8.3, PHP 8.4, PHP 8.5] để chạy cho một website [tên miền hoặc tên miền phụ] nhất định trên cùng một máy chủ, độc lập với phiên bản PHP mà các website khác hoặc máy chủ đang sử dụng làm mặc định.
 
-  Nới đơn giản, nếu bạn có nhiều website trên cùng một hệ thống, bạn có thể cài đặt website A chạy PHP 8.1 trong khi website B vẫn chạy PHP 7.4, mà không ảnh hưởng lẫn nhau.
+  Nói đơn giản, nếu bạn có nhiều website trên cùng một hệ thống, bạn có thể cài đặt website A chạy PHP 8.3 trong khi website B vẫn chạy PHP 7.4, mà không ảnh hưởng lẫn nhau.
 
   Mục đích chính:
   * Đảm bảo tương thích ứng dụng: Các website, theme, plugin khác nhau có thể yêu cầu các phiên bản PHP khác nhau để hoạt động tối ưu hoặc tránh lỗi.
@@ -20,41 +21,142 @@ function huong_dan() {
 EOF
 }
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UX Bo Cong
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 022
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
+
+route_menu="${1:-}"
+su_dung_repo_du_phong=0
+tmp_work_dir=""
+
+# ==============================================================================
+# BẪY DỌN DẸP TÀI NGUYÊN & KHÔI PHỤC /etc/hosts AN TOÀN KHI THOÁT SỚM
+# ==============================================================================
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if ((su_dung_repo_du_phong == 1)) && [[ -f /etc/hosts ]]; then
+    local hosts_tmp="/etc/wptt/tmp/hosts_domain_clean_$$.tmp"
+    if grep -v 'rpms\.litespeedtech\.com' /etc/hosts >"$hosts_tmp" 2>/dev/null; then
+      chmod 644 "$hosts_tmp" 2>/dev/null || true
+      /bin/mv -fT -- "$hosts_tmp" /etc/hosts 2>/dev/null || /bin/rm -f -- "$hosts_tmp"
+    else
+      /bin/rm -f -- "$hosts_tmp" 2>/dev/null || true
+    fi
+  fi
+  if [[ -n "${tmp_work_dir:-}" && -d "$tmp_work_dir" ]]; then
+    case "$tmp_work_dir" in
+      /etc/wptt/tmp/*) /bin/rm -rf -- "${tmp_work_dir:?}" 2>/dev/null || true ;;
+    esac
+  fi
+  /bin/rm -f -- /etc/wptt/tmp/php_extension_call_eol 2>/dev/null || true
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+/bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+chmod 700 /etc/wptt/tmp 2>/dev/null || true
+tmp_work_dir="$(mktemp -d /etc/wptt/tmp/php_dom_XXXXXX 2>/dev/null || echo "/etc/wptt/tmp/php_dom_$$")"
+/bin/mkdir -p "$tmp_work_dir" 2>/dev/null || true
+
+# Nhận diện Hệ điều hành & Package Manager chuẩn
+if grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
+  OS_FAMILY="DEBIAN"
+  PKG_MGR="apt-get"
+else
+  OS_FAMILY="RHEL"
+  if command -v dnf >/dev/null 2>&1; then
+    PKG_MGR="dnf"
+  else
+    PKG_MGR="yum"
+  fi
+fi
+
+# Hàm trích xuất danh sách phiên bản PHP từ kho EOL (0-Perl, chỉ dùng AWK)
+_extract_php_versions() {
+  local eol_file="/etc/wptt/tmp/php_extension_call_eol"
+  [[ -s "$eol_file" ]] || return 0
+  awk '
+    {
+      line = $0
+      while (match(line, /lsphp[0-9][0-9]/)) {
+        ver = substr(line, RSTART + 5, 2)
+        seen[ver] = 1
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    END {
+      for (v in seen) print v
+    }
+  ' "$eol_file" 2>/dev/null | sort -u | awk '{ printf "PHP %s.%s\n", substr($1,1,1), substr($1,2,1) }'
+}
+
+# Hàm tải gói an toàn với curl / wget
+_download_pkg() {
+  local url="$1"
+  local dest_dir="$2"
+  local filename="${url##*/}"
+  if command -v curl >/dev/null 2>&1; then
+    curl --fail --silent --show-error --location --max-time 90 --retry 2 -o "${dest_dir}/${filename}" "$url" 2>/dev/null
+  else
+    wget -q --timeout=90 --tries=2 -P "$dest_dir" "$url" 2>/dev/null
+  fi
+}
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}QUẢN LÝ PHP ➜ Thay Đổi Phiên Bản PHP Cho 1 Website (Domain)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-. /etc/wptt/tenmien 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/tenmien ]] && . /etc/wptt/tenmien 2>/dev/null
 lua_chon_NAME "Thay đổi PHP Domain"
 
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
-  wptt_quay_ve_menu "${1:-}" 0
-}
-
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Tên miền không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-php-ini-main 1
-  exit 1
+if [[ "${NAME:-}" == "0" || -z "${NAME:-}" ]]; then
+  wptt_quay_ve_menu "$route_menu" 0
 fi
 
+pathcheck="/etc/wptt/vhost/.${NAME}.conf"
+vhost_conf_path="/usr/local/lsws/conf/vhosts/${NAME}/${NAME}.conf"
+if [[ ! -f "$pathcheck" || ! -f "$vhost_conf_path" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Tên miền hoặc cấu hình Vhost của '$NAME' không tồn tại trên hệ thống!${C_RESET}"
+  read -r -s -n 1 -t 2.5 _ 2>/dev/null || true
+  wptt_quay_ve_menu "$route_menu" 1
+fi
+
+# shellcheck source=/dev/null
 . "$pathcheck" 2>/dev/null
 
-# Lấy phiên bản PHP hiện tại
-phpcheck=$(php -v | grep cli | grep -oP 'PHP \K[0-9]+\.[0-9]+')
-php_ver_chon_goc=${phpcheck//[-._]/}
-checkioncube=""
-[[ -f /usr/local/lsws/lsphp${php_ver_chon_goc}/lib64/php/modules/ioncube.so ]] && checkioncube="1"
+# Lấy phiên bản PHP hiện tại của hệ thống và của riêng Domain
+phpcheck="$(php -v 2>/dev/null | awk '/^PHP [0-9]+\.[0-9]+/ {split($2, a, "."); print a[1]"."a[2]; exit}')"
+[[ -z "$phpcheck" ]] && phpcheck="${php_version_check:-8.1}"
+php_ver_chon_goc="${phpcheck//[^0-9]/}"
 
-php_hien_tai=${phien_ban_php_domain:-$phpcheck}
+php_hien_tai="${phien_ban_php_domain:-$phpcheck}"
+php_ver_hien_tai_raw="${php_hien_tai//[^0-9]/}"
+
+# Nhận diện nếu PHP hiện tại của Domain hoặc của Hệ thống đang bật IonCube
+checkioncube=""
+if [[ -f "/usr/local/lsws/lsphp${php_ver_chon_goc}/lib64/php/modules/ioncube.so" ]] ||
+   [[ -f "/usr/local/lsws/lsphp${php_ver_hien_tai_raw}/lib64/php/modules/ioncube.so" ]] ||
+   /usr/local/lsws/lsphp"${php_ver_hien_tai_raw}"/bin/php -v 2>/dev/null | grep -qi "ionCube" ||
+   php -v 2>/dev/null | grep -qi "ionCube"; then
+  checkioncube="1"
+fi
 
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 left_text "  Đang xử lý Website : ${C_BOLD_WHITE}$NAME${C_RESET}" 2
@@ -62,50 +164,80 @@ left_text "  PHP hiện đang chạy : ${C_YELLOW}PHP $php_hien_tai${C_RESET}" 2
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# QUÉT VÀ LẤY DANH SÁCH PHP TỪ LITESPEED REPO
+# 1. QUÉT VÀ LẤY DANH SÁCH PHP TỪ LITESPEED REPO
 # ==============================================================================
-_runing "Đang dọn dẹp cache và quét các phiên bản PHP khả dụng..."
+task_scan="Dọn dẹp cache và quét các phiên bản PHP khả dụng"
+_runing "$task_scan"
 
+# Đồng bộ GPG Key LiteSpeed cho RHEL/AlmaLinux/Rocky 8, 9, 10 nguyên tử
 if [[ -f /etc/yum.repos.d/litespeed.repo ]]; then
-  # Lấy phiên bản major của hệ điều hành (vd: 8, 9, 10)
-  os_major_version=$(grep '^VERSION_ID=' /etc/os-release | cut -d '"' -f 2 | cut -d '.' -f 1)
+  os_major_version=""
+  if [[ -r /etc/os-release ]]; then
+    while IFS='=' read -r k v; do
+      if [[ "$k" == "VERSION_ID" ]]; then
+        v="${v//\"/}"
+        os_major_version="${v%%.*}"
+        break
+      fi
+    done </etc/os-release
+  fi
 
+  tmp_repo="${tmp_work_dir}/litespeed.repo.tmp"
   if [[ "$os_major_version" == "10" ]]; then
-    # Dành cho phiên bản 10 (AlmaLinux 10, Rocky 10, RHEL 10...)
-    sed -i 's|gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed|gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025|g' /etc/yum.repos.d/litespeed.repo
+    sed 's|gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed|gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed2025|g' /etc/yum.repos.d/litespeed.repo >"$tmp_repo" 2>/dev/null
   else
-    # Dành cho các phiên bản cũ hơn (8, 9)
-    sed -i 's|gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed|gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed|g' /etc/yum.repos.d/litespeed.repo
+    sed 's|gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-litespeed|gpgkey=https://rpms.litespeedtech.com/centos/RPM-GPG-KEY-litespeed|g' /etc/yum.repos.d/litespeed.repo >"$tmp_repo" 2>/dev/null
+  fi
+  if [[ -s "$tmp_repo" ]]; then
+    chmod 644 "$tmp_repo"
+    /bin/mv -fT -- "$tmp_repo" /etc/yum.repos.d/litespeed.repo 2>/dev/null || /bin/rm -f -- "$tmp_repo"
   fi
 fi
 
-if command -v dnf >/dev/null 2>&1; then
-  dnf clean all >/dev/null 2>&1
+if [[ "$OS_FAMILY" == "RHEL" ]]; then
+  "$PKG_MGR" clean all >/dev/null 2>&1 || true
 fi
 
-(/etc/wptt/php/kho-luu-tru-litespeed) # Subshell
+if [[ -f /etc/wptt/php/kho-luu-tru-litespeed ]]; then
+  (/bin/bash /etc/wptt/php/kho-luu-tru-litespeed >/dev/null 2>&1) || true
+fi
 
-x=$(grep -oP 'lsphp[0-9]+' /etc/wptt/tmp/php_extension_call_eol 2>/dev/null | sort -u | grep -Eo '[0-9]{1,2}' | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g')
+x="$(_extract_php_versions)"
 
-if [[ -z $(echo "$x" | grep -Eo '[0-9]{1,2}') ]]; then
-  sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-  echo -e '\n52.55.120.73 rpms.litespeedtech.com\n' >>/etc/hosts
-  (/etc/wptt/php/kho-luu-tru-litespeed)
-  x=$(grep -oP 'lsphp[0-9]+' /etc/wptt/tmp/php_extension_call_eol 2>/dev/null | sort -u | grep -Eo '[0-9]{1,2}' | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g')
+# Fallback sang IP Repo dự phòng nếu DNS rpms.litespeedtech.com gặp sự cố
+if [[ -z "$x" ]]; then
+  hosts_tmp="${tmp_work_dir}/hosts.tmp"
+  grep -v 'rpms\.litespeedtech\.com' /etc/hosts >"$hosts_tmp" 2>/dev/null || true
+  printf '\n52.55.120.73 rpms.litespeedtech.com\n' >>"$hosts_tmp"
+  chmod 644 "$hosts_tmp"
+  /bin/mv -fT -- "$hosts_tmp" /etc/hosts
   su_dung_repo_du_phong=1
+
+  if [[ -f /etc/wptt/php/kho-luu-tru-litespeed ]]; then
+    (/bin/bash /etc/wptt/php/kho-luu-tru-litespeed >/dev/null 2>&1) || true
+  fi
+  x="$(_extract_php_versions)"
 fi
 
-if [[ -z $(echo "$x" | grep -Eo '[0-9]{1,2}') ]]; then
-  _runloi "Quét phiên bản PHP thất bại!"
-  sed -i '/rpms.litespeedtech.com/d' /etc/hosts
-  sleep 3
-  exec /etc/wptt/wptt-php-ini-main 1
-  exit 1
+# Fallback cuối: Quét trực tiếp từ Package Manager nếu trang danh sách EOL không phản hồi
+if [[ -z "$x" ]]; then
+  if [[ "$OS_FAMILY" == "DEBIAN" ]]; then
+    x="$(apt-cache --names-only search '^lsphp[0-9]{2}$' 2>/dev/null | awk '{ver=substr($1,6,2); if(ver~/^[0-9]{2}$/) print ver}' | sort -u | awk '{printf "PHP %s.%s\n", substr($1,1,1), substr($1,2,1)}')"
+  else
+    x="$("$PKG_MGR" list available 'lsphp[0-9][0-9]' 2>/dev/null | awk '/^lsphp[0-9][0-9]\./ {ver=substr($1,6,2); print ver}' | sort -u | awk '{printf "PHP %s.%s\n", substr($1,1,1), substr($1,2,1)}')"
+  fi
 fi
-_rundone "Quét phiên bản PHP thành công!"
+
+if [[ -z "$x" ]]; then
+  _runloi "$task_scan"
+  echo -e "\n${C_RED}❌ Không thể lấy danh sách phiên bản PHP từ kho lưu trữ LiteSpeed!${C_RESET}\n"
+  read -r -s -n 1 -t 2.5 _ 2>/dev/null || true
+  wptt_quay_ve_menu "$route_menu" 1
+fi
+_rundone "$task_scan"
 
 # ==============================================================================
-# MENU CHỌN PHIÊN BẢN PHP
+# 2. MENU CHỌN PHIÊN BẢN PHP
 # ==============================================================================
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}DANH SÁCH PHIÊN BẢN PHP HỖ TRỢ${C_RESET}"
@@ -125,79 +257,69 @@ echo -e "${C_CYAN}╰───────────────────�
 
 while true; do
   echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
-  read -r REPLY
+  if ! read -r REPLY; then
+    echo -e "\n${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    wptt_quay_ve_menu "$route_menu" 0
+  fi
   [[ "$REPLY" == "0" || -z "$REPLY" ]] && {
     echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
-    wptt_quay_ve_menu "${1:-}" 0
+    wptt_quay_ve_menu "$route_menu" 0
   }
 
-  if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-    php_version_text="${selects[$((REPLY - 1))]}"
+  if [[ "$REPLY" =~ ^[0-9]+$ ]] && ((10#$REPLY >= 1 && 10#$REPLY <= ${#selects[@]})); then
+    php_version_text="${selects[$((10#$REPLY - 1))]}"
     break
   else
     echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
   fi
 done
 
-# Định dạng biến
-php_version_raw=${php_version_text//[-._ PHP]/}
-php_ver_chon=$(echo "$php_version_raw" | head -1)
-php_version_cham=$(echo "$php_ver_chon" | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
+# Định dạng biến chuẩn bằng Pure Bash (0-Perl, 0-Subshell)
+php_ver_chon="${php_version_text//[^0-9]/}"
+php_version_cham="${php_ver_chon:0:1}.${php_ver_chon:1:1}"
 
 if [[ "$php_hien_tai" == "$php_version_cham" ]]; then
   echo -e "\n${C_YELLOW}⚠️ Website $NAME hiện tại đã sử dụng PHP $php_version_cham rồi!${C_RESET}"
-  sleep 3
-  exec /etc/wptt/wptt-php-ini-main 1
-  exit 0
+  read -r -s -n 1 -t 2.5 _ 2>/dev/null || true
+  wptt_quay_ve_menu "$route_menu" 0
 fi
 
 # ==============================================================================
-# KIỂM TRA ĐỘ TƯƠNG THÍCH VỚI WORDPRESS CORE
+# 3. KIỂM TRA ĐỘ TƯƠNG THÍCH VỚI WORDPRESS CORE (100% PURE BASH - 0 SUBSHELL)
 # ==============================================================================
-if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
-  [[ -f /usr/local/lsws/"$NAME"/html/wp-includes/version.php ]] && raw_wp_ver=$(grep '^[[:space:]]*$wp_version[[:space:]]*=' "/usr/local/lsws/$NAME/html/wp-includes/version.php" 2>/dev/null | cut -d "'" -f 2 2>/dev/null)
+wp_ver_file="/usr/local/lsws/$NAME/html/wp-includes/version.php"
+if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" && -r "$wp_ver_file" ]]; then
+  wp_major=0
+  wp_minor=0
+  has_wp_ver=0
 
-  # Đề phòng trường hợp cực hiếm WP dùng nháy kép
-  if [[ -z "$raw_wp_ver" ]]; then
-    raw_wp_ver=$(grep '^[[:space:]]*$wp_version[[:space:]]*=' "/usr/local/lsws/$NAME/html/wp-includes/version.php" 2>/dev/null | cut -d '"' -f 2 2>/dev/null)
-  fi
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*\$wp_version[[:space:]]*=[[:space:]]*[\'\"]([0-9]+)\.([0-9]+) ]]; then
+      wp_major=$((10#${BASH_REMATCH[1]}))
+      wp_minor=$((10#${BASH_REMATCH[2]}))
+      has_wp_ver=1
+      break
+    fi
+  done <"$wp_ver_file"
 
   loi_tuong_thich=""
-
-  if [[ -n "$raw_wp_ver" ]]; then
-    # Bóc tách và làm sạch riêng số Major và Minor (chống lỗi dính chữ 'alpha/beta')
-    wp_major=$(echo "$raw_wp_ver" | cut -d. -f1 | sed 's/[^0-9]//g')
-    wp_minor=$(echo "$raw_wp_ver" | cut -d. -f2 | sed 's/[^0-9]//g')
-
-    # Ép kiểu chống lỗi số bát phân (Octal) của Bash
-    wp_major=$((10#$wp_major))
-    wp_minor=$((10#$wp_minor))
-
-    # Quy đổi thành số nguyên Toán học để so sánh tuyệt đối chuẩn (VD: 6.4 -> 604, 6.12 -> 612): nhân cho 100 so sánh cho nó chuẩn tránh bị hiện tuởng: 5.12 lớn hơn 6.1 cứ: cắt 2 số đầu rồi nhân theo hệ 100
+  if ((has_wp_ver == 1)); then
     check_ver_core=$((wp_major * 100 + wp_minor))
 
-    # WordPress 6.9 trở lên mới bắt đầu support tốt PHP 8.5
     if [[ "$php_ver_chon" == '85' ]] && ((check_ver_core < 609)); then
       loi_tuong_thich="WordPress 6.9"
-    # WordPress 6.7 trở lên mới support ổn định PHP 8.4
     elif [[ "$php_ver_chon" == '84' ]] && ((check_ver_core < 607)); then
       loi_tuong_thich="WordPress 6.7"
-    # WordPress 6.4 trở lên mới support ổn định PHP 8.3
     elif [[ "$php_ver_chon" == '83' ]] && ((check_ver_core < 604)); then
       loi_tuong_thich="WordPress 6.4"
-    # WordPress 6.0 trở lên cho PHP 8.2
     elif [[ "$php_ver_chon" == '82' ]] && ((check_ver_core < 600)); then
       loi_tuong_thich="WordPress 6.0"
-    # WordPress 5.9 trở lên cho PHP 8.1
     elif [[ "$php_ver_chon" == '81' ]] && ((check_ver_core < 509)); then
       loi_tuong_thich="WordPress 5.9"
-    # WordPress 5.6 trở lên cho PHP 8.0
     elif [[ "$php_ver_chon" == '80' ]] && ((check_ver_core < 506)); then
       loi_tuong_thich="WordPress 5.6"
-    # WordPress 5.3 trở lên cho PHP 7.4
     elif [[ "$php_ver_chon" == '74' ]] && ((check_ver_core < 503)); then
       loi_tuong_thich="WordPress 5.3"
-    # WordPress 5.0 trở lên cho PHP 7.3
     elif [[ "$php_ver_chon" == '73' ]] && ((check_ver_core < 500)); then
       loi_tuong_thich="WordPress 5.0"
     fi
@@ -205,27 +327,24 @@ if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" ]]; then
 
   if [[ -n "$loi_tuong_thich" ]]; then
     echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}LỖI TƯƠNG THÍCH MÃ NGUỒN WORDPRESS${C_RESET}"
+    center_text "${C_BOLD_WHITE}LỖI TƯƠNG THÍCH MÃ NGUỒN WORDPRESS (HIỆN TẠI: ${wp_major}.${wp_minor})${C_RESET}"
     echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "Phiên bản WordPress hiện tại của bạn QUÁ CŨ, không thể chạy" 2
     left_text "được với ${C_YELLOW}PHP $php_version_cham${C_RESET}." 2
     left_text "Vui lòng cập nhật WordPress lên tối thiểu ${C_YELLOW}$loi_tuong_thich${C_RESET} hoặc" 2
     left_text "chọn một phiên bản PHP thấp hơn để tránh bị lỗi 500." 2
     echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-    sleep 5
-    exec /etc/wptt/wptt-php-ini-main 1
-    exit 1
+    read -r -s -n 1 -t 5 _ 2>/dev/null || true
+    wptt_quay_ve_menu "$route_menu" 1
   fi
 fi
 
-if
-  ! wptt_xac_nhan "Xác nhận: [PHP $php_hien_tai] ➜ [PHP $php_version_cham] Website $NAME!" \
-    "Nếu Source Code không tương thích, website có thể bị lỗi!" \
-    "Đổi xong nếu không tương thích hãy đổi lại về phiên bản PHP cũ!" \
-    "Đồng ý đổi PHP" "Hủy, để tôi kiểm tra lại Source Code"
-then
+if ! wptt_xac_nhan "Xác nhận: [PHP $php_hien_tai] ➜ [PHP $php_version_cham] Website $NAME!" \
+  "Nếu Source Code không tương thích, website có thể bị lỗi!" \
+  "Đổi xong nếu không tương thích hãy đổi lại về phiên bản PHP cũ!" \
+  "Đồng ý đổi PHP" "Hủy, để tôi kiểm tra lại Source Code"; then
   echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-  wptt_quay_ve_menu "${1:-}" 0
+  wptt_quay_ve_menu "$route_menu" 0
 fi
 
 clear
@@ -233,254 +352,321 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}ĐANG TRIỂN KHAI: ${C_BOLD_WHITE}$php_version_text CHO $NAME${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
+# ==============================================================================
+# 4. KIỂM TRA & CÀI ĐẶT LSPHP MỚI NẾU CHƯA CÓ TRÊN HỆ THỐNG (BATCH INSTALL)
+# ==============================================================================
+lsphp_bin="/usr/local/lsws/lsphp${php_ver_chon}/bin/lsphp"
+php_cli_bin="/usr/local/lsws/lsphp${php_ver_chon}/bin/php"
 php_run_download=""
-if [[ ! -d "/usr/local/lsws/lsphp${php_ver_chon}" ]]; then
-  echo "Phiên bản PHP $php_version_text chưa có sẵn trong hệ thống."
-  echo "bắt đầu tiến hành Cài đặt. Thời gian chờ đợi sẽ 3 đến 5 phút"
-  php_run_download='1'
+
+if [[ ! -x "$lsphp_bin" ]]; then
+  echo -e "${C_YELLOW}ℹ️ Phiên bản $php_version_text chưa có sẵn trên máy chủ. Đang tiến hành tải và cài đặt tự động...${C_RESET}\n"
+  php_run_download="1"
 fi
 
-# Cài bù thư viện Json cho PHP 7.4 (CentOS 7)
-if [[ "$php_ver_chon" == '74' ]] && ! command -v dnf >/dev/null 2>&1; then
-  if [[ -z $(rpm -aq | grep 'lsphp74-json') ]]; then
-    php_run_download='1'
+# Kiểm tra bù thư viện JSON cho PHP 7.4 trên RHEL/CentOS cũ
+if [[ "$php_ver_chon" == "74" && "$OS_FAMILY" == "RHEL" && -x "$php_cli_bin" ]]; then
+  if ! "$php_cli_bin" -m 2>/dev/null | grep -qi '^json$'; then
+    php_run_download="1"
   fi
 fi
 
 if [[ -n "$php_run_download" ]]; then
+  extensions=(common gd process mbstring pdo mysqlnd xml opcache mcrypt imap bcmath intl zip mysql json curl pecl-igbinary igbinary imagick pecl-imagick)
 
-  extensions=(common gd process mbstring pdo mysqlnd xml opcache mcrypt imap bcmath intl zip mysql json curl pecl-igbinary igbinary)
-
-  if [[ $(dnf list available 2>/dev/null | grep "lsphp${php_ver_chon}") || $(apt list 2>/dev/null | grep "lsphp${php_ver_chon}") ]]; then
-    _runing "Phiên bản PHP $php_version_text chưa có sẵn bắt đầu tiến hành Cài đặt, thời gian sẽ 3 đến 5 phút"
-
-    _runing "Đang tải và cài đặt lõi lsphp${php_ver_chon}..."
-    yum install -y lsphp"${php_ver_chon}" >/dev/null 2>&1
-    _rundone "Cài đặt lõi lsphp${php_ver_chon} thành công"
-
-    for extension in "${extensions[@]}"; do
-      _runing "Đang cài đặt extension: lsphp${php_ver_chon}-$extension..."
-      yum install -y lsphp"${php_ver_chon}"-"$extension" >/dev/null 2>&1
-      _rundone "Cài đặt extension: lsphp${php_ver_chon}-$extension"
-    done
-
-  else
-    url_repo_litespeed=$(
-      awk '
-      BEGIN { FS = "/" }
-      {
-        filename = $NF; split(filename, parts, "-")
-        pkg_name = ""; version = ""
-        if (parts[2] == "pecl") { pkg_name = parts[1] "-" parts[2] "-" parts[3]; version = parts[4] }
-        else if (parts[2] ~ /^[0-9]+\.[0-9]+/) { pkg_name = parts[1]; version = parts[2] }
-        else { pkg_name = parts[1] "-" parts[2]; version = parts[3] }
-        if (version > versions[pkg_name]) { versions[pkg_name] = version; latest_lines[pkg_name] = $0 }
-      }
-      END { PROCINFO["sorted_in"] = "@ind_str_asc"; for (pkg in latest_lines) print latest_lines[pkg] }' /etc/wptt/tmp/php_extension_call_eol | grep "lsphp${php_ver_chon}" | grep -oP 'href="\K[^"]+' | grep -v 'debuginfo\|-devel\|-debugsource'
-    )
-
-    for extension in "${extensions[@]}"; do
-      _runing "Đang cài đặt extension: lsphp${php_ver_chon}-$extension (Kho EOL)..."
-      if rpm_url=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-" | grep '\.rpm'); then
-        [[ -n "$rpm_url" ]] && dnf install "https://rpms.litespeedtech.com$rpm_url" -y >/dev/null 2>&1
-      fi
-      if deb_url=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-" | grep '\.deb'); then
-        if [[ -n "$deb_url" ]]; then
-          TEMP_DIR_file=$(mktemp -d)
-          wget -q -P "$TEMP_DIR_file" "https://rpms.litespeedtech.com$deb_url"
-          apt install -y "$TEMP_DIR_file"/*.deb >/dev/null 2>&1
-          rm -rf "${TEMP_DIR_file:?}"
-        fi
-      fi
-      _rundone "Cài đặt extension: lsphp${php_ver_chon}-$extension"
-    done
-
-    _runing "Đang tải và cài đặt lõi lsphp${php_ver_chon} (Kho EOL)..."
-    url_php_eol_install=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep -P "lsphp${php_ver_chon}-\K[0-9]+\.[0-9]+\|lsphp${php_ver_chon}_\K[0-9]+\.[0-9]+" | tail -n1)
-    if [[ "$url_php_eol_install" == *.rpm ]]; then
-      dnf install "https://rpms.litespeedtech.com${url_php_eol_install}" -y >/dev/null 2>&1
-    else
-      TEMP_DIR_file=$(mktemp -d)
-      wget -q -P "$TEMP_DIR_file" "https://rpms.litespeedtech.com${url_php_eol_install}"
-      apt install -y "$TEMP_DIR_file"/*.deb >/dev/null 2>&1
-      rm -rf "${TEMP_DIR_file:?}"
-    fi
-    _rundone "Cài đặt lõi lsphp${php_ver_chon} thành công"
-    rm -f /etc/wptt/tmp/php_extension_call_eol
+  if systemctl is-active --quiet valkey 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null || systemctl is-active --quiet redis-server 2>/dev/null; then
+    extensions+=(redis pecl-redis)
   fi
 
-  # Fix Json cho PHP 7.4 CentOS
-  if ! command -v dnf >/dev/null 2>&1; then
-    if [[ "$php_ver_chon" == '74' ]] && ! /usr/local/lsws/lsphp74/bin/php -m | grep -q 'json'; then
-      _runing "Cài đặt bổ sung thư viện JSON cho PHP 7.4..."
-      rpm -ivh https://rpms.litespeedtech.com/centos/7/update/x86_64/RPMS/lsphp74-json-7.4.33-2.el7.x86_64.rpm >/dev/null 2>&1
-      _rundone "Cài đặt thư viện JSON hoàn tất"
-    fi
-  fi
-
-  # Redis / Memcached / IonCube
-  if systemctl is-active --quiet valkey 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
-    _runing "Đang cài đặt extension: lsphp${php_ver_chon}-redis..."
-    if grep -qi "Ubuntu" /etc/*release; then
-      yum install lsphp"${php_ver_chon}"-redis -y >/dev/null 2>&1
-    else
-      if [[ $(dnf list available 2>/dev/null | grep "lsphp${php_ver_chon}") || $(apt list 2>/dev/null | grep "lsphp${php_ver_chon}") ]]; then
-        yum install lsphp"${php_ver_chon}"-pecl-redis lsphp"${php_ver_chon}"-pecl-igbinary -y >/dev/null 2>&1
-      else
-        for ext in pecl-igbinary pecl-redis; do
-          rpm_url=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${ext}-" | head -n1)
-          [[ -n "$rpm_url" ]] && dnf install "https://rpms.litespeedtech.com$rpm_url" -y >/dev/null 2>&1
-        done
-      fi
-    fi
-    _rundone "Cài đặt extension: lsphp${php_ver_chon}-redis"
-  fi
-
-  if [[ $(systemctl status memcached.service 2>/dev/null | grep 'Active' | awk '{print $2}') == 'active' ]]; then
-    _runing "Đang cài đặt extension: lsphp${php_ver_chon}-memcached..."
-    if grep -qi "Ubuntu" /etc/*release; then
-      yum install lsphp"${php_ver_chon}"-memcached -y >/dev/null 2>&1
-    else
-      if [[ $(dnf list available 2>/dev/null | grep "lsphp${php_ver_chon}") || $(apt list 2>/dev/null | grep "lsphp${php_ver_chon}") ]]; then
-        yum install lsphp"${php_ver_chon}"-pecl-memcached -y --disablerepo="mariadb" >/dev/null 2>&1
-      else
-        for ext in pecl-igbinary pecl-msgpack pecl-memcached; do
-          rpm_url=$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${ext}-" | head -n1)
-          [[ -n "$rpm_url" ]] && dnf install "https://rpms.litespeedtech.com$rpm_url" -y >/dev/null 2>&1
-        done
-      fi
-    fi
-    _rundone "Cài đặt extension: lsphp${php_ver_chon}-memcached"
+  if systemctl is-active --quiet memcached 2>/dev/null; then
+    extensions+=(memcached pecl-memcached msgpack pecl-msgpack)
   fi
 
   if [[ "$checkioncube" == "1" ]]; then
-    _runing "Đang cài đặt extension: lsphp${php_ver_chon}-ioncube..."
-    yum install lsphp"${php_ver_chon}"-ioncube -y >/dev/null 2>&1
-    _rundone "Cài đặt extension: lsphp${php_ver_chon}-ioncube"
+    extensions+=(ioncube)
+  fi
+
+  repo_has_pkg=0
+  if [[ "$OS_FAMILY" == "DEBIAN" ]]; then
+    apt-cache show "lsphp${php_ver_chon}" >/dev/null 2>&1 && repo_has_pkg=1
+  else
+    if "$PKG_MGR" list available "lsphp${php_ver_chon}*" >/dev/null 2>&1 || rpm -q "lsphp${php_ver_chon}" >/dev/null 2>&1; then
+      repo_has_pkg=1
+    fi
+  fi
+
+  if ((repo_has_pkg == 1)); then
+    task_install="Tải và cài đặt lõi lsphp${php_ver_chon} cùng bộ Extensions"
+    _runing "$task_install"
+
+    if [[ "$OS_FAMILY" == "DEBIAN" ]]; then
+      avail_apt_pkgs="$(apt-cache --names-only search "^lsphp${php_ver_chon}(-|$)" 2>/dev/null | awk '{print $1}')"
+      install_list=("lsphp${php_ver_chon}")
+      for ext in "${extensions[@]}"; do
+        pkg_candidate="lsphp${php_ver_chon}-${ext}"
+        if grep -qxF "$pkg_candidate" <<<"$avail_apt_pkgs"; then
+          install_list+=("$pkg_candidate")
+        fi
+      done
+      DEBIAN_FRONTEND=noninteractive apt-get install -y "${install_list[@]}" >/dev/null 2>&1 || true
+    else
+      install_list=("lsphp${php_ver_chon}")
+      for ext in "${extensions[@]}"; do
+        install_list+=("lsphp${php_ver_chon}-${ext}")
+      done
+      if [[ "$PKG_MGR" == "dnf" ]]; then
+        dnf install -y --skip-broken --disablerepo="mariadb*" "${install_list[@]}" >/dev/null 2>&1 ||
+          dnf install -y --skip-broken "${install_list[@]}" >/dev/null 2>&1 || true
+      else
+        yum install -y --skip-broken "${install_list[@]}" >/dev/null 2>&1 || true
+      fi
+    fi
+    _rundone "$task_install"
+
+  else
+    # Cài đặt từ kho lưu trữ EOL (End-of-Life)
+    mapfile -t url_repo_litespeed < <(
+      awk '
+        BEGIN { FS = "/" }
+        {
+          filename = $NF; split(filename, parts, "-")
+          pkg_name = ""; version = ""
+          if (parts[2] == "pecl") { pkg_name = parts[1] "-" parts[2] "-" parts[3]; version = parts[4] }
+          else if (parts[2] ~ /^[0-9]+\.[0-9]+/) { pkg_name = parts[1]; version = parts[2] }
+          else { pkg_name = parts[1] "-" parts[2]; version = parts[3] }
+          if (version > versions[pkg_name]) { versions[pkg_name] = version; latest_lines[pkg_name] = $0 }
+        }
+        END {
+          for (pkg in latest_lines) print latest_lines[pkg]
+        }
+      ' /etc/wptt/tmp/php_extension_call_eol 2>/dev/null |
+        grep "lsphp${php_ver_chon}" |
+        grep -oP 'href="\K[^"]+' |
+        grep -vE 'debuginfo|-devel|-debugsource'
+    )
+
+    eol_pkg_dir="${tmp_work_dir}/eol_pkgs"
+    /bin/mkdir -p "$eol_pkg_dir"
+
+    task_eol_core="Tải và cài đặt lõi lsphp${php_ver_chon} (Kho EOL)"
+    _runing "$task_eol_core"
+    url_php_eol_install="$(printf "%s\n" "${url_repo_litespeed[@]}" | grep -P "lsphp${php_ver_chon}-\K[0-9]+\.[0-9]+|lsphp${php_ver_chon}_\K[0-9]+\.[0-9]+" | tail -n1)"
+    if [[ -n "$url_php_eol_install" ]]; then
+      if [[ "$url_php_eol_install" == *.rpm ]]; then
+        "$PKG_MGR" install -y "https://rpms.litespeedtech.com${url_php_eol_install}" >/dev/null 2>&1 || true
+      elif [[ "$url_php_eol_install" == *.deb ]]; then
+        _download_pkg "https://rpms.litespeedtech.com${url_php_eol_install}" "$eol_pkg_dir" &&
+          DEBIAN_FRONTEND=noninteractive apt-get install -y "$eol_pkg_dir"/*.deb >/dev/null 2>&1 || true
+        /bin/rm -f -- "$eol_pkg_dir"/*.deb 2>/dev/null || true
+      fi
+    fi
+    _rundone "$task_eol_core"
+
+    for extension in "${extensions[@]}"; do
+      task_ext="Cài đặt extension: lsphp${php_ver_chon}-${extension} (Kho EOL)"
+      _runing "$task_ext"
+      if [[ "$OS_FAMILY" == "RHEL" ]]; then
+        rpm_url="$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}-" | grep '\.rpm$' | head -n1)"
+        if [[ -n "$rpm_url" ]]; then
+          "$PKG_MGR" install -y "https://rpms.litespeedtech.com${rpm_url}" >/dev/null 2>&1 || true
+        fi
+      else
+        deb_url="$(printf "%s\n" "${url_repo_litespeed[@]}" | grep "lsphp${php_ver_chon}-${extension}[-_]" | grep '\.deb$' | head -n1)"
+        if [[ -n "$deb_url" ]]; then
+          _download_pkg "https://rpms.litespeedtech.com${deb_url}" "$eol_pkg_dir" &&
+            DEBIAN_FRONTEND=noninteractive apt-get install -y "$eol_pkg_dir"/*.deb >/dev/null 2>&1 || true
+          /bin/rm -f -- "$eol_pkg_dir"/*.deb 2>/dev/null || true
+        fi
+      fi
+      _rundone "$task_ext"
+    done
   fi
 
   # ==============================================================================
-  # TỐI ƯU HÓA PHP.INI CHO BẢN MỚI
+  # 5. TỐI ƯU HÓA PHP.INI CHO BẢN PHP MỚI CÀI ĐẶT (ATOMIC & 0-SUBSHELL)
   # ==============================================================================
-  _runing "Đang phân tích RAM để tự động tối ưu php.ini (OPCache, JIT, Memory)..."
-  if grep -qi "Ubuntu" /etc/*release; then
-    duong_dan_php_ini="/usr/local/lsws/lsphp${php_ver_chon}/etc/php/$php_version_cham/litespeed/php.ini"
+  task_ini="Tối ưu hóa php.ini cho $php_version_text theo dung lượng RAM"
+  _runing "$task_ini"
+
+  if [[ "$OS_FAMILY" == "DEBIAN" ]]; then
+    duong_dan_php_ini="/usr/local/lsws/lsphp${php_ver_chon}/etc/php/${php_version_cham}/litespeed/php.ini"
   else
     duong_dan_php_ini="/usr/local/lsws/lsphp${php_ver_chon}/etc/php.ini"
   fi
 
-  TOTAL_RAM_MB=$(free -m | awk '/^Mem:/{print $2}')
-  if [ "$TOTAL_RAM_MB" -le 1200 ]; then
+  if [[ ! -f "$duong_dan_php_ini" && -x "$php_cli_bin" ]]; then
+    detected_ini="$("$php_cli_bin" --ini 2>/dev/null | awk -F': ' '/Loaded Configuration File/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
+    [[ -n "$detected_ini" && -f "$detected_ini" ]] && duong_dan_php_ini="$detected_ini"
+  fi
+
+  mem_total_kb=0
+  if [[ -r /proc/meminfo ]]; then
+    while IFS=': ' read -r key val _; do
+      if [[ "$key" == "MemTotal" && "$val" =~ ^[0-9]+$ ]]; then
+        mem_total_kb="$val"
+        break
+      fi
+    done </proc/meminfo
+  fi
+  TOTAL_RAM_MB=$((mem_total_kb / 1024))
+  ((TOTAL_RAM_MB <= 0)) && TOTAL_RAM_MB=1024
+
+  if ((TOTAL_RAM_MB <= 1200)); then
     OPCACHE_MEM="64"
-    JIT_BUFFER="0M"
+    INTERNED_STR="8"
     REALPATH_SIZE="512K"
-  elif [ "$TOTAL_RAM_MB" -le 2500 ]; then
+  elif ((TOTAL_RAM_MB <= 2500)); then
     OPCACHE_MEM="128"
-    JIT_BUFFER="64M"
+    INTERNED_STR="16"
     REALPATH_SIZE="1024K"
-  elif [ "$TOTAL_RAM_MB" -le 4500 ]; then
+  elif ((TOTAL_RAM_MB <= 4500)); then
     OPCACHE_MEM="256"
-    JIT_BUFFER="128M"
+    INTERNED_STR="32"
     REALPATH_SIZE="2048K"
   else
     OPCACHE_MEM="512"
-    JIT_BUFFER="256M"
-    REALPATH_SIZE="2048K"
+    INTERNED_STR="64"
+    REALPATH_SIZE="4096K"
   fi
 
-  sed -i '/realpath_cache_size/d' "$duong_dan_php_ini"
-  sed -i '/realpath_cache_ttl/d' "$duong_dan_php_ini"
-  echo "realpath_cache_size = $REALPATH_SIZE
-realpath_cache_ttl = 7200" >>"$duong_dan_php_ini"
-
-  sed -i "/opcache.memory_consumption/d" "$duong_dan_php_ini"
-  sed -i "/opcache.interned_strings_buffer/d" "$duong_dan_php_ini"
-  sed -i "/opcache.max_accelerated_files/d" "$duong_dan_php_ini"
-  sed -i "/opcache.revalidate_freq/d" "$duong_dan_php_ini"
-  sed -i "/opcache.fast_shutdown/d" "$duong_dan_php_ini"
-  sed -i "/opcache.enable_cli/d" "$duong_dan_php_ini"
-  echo "opcache.memory_consumption=${OPCACHE_MEM}
-opcache.interned_strings_buffer=8
-opcache.max_accelerated_files=10000
-opcache.revalidate_freq=100
-opcache.fast_shutdown=1
-opcache.enable_cli=1" >>"$duong_dan_php_ini"
-
-  if ((php_ver_chon >= 80)); then
-    sed -i '/opcache.jit_buffer_size/d' "$duong_dan_php_ini"
-    sed -i '/opcache.jit/d' "$duong_dan_php_ini"
-    echo "opcache.jit_buffer_size=0" >>"$duong_dan_php_ini" #mặc định nên tắt JIT đi
+  if [[ -f "$duong_dan_php_ini" ]]; then
+    tmp_php_ini="$(wptt_atomic_begin "$duong_dan_php_ini")"
+    if [[ -n "$tmp_php_ini" && -f "$tmp_php_ini" ]]; then
+      awk -v r_size="$REALPATH_SIZE" \
+          -v op_mem="$OPCACHE_MEM" \
+          -v op_str="$INTERNED_STR" \
+          -v php_v="$php_ver_chon" \
+          -v giatuan="${wptangtoc_ols_giatuan:-0}" '
+        /^[ \t]*(realpath_cache_size|realpath_cache_ttl|opcache\.memory_consumption|opcache\.interned_strings_buffer|opcache\.max_accelerated_files|opcache\.revalidate_freq|opcache\.fast_shutdown|opcache\.enable_cli)[ \t]*=/ { next }
+        php_v >= 80 && /^[ \t]*(opcache\.jit_buffer_size|opcache\.jit)[ \t]*=/ { next }
+        giatuan == "1" && /^[ \t]*(opcache\.validate_timestamps|opcache\.file_update_protection)[ \t]*=/ { next }
+        /^[ \t]*expose_php[ \t]*=/ { print "expose_php = Off"; next }
+        /^[ \t]*upload_max_filesize[ \t]*=[ \t]*2M/ { print "upload_max_filesize = 8M"; next }
+        /^[ \t]*max_execution_time[ \t]*=[ \t]*30/ { print "max_execution_time = 120"; next }
+        { print }
+        END {
+          print "realpath_cache_size = " r_size
+          print "realpath_cache_ttl = 7200"
+          print "opcache.memory_consumption=" op_mem
+          print "opcache.interned_strings_buffer=" op_str
+          print "opcache.max_accelerated_files=32531"
+          print "opcache.revalidate_freq=100"
+          print "opcache.fast_shutdown=1"
+          print "opcache.enable_cli=1"
+          if (php_v >= 80) {
+            print "opcache.jit_buffer_size=0"
+          }
+          if (giatuan == "1") {
+            print "opcache.validate_timestamps=0"
+            print "opcache.file_update_protection=0"
+          }
+        }
+      ' "$tmp_php_ini" >"${tmp_php_ini}.new" &&
+        /bin/mv -fT -- "${tmp_php_ini}.new" "$tmp_php_ini"
+      wptt_atomic_commit "$tmp_php_ini" "$duong_dan_php_ini"
+    fi
   fi
-
-  if [[ "$wptangtoc_ols_giatuan" == "1" ]]; then
-    sed -i "/opcache.validate_timestamps/d" "$duong_dan_php_ini"
-    sed -i "/opcache.file_update_protection/d" "$duong_dan_php_ini"
-    echo "opcache.validate_timestamps=0
-opcache.file_update_protection=0" >>"$duong_dan_php_ini"
-  fi
-
-  sed -i "s/expose_php = On/expose_php = off/g" "$duong_dan_php_ini"
-  sed -i "s/upload_max_filesize = 2M/upload_max_filesize = 8M/g" "$duong_dan_php_ini"
-  sed -i "s/max_execution_time = 30/max_execution_time = 120/g" "$duong_dan_php_ini"
-  _rundone "Tối ưu hóa tài nguyên PHP hoàn tất"
+  _rundone "$task_ini"
 fi
 
 # ==============================================================================
-# ÁP DỤNG CẤU HÌNH VÀO VHOST
+# 6. CHỐT CHẶN PREFLIGHT: KIỂM TRA BINARY LSPHP TRƯỚC KHI CẬP NHẬT VHOST
 # ==============================================================================
-_runing "đồng bộ Vhost của Website $NAME với lõi $php_version_text"
-sed -E -i "s|/lsphp[0-9]+/bin/lsphp|/lsphp${php_ver_chon}/bin/lsphp|g" "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
-_rundone "đồng bộ Vhost của Website $NAME với lõi $php_version_text"
+if [[ ! -x "$lsphp_bin" ]]; then
+  _runloi "Kiểm tra tệp thực thi $lsphp_bin"
+  echo -e "\n${C_RED}❌ CẢNH BÁO AN TOÀN: Không tìm thấy tệp thực thi '$lsphp_bin'.${C_RESET}"
+  echo -e "${C_YELLOW}➜ Hệ thống đã tự động giữ nguyên PHP $php_hien_tai cho website $NAME để tránh lỗi 503!${C_RESET}\n"
+  wptt_quay_ve_menu "$route_menu" 1
+fi
 
-wptt_atomic_edit_config "/etc/wptt/vhost/.$NAME.conf" "phien_ban_php_domain=$php_version_cham"
+ln -sfn "$lsphp_bin" "/usr/local/lsws/fcgi-bin/lsphp${php_ver_chon}" 2>/dev/null || true
 
-if [[ "$su_dung_repo_du_phong" == '1' ]]; then
-  sed -i '/rpms.litespeedtech.com/d' /etc/hosts
+# ==============================================================================
+# 7. ÁP DỤNG CẤU HÌNH NGUYÊN TỬ VÀO VHOST + VALIDATE & ROLLBACK AN TOÀN
+# ==============================================================================
+task_vhost="Đồng bộ Vhost của Website $NAME với lõi $php_version_text"
+_runing "$task_vhost"
+
+vhost_backup="${tmp_work_dir}/${NAME}.conf.bak"
+/bin/cp -fp "$vhost_conf_path" "$vhost_backup" 2>/dev/null || true
+
+tmp_ols_vhost="$(wptt_atomic_begin "$vhost_conf_path")" || {
+  _runloi "$task_vhost"
+  wptt_quay_ve_menu "$route_menu" 1
+}
+
+sed -E -i "s|/lsphp[0-9]+/bin/lsphp|/lsphp${php_ver_chon}/bin/lsphp|g" "$tmp_ols_vhost"
+wptt_atomic_commit "$tmp_ols_vhost" "$vhost_conf_path"
+
+if /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
+  wptt_atomic_edit_config "$pathcheck" "phien_ban_php_domain=$php_version_cham"
+  if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+    wptt_smart_reload_lsws >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  else
+    /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+  fi
+  _rundone "$task_vhost"
+else
+  # Rollback nguyên tử nếu phát hiện lỗi cú pháp Vhost
+  if [[ -f "$vhost_backup" ]]; then
+    tmp_restore="$(wptt_atomic_begin "$vhost_conf_path")"
+    if [[ -n "$tmp_restore" ]]; then
+      /bin/cp -f "$vhost_backup" "$tmp_restore"
+      wptt_atomic_commit "$tmp_restore" "$vhost_conf_path"
+    fi
+  fi
+  _runloi "$task_vhost"
+  echo -e "\n${C_RED}❌ Phát hiện lỗi cú pháp Vhost! Hệ thống đã tự động Rollback về cấu hình an toàn.${C_RESET}\n"
+  wptt_quay_ve_menu "$route_menu" 1
 fi
 
 # ==============================================================================
-# [ĐỒNG BỘ WP-CRON] Đổi phiên bản PHP trong lịch trình Cron của WP-CLI
+# 8. ĐỒNG BỘ WP-CRON NGUYÊN TỬ CHO RIÊNG WEBSITE
 # ==============================================================================
 cron_file="/etc/cron.d/wp-cron-job-$NAME.cron"
 if [[ -f "$cron_file" ]]; then
-  _runing "Đồng bộ lại phiên bản PHP mới cho hệ thống WP-Cron ngầm"
-  sed -E -i "s|/usr/local/lsws/lsphp[0-9]+/bin/php|/usr/local/lsws/lsphp${php_ver_chon}/bin/php|g" "$cron_file"
-  if grep -qi "Ubuntu" /etc/*release 2>/dev/null; then
-    systemctl restart cron.service >/dev/null 2>&1
-  else
-    systemctl restart crond.service >/dev/null 2>&1
+  task_cron="Đồng bộ phiên bản PHP mới cho hệ thống WP-Cron ngầm"
+  _runing "$task_cron"
+  tmp_cron="$(wptt_atomic_begin "$cron_file")"
+  if [[ -n "$tmp_cron" && -f "$tmp_cron" ]]; then
+    sed -E -i "s|/usr/local/lsws/lsphp[0-9]+/bin/php|/usr/local/lsws/lsphp${php_ver_chon}/bin/php|g" "$tmp_cron"
+    wptt_atomic_commit "$tmp_cron" "$cron_file"
   fi
-  _rundone "Đồng bộ lại phiên bản PHP mới cho hệ thống WP-Cron ngầm"
+  if [[ "$OS_FAMILY" == "DEBIAN" ]]; then
+    systemctl restart cron.service >/dev/null 2>&1 || true
+  else
+    systemctl restart crond.service >/dev/null 2>&1 || true
+  fi
+  _rundone "$task_cron"
 fi
-# ==============================================================================
 
-/usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
+# ==============================================================================
+# 9. BẢNG BÁO CÁO THÀNH CÔNG & QUÉT CẢNH BÁO IONCUBE PLUGIN
+# ==============================================================================
 clear
 echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT THAY ĐỔI PHP CHO WEBSITE${C_RESET}"
 echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 left_text "Website được áp dụng : ${C_BOLD_WHITE}$NAME${C_RESET}" 2
-left_text "Phiên bản đang chạy  : ${C_YELLOW}PHP $php_version_cham${C_RESET}" 2
+left_text "Phiên bản đang chạy  : ${C_YELLOW}PHP $php_version_cham (lsphp${php_ver_chon})${C_RESET}" 2
 echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-#tính năng thông báo nguời dùng nếu sử dụng ioncube PHP
-if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then                                        #chỉ run kiểm tra khi nếu là mã nguồn WordPress
-  if ! /usr/local/lsws/lsphp"${php_ver_chon}"/bin/php -v 2>/dev/null | grep -qi "ionCube"; then #xác định nếu phiên bản PHP đã có ioncube rồi thì không cần phải thông báo
-    if [[ -f /etc/wptt/ioncube-plugin-list ]]; then
-      mapfile -t ioncube_plugins_list < <(sed '/^$/d' /etc/wptt/ioncube-plugin-list)
-    else
-      ioncube_plugins_list=()
+if [[ -f "/usr/local/lsws/$NAME/html/wp-load.php" && -x "$php_cli_bin" ]]; then
+  if ! "$php_cli_bin" -v 2>/dev/null | grep -qi "ionCube"; then
+    ioncube_plugins_list=()
+    if [[ -r /etc/wptt/ioncube-plugin-list ]]; then
+      while IFS= read -r p_line; do
+        p_line="${p_line#"${p_line%%[![:space:]]*}"}"
+        p_line="${p_line%"${p_line##*[![:space:]]}"}"
+        [[ -n "$p_line" ]] && ioncube_plugins_list+=("$p_line")
+      done </etc/wptt/ioncube-plugin-list
     fi
-    # 2. Đường dẫn chuẩn tới thư mục Plugins của WordPress
+
     PLUGIN_DIR="/usr/local/lsws/$NAME/html/wp-content/plugins"
-
-    # 3. Quét kiểm tra nếu thư mục tồn tại và danh sách không rỗng
     if [[ -d "$PLUGIN_DIR" && ${#ioncube_plugins_list[@]} -gt 0 ]]; then
-
       co_plugin_ioncube=0
       danh_sach_phat_hien=""
 
-      # Lặp qua từng tên plugin trong file list để soi vào thư mục web
       for plugin_name in "${ioncube_plugins_list[@]}"; do
         if [[ -d "$PLUGIN_DIR/$plugin_name" ]]; then
           co_plugin_ioncube=1
@@ -488,11 +674,10 @@ if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then                        
         fi
       done
 
-      # 4. Nếu phát hiện (cờ = 1), in ra cảnh báo khuyên dùng
-      if [[ "$co_plugin_ioncube" -eq 1 ]]; then
+      if ((co_plugin_ioncube == 1)); then
         echo ""
         print_border_top "$C_YELLOW"
-        center_text "${C_YELLOW}PHÁT HIỆN PLUGIN WordPress YÊU CẦU IONCUBE LOADER${C_RESET}"
+        center_text "${C_YELLOW}PHÁT HIỆN PLUGIN WORDPRESS YÊU CẦU IONCUBE LOADER${C_RESET}"
         print_border_mid "$C_YELLOW"
         left_text "Website ${C_GREEN}$NAME${C_RESET} đang chứa các plugin bị mã hóa:" 2
         echo -e "${danh_sach_phat_hien}"
@@ -502,10 +687,10 @@ if [[ -f /usr/local/lsws/$NAME/html/wp-load.php ]]; then                        
         left_text "${C_GREEN}ioncube${C_RESET} cho phiên bản PHP của website này." 2
         print_border_bot "$C_YELLOW"
         echo ""
-        sleep 2 # Dừng 2 giây cho khách kịp đọc
+        read -r -s -n 1 -t 2.5 _ 2>/dev/null || true
       fi
     fi
   fi
 fi
 
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "$route_menu" 0
