@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.3.2.2
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến hiệu năng tìm kiếm:** Tích hợp cơ chế debounce giúp tối ưu hóa tốc độ phản hồi và giảm tải tài nguyên hệ thống, mang lại trải nghiệm thao tác mượt mà và chính xác hơn cho quản trị viên.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.3.2.1
 
 🚀 **Tính năng mới & Cải tiến**
