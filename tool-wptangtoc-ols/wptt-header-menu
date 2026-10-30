@@ -2,50 +2,232 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
+# @description: Render Header Menu Trung tâm (Đồng bộ State-Machine với wptt_smart_reload_lsws)
+
+# ------------------------------------------------------------------------------
+# HELPER 1: Kiểm tra PID sống từ file (100% Pure Bash, 0 Subshell)
+# ------------------------------------------------------------------------------
+_wptt_pidfile_alive() {
+  local pfile="$1"
+  local pid=""
+  if [[ -r "$pfile" ]]; then
+    IFS= read -r pid <"$pfile" 2>/dev/null || true
+    if [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# ------------------------------------------------------------------------------
+# HELPER 2: Kiểm tra Circuit Breaker của OLS (/run/wptangtoc/lsws-reload.cb)
+# Trả về 0 nếu cho phép Auto-Heal, trả về 1 nếu Circuit Breaker đang OPEN
+# ------------------------------------------------------------------------------
+_wptt_ols_cb_is_allowed() {
+  local cb_file="/run/wptangtoc/lsws-reload.cb"
+  [[ -r "$cb_file" ]] || return 0
+
+  local now=0 line="" count=0
+  printf -v now '%(%s)T' -1 2>/dev/null || now="$(date +%s)"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[0-9]+$ ]] || continue
+    if ((now - line < 300)); then
+      ((count++))
+    fi
+  done <"$cb_file"
+
+  ((count < 5))
+}
+
+# ------------------------------------------------------------------------------
+# HELPER 3: Ngủ ngắn không tạo tiến trình con (Zero-Fork Micro-Sleep)
+# ------------------------------------------------------------------------------
+_wptt_micro_sleep() {
+  local duration="${1:-0.1}"
+  local fifo="/run/wptangtoc/.header_wait.fifo"
+  if [[ ! -p "$fifo" ]]; then
+    /bin/mkdir -p /run/wptangtoc 2>/dev/null || true
+    mkfifo -m 600 "$fifo" 2>/dev/null || true
+  fi
+  if [[ -p "$fifo" ]]; then
+    read -r -t "$duration" _ <>"$fifo" 2>/dev/null || true
+  else
+    sleep "$duration" 2>/dev/null || true
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# KIỂM TRA TRẠNG THÁI OPENLITESPEED (ĐỒNG BỘ 100% VỚI wptt_smart_reload_lsws)
+# ------------------------------------------------------------------------------
+_wptt_check_ols_status() {
+  local pid_file="/tmp/lshttpd/lshttpd.pid"
+  local worker_pid_file="/run/wptangtoc/lsws-reload.worker.pid"
+  local pending_file="/run/wptangtoc/lsws-reload.pending"
+  local processing_file="/run/wptangtoc/lsws-reload.processing"
+  local i
+
+  # 1. FAST-PATH (0 Subshell, ~0.01ms): Kiểm tra trực tiếp PID file của OLS
+  if _wptt_pidfile_alive "$pid_file"; then
+    REPLY_OLS_STATUS="running"
+    return 0
+  fi
+
+  # 2. SMART-RELOAD AWARE: Nếu wptt_smart_reload_lsws đang hoạt động ngầm
+  if _wptt_pidfile_alive "$worker_pid_file" || [[ -f "$processing_file" || -f "$pending_file" ]]; then
+    # Nếu tiến trình lshttpd/openlitespeed vẫn đang sống trong RAM (đang Graceful Reload)
+    if pgrep -x "openlitespeed" >/dev/null 2>&1 || pgrep -x "lshttpd" >/dev/null 2>&1; then
+      REPLY_OLS_STATUS="running"
+      return 0
+    fi
+
+    # Nếu Worker đang chạy systemctl start lsws.service (mất ~2s), chờ PID mới xuất hiện
+    for ((i = 0; i < 22; i++)); do
+      _wptt_micro_sleep 0.1
+      if _wptt_pidfile_alive "$pid_file" || pgrep -x "openlitespeed" >/dev/null 2>&1 || pgrep -x "lshttpd" >/dev/null 2>&1; then
+        REPLY_OLS_STATUS="running"
+        return 0
+      fi
+      # Nếu Worker đã thoát mà PID vẫn không lên -> dừng chờ ngay
+      if ! _wptt_pidfile_alive "$worker_pid_file" && [[ ! -f "$processing_file" ]]; then
+        break
+      fi
+    done
+  fi
+
+  # 3. KIỂM TRA LẠI TRONG RAM (Trường hợp file PID bị xóa nhầm nhưng tiến trình vẫn sống)
+  if pgrep -x "openlitespeed" >/dev/null 2>&1 || pgrep -x "lshttpd" >/dev/null 2>&1; then
+    REPLY_OLS_STATUS="running"
+    return 0
+  fi
+
+  # 4. AUTO-HEALING QUA wptt_smart_reload_lsws (Tôn trọng Circuit Breaker)
+  if ! _wptt_ols_cb_is_allowed; then
+    # Circuit Breaker đang OPEN (lỗi liên tiếp >= 5 lần/5 phút) -> Báo lỗi ngay, không treo Menu
+    REPLY_OLS_STATUS=""
+    return 1
+  fi
+
+  if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+    wptt_smart_reload_lsws >/dev/null 2>&1 || true
+  elif [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
+    systemctl start lsws.service >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true
+  fi
+
+  # Chờ tối đa 2.2s để tiến trình phục hồi ghi file PID
+  for ((i = 0; i < 22; i++)); do
+    _wptt_micro_sleep 0.1
+    if _wptt_pidfile_alive "$pid_file" || pgrep -x "openlitespeed" >/dev/null 2>&1 || pgrep -x "lshttpd" >/dev/null 2>&1; then
+      REPLY_OLS_STATUS="running"
+      return 0
+    fi
+  done
+
+  REPLY_OLS_STATUS=""
+  return 1
+}
+
+# ------------------------------------------------------------------------------
+# KIỂM TRA TRẠNG THÁI MARIADB (ZERO-FORK FAST-PATH + CHỐNG BÃO RESTART)
+# ------------------------------------------------------------------------------
+_wptt_check_mariadb_status() {
+  local pf="" state="" now=0 last_fail=0 i
+  local db_cb_file="/run/wptangtoc/mariadb-heal.ts"
+
+  # 1. FAST-PATH (0 Subshell, ~0.01ms): Đọc trực tiếp các đường dẫn PID chuẩn
+  for pf in /run/mariadb/mariadb.pid /var/run/mariadb/mariadb.pid /run/mysqld/mysqld.pid /var/run/mysqld/mysqld.pid; do
+    if _wptt_pidfile_alive "$pf"; then
+      REPLY_MARIADB_STATUS="active"
+      return 0
+    fi
+  done
+
+  # 2. Kiểm tra nhanh trong RAM (Trường hợp PID đặt trong /var/lib/mysql)
+  if pgrep -x "mariadbd" >/dev/null 2>&1 || pgrep -x "mysqld" >/dev/null 2>&1; then
+    REPLY_MARIADB_STATUS="active"
+    return 0
+  fi
+
+  # 3. Kiểm tra trạng thái systemd (Nếu đang khởi động/reload thì chờ, không bắn đè restart)
+  state="$(systemctl is-active mariadb.service 2>/dev/null || true)"
+  if [[ "$state" == "active" ]]; then
+    REPLY_MARIADB_STATUS="active"
+    return 0
+  elif [[ "$state" == "activating" || "$state" == "reloading" ]]; then
+    for ((i = 0; i < 15; i++)); do
+      _wptt_micro_sleep 0.15
+      if pgrep -x "mariadbd" >/dev/null 2>&1 || pgrep -x "mysqld" >/dev/null 2>&1; then
+        REPLY_MARIADB_STATUS="active"
+        return 0
+      fi
+    done
+  fi
+
+  # 4. Chống bão Auto-Restart nếu MariaDB vừa thất bại khởi động trong vòng 30 giây qua
+  printf -v now '%(%s)T' -1 2>/dev/null || now="$(date +%s)"
+  if [[ -r "$db_cb_file" ]]; then
+    IFS= read -r last_fail <"$db_cb_file" 2>/dev/null || true
+    if [[ "$last_fail" =~ ^[0-9]+$ ]] && ((now - last_fail < 30)); then
+      REPLY_MARIADB_STATUS="${state:-inactive}"
+      return 1
+    fi
+  fi
+
+  # 5. AUTO-HEALING: Khởi động lại khi xác nhận MariaDB thực sự dừng
+  /bin/mkdir -p /run/wptangtoc 2>/dev/null || true
+  printf '%s\n' "$now" >"$db_cb_file" 2>/dev/null || true
+
+  systemctl start mariadb.service >/dev/null 2>&1 || systemctl start mysql.service >/dev/null 2>&1 || true
+  if pgrep -x "mariadbd" >/dev/null 2>&1 || pgrep -x "mysqld" >/dev/null 2>&1 || systemctl is-active --quiet mariadb.service 2>/dev/null; then
+    /bin/rm -f -- "$db_cb_file" 2>/dev/null || true
+    REPLY_MARIADB_STATUS="active"
+    return 0
+  fi
+
+  REPLY_MARIADB_STATUS="${state:-inactive}"
+  return 1
+}
 
 function header_menu() {
   clear
-  . /etc/wptt/.wptt.conf 2>/dev/null
+
+  # Nạp cấu hình và thư viện (Chống nạp chồng dư thừa)
+  # shellcheck source=/dev/null
+  [[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+
   if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
-    . /etc/wptt/core-functions 2>/dev/null
+    # shellcheck source=/dev/null
+    [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
   fi
 
-  if [[ -z "${ngon_ngu:-}" || -z "${tai_ma_nguon_wordpress:-}" ]]; then
+  [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+  if [[ -z "${tai_ma_nguon_wordpress:-}" && -f "/etc/wptt/lang/${ngon_ngu}.sh" ]]; then
     # shellcheck source=/dev/null
-    . /etc/wptt/.wptt.conf 2>/dev/null
-    [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
-    # shellcheck source=/dev/null
-    . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+    . "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
   fi
 
   if ! declare -F _runing &>/dev/null; then
     # shellcheck source=/dev/null
-    . /etc/wptt/echo-color 2>/dev/null
+    [[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
   fi
 
   # ==============================================================================
-  # 1. KIỂM TRA TRẠNG THÁI DỊCH VỤ
+  # 1. KIỂM TRA TRẠNG THÁI DỊCH VỤ (ZERO-FORK & SMART-RELOAD AWARE)
   # ==============================================================================
-  ols_status=$(/usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -i 'litespeed is running')
-  mariadb_status=$(systemctl is-active mariadb.service 2>/dev/null)
+  local REPLY_OLS_STATUS="" REPLY_MARIADB_STATUS=""
+  local ols_status="" mariadb_status=""
 
-  # Cố gắng start lại nếu đang sập để kiểm tra lần cuối
-  if [[ -z "$ols_status" ]]; then
-    /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
-    ols_status=$(/usr/local/lsws/bin/lswsctrl status 2>/dev/null | grep -i 'litespeed is running')
-  fi
-  if [[ "$mariadb_status" != "active" ]]; then
-    systemctl restart mariadb.service >/dev/null 2>&1
-    mariadb_status=$(systemctl is-active mariadb.service 2>/dev/null)
-  fi
+  _wptt_check_ols_status || true
+  ols_status="$REPLY_OLS_STATUS"
+
+  _wptt_check_mariadb_status || true
+  mariadb_status="$REPLY_MARIADB_STATUS"
 
   # ==============================================================================
   # 2. XÁC ĐỊNH NHÃN BẢN QUYỀN
   # ==============================================================================
   local license_label=""
-  if [[ "$wptangtoc_ols_giatuan" == "1" ]]; then
-    license_label="Bản Quyền: Enterprise"
-  elif [[ -n "$key_activate" ]]; then
+  if [[ "${wptangtoc_ols_giatuan:-}" == "1" || -n "${key_activate:-}" ]]; then
     license_label="Bản Quyền: Enterprise"
   fi
 
@@ -55,14 +237,14 @@ function header_menu() {
   print_border_top "$C_CYAN"
 
   # Khối 1: Tên phần mềm & Phiên bản
-  center_text "${C_BOLD_WHITE}WPTANGTOC OLS ${phien_ban:-phiên bản}: $version_wptangtoc_ols${C_RESET}" "$C_CYAN"
+  center_text "${C_BOLD_WHITE}WPTANGTOC OLS ${phien_ban:-phiên bản}: ${version_wptangtoc_ols:-}${C_RESET}" "$C_CYAN"
   print_border_mid "$C_CYAN"
 
-  # Khối 2: Tác giả & Bản quyền (Đã thêm khoảng trống trên/dưới cho thoáng đãng)
+  # Khối 2: Tác giả & Bản quyền
   center_text "" "$C_CYAN"
   center_text "${C_BOLD_WHITE}${phat_trien_boi_gia_tuan:-Phát triển bởi: Gia Tuấn}${C_RESET}" "$C_CYAN"
-  [[ -n "$license_label" ]] && center_text "${C_BOLD_WHITE}$license_label${C_RESET}" "$C_CYAN"
-  [[ "$beta_wptangtoc_ols" == "1" ]] && center_text "${C_BOLD_WHITE}[Phiên bản Beta]${C_RESET}" "$C_CYAN"
+  [[ -n "$license_label" ]] && center_text "${C_BOLD_WHITE}${license_label}${C_RESET}" "$C_CYAN"
+  [[ "${beta_wptangtoc_ols:-}" == "1" ]] && center_text "${C_BOLD_WHITE}[Phiên bản Beta]${C_RESET}" "$C_CYAN"
   center_text "" "$C_CYAN"
 
   print_border_mid "$C_CYAN"

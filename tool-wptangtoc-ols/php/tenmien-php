@@ -1,153 +1,210 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
+# @description: Thư viện chọn phiên bản PHP đã cài đặt trên máy chủ
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
+  # shellcheck source=/dev/null
+  [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
+fi
+
+if [[ -z "${ngon_ngu:-}" ]]; then
+  # shellcheck source=/dev/null
+  [[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+  [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+  # shellcheck source=/dev/null
+  [[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+fi
+
+if ! declare -F _runing &>/dev/null; then
+  # shellcheck source=/dev/null
+  [[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+fi
+
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 
 function lua_chon_tenmien_php() {
   LSPHP=""
-  local selects=()
+  local -a selects=()
+  local -a fzf_lines=()
   local box_inner_width=78
+  local dir dir_clean php_name num_ver ver_len phien_ban_format
 
-  # 1. QUÉT PHIÊN BẢN BẰNG GLOBBING
-  for dir in /usr/local/lsws/lsphp*/; do
-    [[ ! -d "$dir" ]] && continue
+  # 1. QUÉT PHIÊN BẢN BẰNG GLOBBING AN TOÀN (0 SUBSHELL)
+  shopt -s nullglob
+  local -a lsphp_dirs=(/usr/local/lsws/lsphp*/)
+  shopt -u nullglob
 
-    local php_name=$(basename "$dir") # VD: lsphp81
+  for dir in "${lsphp_dirs[@]}"; do
+    [[ -d "$dir" ]] || continue
 
-    # Loại bỏ bản 7.4 lỗi (Tương thích ngược với centos 7)
-    if [[ "$php_name" == "lsphp74" && ! -f "$dir/lib64/php/modules/json.so" ]]; then
+    # Kiểm tra phải có binary thực thi thật sự (tránh thư mục rỗng/gỡ dở dang)
+    if [[ ! -x "${dir}bin/lsphp" && ! -x "${dir}bin/php" ]]; then
       continue
     fi
 
-		# Parameter Expansion
+    # Lấy tên thư mục bằng Pure Bash (thay cho basename)
+    dir_clean="${dir%/}"
+    php_name="${dir_clean##*/}"
+
+    # Chỉ chấp nhận đúng định dạng lsphpXX (VD: lsphp74, lsphp81, lsphp84)
+    [[ "$php_name" =~ ^lsphp([0-9]{2,3})$ ]] || continue
+    num_ver="${BASH_REMATCH[1]}"
+
+    # Loại bỏ bản 7.4 thiếu json.so trên RHEL/CentOS 7 (Không ảnh hưởng Ubuntu/Debian)
+    if [[ "$php_name" == "lsphp74" && -d "${dir}lib64/php/modules" && ! -f "${dir}lib64/php/modules/json.so" ]]; then
+      continue
+    fi
+
     # 2. CHUYỂN ĐỔI: lsphp81 -> PHP 8.1 BẰNG BASH BUILT-IN
-    local num_ver=${php_name#lsphp} # Lấy phần số: 81
-    local ver_len=${#num_ver}
-    local phien_ban_format="${num_ver:0:$ver_len-1}.${num_ver: -1}" # Chèn dấu chấm: 8.1
+    ver_len=${#num_ver}
+    phien_ban_format="${num_ver:0:ver_len-1}.${num_ver: -1}"
 
     selects+=("PHP $phien_ban_format")
   done
 
   # 3. KIỂM TRA MẢNG TRỐNG
-  if [[ ${#selects[@]} -eq 0 ]]; then
-    echo -e "\n${C_RED}❌ Webserver không có bất kỳ phiên bản PHP (lsphp) nào tồn tại trên hệ thống!${C_RESET}"
+  if ((${#selects[@]} == 0)); then
+    echo -e "\n${C_RED}❌ Webserver không có bất kỳ phiên bản PHP (lsphp) hợp lệ nào trên hệ thống!${C_RESET}"
     LSPHP="0"
     return 1 2>/dev/null || exit 1
   fi
 
   # 4. SẮP XẾP LẠI DANH SÁCH (Version Sort chuẩn mực)
-  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -V)
+  if ((${#selects[@]} > 1)); then
+    mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -V)
+  fi
 
   # ==============================================================================
-  # 5. RENDER KHUNG MENU BO CONG (THUẬT TOÁN ĐÚC KHUNG TỰ ĐỘNG CHUẨN 100%)
+  # 5. RENDER KHUNG MENU BO CONG (100% PURE BASH - 0 SUBSHELL / 0 SED)
   # ==============================================================================
-  
-  # Vẽ đường kẻ ngang tự động khớp với box_inner_width
-  local border_line=$(printf "%${box_inner_width}s" "" | sed 's/ /─/g')
+  local border_line=""
+  printf -v border_line '%*s' "$box_inner_width" ""
+  border_line="${border_line// /─}"
 
   echo -e "\n${C_CYAN}╭${border_line}╮${C_RESET}"
-  
+
   # Xử lý Tiêu đề
   local title_text="${nhap_lua_chon_cua_ban:-Nhập lựa chọn của bạn} ${phien_ban:-phiên bản} PHP ${ban_muon:-bạn muốn}:"
   local clean_title="  ${title_text}"
   local title_len=${#clean_title}
   local pad_r=$((box_inner_width - title_len))
-  [[ $pad_r -lt 0 ]] && pad_r=0
-  echo -e "${C_CYAN}│${C_RESET}${C_YELLOW}${clean_title}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+  ((pad_r < 0)) && pad_r=0
+  local pad_r_str=""
+  printf -v pad_r_str '%*s' "$pad_r" ""
+  echo -e "${C_CYAN}│${C_RESET}${C_YELLOW}${clean_title}${C_RESET}${pad_r_str}${C_CYAN}│${C_RESET}"
 
   # Xử lý Đường gạch chân ngắt quãng
   local line_len=$((${#title_text} + 3))
+  ((line_len > box_inner_width)) && line_len=$box_inner_width
   local pad_line_r=$((box_inner_width - line_len))
-  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
-  local short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
-  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+  ((pad_line_r < 0)) && pad_line_r=0
+  local short_line="" pad_line_str=""
+  printf -v short_line '%*s' "$line_len" ""
+  short_line="${short_line// /─}"
+  printf -v pad_line_str '%*s' "$pad_line_r" ""
+  echo -e "${C_CYAN}├${short_line}${pad_line_str}│${C_RESET}"
 
   # Xử lý Danh sách phiên bản
-  local i=1
+  local i=1 item item_text clean_text item_len pad pad_item_str fzf_row
   for item in "${selects[@]}"; do
-    local item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$item")
-    local clean_text=$(printf "  %3d) %s" "$i" "$item")
-    local item_len=${#clean_text}
-    local pad=$((box_inner_width - item_len))
-    [[ $pad -lt 0 ]] && pad=0
-    echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    printf -v item_text "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$item"
+    printf -v clean_text "  %3d) %s" "$i" "$item"
+    printf -v fzf_row "%2d: %s" "$i" "$item"
+    fzf_lines+=("$fzf_row")
+
+    item_len=${#clean_text}
+    pad=$((box_inner_width - item_len))
+    ((pad < 0)) && pad=0
+    printf -v pad_item_str '%*s' "$pad" ""
+    echo -e "${C_CYAN}│${C_RESET}${item_text}${pad_item_str}${C_CYAN}│${C_RESET}"
     ((i++))
   done
-  
+
   echo -e "${C_CYAN}╰${border_line}╯${C_RESET}"
 
   # ==============================================================================
   # 6. XỬ LÝ LỰA CHỌN CỦA NGƯỜI DÙNG
   # ==============================================================================
-  local fzf_installed=false
+  local fzf_installed=0
+  local prompt_text=""
   if command -v fzf &>/dev/null; then
-    fzf_installed=true
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=${exit_thoat:-Thoát}]: "
+    fzf_installed=1
+    prompt_text="Nhập lựa chọn (1-${#selects[@]}) [00=Tìm nhanh] [0=${exit_thoat:-Thoát}]: "
   else
-    PROMPT_TEXT="Nhập lựa chọn (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
+    prompt_text="Nhập lựa chọn (1-${#selects[@]}) [0=${exit_thoat:-Thoát}]: "
   fi
 
+  local REPLY fzf_result selected_php num_ver_rev action_index
   while true; do
-    echo -en "${C_CYAN}${PROMPT_TEXT}${C_RESET}"
+    echo -en "${C_CYAN}${prompt_text}${C_RESET}"
 
-		# Tắt echo và dọn rác bàn phím (nếu người dùng lỡ bấm phím trong khi chờ)
+    # Tắt echo và dọn rác bàn phím (Typeahead Buffering)
     if [[ -t 0 ]]; then stty -echo 2>/dev/null; fi
     if declare -F wptt_flush_stdin >/dev/null; then
       wptt_flush_stdin
     fi
     if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
 
-    if ! read -r REPLY; then exit 1; fi
-    REPLY="${REPLY// /}"
+    if ! read -r REPLY; then
+      LSPHP="0"
+      return 1 2>/dev/null || exit 1
+    fi
+    REPLY="${REPLY//[[:space:]]/}"
     REPLY="${REPLY,,}"
 
     case "$REPLY" in
-    0)
-      echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
-      LSPHP="0"
-      return 0
-      ;;
-    00)
-      if $fzf_installed; then
-        local fzf_result
-        fzf_result=$(printf "%s\n" "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt=">> Tìm nhanh PHP [0=Thoát]: " --height=40% --border=rounded --color=border:red --cycle --reverse)
+      0)
+        echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
+        LSPHP="0"
+        return 0
+        ;;
+      00)
+        if ((fzf_installed == 1)); then
+          fzf_result=""
+          trap '' SIGINT
+          fzf_result=$(
+            printf "%s\n" "${fzf_lines[@]}" | fzf \
+              --prompt=">> Tìm nhanh PHP [ESC=Hủy]: " \
+              --height='~40%' \
+              --border=rounded \
+              --color=border:red \
+              --cycle \
+              --layout=reverse
+          ) || true
+          trap - SIGINT
 
-        if [[ -z "$fzf_result" ]]; then
-          echo -e "${C_YELLOW}Đã hủy chọn nhanh. Vui lòng chọn lại.${C_RESET}"
-          continue
+          if [[ -z "$fzf_result" ]]; then
+            echo -e "${C_YELLOW}Đã hủy chọn nhanh. Vui lòng chọn lại.${C_RESET}"
+            continue
+          fi
+
+          # Cắt phần số thứ tự " 1: PHP 8.1" -> "PHP 8.1" bằng Pure Bash (0 sed)
+          selected_php="${fzf_result#*: }"
+          num_ver_rev="${selected_php#PHP }"
+          num_ver_rev="${num_ver_rev//[^0-9]/}"
+          LSPHP="lsphp${num_ver_rev}"
+          return 0
+        else
+          echo -e "${C_RED}❌ Lỗi: FZF chưa được cài đặt.${C_RESET}"
         fi
+        ;;
+      *)
+        if [[ "$REPLY" =~ ^[0-9]+$ ]] && ((10#$REPLY >= 1 && 10#$REPLY <= ${#selects[@]})); then
+          action_index=$((10#$REPLY - 1))
+          selected_php="${selects[$action_index]}"
 
-        local selected_php=$(echo "$fzf_result" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//')
-
-        # CHUYỂN ĐỔI NGƯỢC: PHP 8.1 -> lsphp81
-        local num_ver_rev="${selected_php#PHP }"
-        num_ver_rev="${num_ver_rev//./}"
-        LSPHP="lsphp$num_ver_rev"
-        return 0
-      else
-        echo -e "${C_RED}Lỗi: FZF chưa được cài đặt.${C_RESET}"
-      fi
-      ;;
-    *)
-      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le ${#selects[@]} ]; then
-        local action_index=$((REPLY - 1))
-        local selected_php="${selects[$action_index]}"
-
-        # CHUYỂN ĐỔI NGƯỢC: PHP 8.1 -> lsphp81
-        local num_ver_rev="${selected_php#PHP }"
-        num_ver_rev="${num_ver_rev//./}"
-        LSPHP="lsphp$num_ver_rev"
-        return 0
-      else
-        echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
-      fi
-      ;;
+          # CHUYỂN ĐỔI NGƯỢC: PHP 8.1 -> lsphp81
+          num_ver_rev="${selected_php#PHP }"
+          num_ver_rev="${num_ver_rev//[^0-9]/}"
+          LSPHP="lsphp${num_ver_rev}"
+          return 0
+        else
+          echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn từ 1 đến ${#selects[@]}.${C_RESET}"
+        fi
+        ;;
     esac
   done
 }
