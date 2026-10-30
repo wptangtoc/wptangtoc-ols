@@ -1,3 +1,12 @@
+# WPTangToc OLS 8.3.2.4
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến an toàn tệp cấu hình:** Nâng cấp cơ chế ghi và chỉnh sửa cấu hình hệ thống (httpd, vhost, MariaDB, PHP.ini) với tính năng bảo vệ toàn diện, đảm bảo dữ liệu không bị hỏng hóc hoặc mất mát ngay cả khi xảy ra sự cố gián đoạn nguồn điện đột ngột.
+- **Kiểm tra tính hợp lệ trước khi khởi động dịch vụ:** Tự động kiểm tra kỹ lưỡng cú pháp và tính toàn vẹn của tệp cấu hình trước khi tiến hành khởi động lại các dịch vụ, giúp ngăn chặn triệt để tình trạng lỗi downtime hệ thống do cấu hình không hợp lệ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 🛠️ Tối ưu hệ thống
 - Nâng cấp công cụ giám sát tài nguyên `wtop` giúp theo dõi hệ thống trực quan và chính xác hơn.
 - Cải thiện quy trình chuyển đổi phiên bản PHP, giúp thao tác mượt mà, nhanh chóng và ổn định hơn.
