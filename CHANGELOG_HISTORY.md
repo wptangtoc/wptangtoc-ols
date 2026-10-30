@@ -184,18 +184,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.2.4.0
-
-### 🚀 Tính năng mới
-- **Nâng cấp toàn diện hệ thống tìm kiếm:** Tích hợp bộ máy tìm kiếm hướng dẫn và tăng tốc hoàn toàn mới, tối ưu hóa tốc độ phản hồi nhanh gấp 200 lần.
-- **Hệ thống từ khóa thông minh (Alias):** Tự động nhận diện từ khóa viết tắt hoặc gõ tắt (ví dụ: nhập *cai wp* hay *cài đặt wordpress*) để ưu tiên điều hướng nhanh đến menu Tải mã nguồn WordPress.
-- **Tích hợp sẵn Preload Cache Search:** Tải trước bộ nhớ đệm tìm kiếm ngay từ bộ cài đặt ban đầu giúp quản trị viên thao tác cực kỳ mượt mà.
-
-### 🛠️ Tối ưu hệ thống
-- **Thuật toán tìm kiếm nâng cao:** Hỗ trợ khớp từ khóa chính xác (Strict AND), phân hạng ưu tiên 5 tầng thông minh (Tiêu đề ưu tiên hơn Nội dung) và tự động tô sáng (highlight) từ khóa ngay trong khung Preview.
-- **Hỗ trợ gõ không dấu và chống sai chính tả:** Tối ưu khả năng nhận diện khi tìm kiếm tiếng Việt không dấu hoặc gõ sai chính tả, kết hợp cơ chế trọng số ưu tiên các tính năng quản trị thường dùng.
-- **Tối ưu hiệu năng tìm kiếm:** Cải thiện sâu về hiệu suất phần cứng và tốc độ xử lý của toàn bộ hệ thống tìm kiếm.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
