@@ -1,3 +1,11 @@
+🛠️ Tối ưu hệ thống
+- Nâng cấp công cụ giám sát tài nguyên `wtop` giúp theo dõi hệ thống trực quan và chính xác hơn.
+- Cải thiện quy trình chuyển đổi phiên bản PHP, giúp thao tác mượt mà, nhanh chóng và ổn định hơn.
+- Tối ưu hiệu năng tìm kiếm với cơ chế Debounce, giúp giảm tải tài nguyên và tăng tốc độ phản hồi cho máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.3.2.2
 
 🛠️ **Tối ưu hệ thống**
