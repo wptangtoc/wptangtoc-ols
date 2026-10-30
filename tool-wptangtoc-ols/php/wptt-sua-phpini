@@ -1,7 +1,12 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+# @description: Chỉnh sửa cấu hình php.ini (Zero-Touch Pre-Validation, Smart Log Wrap & Atomic Commit)
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Tính năng Sửa cấu hình php.ini là khả năng thay đổi các thiết lập hoạt động cốt lõi của PHP bằng cách chỉnh sửa trực tiếp tệp tin cấu hình chính của nó, có tên là php.ini. Tệp này chứa hàng loạt các chỉ thị [directives] điều khiển mọi khía cạnh của PHP, từ giới hạn tài nguyên, cách báo lỗi, đến việc kích hoạt các module mở rộng.
 
   Nói một cách đơn giản, php.ini giống như bảng điều khiển trung tâm của PHP. Việc sửa nó cho phép bạn tùy chỉnh sâu cách PHP vận hành trên máy chủ của mình.
@@ -18,45 +23,116 @@ function huong_dan() {
 EOF
 }
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 022
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
+
+route_menu="${1:-}"
+tmp_edit=""
+
+# ==============================================================================
+# BẪY DỌN DẸP FILE NHÁP AN TOÀN KHI THOÁT HOẶC NGẮT KẾT NỐI (CTRL+C / ĐỨT SSH)
+# ==============================================================================
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  [[ -n "${tmp_edit:-}" && -f "$tmp_edit" ]] && /bin/rm -f -- "$tmp_edit" 2>/dev/null || true
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# HÀM IN DÒNG LỖI TỰ ĐỘNG BẺ DÒNG (MULTI-LINE WORD WRAP) CHUẨN KHUNG 78 KÝ TỰ
+# ==============================================================================
+_print_wrapped_error_box() {
+  local raw_text="$1"
+  local tmp_path="$2"
+  local real_path="$3"
+  local line="" clean_line="" chunk=""
+  local max_w=76
+
+  while IFS= read -r line; do
+    line="${line//$'\r'/}"
+    [[ -z "$line" ]] && continue
+
+    # Thay thế tên file nháp bằng tên file php.ini thật để người dùng dễ nhìn số dòng (on line X)
+    clean_line="${line//"$tmp_path"/"$real_path"}"
+
+    local first_wrap=1
+    while [[ -n "$clean_line" ]]; do
+      if ((first_wrap == 1)); then
+        if ((${#clean_line} <= max_w)); then
+          printf "${C_RED}│${C_RESET}  ${C_BOLD_WHITE}%-74s${C_RESET}${C_RED}│${C_RESET}\n" "$clean_line"
+          break
+        else
+          chunk="${clean_line:0:$max_w}"
+          clean_line="${clean_line:$max_w}"
+          printf "${C_RED}│${C_RESET}  ${C_BOLD_WHITE}%-74s${C_RESET}${C_RED}│${C_RESET}\n" "$chunk"
+          first_wrap=0
+        fi
+      else
+        local sub_w=$((max_w - 4))
+        chunk="${clean_line:0:$sub_w}"
+        clean_line="${clean_line:$sub_w}"
+        printf "${C_RED}│${C_RESET}    ${C_YELLOW}↳ %-70s${C_RESET}${C_RED}│${C_RESET}\n" "$chunk"
+      fi
+    done
+  done <<<"$raw_text"
+}
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_php} ➜ ${cau_hinh_php_ini:-Chỉnh sửa file php.ini}${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_php:-Quản lý PHP} ➜ ${cau_hinh_php_ini:-Chỉnh sửa file php.ini}${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-/bin/bash /etc/wptt/php/wptt-php-version-domain
-. /etc/wptt/php/tenmien-php
+[[ -f /etc/wptt/php/wptt-php-version-domain ]] && /bin/bash /etc/wptt/php/wptt-php-version-domain
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/php/tenmien-php ]] && . /etc/wptt/php/tenmien-php
 
-# Chốt chặn thoát
-if [[ "$LSPHP" == '0' || -z "$LSPHP" ]]; then
-  wptt_quay_ve_menu "${1:-}" 0
+# Chốt chặn thoát nếu người dùng chọn 0
+if [[ "${LSPHP:-}" == "0" || -z "${LSPHP:-}" ]]; then
+  wptt_quay_ve_menu "$route_menu" 0
 fi
 
-# ==============================================================================
-# TÍNH TOÁN ĐƯỜNG DẪN CONFIG THEO OS
-# ==============================================================================
-phien_ban_php_co_cham=$(echo "$LSPHP" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
+# 1. TÍNH TOÁN ĐƯỜNG DẪN PHP.INI CHUẨN XÁC
+php_num="${LSPHP//[^0-9]/}"
+phien_ban_php_co_cham="${php_num:0:1}.${php_num:1:1}"
+php_bin="/usr/local/lsws/${LSPHP}/bin/php"
 
-if cat /etc/*release 2>/dev/null | grep -qi "ubuntu"; then
+if grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
   duong_dan_php_ini="/usr/local/lsws/$LSPHP/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
 else
   duong_dan_php_ini="/usr/local/lsws/$LSPHP/etc/php.ini"
 fi
 
+# Fallback Hỏi trực tiếp binary PHP nếu đường dẫn mặc định khác biệt
+if [[ ! -f "$duong_dan_php_ini" && -x "$php_bin" ]]; then
+  detected_ini="$("$php_bin" --ini 2>/dev/null | awk -F': ' '/Loaded Configuration File/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}')"
+  [[ -n "$detected_ini" && -f "$detected_ini" ]] && duong_dan_php_ini="$detected_ini"
+fi
+
 if [[ ! -f "$duong_dan_php_ini" ]]; then
   echo -e "\n${C_RED}❌ Lỗi: Không xác định được file php.ini cho phiên bản $LSPHP!${C_RESET}"
-  sleep 3
-  wptt_quay_ve_menu "${1:-}" 0
-  wptt_quay_ve_menu "${1:-}" 1
+  read -r -s -n 1 -t 2.5 _ 2>/dev/null || true
+  wptt_quay_ve_menu "$route_menu" 1 "enter"
 fi
 
 # ==============================================================================
-# HIỂN THỊ BẢNG TRẠNG THÁI (UX BO CONG)
+# 2. HIỂN THỊ BẢNG TRẠNG THÁI (UX BO CONG)
 # ==============================================================================
 echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 left_text "Phiên bản PHP : ${C_GREEN}PHP $phien_ban_php_co_cham ($LSPHP)${C_RESET}" 2
@@ -64,15 +140,27 @@ left_text "Đường dẫn file: ${C_YELLOW}$duong_dan_php_ini${C_RESET}" 2
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 # ==============================================================================
-# XÁC NHẬN BẢO MẬT & HƯỚNG DẪN TRÌNH SOẠN THẢO
+# 3. XÁC NHẬN BẢO MẬT & HƯỚNG DẪN TRÌNH SOẠN THẢO
 # ==============================================================================
-if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn mở và chỉnh sửa cấu hình php.ini không?" "CẢNH BÁO: Chỉnh sửa sai cú pháp có thể khiến toàn bộ website chạy" "trên phiên bản PHP này bị sập (Lỗi 500/503)." "Đồng ý Chỉnh sửa" "Hủy thao tác"; then
+if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn mở và chỉnh sửa cấu hình php.ini không?" \
+  "CẢNH BÁO: Chỉnh sửa sai cú pháp có thể khiến toàn bộ website chạy" \
+  "trên phiên bản PHP $phien_ban_php_co_cham bị gián đoạn (Lỗi 500/503)." \
+  "Đồng ý Chỉnh sửa" "Hủy thao tác"; then
   echo ""
 
-  [[ -z "$editor_cau_hinh" ]] && editor_cau_hinh="nano"
+  editor_cmd="${editor_cau_hinh:-nano}"
+  if ! command -v "$editor_cmd" >/dev/null 2>&1; then
+    if command -v nano >/dev/null 2>&1; then
+      editor_cmd="nano"
+    elif command -v vi >/dev/null 2>&1; then
+      editor_cmd="vi"
+    else
+      _runloi "Tìm trình soạn thảo văn bản (nano/vi)"
+      wptt_quay_ve_menu "$route_menu" 1
+    fi
+  fi
 
-  # Khung hướng dẫn phím tắt Nano
-  if [[ "$editor_cau_hinh" == "nano" ]]; then
+  if [[ "$editor_cmd" == "nano" ]]; then
     echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HƯỚNG DẪN LƯU FILE BẰNG NANO${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -81,82 +169,111 @@ if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn mở và chỉnh sửa cấu h�
     left_text "3. Thoát ra ngoài Menu, ấn tổ hợp  : ${C_YELLOW}Ctrl + X${C_RESET}" 4
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   else
-    echo -e "${C_YELLOW}Đang mở trình soạn thảo: $editor_cau_hinh${C_RESET}\n"
+    echo -e "${C_YELLOW}Đang mở trình soạn thảo: $editor_cmd${C_RESET}\n"
   fi
 
-  echo -e "${C_CYAN}Đang chuẩn bị dữ liệu và mở file cấu hình...${C_RESET}"
-  sleep 3
+  read -r -s -n 1 -t 1.8 _ 2>/dev/null || true
 
-  # Lấy MD5 trước khi sửa (Lưu trên RAM)
-  old_md5=$(md5sum "$duong_dan_php_ini" | awk '{print $1}')
+  old_md5=""
+  read -r old_md5 _ < <(md5sum "$duong_dan_php_ini" 2>/dev/null)
 
-  # ==============================================================================
-  # MỞ TRÌNH SOẠN THẢO
-  # ==============================================================================
-  $editor_cau_hinh "$duong_dan_php_ini"
-  clear # Xóa màn hình sau khi Nano thoát ra
+  # Khởi tạo file nháp bằng wptt_atomic_begin (File php.ini thật hoàn toàn không bị chạm vào)
+  tmp_edit="$(wptt_atomic_begin "$duong_dan_php_ini")" || {
+    _runloi "Khởi tạo file nháp cho $duong_dan_php_ini"
+    wptt_quay_ve_menu "$route_menu" 1
+  }
 
-  # ==============================================================================
-  # KIỂM TRA SỰ THAY ĐỔI VÀ CHECK LỖI CÚ PHÁP
-  # ==============================================================================
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}ĐANG KIỂM TRA SỰ THAY ĐỔI VÀ CÚ PHÁP PHP.INI${C_RESET}"
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  # Lấy danh sách cảnh báo sẵn có của bản gốc (nếu có) để tránh bắt lỗi oan các module cũ
+  baseline_warn=""
+  if [[ -x "$php_bin" ]]; then
+    baseline_warn="$("$php_bin" -c "$duong_dan_php_ini" -v 2>&1 | grep -iE "warning|error|exception|fatal|syntax" || true)"
+  fi
 
-  new_md5=$(md5sum "$duong_dan_php_ini" | awk '{print $1}')
+  # ============================================================================
+  # 4. VÒNG LẶP CHỈNH SỬA TRÊN NHÁP -> KIỂM TRA CÔ LẬP (-c) -> ATOMIC COMMIT
+  # ============================================================================
+  while true; do
+    "$editor_cmd" "$tmp_edit"
+    clear
 
-  if [[ "$old_md5" != "$new_md5" ]]; then
-    UI_STRING="Đang phân tích cú pháp PHP.ini (Syntax Check)..."
-    _runing "$UI_STRING"
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}ĐANG KIỂM TRA SỰ THAY ĐỔI VÀ CÚ PHÁP PHP.INI ($LSPHP)${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-    # KẾT HỢP KIỂM TRA LỖI PHP.INI TRƯỚC KHI RESTART
-    # Gọi nháp tiến trình PHP với file php.ini vừa sửa để xem có văng lỗi Parse/Fatal không
-    kiem_tra_php=$(/usr/local/lsws/"$LSPHP"/bin/php -c "$duong_dan_php_ini" -v 2>&1 | grep -iE "warning|error|exception|fatal")
+    new_md5=""
+    read -r new_md5 _ < <(md5sum "$tmp_edit" 2>/dev/null)
 
-    _rundone "$UI_STRING"
-    if [[ -n "$kiem_tra_php" ]]; then
-      wptt_logs "INFO" "Cấu hình lại PHP gây ra lỗi "
+    if [[ "$old_md5" == "$new_md5" ]]; then
+      echo -e "${C_YELLOW}Không có sự thay đổi nào được phát hiện trong file. Bỏ qua bước nạp lại.${C_RESET}\n"
+      break
+    fi
+
+    task_syntax="Phân tích cú pháp php.ini trên môi trường cô lập (Syntax Check)"
+    _runing "$task_syntax"
+
+    php_rc=0
+    raw_php_out=""
+    if [[ -x "$php_bin" ]]; then
+      raw_php_out="$("$php_bin" -c "$tmp_edit" -v 2>&1)" || php_rc=$?
+    fi
+    kiem_tra_php="$(grep -iE "warning|error|exception|fatal|syntax" <<<"$raw_php_out" || true)"
+
+    # Nếu phát hiện lỗi cú pháp mới hoặc trình biên dịch PHP trả về mã lỗi != 0
+    if ((php_rc != 0)) || { [[ -n "$kiem_tra_php" ]] && [[ "$kiem_tra_php" != "$baseline_warn" ]]; }; then
+      _runloi "$task_syntax"
+      wptt_logs "ERROR" "Chỉnh sửa php.ini ($LSPHP) bị lỗi cú pháp"
 
       echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}LỖI CÚ PHÁP ĐÃ XẢY RA TRONG PHP.INI${C_RESET}"
+      center_text "${C_BOLD_WHITE}PHÁT HIỆN LỖI CÚ PHÁP TRONG FILE PHP.INI VỪA SỬA${C_RESET}" "$C_RED"
       echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "${C_YELLOW}Hệ thống đã HỦY LỆNH RELOAD để tránh sập các Website đang chạy!${C_RESET}" 2
-      left_text "Chi tiết cảnh báo/lỗi từ trình biên dịch PHP:" 2
+      left_text "${C_GREEN}✔ File php.ini gốc đang chạy vẫn an toàn 100% (Chưa bị ghi đè)!${C_RESET}" 2 "$C_RED"
+      left_text "Chi tiết lỗi từ trình thông dịch PHP ($LSPHP):" 2 "$C_RED"
       echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-      # In chi tiết lỗi ra màn hình cho người dùng đọc
-      while IFS= read -r line; do
-        if [[ -n "$line" ]]; then
-          printf "${C_RED}│${C_RESET}  %-69s${C_RED}│${C_RESET}\n" "${line:0:69}"
-        fi
-      done <<<"$kiem_tra_php"
+      _print_wrapped_error_box "${kiem_tra_php:-$raw_php_out}" "$tmp_edit" "$duong_dan_php_ini"
 
-      left_text "${C_YELLOW}Hãy vào cấu hình PHP.ini ${C_GREEN}PHP $phien_ban_php_co_cham ($LSPHP)${C_RESET} và sửa lại cho đúng nhé!${C_RESET}" 2
       echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-      wptt_quay_ve_menu "${1:-}" 0
-      wptt_quay_ve_menu "${1:-}" 1
+      if wptt_xac_nhan "Cấu hình php.ini bạn vừa sửa có lỗi cú pháp!" \
+        "Bạn có muốn mở lại trình soạn thảo để sửa tiếp không?" \
+        "(Nếu chọn Hủy, bản nháp lỗi sẽ bị xóa và giữ nguyên file php.ini gốc)" \
+        "Sửa lại ngay" "Hủy bỏ thay đổi"; then
+        continue
+      else
+        echo -e "${C_YELLOW}Đã hủy bỏ bản nháp lỗi. Cấu hình PHP $phien_ban_php_co_cham gốc được giữ nguyên an toàn.${C_RESET}\n"
+        wptt_quay_ve_menu "$route_menu" 1
+      fi
     else
-      _runing "Nạp lại tiến trình LS-PHP (Zero-Downtime)..."
-      wptt_smart_reload_lsws >/dev/null 2>&1
-      wptt_logs "INFO" "Cấu hình lại PHP phiên bản $phien_ban_php_co_cham"
-      _rundone "Nạp lại tiến trình LS-PHP (Zero-Downtime)..."
+      _rundone "$task_syntax"
 
-      # BẢNG BÁO CÁO THÀNH CÔNG
+      # Cú pháp hợp lệ 100% -> Thực hiện Atomic Commit đè vào file php.ini thật
+      task_apply="Áp dụng cấu hình mới và nạp lại tiến trình $LSPHP"
+      _runing "$task_apply"
+
+      if ! wptt_atomic_commit "$tmp_edit" "$duong_dan_php_ini"; then
+        _runloi "$task_apply"
+        wptt_quay_ve_menu "$route_menu" 1
+      fi
+      tmp_edit="" # Đã commit xong, giải phóng biến để trap không xóa lại
+
+      # Dọn các worker lsphp detached của phiên bản này để nhận php.ini mới ngay lập tức
+      pkill -TERM -f "/usr/local/lsws/${LSPHP}/bin/lsphp" >/dev/null 2>&1 || true
+      wptt_smart_reload_lsws >/dev/null 2>&1
+      wptt_logs "INFO" "Cấu hình lại php.ini phiên bản PHP $phien_ban_php_co_cham ($LSPHP) thành công"
+      _rundone "$task_apply"
+
       echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}CẬP NHẬT CẤU HÌNH PHP THÀNH CÔNG${C_RESET}"
+      center_text "${C_BOLD_WHITE}CẬP NHẬT CẤU HÌNH PHP.INI THÀNH CÔNG${C_RESET}" "$C_GREEN"
       echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "Trạng thái : Cấu hình mới đã được áp dụng an toàn. Website" 2
-      left_text "             của bạn không bị gián đoạn (Zero-Downtime)." 2
+      left_text "Phiên bản áp dụng : ${C_YELLOW}PHP $phien_ban_php_co_cham ($LSPHP)${C_RESET}" 2 "$C_GREEN"
+      left_text "Trạng thái        : Đã nạp lại Worker LSPHP." 2 "$C_GREEN"
       echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      break
     fi
-  else
-    echo -e "${C_YELLOW}Không có sự thay đổi nào được phát hiện trong file. Bỏ qua bước nạp lại.${C_RESET}\n"
-  fi
+  done
 
 else
   echo -e "${C_YELLOW}Đã hủy thao tác chỉnh sửa cấu hình php.ini.${C_RESET}\n"
 fi
 
-wptt_quay_ve_menu "${1:-}" 0
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "$route_menu" 0

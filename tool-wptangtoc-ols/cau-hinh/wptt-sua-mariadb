@@ -3,9 +3,10 @@
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
 # @since: 2026
+# @description: Chỉnh sửa cấu hình MariaDB
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Tính năng Cấu hình MariaDB là quá trình điều chỉnh các tham số và cài đặt hoạt động của máy chủ cơ sở dữ liệu MariaDB để tối ưu hóa hiệu suất, tăng cường bảo mật, quản lý tài nguyên và đảm bảo nó hoạt động ổn định theo nhu cầu cụ thể của bạn.
 
   Nói một cách đơn giản, đây là việc bạn tinh chỉnh các nút vặn bên trong MariaDB để nó chạy nhanh nhất, an toàn nhất và phù hợp nhất với website hoặc ứng dụng mà nó phục vụ, cũng như với phần cứng của máy chủ.
@@ -23,24 +24,167 @@ function huong_dan() {
 EOF
 }
 
-. /etc/wptt/.wptt.conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện UI Xác nhận
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+stty iutf8 2>/dev/null || true
+umask 022
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
+
+route_menu="${1:-}"
+duong_dan_cau_hinh_mariadb=""
+tmp_edit=""
+backup_orig=""
+need_rollback=0
+
+# ==============================================================================
+# BẪY DỌN DẸP & TỰ ĐỘNG ROLLBACK NẾU BỊ NGẮT GIỮA CHỪNG (CTRL+C / ĐỨT SSH)
+# ==============================================================================
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+
+  if ((need_rollback == 1)) && [[ -n "${duong_dan_cau_hinh_mariadb:-}" && -n "${backup_orig:-}" && -f "$backup_orig" ]]; then
+    local rb_tmp=""
+    rb_tmp="$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb" 2>/dev/null || true)"
+    if [[ -n "$rb_tmp" && -f "$rb_tmp" ]]; then
+      /bin/cp -f -- "$backup_orig" "$rb_tmp" 2>/dev/null || true
+      wptt_atomic_commit "$rb_tmp" "$duong_dan_cau_hinh_mariadb" 2>/dev/null || true
+    fi
+    # Đảm bảo MariaDB luôn sống trở lại nếu bị ngắt lúc đang lỗi
+    if ! systemctl is-active --quiet mariadb 2>/dev/null; then
+      systemctl restart mariadb >/dev/null 2>&1 || true
+    fi
+  fi
+
+  [[ -n "${tmp_edit:-}" && -f "$tmp_edit" ]] && /bin/rm -f -- "$tmp_edit" 2>/dev/null || true
+  [[ -n "${backup_orig:-}" && -f "$backup_orig" ]] && /bin/rm -f -- "$backup_orig" 2>/dev/null || true
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# HÀM IN DÒNG LỖI TỰ ĐỘNG BẺ DÒNG (MULTI-LINE WORD WRAP) CHUẨN KHUNG 78 KÝ TỰ
+# ==============================================================================
+_print_wrapped_error_box() {
+  local raw_text="$1"
+  local line="" clean_line="" chunk=""
+  local max_w=76
+
+  while IFS= read -r line; do
+    line="${line//$'\r'/}"
+    [[ -z "$line" ]] && continue
+
+    # Lọc bỏ các dòng thông tin/note vô hại của mariadbd --help --verbose
+    if [[ "$line" == *"[Note]"* || "$line" == *"Plugin "* && "$line" == *" is disabled"* ]]; then
+      continue
+    fi
+
+    # Rút gọn phần Timestamp hoặc đường dẫn binary dài dòng ở đầu dòng log
+    clean_line="$line"
+    if [[ "$clean_line" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]]+[0-9:]+[[:space:]]+[0-9]+[[:space:]]+(.*)$ ]]; then
+      clean_line="${BASH_REMATCH[1]}"
+    elif [[ "$clean_line" =~ ^/usr/(sbin|libexec)/(mariadbd|mysqld):[[:space:]]*(.*)$ ]]; then
+      clean_line="${BASH_REMATCH[3]}"
+    fi
+
+    local first_wrap=1
+    while [[ -n "$clean_line" ]]; do
+      if ((first_wrap == 1)); then
+        if ((${#clean_line} <= max_w)); then
+          printf "${C_RED}│${C_RESET}  ${C_BOLD_WHITE}%-74s${C_RESET}${C_RED}│${C_RESET}\n" "$clean_line"
+          break
+        else
+          chunk="${clean_line:0:$max_w}"
+          clean_line="${clean_line:$max_w}"
+          printf "${C_RED}│${C_RESET}  ${C_BOLD_WHITE}%-74s${C_RESET}${C_RED}│${C_RESET}\n" "$chunk"
+          first_wrap=0
+        fi
+      else
+        local sub_w=$((max_w - 4))
+        chunk="${clean_line:0:$sub_w}"
+        clean_line="${clean_line:$sub_w}"
+        printf "${C_RED}│${C_RESET}    ${C_YELLOW}↳ %-72s${C_RESET}${C_RED}│${C_RESET}\n" "$chunk"
+      fi
+    done
+  done <<<"$raw_text"
+}
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${cau_hinh_webserver} ➜ Chỉnh sửa file MariaDB Database${C_RESET}"
+center_text "${C_YELLOW}${cau_hinh_webserver:-Cấu hình Hệ thống} ➜ Chỉnh sửa file MariaDB Database${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn mở và chỉnh sửa cấu hình MariaDB không?" "CẢNH BÁO NGUY HIỂM: File cấu hình Database (my.cnf) rất nhạy cảm." "Chỉ một sai sót nhỏ cũng có thể làm sập toàn bộ Cơ sở dữ liệu!" "Đồng ý Chỉnh sửa" "Hủy thao tác"; then
+# Nhận diện chính xác đường dẫn file cấu hình MariaDB theo Hệ điều hành
+if grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
+  if [[ -f /etc/mysql/my.cnf ]]; then
+    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
+  elif [[ -f /etc/mysql/mariadb.conf.d/50-server.cnf ]]; then
+    duong_dan_cau_hinh_mariadb="/etc/mysql/mariadb.conf.d/50-server.cnf"
+  fi
+else
+  if [[ -f /etc/my.cnf.d/server.cnf ]]; then
+    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
+  elif [[ -f /etc/my.cnf ]]; then
+    duong_dan_cau_hinh_mariadb="/etc/my.cnf"
+  fi
+fi
+
+if [[ -z "$duong_dan_cau_hinh_mariadb" || ! -f "$duong_dan_cau_hinh_mariadb" ]]; then
+  _runloi "Kiểm tra file cấu hình MariaDB"
+  echo -e "\n${C_RED}❌ Lỗi: Không tìm thấy file cấu hình MariaDB trên hệ thống!${C_RESET}\n"
+  wptt_quay_ve_menu "$route_menu" 1
+fi
+
+# Nhận diện binary kiểm tra cú pháp (mariadbd hoặc mysqld)
+MARIADBD_BIN=""
+for bin_cand in /usr/sbin/mariadbd /usr/libexec/mariadbd /usr/sbin/mysqld /usr/libexec/mysqld; do
+  if [[ -x "$bin_cand" ]]; then
+    MARIADBD_BIN="$bin_cand"
+    break
+  fi
+done
+if [[ -z "$MARIADBD_BIN" ]]; then
+  if command -v mariadbd >/dev/null 2>&1; then
+    MARIADBD_BIN="$(command -v mariadbd)"
+  elif command -v mysqld >/dev/null 2>&1; then
+    MARIADBD_BIN="$(command -v mysqld)"
+  fi
+fi
+
+# ==============================================================================
+# 1. XÁC NHẬN BẢO MẬT & HƯỚNG DẪN TRÌNH SOẠN THẢO
+# ==============================================================================
+if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn mở và chỉnh sửa cấu hình MariaDB không?" \
+  "CẢNH BÁO NGUY HIỂM: File cấu hình Database ($duong_dan_cau_hinh_mariadb) rất nhạy cảm." \
+  "Chỉ một sai sót nhỏ cũng có thể làm sập toàn bộ Cơ sở dữ liệu!" \
+  "Đồng ý Chỉnh sửa" "Hủy thao tác"; then
   echo ""
 
-  [[ -z "$editor_cau_hinh" ]] && editor_cau_hinh="nano"
+  editor_cmd="${editor_cau_hinh:-nano}"
+  if ! command -v "$editor_cmd" >/dev/null 2>&1; then
+    if command -v nano >/dev/null 2>&1; then
+      editor_cmd="nano"
+    elif command -v vi >/dev/null 2>&1; then
+      editor_cmd="vi"
+    else
+      _runloi "Tìm trình soạn thảo văn bản (nano/vi)"
+      wptt_quay_ve_menu "$route_menu" 1
+    fi
+  fi
 
-  # Khung hướng dẫn phím tắt Nano (UX Bo Cong)
-  if [[ "$editor_cau_hinh" == "nano" ]]; then
+  if [[ "$editor_cmd" == "nano" ]]; then
     echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HƯỚNG DẪN LƯU FILE BẰNG NANO${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -49,89 +193,165 @@ if wptt_xac_nhan "Bạn có CHẮC CHẮN muốn mở và chỉnh sửa cấu h�
     left_text "3. Thoát ra ngoài Menu, ấn tổ hợp  : ${C_YELLOW}Ctrl + X${C_RESET}" 4
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
   else
-    echo -e "${C_YELLOW}Đang mở trình soạn thảo: $editor_cau_hinh${C_RESET}\n"
+    echo -e "${C_YELLOW}Đang mở trình soạn thảo: $editor_cmd${C_RESET}\n"
   fi
 
-  echo -e "${C_CYAN}Đang chuẩn bị dữ liệu và mở file...${C_RESET}"
-  sleep 3
+  read -r -s -n 1 -t 1.8 _ 2>/dev/null || true
 
-  # Nhận diện đường dẫn config theo OS
-  if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-    duong_dan_cau_hinh_mariadb="/etc/mysql/my.cnf"
-  else
-    duong_dan_cau_hinh_mariadb="/etc/my.cnf.d/server.cnf"
-  fi
+  # ============================================================================
+  # 2. KHỞI TẠO BẢN SAO LƯU GỐC & FILE NHÁP ATOMIC (wptt_atomic_begin)
+  # ============================================================================
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+  chmod 700 /etc/wptt/tmp 2>/dev/null || true
 
-  # Lấy mã băm MD5 trước khi sửa (Lưu trên RAM)
-  old_md5=$(md5sum "$duong_dan_cau_hinh_mariadb" | awk '{print $1}')
+  backup_orig="$(mktemp -p /etc/wptt/tmp mariadb_cnf_orig_XXXXXX.bak)"
+  /bin/cp -fp -- "$duong_dan_cau_hinh_mariadb" "$backup_orig" || {
+    _runloi "Tạo bản sao lưu an toàn cho cấu hình MariaDB"
+    wptt_quay_ve_menu "$route_menu" 1
+  }
 
-  # ==============================================================================
-  # MỞ TRÌNH SOẠN THẢO
-  # ==============================================================================
-  $editor_cau_hinh "$duong_dan_cau_hinh_mariadb"
-  clear # Xóa màn hình sau khi Nano thoát ra để giao diện sạch sẽ
+  old_md5=""
+  read -r old_md5 _ < <(md5sum "$duong_dan_cau_hinh_mariadb" 2>/dev/null)
 
-  # ==============================================================================
-  # KIỂM TRA MD5 VÀ SYNTAX (CHỐNG SẬP DATABASE)
-  # ==============================================================================
-  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_YELLOW}ĐANG KIỂM TRA SỰ THAY ĐỔI VÀ CÚ PHÁP${C_RESET}"
-  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  tmp_edit="$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb")" || {
+    _runloi "Khởi tạo file nháp chỉnh sửa MariaDB"
+    wptt_quay_ve_menu "$route_menu" 1
+  }
 
-  new_md5=$(md5sum "$duong_dan_cau_hinh_mariadb" | awk '{print $1}')
+  # ============================================================================
+  # 3. VÒNG LẶP CHỈNH SỬA -> 2-STAGE VALIDATION -> AUTO-ROLLBACK / RETRY
+  # ============================================================================
+  while true; do
+    "$editor_cmd" "$tmp_edit"
+    clear
 
-  if [[ "$old_md5" != "$new_md5" ]]; then
-    UI_STRING="Đang phân tích cú pháp cấu hình (Syntax Check)..."
-    _runing "$UI_STRING"
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}ĐANG KIỂM TRA SỰ THAY ĐỔI VÀ CÚ PHÁP MARIADB${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-    # Bắt lỗi cú pháp thông qua Exit Code của mariadbd
-    loi_chi_tiet=$(mariadbd --help --verbose 2>&1 >/dev/null)
-    exit_status=$?
+    new_md5=""
+    read -r new_md5 _ < <(md5sum "$tmp_edit" 2>/dev/null)
 
-    _rundone "$UI_STRING"
+    if [[ "$old_md5" == "$new_md5" ]]; then
+      if ((need_rollback == 1)); then
+        rb_tmp="$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb")"
+        /bin/cp -f -- "$backup_orig" "$rb_tmp"
+        wptt_atomic_commit "$rb_tmp" "$duong_dan_cau_hinh_mariadb"
+        need_rollback=0
+      fi
+      echo -e "${C_YELLOW}Không có sự thay đổi nào được phát hiện trong file. Bỏ qua bước nạp lại.${C_RESET}\n"
+      break
+    fi
 
-    if [[ $exit_status -ne 0 ]]; then
-      wptt_logs "INFO" "Cấu hình lại Mariadb làm gây ra lỗi "
+    # Áp dụng nguyên tử file nháp vào vị trí chính thức để mariadbd kiểm tra
+    need_rollback=1
+    commit_stage="$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb")" || {
+      _runloi "Chuẩn bị commit cấu hình MariaDB"
+      break
+    }
+    /bin/cp -f -- "$tmp_edit" "$commit_stage"
+    wptt_atomic_commit "$commit_stage" "$duong_dan_cau_hinh_mariadb"
+
+    # --------------------------------------------------------------------------
+    # TẦNG 1: KIỂM TRA CÚ PHÁP TĨNH (PRE-FLIGHT SYNTAX CHECK)
+    # --------------------------------------------------------------------------
+    task_syntax="Phân tích cú pháp cấu hình MariaDB (Syntax Check)"
+    _runing "$task_syntax"
+    exit_status=0
+    loi_chi_tiet=""
+    if [[ -n "$MARIADBD_BIN" ]]; then
+      loi_chi_tiet="$("$MARIADBD_BIN" --help --verbose 2>&1 >/dev/null)" || exit_status=$?
+    fi
+
+    if ((exit_status != 0)) || grep -qiE '\[ERROR\]|unknown variable|unknown option|syntax error' <<<"$loi_chi_tiet"; then
+      _runloi "$task_syntax"
+      wptt_logs "ERROR" "Chỉnh sửa cấu hình MariaDB bị lỗi cú pháp"
 
       echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}LỖI CÚ PHÁP NGHIÊM TRỌNG ĐÃ XẢY RA${C_RESET}"
+      center_text "${C_BOLD_WHITE}PHÁT HIỆN LỖI CÚ PHÁP TRONG CẤU HÌNH MARIADB${C_RESET}" "$C_RED"
       echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "${C_YELLOW}Hệ thống đã HỦY LỆNH RESTART để bảo vệ Database của bạn khỏi bị sập!${C_RESET}" 2
-      left_text "Chi tiết mã lỗi từ MariaDB:" 2
+      left_text "${C_YELLOW}Hệ thống đã CHẶN LỆNH RESTART để bảo vệ Database khỏi bị sập!${C_RESET}" 2 "$C_RED"
+      left_text "Chi tiết mã lỗi từ MariaDB:" 2 "$C_RED"
       echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-      # In chi tiết lỗi ra màn hình cho người dùng đọc
-      while IFS= read -r line; do
-        if [[ -n "$line" ]]; then
-          printf "${C_RED}│${C_RESET}  %-69s${C_RED}│${C_RESET}\n" "${line:0:69}" # Cắt chuỗi nếu quá dài
-        fi
-      done <<<"$loi_chi_tiet"
+      _print_wrapped_error_box "$loi_chi_tiet"
 
-      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "Hãy vào và sửa lại MariaDB my.cnf cho đúng nhé!"
-      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
-      wptt_quay_ve_menu "${1:-}" 1
-    else
-      # Nếu cấu hình chuẩn xác -> Khởi động lại
-
-      _runing "Nạp lại cấu hình mới cho MariaDB (Restart)..."
-      systemctl restart mariadb >/dev/null 2>&1
-      wptt_logs "INFO" "Cấu hình lại MariaDB thành công "
-      _rundone "Nạp lại cấu hình mới cho MariaDB (Restart)..."
-
-      echo -e "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      center_text "${C_BOLD_WHITE}CẬP NHẬT CẤU HÌNH THÀNH CÔNG${C_RESET}"
-      echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-      left_text "Trạng thái : Database đã được khởi động lại với thông số mới." 2
-      echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      if wptt_xac_nhan "Cấu hình MariaDB bạn vừa lưu bị lỗi cú pháp!" \
+        "Bạn có muốn mở lại trình soạn thảo để sửa tiếp không?" \
+        "(Nếu chọn Hủy, hệ thống sẽ tự động khôi phục lại file gốc ban đầu)" \
+        "Sửa lại ngay" "Hủy & Khôi phục file gốc"; then
+        continue
+      else
+        task_rb="Khôi phục (Rollback) lại file cấu hình MariaDB gốc an toàn"
+        _runing "$task_rb"
+        rb_tmp="$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb")"
+        /bin/cp -f -- "$backup_orig" "$rb_tmp"
+        wptt_atomic_commit "$rb_tmp" "$duong_dan_cau_hinh_mariadb"
+        need_rollback=0
+        _rundone "$task_rb"
+        wptt_logs "INFO" "Đã tự động Rollback cấu hình MariaDB về bản gốc an toàn"
+        wptt_quay_ve_menu "$route_menu" 1
+      fi
     fi
-  else
-    echo -e "${C_YELLOW}Không có sự thay đổi nào được phát hiện trong file. Bỏ qua bước nạp lại.${C_RESET}\n"
-  fi
+    _rundone "$task_syntax"
+
+    # --------------------------------------------------------------------------
+    # TẦNG 2: KHỞI ĐỘNG LẠI & KIỂM TRA SỐNG THỰC TẾ (RUNTIME BOOT VERIFICATION)
+    # --------------------------------------------------------------------------
+    task_restart="Nạp lại cấu hình mới cho MariaDB (Restart & Health Check)"
+    _runing "$task_restart"
+
+    if systemctl restart mariadb >/dev/null 2>&1 && systemctl is-active --quiet mariadb 2>/dev/null; then
+      need_rollback=0
+      /bin/rm -f -- /run/wptangtoc/mariadb-heal.ts 2>/dev/null || true
+      _rundone "$task_restart"
+      wptt_logs "INFO" "Cấu hình lại MariaDB thành công"
+
+      echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}CẬP NHẬT CẤU HÌNH MARIADB THÀNH CÔNG${C_RESET}" "$C_GREEN"
+      echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "File cấu hình : ${C_YELLOW}$duong_dan_cau_hinh_mariadb${C_RESET}" 2 "$C_GREEN"
+      left_text "Trạng thái    : Database đã khởi động lại ổn định với thông số mới." 2 "$C_GREEN"
+      echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      break
+    else
+      # Cú pháp đúng nhưng thông số vượt quá tài nguyên (VD: tràn RAM Buffer Pool) khiến MariaDB không lên!
+      _runloi "$task_restart"
+      runtime_err="$(journalctl -u mariadb.service -n 15 --no-pager 2>/dev/null | grep -iE 'error|fail|abort|cannot|invalid' || echo "MariaDB không thể khởi động với các thông số tài nguyên vừa thiết lập.")"
+
+      # Khôi phục ngay bản gốc và bật lại MariaDB để cứu các Website đang chạy
+      rb_tmp="$(wptt_atomic_begin "$duong_dan_cau_hinh_mariadb")"
+      /bin/cp -f -- "$backup_orig" "$rb_tmp"
+      wptt_atomic_commit "$rb_tmp" "$duong_dan_cau_hinh_mariadb"
+      systemctl restart mariadb >/dev/null 2>&1 || true
+      need_rollback=0
+
+      echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}MARIADB KHÔNG THỂ KHỞI ĐỘNG VỚI THÔNG SỐ MỚI!${C_RESET}" "$C_RED"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "${C_GREEN}✔ Hệ thống đã TỰ ĐỘNG ROLLBACK cấu hình cũ và bật lại Database an toàn!${C_RESET}" 2 "$C_RED"
+      left_text "Nguyên nhân từ Systemd / MariaDB Log:" 2 "$C_RED"
+      echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      _print_wrapped_error_box "$runtime_err"
+
+      echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+      if wptt_xac_nhan "Thông số vừa chỉnh vượt quá giới hạn máy chủ hoặc xung đột!" \
+        "Database đã được cứu sống bằng file gốc. Bạn có muốn mở lại để sửa tiếp?" \
+        "" \
+        "Mở lại sửa tiếp" "Thoát về Menu"; then
+        continue
+      else
+        wptt_quay_ve_menu "$route_menu" 1
+      fi
+    fi
+  done
 
 else
-  echo -e "${C_YELLOW}Đã hủy thao tác chỉnh sửa cấu hình.${C_RESET}\n"
+  echo -e "${C_YELLOW}Đã hủy thao tác chỉnh sửa cấu hình MariaDB.${C_RESET}\n"
 fi
 
-wptt_quay_ve_menu "${1:-}" 0
+wptt_quay_ve_menu "$route_menu" 0
