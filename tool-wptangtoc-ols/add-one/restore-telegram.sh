@@ -7,7 +7,7 @@ umask 077 #nâng cao bảo mật cho file backup trừ quyền: chủ sở hữu
 # shellcheck disable=SC2154,SC1090,SC1091,SC2317
 
 function huong_dan() {
-    cat << 'EOF'
+  cat <<'EOF'
   Tính năng tải [download] file sao lưu từ hệ thống Telegram Bot về máy chủ của bạn.
   Hệ thống sẽ tự động tìm kiếm, tải xuống và ghép nối các file bị phân mảnh [split parts]
   trở thành một file hoàn chỉnh [Zip/SQL] để chuẩn bị cho quá trình khôi phục.
@@ -33,27 +33,20 @@ lua_chon_NAME "Download file backup từ Telegram"
 
 # Vá lỗi SC2317: Bỏ 'exec' để ShellCheck không báo lỗi Unreachable code
 if [[ "$NAME" == "0" || -z "$NAME" ]]; then
-  if [[ "${1:-}" == "98" ]]; then
-    /etc/wptt/wptt-backup-restore-main 1
-  fi
-  return 2>/dev/null || exit 0
+  wptt_quay_ve_menu "${1:-}" 0
 fi
 
 pathcheck="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$pathcheck" ]]; then
   echo -e "\n${C_RED}Tên miền không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 3
   # Vá lỗi SC2317
-  if [[ "${1:-}" == "98" ]]; then
-    /etc/wptt/wptt-backup-restore-main 1
-  fi
-  return 2>/dev/null || exit 0
+  wptt_quay_ve_menu "${1:-}" 1
 fi
 
 TG_BASE_URL="https://api.telegram.org"
-if ! curl -I -s -m 3 "$TG_BASE_URL" > /dev/null 2>&1; then
-    API_PROXY=$(curl --tlsv1.3 -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
-    [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
+if ! curl -I -s -m 3 "$TG_BASE_URL" >/dev/null 2>&1; then
+  API_PROXY=$(curl --tlsv1.3 -sL -m 10 -H "User-Agent: wptangtoc ols get telegram" "https://hub.wptangtoc.com/get-telegram-work" | tr -d '\r\n[:space:]')
+  [[ "$API_PROXY" == *"workers.dev"* ]] && TG_BASE_URL="https://$API_PROXY"
 fi
 
 echo ""
@@ -61,7 +54,7 @@ _runing "Đang kết nối đến máy chủ WPTangToc để lấy danh sách fi
 log_file=$(mktemp -p /dev/shm)
 selects=()
 
-curl --tlsv1.3 -X POST -s "https://hub.wptangtoc.com/restore" -H "Content-Type: application/json" -A 'Activate Backup Restore WPTangToc' > "$log_file"
+curl --tlsv1.3 -X POST -s "https://hub.wptangtoc.com/restore" -H "Content-Type: application/json" -A 'Activate Backup Restore WPTangToc' >"$log_file"
 
 danh_sach=$(cat "$log_file" | cut -f2 -d ' ' | sed 's/\.part_[0-9]\+$//' | grep "^${NAME}_" | uniq | head -n 100)
 
@@ -69,10 +62,7 @@ if [[ -z "$danh_sach" ]]; then
   _runloi "Truy xuất danh sách thất bại"
   echo -e "${C_YELLOW}Không tìm thấy bản sao lưu nào cho domain $NAME trên Telegram!${C_RESET}"
   rm -f "${log_file:?}"
-  sleep 3
-  # Vá lỗi SC2317
-  [[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
-  exit 0
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
 _rundone "Đã lấy danh sách file thành công!"
@@ -84,12 +74,12 @@ echo -e "${C_CYAN}╭───────────────────�
 center_text "${C_YELLOW}DANH SÁCH CÁC BẢN SAO LƯU TRÊN TELEGRAM${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
- i=1
+i=1
 for file_bk in "${selects[@]}"; do
-   item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$file_bk")
-   clean_text=$(printf "  %3d) %s" "$i" "$file_bk")
-   item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
-   pad=$((box_inner_width - item_len))
+  item_text=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%s${C_RESET}" "$i" "$file_bk")
+  clean_text=$(printf "  %3d) %s" "$i" "$file_bk")
+  item_len=$(echo -n "$clean_text" | awk '{print length($0)}')
+  pad=$((box_inner_width - item_len))
   [[ $pad -lt 0 ]] && pad=0
   echo -e "${C_CYAN}│${C_RESET}${item_text}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
   ((i++))
@@ -124,7 +114,7 @@ while true; do
       selected_name=$(printf '%s\n' "${selects[@]}" | nl -w 3 -s ': ' | fzf --prompt="Tìm bản sao lưu >> " --height=40% --border=rounded --color=border:red --cycle --reverse)
       # Vá lỗi SC2001: Dùng nội tại Bash để cắt chuỗi thay vì dùng lệnh sed
       selected_name="${selected_name#*: }"
-      
+
       if [[ -n "$selected_name" ]]; then
         file1="$selected_name"
         break
@@ -143,8 +133,10 @@ while true; do
   esac
 done
 
-telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null); telegram_api="${telegram_tmp_api:-$telegram_api}"
-telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null); telegram_id="${telegram_tmp_id:-$telegram_id}"
+telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null)
+telegram_api="${telegram_tmp_api:-$telegram_api}"
+telegram_tmp_id=$(wptt_giai_ma "$telegram_id" 2>/dev/null)
+telegram_id="${telegram_tmp_id:-$telegram_id}"
 
 # ==============================================================================
 # HÀM TẢI & GHÉP NỐI (BẢO CHỨNG 100% TOÀN VẸN DATA)
@@ -156,28 +148,28 @@ download_and_merge_telegram() {
   rm -f "${path_dl:?}/${target_file:?}"
 
   echo -e "\n${C_CYAN}➜ Đang xử lý tải xuống: ${C_YELLOW}$target_file${C_RESET}"
-  
+
   mapfile -t dulieu_all < <(grep "$target_file" "$log_file" | sort -k2,2V)
-  
+
   for du_lieu in "${dulieu_all[@]}"; do
     # Vá lỗi SC2155: Khai báo local riêng, gán giá trị riêng
     local file_id
     file_id=$(echo "$du_lieu" | cut -f1 -d ' ')
-    
+
     local ten_file_part
     ten_file_part=$(echo "$du_lieu" | cut -f2 -d ' ')
-    
+
     local get_file_url="${TG_BASE_URL}/bot${telegram_api}/getFile"
-    
+
     local file_info
     file_info=$(curl -s -X POST "$get_file_url" -d file_id="$file_id")
-    
+
     local file_path
     file_path=$(echo "$file_info" | jq -r '.result.file_path')
-    
+
     local file_size_api
     file_size_api=$(echo "$file_info" | jq -r '.result.file_size')
-    
+
     if [[ "$file_path" == "null" || -z "$file_path" ]]; then
       _runloi "Không thể lấy link tải mảnh: $ten_file_part"
       return 1
@@ -185,23 +177,23 @@ download_and_merge_telegram() {
 
     echo -e "   ${C_CYAN}➜ Đang tải kết nối mảnh:${C_RESET} $ten_file_part"
     local download_url="${TG_BASE_URL}/file/bot${telegram_api}/$file_path"
-    
+
     # Ẩn Progress bar để chống gãy Pipe, chỉ báo trạng thái tải tĩnh
     curl -sL -f -o "$path_dl/$ten_file_part" "$download_url"
-    
+
     if [[ -f "$path_dl/$ten_file_part" ]]; then
       # SIÊU KIỂM TRA CHÉO: Dữ liệu tải về phải khớp 100% Byte với Telegram báo cáo
       local downloaded_size
       downloaded_size=$(stat -c %s "$path_dl/$ten_file_part")
-      
+
       if [[ "$downloaded_size" != "$file_size_api" ]]; then
-          _runloi "Lỗi rớt mạng! Dung lượng mảnh $ten_file_part bị thiếu."
-          return 1
+        _runloi "Lỗi rớt mạng! Dung lượng mảnh $ten_file_part bị thiếu."
+        return 1
       fi
-      
+
       # An toàn 100% rồi mới cho phép nối file (cat)
       if [[ "$ten_file_part" == *".part_"* ]]; then
-        cat "$path_dl/$ten_file_part" >> "$path_dl/$target_file"
+        cat "$path_dl/$ten_file_part" >>"$path_dl/$target_file"
         rm -f "${path_dl:?}/${ten_file_part:?}"
       fi
     else
@@ -209,7 +201,7 @@ download_and_merge_telegram() {
       return 1
     fi
   done
-  
+
   _rundone "Hoàn tất ghép nối 100% an toàn: $target_file"
   return 0
 }
@@ -232,7 +224,7 @@ done
 selects=("${filtered_selects[@]}")
 
 if [[ ${#selects[@]} -gt 0 && "$dongy_taifile1" == "y" ]]; then
-  
+
   if echo "$file1" | grep -Eq "\.(zip)$"; then
     echo -e "${C_YELLOW}Gợi ý:${C_RESET} Bạn đã tải file Mã nguồn. Nên tải thêm Database để khôi phục đồng bộ."
     ggdrthem="File Database (.sql.gz)"
@@ -318,7 +310,7 @@ else
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "${C_YELLOW}Trạng thái: Có file bị lỗi hoặc bạn đã hủy tải xuống!${C_RESET}"
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-sleep 3
-[[ "${1:-}" == "98" ]] && /etc/wptt/wptt-backup-restore-main 1
+wptt_quay_ve_menu "${1:-}" 0
