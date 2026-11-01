@@ -1,0 +1,165 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+# @description: Tự động kiểm tra và kích hoạt Chống Lượng Tử (Post-Quantum KEX) cho OpenSSH
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
+
+
+wptt_ensure_ssh_pqc() {
+  local sshd_bin=""
+  sshd_bin="$(command -v sshd 2>/dev/null || echo "/usr/sbin/sshd")"
+  if [[ ! -x "$sshd_bin" ]]; then
+    return 1
+  fi
+
+  # 1. Quét danh sách KexAlgorithms mà binary OpenSSH trên máy này thực sự hỗ trợ
+  local supported_kex=""
+  supported_kex="$(ssh -Q kex 2>/dev/null || true)"
+  if [[ -z "$supported_kex" ]]; then
+    return 0
+  fi
+
+  # 2. Lọc các thuật toán Hậu Lượng Tử (Post-Quantum) được hỗ trợ theo thứ tự ưu tiên
+  local pqc_candidates=(
+    "mlkem768x25519-sha256"
+    "sntrup761x25519-sha512"
+    "sntrup761x25519-sha512@openssh.com"
+  )
+  local avail_pqc=()
+  local alg=""
+  for alg in "${pqc_candidates[@]}"; do
+    if grep -qxF "$alg" <<<"$supported_kex"; then
+      avail_pqc+=("$alg")
+    fi
+  done
+
+  # Nếu phiên bản OpenSSH quá cũ (VD: AlmaLinux 8 OpenSSH 8.0) không có bất kỳ thuật toán PQC nào
+  if ((${#avail_pqc[@]} == 0)); then
+    return 0
+  fi
+
+  # 3. Kiểm tra cấu hình đang chạy của sshd (sshd -T)
+  local active_kex_line="" active_kex_list=""
+  active_kex_line="$("$sshd_bin" -T 2>/dev/null | awk '$1 == "kexalgorithms" {print $2; exit}')"
+  active_kex_list=",${active_kex_line},"
+
+  # Kiểm tra xem mọi thuật toán PQC mà máy hỗ trợ đã có mặt trong cấu hình chạy chưa,
+  # VÀ thuật toán đứng đầu tiên có phải là thuật toán PQC chưa
+  local need_fix=0
+  for alg in "${avail_pqc[@]}"; do
+    if [[ "$active_kex_list" != *",${alg},"* ]]; then
+      need_fix=1
+      break
+    fi
+  done
+
+  local first_active_kex="${active_kex_line%%,*}"
+  if [[ "$first_active_kex" != *"sntrup761"* && "$first_active_kex" != *"mlkem768"* ]]; then
+    need_fix=1
+  fi
+
+  # Nếu máy chủ đã ưu tiên PQC chuẩn xác rồi -> Kết thúc ngay (0 Disk I/O)
+  if ((need_fix == 0)); then
+    return 0
+  fi
+
+  local task_msg="Kích hoạt giao thức SSH Chống Lượng Tử (Post-Quantum KEX)"
+  _runing "$task_msg"
+
+  # 4. Xây dựng chuỗi KexAlgorithms tối ưu (Chỉ đưa vào các thuật toán máy chủ hỗ trợ)
+  local classic_candidates=(
+    "curve25519-sha256"
+    "curve25519-sha256@libssh.org"
+    "ecdh-sha2-nistp256"
+    "ecdh-sha2-nistp384"
+    "ecdh-sha2-nistp521"
+    "diffie-hellman-group-exchange-sha256"
+    "diffie-hellman-group16-sha512"
+    "diffie-hellman-group18-sha512"
+    "diffie-hellman-group14-sha256"
+  )
+
+  local final_kex_arr=("${avail_pqc[@]}")
+  for alg in "${classic_candidates[@]}"; do
+    if grep -qxF "$alg" <<<"$supported_kex"; then
+      final_kex_arr+=("$alg")
+    fi
+  done
+
+  local final_kex_str=""
+  local IFS=','
+  final_kex_str="${final_kex_arr[*]}"
+  unset IFS
+
+  # 5. Đảm bảo thư mục /etc/ssh/sshd_config.d tồn tại và được Include ở ĐẦU file sshd_config
+  /bin/mkdir -p /etc/ssh/sshd_config.d 2>/dev/null || true
+  chmod 700 /etc/ssh/sshd_config.d 2>/dev/null || true
+
+  local main_sshd_conf="/etc/ssh/sshd_config"
+  if [[ -f "$main_sshd_conf" ]] && ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' "$main_sshd_conf" 2>/dev/null; then
+    local tmp_main="${main_sshd_conf}.wptt_tmp.$$"
+    {
+      printf 'Include /etc/ssh/sshd_config.d/*.conf\n'
+      cat "$main_sshd_conf"
+    } >"$tmp_main" && chmod 600 "$tmp_main" && /bin/mv -f "$tmp_main" "$main_sshd_conf"
+  fi
+
+  # 6. Ghi file 10-pqc.conf nguyên tử (10- đứng trước 50-redhat.conf để thắng crypto-policies)
+  local pqc_conf="/etc/ssh/sshd_config.d/10-pqc.conf"
+  local tmp_pqc="${pqc_conf}.tmp.$$"
+  local backup_pqc=""
+
+  if [[ -f "$pqc_conf" ]]; then
+    backup_pqc="${pqc_conf}.bak.$$"
+    /bin/cp -fp -- "$pqc_conf" "$backup_pqc" 2>/dev/null || true
+  fi
+
+  cat >"$tmp_pqc" <<EOF
+# Configured by WPTangToc OLS - Post-Quantum Cryptography (PQC) Priority
+KexAlgorithms ${final_kex_str}
+EOF
+  chmod 600 "$tmp_pqc"
+  chown root:root "$tmp_pqc" 2>/dev/null || true
+  /bin/mv -f -- "$tmp_pqc" "$pqc_conf"
+
+  # 7. Kiểm tra cú pháp tuyệt đối bằng sshd -t trước khi Reload
+  if "$sshd_bin" -t 2>/dev/null; then
+    [[ -n "$backup_pqc" ]] && /bin/rm -f -- "$backup_pqc" 2>/dev/null || true
+
+    # Reload nhẹ nhàng không làm đứt kết nối SSH hiện tại
+    if systemctl is-active --quiet sshd 2>/dev/null; then
+      systemctl reload sshd 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+    elif systemctl is-active --quiet ssh 2>/dev/null; then
+      systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || true
+    fi
+
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Đã kích hoạt SSH Post-Quantum (${avail_pqc[*]})"
+    _rundone "$task_msg"
+    return 0
+  else
+    # Rollback tự động nếu sshd -t phát hiện xung đột
+    if [[ -n "$backup_pqc" && -f "$backup_pqc" ]]; then
+      /bin/mv -f -- "$backup_pqc" "$pqc_conf" 2>/dev/null || true
+    else
+      /bin/rm -f -- "$pqc_conf" 2>/dev/null || true
+    fi
+    _runloi "$task_msg"
+    return 1
+  fi
+}
+
+# Thực thi ngay khi gọi script
+wptt_ensure_ssh_pqc
