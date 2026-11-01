@@ -183,13 +183,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## Phiên bản 8.2.4.2
-
-🛠️ **Tối ưu hệ thống & Trải nghiệm quản trị**
-- Cải thiện cơ chế điều hướng, giúp thao tác quay trở lại menu chính mượt mà và trực quan hơn.
-- Nâng cấp hệ thống báo lỗi chi tiết, giúp quản trị viên dễ dàng nhận diện và xử lý sự cố nhanh chóng.
-- Tối ưu hóa cấu trúc mã nguồn, hỗ trợ việc bảo trì và phát triển tính năng ổn định hơn trong tương lai.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
