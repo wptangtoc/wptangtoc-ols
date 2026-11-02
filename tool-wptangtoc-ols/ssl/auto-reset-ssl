@@ -1,9 +1,84 @@
 #!/bin/bash
-#find tim file được tạo và sửa đổi dưới 1640 phút (bằng 27,3 tiếng, đợi vòng cron ssl khoảng 0 giờ và 12 giờ gia hạn ssl) và kiểm tra phải đáp ứng được điều kiện trong 27,3 chưa có lần nào reset -newer /usr/local/lsws/cgid -print -quit
-# Tìm file SSL (.pem) được sửa đổi trong 1640 phút và mới hơn lần OLS reload cuối cùng
-if [[ -n $(find /etc/letsencrypt/archive -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
-    # Reload cơ chế "vừa chạy vừa thay lốp" (Zero Downtime)
-	. /etc/wptt/core-functions 2>/dev/null
-	wptt_logs "INFO" "Gia hạn tự động ssl letsencrypt"
-	wptt_smart_reload_lsws >/dev/null 2>&1
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+# @description: Thư viện Cron kiểm tra chứng chỉ SSL mới (Let's Encrypt & Paid ACME) và Reload OLS Zero-Downtime
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+# Chốt chặn an toàn: Nếu mốc /usr/local/lsws/cgid chưa tồn tại (OLS chưa chạy), thoát sớm
+[[ -e /usr/local/lsws/cgid ]] || exit 0
+
+need_reload=0
+reload_log_msg=""
+
+# ==============================================================================
+# 1. KIỂM TRA & ĐỒNG BỘ SSL TRẢ PHÍ TỰ ĐỘNG (/etc/letsencrypt/live/*-paid)
+# ==============================================================================
+# Chỉ quét khi tính năng SSL trả phí ACME EAB đã được kích hoạt trên hệ thống
+if [[ -f /etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh ]]; then
+  shopt -s nullglob
+  for paid_live_dir in /etc/letsencrypt/live/*-paid; do
+    [[ -d "$paid_live_dir" ]] || continue
+
+    cert_folder_name="${paid_live_dir##*/}"
+    domain_name="${cert_folder_name%-paid}"
+    target_ssl_dir="/usr/local/lsws/${domain_name}/ssl"
+
+    # Bỏ qua nếu thư mục vhost của domain không còn tồn tại
+    [[ -d "/usr/local/lsws/${domain_name}" ]] || continue
+
+    # Dùng cờ -L để xuyên qua Symlink trong live/, kiểm tra xem file .pem thực tế
+    # có mới hơn mốc /usr/local/lsws/cgid trong vòng 1640 phút (27.3 giờ) hay không
+    if [[ ! -f "${target_ssl_dir}/cert.crt" ]] || [[ -n $(find -L "$paid_live_dir" -maxdepth 1 -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
+      /bin/mkdir -p -- "$target_ssl_dir"
+      /bin/chmod 700 -- "$target_ssl_dir" 2>/dev/null || true
+
+      old_umask=$(umask)
+      umask 077
+      [[ -f "${paid_live_dir}/privkey.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/privkey.pem" "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
+      [[ -f "${paid_live_dir}/cert.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/cert.pem" "${target_ssl_dir}/cert.crt" 2>/dev/null || true
+      [[ -f "${paid_live_dir}/chain.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/chain.pem" "${target_ssl_dir}/ca_bundle.crt" 2>/dev/null || true
+      [[ -f "${paid_live_dir}/fullchain.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/fullchain.pem" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
+      umask "$old_umask"
+
+      /bin/chmod 600 -- "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
+      /bin/chmod 644 -- "${target_ssl_dir}/cert.crt" "${target_ssl_dir}/ca_bundle.crt" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
+
+      need_reload=1
+      reload_log_msg="Gia hạn tự động SSL trả phí (ACME EAB)"
+    fi
+  done
+  shopt -u nullglob
+fi
+
+# ==============================================================================
+# 2. KIỂM TRA SSL LET'S ENCRYPT MIỄN PHÍ (/etc/letsencrypt/archive)
+# ==============================================================================
+# Tối ưu I/O: Chỉ chạy lệnh find này nếu Bước 1 chưa bật cờ need_reload
+if ((need_reload == 0)) && [[ -d /etc/letsencrypt/archive ]]; then
+  if [[ -n $(find /etc/letsencrypt/archive -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
+    need_reload=1
+    reload_log_msg="Gia hạn tự động SSL Let's Encrypt"
+  fi
+fi
+
+# ==============================================================================
+# 3. DỒN VỀ CUỐI: RELOAD OPENLITESPEED ĐÚNG 1 LẦN DUY NHẤT (ZERO-DOWNTIME)
+# ==============================================================================
+if ((need_reload == 1)); then
+  # shellcheck source=/dev/null
+  . /etc/wptt/core-functions 2>/dev/null || true
+  if declare -F wptt_logs >/dev/null 2>&1; then
+    wptt_logs "INFO" "$reload_log_msg"
+  fi
+  if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+    wptt_smart_reload_lsws >/dev/null 2>&1
+  else
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+  fi
 fi

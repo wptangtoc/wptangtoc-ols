@@ -1,204 +1,179 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
 # @since: 2026
+# @description: Cài đặt & Tự động hóa SSL Trả phí / ZeroSSL (Tương thích 100% với Let's Encrypt & Certbot Auto-Renew)
 
 function huong_dan() {
   cat <<'EOF'
-  Tính năng Cài đặt SSL trả phí là quá trình trang bị cho website của bạn một chứng chỉ SSL/TLS thương mại [mua từ các nhà cung cấp như DigiCert, Sectigo, GlobalSign,...] để kích hoạt giao thức HTTPS, đảm bảo kết nối mã hóa và xác thực danh tính website ở mức độ cao hơn.
+  Tính năng Cài đặt SSL trả phí & ZeroSSL là quá trình trang bị cho website của bạn một chứng chỉ SSL/TLS thương mại [mua từ DigiCert, Sectigo, GlobalSign, SSL.com hoặc cấp phát qua ZeroSSL] để kích hoạt giao thức HTTPS, đảm bảo kết nối mã hóa và xác thực danh tính website ở mức độ cao hơn.
 
   Nói một cách đơn giản, đây là việc bạn đầu tư mua một giấy phép bảo mật cao cấp hơn cho website, thường đi kèm với các quy trình xác minh nghiêm ngặt hơn và có thể cung cấp các dấu hiệu tin cậy rõ ràng hơn cho người dùng so với chứng chỉ miễn phí.
 
   Mục Đích Chính
-  * Xác thực danh tính mạnh mẽ [đặc biệt với OV/EV]:
-  * OV [Organization Validation]: Xác minh sự tồn tại và tính hợp pháp của tổ chức sở hữu website.
-  * EV [Extended Validation]: Quy trình xác minh nghiêm ngặt nhất, trước đây thường hiển thị tên công ty trên thanh địa chỉ màu xanh lá [hiện nay ít phổ biến hơn nhưng vẫn tăng độ tin cậy].
-  * Bảo mật dữ liệu: Mã hóa toàn bộ thông tin trao đổi giữa người dùng và website.
-  * Tăng uy tín và niềm tin: Khách hàng có thể cảm thấy an tâm hơn khi giao dịch trên website có chứng chỉ trả phí, đặc biệt là OV/EV.
-  * Bảo hiểm [Warranty]: Nhiều chứng chỉ trả phí đi kèm với các gói bảo hiểm, bồi thường nếu có sai sót từ phía nhà cung cấp chứng chỉ gây thiệt hại.
-  * Hỗ trợ khách hàng: Thường nhận được sự hỗ trợ kỹ thuật tốt hơn từ nhà cung cấp.
-  * Các tính năng đặc biệt: Một số loại có thể hỗ trợ nhiều tên miền [SAN] hoặc wildcard [cho tất cả tên miền phụ] một cách linh hoạt.
-
-  Việc cài đặt SSL trả phí thường đòi hỏi nhiều bước hơn và có chi phí, nhưng mang lại các lợi ích về xác thực và uy tín cao hơn cho một số loại hình website, đặc biệt là các trang thương mại điện tử lớn hoặc tổ chức tài chính.
+  * Hỗ trợ Tự động hóa 100% ZeroSSL (Tự động lấy mã EAB qua API không cần thao tác tay) và tái cấp/gia hạn SSL Trả phí bằng Certbot qua chuẩn quốc tế ACME EAB [External Account Binding] của Sectigo, DigiCert, GlobalSign, SSL.com...
+  * Hoạt động song song dưới định danh riêng (${NAME}-paid), tương thích 100% với trình gia hạn tự động của WPTangToc OLS mà không xóa chứng chỉ Let's Encrypt miễn phí sẵn có.
+  * Tích hợp bộ kiểm tra tiền trạm DNS (IPv4/IPv6 AAAA, Cloudflare Proxy, xung đột Port 80) giúp ngăn chặn lỗi hỏng đơn hàng EAB.
+  * Xác thực danh tính mạnh mẽ [đặc biệt với OV/EV] và mã hóa toàn bộ thông tin trao đổi giữa người dùng và website.
 EOF
 }
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+stty iutf8 2>/dev/null || true
+umask 022
 
 # ==============================================================================
 # MODULE BẢO VỆ & DỌN DẸP RÁC TỰ ĐỘNG (TRAP CLEANUP)
 # ==============================================================================
 tmp_vhost=""
+tmp_cert_paste=""
+tmp_ca_paste=""
+tmp_eab_ini=""
+
 cleanup() {
   local rc=$?
-  # Dọn dẹp file temp htaccess nếu có
-  [[ -n "$tmp_vhost" && -f "$tmp_vhost" ]] && /bin/rm -f -- "$tmp_vhost"
-  # Chỉ thoát tiến trình nếu không phải đang source
+  trap - EXIT INT TERM HUP
+  if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
+  [[ -n "${tmp_vhost:-}" && -f "$tmp_vhost" ]] && /bin/rm -f -- "$tmp_vhost" 2>/dev/null || true
+  [[ -n "${tmp_cert_paste:-}" && -f "$tmp_cert_paste" ]] && /bin/rm -f -- "$tmp_cert_paste" 2>/dev/null || true
+  [[ -n "${tmp_ca_paste:-}" && -f "$tmp_ca_paste" ]] && /bin/rm -f -- "$tmp_ca_paste" 2>/dev/null || true
+  [[ -n "${tmp_eab_ini:-}" && -f "$tmp_eab_ini" ]] && /bin/rm -f -- "$tmp_eab_ini" 2>/dev/null || true
   if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit "$rc"
   fi
 }
 
-# CHỈ áp dụng bẫy (trap) nếu file này ĐANG ĐƯỢC EXECUTE (tránh đè trap của file mẹ)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   trap cleanup EXIT
-  trap 'cleanup; exit 130' INT
-  trap 'cleanup; exit 143' TERM HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
 fi
 
 # ==============================================================================
 # KHỞI TẠO MÔI TRƯỜNG & THƯ VIỆN
 # ==============================================================================
-. /etc/wptt/.wptt.conf 2>/dev/null || true
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null || true
 [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null || true
-. /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/core-functions 2>/dev/null # Nạp thư viện lõi và UI Xác nhận
+# shellcheck source=/dev/null
+[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
 
-clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_ssl} ➜ Khởi tạo & Cấu hình SSL Trả phí (Paid SSL)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+# Hàm đọc input an toàn (Chống rác bộ đệm Type-ahead & đảm bảo bật stty echo)
+_safe_prompt_input() {
+  local prompt_str="$1"
+  local __out_var="$2"
+  local input_val=""
 
-NAME="${1:-}"
-no_key="${2:-}"
-[[ "$NAME" == "98" ]] && NAME=""
+  if declare -F wptt_flush_stdin >/dev/null 2>&1; then
+    wptt_flush_stdin
+  fi
+  if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
 
-# ==============================================================================
-# HÀM MENU CHỌN DOMAIN (UX BO CONG)
-# ==============================================================================
-if [[ -z "$NAME" ]]; then
-  . /etc/wptt/tenmien
-  lua_chon_NAME "cấu hình SSL Trả phí"
-fi
-
-[[ "$NAME" == "0" || -z "$NAME" ]] && {
-  wptt_quay_ve_menu "${1:-}" 0
+  if ! read -r -p "$prompt_str" input_val; then
+    echo -e "\n${C_RED}⚠️ Đã mất kết nối Terminal (EOF). Đang thoát an toàn...${C_RESET}"
+    exit 1
+  fi
+  printf -v "$__out_var" '%s' "$input_val"
 }
 
-path="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$path" ]]; then
-  echo -e "\n${C_RED}❌ Tên miền không tồn tại trên hệ thống này!${C_RESET}"
-  sleep 3
-  wptt_quay_ve_menu "${1:-}" 1
-fi
+# Hàm tự động cài đặt OpenSSL và Certbot có Retry (Auto-Heal)
+_ensure_ssl_dependencies() {
+  local need_cb="${1:-0}"
 
-wptt_logs "INFO" "Thiết lập cài đặt ssl trả phí website $NAME"
-ssl_dir="/usr/local/lsws/$NAME/ssl"
-/bin/mkdir -p -- "$ssl_dir"
-
-key_file="$ssl_dir/$NAME.key"
-csr_file="$ssl_dir/$NAME.csr"
-
-# ==============================================================================
-# TẠO PRIVATE KEY VÀ CSR (VỚI 3 OPTION MÃ HÓA)
-# ==============================================================================
-dongy2="n"
-if [[ -z "$no_key" ]]; then
-  echo ""
-  if wptt_xac_nhan "Bạn có muốn hệ thống tự tạo Private Key (.key) và mã CSR không?" "${C_BOLD_WHITE}Gợi ý:${C_RESET} Chọn [Có] nếu bạn chưa mua SSL và cần mã CSR để cung cấp cho nhà bán." "" "Có (Tự động tạo)" "Không cần"; then
-    dongy2="y"
+  if ! command -v openssl >/dev/null 2>&1; then
+    local task_ossl="Bổ sung thư viện mã hóa OpenSSL"
+    _runing "$task_ossl"
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y -q openssl >/dev/null 2>&1 || true
+    elif command -v yum >/dev/null 2>&1; then
+      yum install -y -q openssl >/dev/null 2>&1 || true
+    elif command -v apt-get >/dev/null 2>&1; then
+      env DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+      env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq openssl >/dev/null 2>&1 || true
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+      _rundone "$task_ossl"
+    else
+      _runloi "$task_ossl"
+      return 1
+    fi
   fi
-fi
 
-if [[ "$dongy2" == "y" ]]; then
-  echo -e "\n${C_CYAN}Chọn thuật toán mã hóa cho chứng chỉ SSL:${C_RESET}"
-  echo -e " [1] ${C_GREEN}RSA 2048-bit${C_RESET} (Khuyên dùng - Tương thích 100% mọi nhà cung cấp)"
-  echo -e " [2] ${C_YELLOW}RSA 4096-bit${C_RESET} (Bảo mật cao nhất - Tiêu tốn CPU máy chủ hơn)"
-  echo -e " [3] ${C_CYAN}ECDSA P-256${C_RESET}  (Hiệu năng tối đa - Siêu nhẹ, tốc độ ngon nhất)"
-  echo ""
-  read -r -p "Nhập lựa chọn của bạn [Mặc định 1]: " ssl_algo_choice
-  ssl_algo_choice="${ssl_algo_choice:-1}"
+  if ((need_cb == 1)) && ! command -v certbot >/dev/null 2>&1; then
+    local ui_heal="Hệ thống phát hiện thiếu Certbot, đang tiến hành tự động cài đặt"
+    _runing "$ui_heal"
+    /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+    local log_cb
+    log_cb="$(mktemp -p "/etc/wptt/tmp" wptt_certbot_install_XXXXXX.log)"
+    local attempt=1 max_attempts=3 install_ok=0
 
+    while ((attempt <= max_attempts)); do
+      printf -- '--- Thử cài đặt Certbot lần %d ---\n' "$attempt" >>"$log_cb"
+      if grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
+        env DEBIAN_FRONTEND=noninteractive apt-get update -y >>"$log_cb" 2>&1 || true
+        if env DEBIAN_FRONTEND=noninteractive apt-get install -y certbot >>"$log_cb" 2>&1; then
+          install_ok=1
+          break
+        fi
+      else
+        dnf install -y epel-release >>"$log_cb" 2>&1 || yum install -y epel-release >>"$log_cb" 2>&1 || true
+        if dnf install -y certbot --setopt=timeout=15 >>"$log_cb" 2>&1 || yum install -y certbot >>"$log_cb" 2>&1; then
+          install_ok=1
+          break
+        fi
+      fi
+      sleep 2
+      ((attempt++))
+    done
 
-	#lập trình phòng thủ: check thư viện openssl có khi người dùng nghịch dại đi xóa openssl thì sao cứ check trước cho chắc
-	if ! command -v openssl >/dev/null 2>&1; then
-		dnf install openssl -y >/dev/null 2>&1 
-	fi
+    if command -v certbot >/dev/null 2>&1 && ((install_ok == 1)); then
+      _rundone "$ui_heal"
+      /bin/rm -f -- "$log_cb" 2>/dev/null || true
+    else
+      _runloi "$ui_heal"
+      echo -e "${C_RED}Lỗi nghiêm trọng: Không thể cài đặt Certbot sau $max_attempts lần thử!${C_RESET}"
+      echo -e "=> Chi tiết lỗi đã được lưu tại: ${C_YELLOW}${log_cb}${C_RESET}"
+      return 1
+    fi
+  fi
+  return 0
+}
 
-  UI_TASK="Khởi tạo Private Key & CSR mã hóa cho $NAME"
-  _runing "$UI_TASK"
+# Hàm ghi nguyên tử khối vhssl vào Vhost của OpenLiteSpeed
+_apply_paid_vhssl_config() {
+  local domain="$1"
+  local vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+  local s_dir="/usr/local/lsws/$domain/ssl"
 
-  # Setup thông tin cơ bản cho CSR
-  subj_string="/C=VN/ST=Hai Phong/L=Hai Phong/O=$NAME/OU=$NAME/CN=$NAME/emailAddress=admin@${NAME}"
-  
-  # Đặt umask 077 để đảm bảo Private Key được sinh ra luôn có quyền 600 từ gốc (Chống leak secret)
-  old_umask=$(umask)
-  umask 077
+  if [[ ! -f "$vhost_conf" ]]; then
+    return 1
+  fi
 
-  case "$ssl_algo_choice" in
-    2)
-      openssl req -new -newkey rsa:4096 -nodes \
-        -keyout "$key_file" -out "$csr_file" -subj "$subj_string" \
-        -addext "subjectAltName=DNS:$NAME,DNS:www.$NAME" >/dev/null 2>&1
-      algo_name="RSA 4096-bit"
-      ;;
-    3)
-      openssl ecparam -name prime256v1 -genkey -noout -out "$key_file" >/dev/null 2>&1
-      openssl req -new -key "$key_file" -out "$csr_file" -subj "$subj_string" \
-        -addext "subjectAltName=DNS:$NAME,DNS:www.$NAME" >/dev/null 2>&1
-      algo_name="ECDSA P-256"
-      ;;
-    *)
-      openssl req -new -newkey rsa:2048 -nodes \
-        -keyout "$key_file" -out "$csr_file" -subj "$subj_string" \
-        -addext "subjectAltName=DNS:$NAME,DNS:www.$NAME" >/dev/null 2>&1
-      algo_name="RSA 2048-bit"
-      ;;
-  esac
-
-  umask "$old_umask" # Khôi phục umask
-  
-  # Chuẩn hóa quyền an toàn cho file
-  /bin/chmod 600 -- "$key_file"
-  /bin/chmod 644 -- "$csr_file"
-
-  if [[ -s "$csr_file" && -s "$key_file" ]]; then
-    _rundone "$UI_TASK ($algo_name)"
-
-    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    center_text "${C_BOLD_WHITE}MÃ CSR XÁC THỰC CỦA BẠN (CERTIFICATE SIGNING REQUEST)${C_RESET}"
-    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-    left_text "Hãy COPY toàn bộ đoạn mã bên dưới và cung cấp cho nhà cung cấp SSL:" 2
-    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
-
-    # In mã CSR (KHÔNG ĐÓNG KHUNG ĐỂ UX COPY ĐƯỢC CHUẨN XÁC NHẤT)
-    echo -e "${C_YELLOW}"
-    cat "$csr_file"
-    echo -e "${C_RESET}\n"
+  if declare -F wptt_atomic_begin >/dev/null 2>&1; then
+    tmp_vhost="$(wptt_atomic_begin "$vhost_conf")"
   else
-    _runloi "$UI_TASK"
-    return 1 2>/dev/null || exit 1
-  fi
-fi
-
-# ==============================================================================
-# CẤU HÌNH VHOST VÀ HTTPD_CONFIG (ATOMIC WRITE)
-# ==============================================================================
-UI_TASK_VHOST="Thiết lập cấu hình SSL trả phí Vhost"
-_runing "$UI_TASK_VHOST"
-
-vhost_conf_file="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
-
-if [[ -f "$vhost_conf_file" ]]; then
-  # 1. Khởi tạo file tạm nguyên tử
-  if type wptt_atomic_begin >/dev/null 2>&1; then
-    tmp_vhost=$(wptt_atomic_begin "$vhost_conf_file")
-  else
-    tmp_vhost="/etc/wptt/tmp/vhost_${NAME}_$$.tmp"
-    /bin/touch -- "$tmp_vhost"
-    /bin/chmod --reference="$vhost_conf_file" "$tmp_vhost"
-    /bin/chown --reference="$vhost_conf_file" "$tmp_vhost"
+    /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+    tmp_vhost="/etc/wptt/tmp/vhost_${domain}_$$.tmp"
+    /bin/cp -fp -- "$vhost_conf" "$tmp_vhost"
   fi
 
-  # 2. Xóa khối vhssl cũ (nếu có) và đẩy sang file tạm
-  /bin/sed -e '/^vhssl /,/^}$/d' "$vhost_conf_file" > "$tmp_vhost"
+  # Xóa khối vhssl cũ trong Vhost (Giữ nguyên 100% file chứng chỉ Let's Encrypt cũ trên đĩa)
+  /bin/sed -e '/^[[:space:]]*vhssl[[:space:]]*{/,/^[[:space:]]*}/d' "$vhost_conf" >"$tmp_vhost"
 
-  # 3. Bơm khối vhssl mới vào cuối file
-  cat <<EOF >> "$tmp_vhost"
+  if [[ -s "$s_dir/ca_bundle.crt" ]] && grep -q "BEGIN CERTIFICATE" "$s_dir/ca_bundle.crt" 2>/dev/null; then
+    cat <<EOF >>"$tmp_vhost"
 vhssl  {
-  keyFile                 /usr/local/lsws/$NAME/ssl/$NAME.key
-  certFile                /usr/local/lsws/$NAME/ssl/cert.crt
+  keyFile                 $s_dir/$domain.key
+  certFile                $s_dir/cert.crt
   certChain               0
-  CACertFile              /usr/local/lsws/$NAME/ssl/ca_bundle.crt
+  CACertFile              $s_dir/ca_bundle.crt
   sslProtocol             24
   renegProtection         1
   sslSessionCache         1
@@ -207,48 +182,941 @@ vhssl  {
   enableQuic              1
 }
 EOF
-
-  # 4. Chốt giao dịch nguyên tử (Zero-downtime config replace)
-  if type wptt_atomic_commit >/dev/null 2>&1; then
-    wptt_atomic_commit "$tmp_vhost" "$vhost_conf_file"
   else
-    /bin/mv -T -- "$tmp_vhost" "$vhost_conf_file"
+    cat <<EOF >>"$tmp_vhost"
+vhssl  {
+  keyFile                 $s_dir/$domain.key
+  certFile                $s_dir/cert.crt
+  certChain               1
+  sslProtocol             24
+  renegProtection         1
+  sslSessionCache         1
+  sslSessionTickets       1
+  enableSpdy              15
+  enableQuic              1
+}
+EOF
   fi
-  tmp_vhost="" # Dọn biến để trap bỏ qua
-  
-  _rundone "$UI_TASK_VHOST"
-else
-  _runloi "$UI_TASK_VHOST (Không tìm thấy Vhost)"
+
+  if declare -F wptt_atomic_commit >/dev/null 2>&1; then
+    wptt_atomic_commit "$tmp_vhost" "$vhost_conf"
+  else
+    /bin/mv -f -- "$tmp_vhost" "$vhost_conf"
+  fi
+  tmp_vhost=""
+  return 0
+}
+
+# Hàm kiểm tra tính hợp lệ của X509 Certificate và khớp Toán học với Private Key
+_verify_key_cert_match() {
+  local k_file="$1"
+  local c_file="$2"
+  local k_pub="" c_pub=""
+
+  [[ ! -s "$k_file" || ! -s "$c_file" ]] && return 1
+
+  if ! openssl x509 -in "$c_file" -noout >/dev/null 2>&1; then
+    return 1
+  fi
+
+  k_pub="$(openssl pkey -in "$k_file" -pubout -outform pem 2>/dev/null | sha256sum | awk '{print $1}')"
+  c_pub="$(openssl x509 -in "$c_file" -pubkey -noout -outform pem 2>/dev/null | sha256sum | awk '{print $1}')"
+
+  [[ -n "$k_pub" && -n "$c_pub" && "$k_pub" == "$c_pub" ]]
+}
+
+# Hàm đọc chuỗi PEM thông minh từ Terminal
+_read_pem_from_terminal() {
+  local out_file="$1"
+  local stop_on_first_cert="${2:-1}"
+  local line=""
+  local empty_count=0
+  local has_begin=0
+
+  if declare -F wptt_flush_stdin >/dev/null 2>&1; then
+    wptt_flush_stdin
+  fi
+  if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
+
+  : >"$out_file"
+  while IFS= read -r line; do
+    line="${line//$'\r'/}"
+
+    if [[ -z "${line//[[:space:]]/}" ]]; then
+      ((empty_count++))
+      if ((has_begin == 1 && stop_on_first_cert == 0 && empty_count >= 1)) || ((empty_count >= 2)); then
+        break
+      fi
+      continue
+    fi
+
+    empty_count=0
+    [[ "$line" == *"-----BEGIN CERTIFICATE-----"* ]] && has_begin=1
+    printf '%s\n' "$line" >>"$out_file"
+
+    if ((stop_on_first_cert == 1)) && [[ "$line" == *"-----END CERTIFICATE-----"* ]]; then
+      break
+    fi
+  done
+}
+
+# Hàm tạo Deploy Hook cho Certbot: Tự động chạy mỗi khi lệnh `certbot renew` tái cấp chứng chỉ ${NAME}-paid
+_ensure_paid_deploy_hook() {
+  local hook_script="/etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh"
+  /bin/mkdir -p /etc/wptt/ssl 2>/dev/null || true
+
+  cat >"$hook_script" <<'EOF'
+#!/bin/bash
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 077
+
+if [[ -z "${RENEWED_LINEAGE:-}" ]]; then
+  exit 0
+fi
+
+cert_name="$(basename "$RENEWED_LINEAGE")"
+# Cắt bỏ hậu tố -paid để lấy đúng tên miền gốc (VD: wptangtoc.com-paid -> wptangtoc.com)
+domain_name="${cert_name%-paid}"
+target_ssl_dir="/usr/local/lsws/${domain_name}/ssl"
+
+if [[ -d "/usr/local/lsws/${domain_name}" ]]; then
+  /bin/mkdir -p -- "$target_ssl_dir"
+  [[ -f "${RENEWED_LINEAGE}/privkey.pem" ]] && /bin/cp -fL -- "${RENEWED_LINEAGE}/privkey.pem" "${target_ssl_dir}/${domain_name}.key"
+  [[ -f "${RENEWED_LINEAGE}/cert.pem" ]] && /bin/cp -fL -- "${RENEWED_LINEAGE}/cert.pem" "${target_ssl_dir}/cert.crt"
+  [[ -f "${RENEWED_LINEAGE}/chain.pem" ]] && /bin/cp -fL -- "${RENEWED_LINEAGE}/chain.pem" "${target_ssl_dir}/ca_bundle.crt"
+  [[ -f "${RENEWED_LINEAGE}/fullchain.pem" ]] && /bin/cp -fL -- "${RENEWED_LINEAGE}/fullchain.pem" "${target_ssl_dir}/fullchain.pem"
+
+  /bin/chmod 600 -- "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
+  /bin/chmod 644 -- "${target_ssl_dir}/cert.crt" "${target_ssl_dir}/ca_bundle.crt" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
+
+  if [[ -x /etc/wptt/service/wptt-reload-lsws ]]; then
+    /bin/bash /etc/wptt/service/wptt-reload-lsws >/dev/null 2>&1 || true
+  else
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+  fi
+fi
+EOF
+  /bin/chmod 700 -- "$hook_script"
+}
+
+# ==============================================================================
+# MODULE KIỂM TRA XUNG ĐỘT PORT 80 & TIỀN TRẠM DNS (HỌC TỪ WPTT-CAISSL)
+# ==============================================================================
+_preflight_port80_and_dns() {
+  local domain="$1"
+  HAS_VALID_WWW_DNS=0
+
+  # 1. Kiểm tra xung đột Port 80 (Nginx / Apache chiếm quyền)
+  local conflict_process=""
+  conflict_process="$(ss -tlnp 2>/dev/null | grep -E '\b:80\b' | grep -oP 'users:\(\("\K[^"]+' | grep -v -iE "litespeed|openlite|lsws|lshttpd" | head -n 1 || true)"
+  if [[ -z "$conflict_process" ]]; then
+    conflict_process="$(netstat -tlnp 2>/dev/null | grep -E '\b:80\b' | awk '{print $7}' | cut -d'/' -f2 | grep -v -iE "litespeed|openlite|lsws|lshttpd|-" | head -n 1 || true)"
+  fi
+
+  if [[ -n "$conflict_process" ]]; then
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_RED}CẢNH BÁO: XUNG ĐỘT PORT 80 (HTTP) CỦA OPENLITESPEED${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    center_text "Hệ thống phát hiện dịch vụ ${C_YELLOW}[$conflict_process]${C_RESET} đang chiếm giữ Port 80."
+    center_text "Giao thức ACME bắt buộc Port 80 phải thông suốt để xác thực tên miền."
+    center_text ""
+    center_text "Để tiếp tục cài đặt, bạn cần tắt dịch vụ xung đột này đi bằng lệnh:"
+    center_text "${C_GREEN}systemctl stop $conflict_process && systemctl disable $conflict_process${C_RESET}"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    return 1
+  fi
+
+  # 2. Kiểm tra phân giải DNS (IPv6 AAAA & IPv4 A)
+  local task_dns="Kiểm tra phân giải DNS cho tên miền $domain"
+  echo ""
+  _runing "$task_dns"
+
+  local server_ips="" public_ip="" server_ipv6=""
+  server_ips="$(ip a 2>/dev/null | grep -Eo '[0-9]{1,3}(\.[0-9]{1,3}){3}' | sed -e '/^127\./d' -e '/^192\.168\./d' | sort -u || true)"
+  public_ip="$(curl -fsSL --connect-timeout 4 --max-time 8 https://ipv4.icanhazip.com 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)"
+  if [[ -z "$public_ip" ]]; then
+    public_ip="$(curl -fsSL --connect-timeout 4 --max-time 8 https://checkip.amazonaws.com 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)"
+  fi
+  server_ips="$server_ips $public_ip"
+  server_ipv6="$(curl -fsSL --connect-timeout 4 --max-time 6 https://ipv6.icanhazip.com 2>/dev/null || true)"
+
+  # Kiểm tra bẫy bản ghi IPv6 (AAAA)
+  local checkdns_v6=""
+  if command -v host >/dev/null 2>&1; then
+    checkdns_v6="$(host -t AAAA "$domain" 2>/dev/null | awk '/has IPv6 address/ {print $5; exit}')"
+  fi
+  if [[ -z "$checkdns_v6" ]]; then
+    checkdns_v6="$(curl -fsSL --connect-timeout 4 --max-time 6 "https://dns.google/resolve?name=${domain}&type=AAAA" 2>/dev/null | grep -Eo '"data":"[0-9a-fA-F:]+"' | head -n 1 | cut -d'"' -f4 || true)"
+  fi
+
+  if [[ -n "$checkdns_v6" ]]; then
+    if [[ -z "$server_ipv6" ]] || ! grep -qiwF -- "$checkdns_v6" <<<"$server_ipv6"; then
+      _runloi "$task_dns"
+      echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_RED}CẢNH BÁO TỬ HUYỆT: TÊN MIỀN ĐANG TRỎ SAI BẢN GHI IPV6 (AAAA)${C_RESET}"
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_YELLOW}Tại sao hệ thống cảnh báo bạn lúc này?${C_RESET}" 2
+      left_text " Các tổ chức CA (ZeroSSL / Sectigo / DigiCert) luôn ${C_RED}ƯU TIÊN TUYỆT ĐỐI${C_RESET}" 2
+      left_text " xác thực qua IPv6 nếu tên miền có bản ghi AAAA. Dù IPv4 trỏ đúng," 2
+      left_text " nhưng IPv6 trỏ sai thì CA vẫn sẽ báo lỗi và từ chối cấp SSL." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_YELLOW}Tình trạng hiện tại:${C_RESET}" 2
+      left_text " - IPv6 (AAAA) đang trỏ : ${C_RED}$checkdns_v6${C_RESET}" 2
+      if [[ -z "$server_ipv6" ]]; then
+        left_text " - Máy chủ (VPS) này    : ${C_YELLOW}Chưa được cấu hình / Không hỗ trợ mạng IPv6${C_RESET}" 2
+      else
+        left_text " - Máy chủ (VPS) này    : ${C_GREEN}$server_ipv6${C_RESET}" 2
+      fi
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text " ${C_GREEN}CÁCH GIẢI QUYẾT TRIỆT ĐỂ NHẤT (Chỉ 1 phút):${C_RESET}" 2
+      left_text " 1. Truy cập trang quản lý DNS (Cloudflare, Namecheap, Mắt Bão...)" 2
+      left_text " 2. Tìm và ${C_RED}XÓA BỎ HOÀN TOÀN${C_RESET} bản ghi Loại AAAA của tên miền này." 2
+      left_text " 3. Chờ 2-3 phút để DNS cập nhật rồi tiến hành cài lại SSL." 2
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+      if ! wptt_xac_nhan "Bạn có muốn BỎ QUA cảnh báo IPv6 này để tiếp tục thử cấp phát không?" \
+        "Chỉ nên tiếp tục nếu tên miền đang bật Đám mây Cam Cloudflare (Proxy)." \
+        "Nếu không dùng Proxy, việc ép chạy có thể làm hỏng mã EAB dùng 1 lần!" \
+        "Vẫn tiếp tục" "Hủy để sửa DNS (Khuyên dùng)"; then
+        return 1
+      fi
+    fi
+  fi
+
+  # Kiểm tra bản ghi IPv4 (A) qua 4 nguồn độc lập
+  local error_ssl_ipv4=1
+  local checkdns="" checkdns2="" checkdns3="" checkdns4="" resolved_ip=""
+  if command -v host >/dev/null 2>&1; then
+    checkdns="$(host -t A "$domain" 2>/dev/null | grep -Eo -m 1 '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)"
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    checkdns2="$(nslookup "$domain" 2>/dev/null | awk '/^Address:/ {print $2}' | grep -v '#' | grep -Eo -m 1 '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true)"
+  fi
+  checkdns3="$(curl -fsSL --connect-timeout 4 --max-time 6 "https://dns.google/resolve?name=${domain}&type=A" 2>/dev/null | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  checkdns4="$(curl -fsSL --connect-timeout 4 --max-time 6 -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=${domain}&type=A" 2>/dev/null | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+
+  for resolved_ip in "$checkdns" "$checkdns2" "$checkdns3" "$checkdns4"; do
+    if [[ -n "$resolved_ip" ]] && grep -qwF -- "$resolved_ip" <<<"$server_ips"; then
+      error_ssl_ipv4=0
+      break
+    fi
+  done
+
+  if ((error_ssl_ipv4 == 1)); then
+    _runloi "$task_dns"
+
+    local trace_output=""
+    trace_output="$(curl -Is --connect-timeout 4 --max-time 8 "https://$domain/cdn-cgi/trace" 2>/dev/null || curl -Is --connect-timeout 4 --max-time 8 "http://$domain/cdn-cgi/trace" 2>/dev/null || true)"
+    if grep -Eqi 'cloudflare|cf-ray' <<<"$trace_output"; then
+      echo -e "\n${C_YELLOW}☁️ PHÁT HIỆN TÊN MIỀN ĐANG BẬT PROXY CLOUDFLARE (ĐÁM MÂY CAM)${C_RESET}"
+      echo -e "Tên miền ${C_CYAN}$domain${C_RESET} đang đi qua lớp trung gian Cloudflare CDN."
+      echo -e "Nếu Cloudflare SSL/TLS đang ở chế độ ${C_GREEN}Full${C_RESET} hoặc ${C_GREEN}Flexible${C_RESET}, Certbot vẫn có thể xác thực qua Webroot."
+      echo -e "Tuy nhiên, để an toàn 100% không bị tường lửa Cloudflare chặn Bot CA, bạn nên tạm tắt Đám mây Cam (chuyển sang Xám).\n"
+
+      if ! wptt_xac_nhan "Bạn có muốn tiếp tục cấp phát SSL khi đang bật Đám mây Cam không?" \
+        "Nếu thất bại, hãy vào Cloudflare tắt Đám mây Cam sang Xám (DNS Only) rồi chạy lại." \
+        "" "Tiếp tục cấp phát" "Tạm dừng để tắt Đám mây Cam"; then
+        return 1
+      fi
+    else
+      echo -e "\n${C_RED}❌ LỖI: TÊN MIỀN CHƯA ĐƯỢC TRỎ BẢN GHI IPV4 (A) VỀ MÁY CHỦ!${C_RESET}"
+      echo -e "Tên miền ${C_YELLOW}$domain${C_RESET} hiện đang trỏ tới: ${C_YELLOW}${checkdns3:-${checkdns:-Không xác định (Chưa phân giải được DNS)}}${C_RESET}"
+      echo -e "IPv4 thực tế của máy chủ này là   : ${C_GREEN}${public_ip:-Không xác định}${C_RESET}"
+      echo -e "Vui lòng trỏ đúng bản ghi A về IP máy chủ trước khi chạy xác thực ACME.\n"
+
+      if ! wptt_xac_nhan "Bạn có chắc chắn muốn bỏ qua cảnh báo DNS này để ép chạy tiếp không?" \
+        "Cảnh báo: Nếu DNS chưa trỏ về máy chủ, quá trình xác thực chắc chắn sẽ thất bại!" \
+        "" "Vẫn ép chạy" "Thoát để trỏ lại DNS (Khuyên dùng)"; then
+        return 1
+      fi
+    fi
+  else
+    _rundone "$task_dns"
+  fi
+
+  # 3. Kiểm tra tự động bản ghi www.$domain (Chỉ gộp www vào yêu cầu nếu www đã trỏ đúng IP và không dính bẫy IPv6)
+  local checkdns_www="" checkdns_www_v6="" www_v6_ok=1
+  checkdns_www="$(curl -fsSL --connect-timeout 4 --max-time 6 "https://dns.google/resolve?name=www.${domain}&type=A" 2>/dev/null | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n 1 || true)"
+  if command -v host >/dev/null 2>&1; then
+    checkdns_www_v6="$(host -t AAAA "www.$domain" 2>/dev/null | awk '/has IPv6 address/ {print $5; exit}')"
+  fi
+  if [[ -n "$checkdns_www_v6" ]]; then
+    if [[ -z "$server_ipv6" ]] || ! grep -qiwF -- "$checkdns_www_v6" <<<"$server_ipv6"; then
+      www_v6_ok=0
+    fi
+  fi
+
+  if ((www_v6_ok == 1)) && [[ -n "$checkdns_www" ]] && grep -qwF -- "$checkdns_www" <<<"$server_ips"; then
+    HAS_VALID_WWW_DNS=1
+  fi
+
+  return 0
+}
+
+# ==============================================================================
+# MODULE TỰ ĐỘNG LẤY MÃ EAB TỪ ZEROSSL API (100% AUTO-PROVISIONING)
+# ==============================================================================
+_fetch_zerossl_eab_credentials() {
+  local domain="$1"
+  ZEROSSL_EAB_KID=""
+  ZEROSSL_EAB_HMAC=""
+
+  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}CẤU HÌNH CẤP PHÁT TỰ ĐỘNG ZEROSSL (ACME EAB)${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "${C_GREEN}[1] Tự động 100%: Tự sinh mã EAB qua Email (Không cần tài khoản ZeroSSL)${C_RESET}" 2
+  left_text "${C_YELLOW}[2] Tự động qua API Access Key${C_RESET}" 2
+  left_text "${C_CYAN}[3] Nhập mã EAB KID & EAB HMAC Key thủ công (Nếu bạn đã lấy sẵn trên Web)${C_RESET}" 2
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  echo ""
+
+  local z_mode=""
+  _safe_prompt_input "Chọn phương thức kết nối ZeroSSL [Mặc định 1]: " z_mode
+  z_mode="${z_mode//[[:space:]]/}"
+  z_mode="${z_mode:-1}"
+
+  if [[ "$z_mode" == "1" ]]; then
+    local z_email=""
+    _safe_prompt_input "➤ Nhập Email đăng ký ZeroSSL [Enter để dùng admin@${domain}]: " z_email
+    z_email="${z_email//[[:space:]]/}"
+    [[ -z "$z_email" ]] && z_email="admin@${domain}"
+
+    local task_zeab="Tự động khởi tạo khóa EAB từ máy chủ ZeroSSL API"
+    _runing "$task_zeab"
+
+    local api_resp=""
+    api_resp="$(curl -fsSL --connect-timeout 10 --max-time 20 -X POST "https://api.zerossl.com/acme/eab-credentials-email" \
+      --data-urlencode "email=${z_email}" 2>/dev/null || true)"
+
+    if [[ "$api_resp" == *'"eab_kid"'* && "$api_resp" == *'"eab_hmac_key"'* ]]; then
+      ZEROSSL_EAB_KID="$(grep -Eo '"eab_kid"[[:space:]]*:[[:space:]]*"[^"]+"' <<<"$api_resp" | head -n 1 | cut -d'"' -f4)"
+      ZEROSSL_EAB_HMAC="$(grep -Eo '"eab_hmac_key"[[:space:]]*:[[:space:]]*"[^"]+"' <<<"$api_resp" | head -n 1 | cut -d'"' -f4)"
+    fi
+
+    if [[ -n "$ZEROSSL_EAB_KID" && -n "$ZEROSSL_EAB_HMAC" ]]; then
+      _rundone "$task_zeab"
+      return 0
+    else
+      _runloi "$task_zeab"
+      echo -e "${C_YELLOW}⚠️ Máy chủ API ZeroSSL không phản hồi mã EAB tự động. Chuyển sang nhập EAB thủ công...${C_RESET}"
+    fi
+  elif [[ "$z_mode" == "2" ]]; then
+    local z_apikey=""
+    _safe_prompt_input "➤ Nhập ZeroSSL API Access Key của bạn: " z_apikey
+    z_apikey="${z_apikey//[[:space:]]/}"
+
+    if [[ -n "$z_apikey" ]]; then
+      local task_zapi="Lấy khóa EAB qua ZeroSSL API Access Key"
+      _runing "$task_zapi"
+
+      local api_resp=""
+      api_resp="$(curl -fsSL --connect-timeout 10 --max-time 20 -X POST "https://api.zerossl.com/acme/eab-credentials?access_key=${z_apikey}" 2>/dev/null || true)"
+
+      if [[ "$api_resp" == *'"eab_kid"'* && "$api_resp" == *'"eab_hmac_key"'* ]]; then
+        ZEROSSL_EAB_KID="$(grep -Eo '"eab_kid"[[:space:]]*:[[:space:]]*"[^"]+"' <<<"$api_resp" | head -n 1 | cut -d'"' -f4)"
+        ZEROSSL_EAB_HMAC="$(grep -Eo '"eab_hmac_key"[[:space:]]*:[[:space:]]*"[^"]+"' <<<"$api_resp" | head -n 1 | cut -d'"' -f4)"
+      fi
+
+      if [[ -n "$ZEROSSL_EAB_KID" && -n "$ZEROSSL_EAB_HMAC" ]]; then
+        _rundone "$task_zapi"
+        return 0
+      else
+        _runloi "$task_zapi"
+        echo -e "${C_YELLOW}⚠️ Access Key không hợp lệ hoặc hết hạn. Chuyển sang nhập EAB thủ công...${C_RESET}"
+      fi
+    fi
+  fi
+
+  echo -e "\n${C_YELLOW}💡 Lấy mã EAB tại: ZeroSSL Dashboard ➜ Developer ➜ EAB Credentials for ACME Clients:${C_RESET}"
+  _safe_prompt_input "➤ Nhập EAB Key ID (KID) : " ZEROSSL_EAB_KID
+  _safe_prompt_input "➤ Nhập EAB HMAC Key     : " ZEROSSL_EAB_HMAC
+  ZEROSSL_EAB_KID="${ZEROSSL_EAB_KID//[[:space:]]/}"
+  ZEROSSL_EAB_HMAC="${ZEROSSL_EAB_HMAC//[[:space:]]/}"
+  [[ -n "$ZEROSSL_EAB_KID" && -n "$ZEROSSL_EAB_HMAC" ]]
+}
+
+# ==============================================================================
+# MODULE PHÂN TÍCH LOG CERTBOT CHUYÊN SÂU (HỌC TỪ WPTT-CAISSL)
+# ==============================================================================
+_diagnose_certbot_failure() {
+  local domain="$1"
+  local recent_log="$2"
+  local log_file="/var/log/letsencrypt/letsencrypt.log"
+
+  echo -e "\n${C_RED}❌ Lỗi: Không thể cấp phát chứng chỉ SSL qua ACME cho '$domain'!${C_RESET}"
+
+  # 1. Lỗi sai khóa EAB (KID / HMAC Key)
+  if grep -Eqi "externalAccountRequired|eab|HMAC|binding|unauthorized.*account" <<<"$recent_log"; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: MÃ EAB (KID / HMAC KEY) KHÔNG HỢP LỆ${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " - Mã EAB Key ID hoặc EAB HMAC Key bị sai, hết hạn hoặc đã được sử dụng." 2
+    left_text " - Với các hãng SSL trả phí (Sectigo/DigiCert), mỗi mã EAB thường chỉ gắn" 2
+    left_text "   với đúng 1 tên miền trong đơn hàng và chỉ kích hoạt được 1 lần." 2
+    left_text " - ${C_GREEN}Giải pháp:${C_RESET} Hãy tạo lại (Regenerate) mã EAB mới trên trang quản lý SSL." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    return 0
+  fi
+
+  # 2. Lỗi chặn truy cập file xác thực .well-known (403 / 404 / Unauthorized)
+  if grep -Eqi "unauthorized|Invalid response from|404 Not Found|403 Forbidden" <<<"$recent_log"; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: KHÔNG THỂ ĐỌC FILE XÁC THỰC (UNAUTHORIZED 403/404)${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " - Tổ chức CA đã kết nối tới máy chủ nhưng bị chặn khi đọc thư mục" 2
+    left_text "   ${C_YELLOW}/.well-known/acme-challenge/${C_RESET} (Lỗi 403 hoặc 404)." 2
+    left_text " - ${C_RED}Thủ phạm thường gặp:${C_RESET}" 2
+    left_text "   1. File ${C_YELLOW}.htaccess${C_RESET} có quy tắc chặn truy cập thư mục ẩn (bắt đầu bằng dấu chấm)." 2
+    left_text "   2. Đang bật Tường lửa WAF (Cloudflare Bot Fight Mode / Wordfence)." 2
+    left_text " - ${C_GREEN}Giải pháp:${C_RESET} Tạm thời tắt WAF hoặc kiểm tra lại file .htaccess rồi thử lại." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    return 0
+  fi
+
+  # 3. Lỗi kết nối Timeout / Firewall chặn Port 80 quốc tế
+  if grep -Eqi "Timeout after connect|Timeout during connect|Connection refused" <<<"$recent_log"; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: HỆ THỐNG BỊ CHẶN KẾT NỐI QUỐC TẾ (TIMEOUT PORT 80)${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " - Máy chủ xác thực của CA (đặt tại Mỹ/Châu Âu) không thể kết nối vào" 2
+    left_text "   Port 80 trên VPS của bạn." 2
+    left_text " - ${C_GREEN}Giải pháp:${C_RESET} Kiểm tra tường lửa VPS hoặc liên hệ nhà cung cấp mở Port 80" 2
+    left_text "   cho phép IP quốc tế truy cập." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    return 0
+  fi
+
+  # 4. Lỗi Rate Limit
+  if grep -Eqi "rateLimited|too many certificates|too many failed authorizations" <<<"$recent_log"; then
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}TỪ CHỐI CẤP PHÁT: CHẠM NGƯỠNG GIỚI HẠN (RATE LIMIT)${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text " - Tên miền ${C_YELLOW}$domain${C_RESET} đã gửi quá nhiều yêu cầu xác thực lỗi liên tiếp." 2
+    left_text " - Vui lòng chờ ít nhất 1 giờ trước khi thử cấp phát lại." 2
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+    return 0
+  fi
+
+  # Tùy chọn mở trình đọc log nếu rơi vào các lỗi khác
+  if [[ -f "$log_file" ]]; then
+    echo -e "Chi tiết lỗi được ghi tại: ${C_YELLOW}$log_file${C_RESET}"
+    if wptt_xac_nhan "Bạn có muốn mở xem trực tiếp file log (letsencrypt.log) để dò lỗi không?" \
+      "Nhấn phím [q] để thoát khỏi trình đọc log." "" "Đồng ý (Xem log)" "Bỏ qua"; then
+      less +G "$log_file"
+    fi
+  fi
+}
+
+# ==============================================================================
+# KHỞI CHẠY GIAO DIỆN CHÍNH
+# ==============================================================================
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_ssl:-Quản lý SSL} ➜ Khởi tạo & Tự động hóa SSL Trả phí / ZeroSSL${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+route_arg="${1:-}"
+NAME="${1:-}"
+no_key="${2:-}"
+[[ "$NAME" == "98" || "$NAME" == "1" ]] && NAME=""
+
+if declare -F wptt_check_lsws >/dev/null 2>&1; then
+  wptt_check_lsws "$route_arg"
 fi
 
 # ==============================================================================
-# HƯỚNG DẪN UPLOAD FILE (UX BO CONG)
+# 1. CHỌN TÊN MIỀN CẦN CÀI ĐẶT SSL TRẢ PHÍ / ZEROSSL
 # ==============================================================================
-if [[ -z "$no_key" ]]; then
+if [[ -z "$NAME" ]]; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/tenmien
+  lua_chon_NAME "cấu hình SSL Trả phí / ZeroSSL"
+fi
+
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  wptt_quay_ve_menu "$route_arg" 0
+fi
+
+if [[ ! -f "/etc/wptt/vhost/.$NAME.conf" && ! -f "/etc/wptt/chuyen-huong/.$NAME.conf" ]]; then
+  echo -e "\n${C_RED}❌ Tên miền '$NAME' không tồn tại trên hệ thống này!${C_RESET}"
+  sleep 2
+  wptt_quay_ve_menu "$route_arg" 1
+fi
+
+if [[ -f "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf.bkwptt" ]]; then
+  echo -e "\n${C_RED}❌ Lỗi: Website $NAME đang bị TẠM KHÓA!${C_RESET}"
+  echo -e "${C_YELLOW}Không thể cài đặt SSL khi website đang tắt. Vui lòng mở khóa trước.${C_RESET}"
+  wptt_quay_ve_menu "$route_arg" 1 "enter"
+fi
+
+wptt_logs "INFO" "Thiết lập cài đặt SSL trả phí / ZeroSSL website $NAME"
+ssl_dir="/usr/local/lsws/$NAME/ssl"
+/bin/mkdir -p -- "$ssl_dir"
+/bin/chmod 700 -- "$ssl_dir" 2>/dev/null || true
+
+key_file="$ssl_dir/$NAME.key"
+csr_file="$ssl_dir/$NAME.csr"
+cert_file="$ssl_dir/cert.crt"
+ca_file="$ssl_dir/ca_bundle.crt"
+
+if ! _ensure_ssl_dependencies 0; then
+  wptt_quay_ve_menu "$route_arg" 1 "enter"
+fi
+
+# Nếu được gọi ngầm từ CLI thông qua cờ $no_key (wptt ssl-tra-phi-config -d domain)
+if [[ -n "$no_key" ]]; then
+  if [[ -s "$key_file" && -s "$cert_file" ]]; then
+    task_cli_apply="Thiết lập cấu hình SSL trả phí Vhost ($NAME)"
+    _runing "$task_cli_apply"
+    if _verify_key_cert_match "$key_file" "$cert_file" && _apply_paid_vhssl_config "$NAME"; then
+      declare -F wptt_smart_reload_lsws >/dev/null 2>&1 && wptt_smart_reload_lsws >/dev/null 2>&1
+      _rundone "$task_cli_apply"
+    else
+      _runloi "$task_cli_apply"
+      echo -e "${C_RED}❌ Lỗi: Private Key và Certificate trong $ssl_dir không khớp nhau!${C_RESET}"
+      wptt_quay_ve_menu "$route_arg" 1 "enter"
+    fi
+  else
+    echo -e "${C_RED}❌ Lỗi: Chưa tìm thấy đủ file $key_file và $cert_file!${C_RESET}"
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+  wptt_quay_ve_menu "$route_arg" 0 "enter"
+fi
+
+# ==============================================================================
+# 2. MENU CHỌN PHƯƠNG THỨC TRIỂN KHAI SSL TRẢ PHÍ / ZEROSSL
+# ==============================================================================
+echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}CHỌN PHƯƠNG THỨC CÀI ĐẶT SSL CHO: ${C_GREEN}${NAME}${C_RESET}"
+echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_GREEN}[1] Thủ công / Bán tự động (Tạo CSR, Upload file hoặc Dán mã trực tiếp)${C_RESET}" 2
+left_text "    ↳ Phù hợp với mọi gói SSL mua lẻ (Sectigo, PositiveSSL, OV/EV...)" 2
+left_text "${C_YELLOW}[2] Tự động hóa 100% bằng Certbot ACME EAB (ZeroSSL, Sectigo, DigiCert...)${C_RESET}" 2
+left_text "    ↳ Tự động lấy SSL (ZeroSSL, Sectigo...) / Tự động Gia hạn chứng chỉ SSL" 2
+left_text "${C_RED}[0] Quay lại Menu trước${C_RESET}" 2
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+echo ""
+
+paid_mode=""
+_safe_prompt_input "Nhập lựa chọn của bạn [Mặc định 1]: " paid_mode
+paid_mode="${paid_mode//[[:space:]]/}"
+paid_mode="${paid_mode:-1}"
+
+if [[ "$paid_mode" == "0" ]]; then
+  wptt_quay_ve_menu "$route_arg" 0
+fi
+
+# ==============================================================================
+# NHÁNH A: TỰ ĐỘNG HÓA 100% BẰNG CERTBOT ACME EAB (ZEROSSL / SECTIGO / DIGICERT)
+# ==============================================================================
+if [[ "$paid_mode" == "2" ]]; then
+  if ! _ensure_ssl_dependencies 1; then
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+
+  # Tự động lấy docRoot chính xác từ Vhost
+  webroot_path="$(awk '/docRoot/ {print $2; exit}' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null || true)"
+  [[ -z "$webroot_path" || ! -d "$webroot_path" ]] && webroot_path="/usr/local/lsws/$NAME/html"
+
+  if [[ ! -d "$webroot_path" ]]; then
+    echo -e "\n${C_RED}❌ Lỗi nghiêm trọng: Không tìm thấy thư mục mã nguồn ($webroot_path)!${C_RESET}"
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+
+  # Kiểm tra xung đột Port 80 và phân giải DNS trước khi tiêu thụ mã EAB
+  if ! _preflight_port80_and_dns "$NAME"; then
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+
+  certbot_bin="$(command -v certbot 2>/dev/null || echo "/usr/bin/certbot")"
+
+  # Mở khóa thư mục .well-known nếu tính năng Lock Down đang bật
+  unset lock_down
+  if [[ -f "/etc/wptt/vhost/.$NAME.conf" ]]; then
+    # shellcheck source=/dev/null
+    . "/etc/wptt/vhost/.$NAME.conf"
+    if [[ -n "${lock_down:-}" && -d "${webroot_path}/.well-known" ]]; then
+      chattr -R -i "${webroot_path}/.well-known" >/dev/null 2>&1 || true
+      /bin/rm -rf -- "${webroot_path:?}/.well-known"
+    fi
+  fi
+
+  echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}CHỌN TỔ CHỨC CẤP PHÁT SSL (CA ACME SERVER)${C_RESET}"
+  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "${C_GREEN}[1] ZeroSSL (Tự động 100% lấy mã EAB qua API) (https://acme.zerossl.com/v2/DV90)${C_RESET}" 2
+  left_text "[2] Sectigo / Comodo / GogetSSL DV            (https://acme.sectigo.com/v2/DV)" 2
+  left_text "[3] Sectigo OV (Chứng chỉ Doanh nghiệp)       (https://acme.sectigo.com/v2/OV)" 2
+  left_text "[4] DigiCert / GeoTrust / Thawte              (https://acme.digicert.com/v2/acme)" 2
+  left_text "[5] SSL.com Commercial (ECC/RSA)              (https://acme.ssl.com/sslcom-dv-ecc)" 2
+  left_text "[6] Nhập đường dẫn ACME Server URL tùy chỉnh khác" 2
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  echo ""
+
+  ca_choice=""
+  _safe_prompt_input "Chọn nhà cung cấp CA của bạn [Mặc định 1 - ZeroSSL]: " ca_choice
+  ca_choice="${ca_choice//[[:space:]]/}"
+  ca_choice="${ca_choice:-1}"
+
+  acme_server="https://acme.zerossl.com/v2/DV90"
+  eab_kid=""
+  eab_hmac=""
+  ca_provider_label="ZeroSSL"
+
+  case "$ca_choice" in
+    1)
+      acme_server="https://acme.zerossl.com/v2/DV90"
+      ca_provider_label="ZeroSSL"
+      if _fetch_zerossl_eab_credentials "$NAME"; then
+        eab_kid="$ZEROSSL_EAB_KID"
+        eab_hmac="$ZEROSSL_EAB_HMAC"
+      fi
+      ;;
+    2)
+      acme_server="https://acme.sectigo.com/v2/DV"
+      ca_provider_label="Sectigo DV"
+      ;;
+    3)
+      acme_server="https://acme.sectigo.com/v2/OV"
+      ca_provider_label="Sectigo OV"
+      ;;
+    4)
+      acme_server="https://acme.digicert.com/v2/acme/directory/"
+      ca_provider_label="DigiCert"
+      ;;
+    5)
+      acme_server="https://acme.ssl.com/sslcom-dv-ecc"
+      ca_provider_label="SSL.com"
+      ;;
+    6)
+      custom_acme_url=""
+      _safe_prompt_input "Nhập ACME Directory URL do nhà bán cung cấp: " custom_acme_url
+      acme_server="${custom_acme_url//[[:space:]]/}"
+      ca_provider_label="Custom ACME CA"
+      ;;
+  esac
+
+  if [[ "$ca_choice" != "1" ]]; then
+    echo -e "\n${C_YELLOW}💡 Vui lòng lấy mã EAB (External Account Binding) trong trang quản lý SSL của bạn:${C_RESET}"
+    _safe_prompt_input "➤ Nhập EAB Key ID (KID)   : " eab_kid
+    _safe_prompt_input "➤ Nhập EAB HMAC Key       : " eab_hmac
+    eab_kid="${eab_kid//[[:space:]]/}"
+    eab_hmac="${eab_hmac//[[:space:]]/}"
+  fi
+
+  # Validate định dạng an toàn cho ACME URL và khóa EAB
+  if [[ -z "$eab_kid" || -z "$eab_hmac" || -z "$acme_server" ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: EAB Key ID, EAB HMAC Key và ACME Server không được để trống!${C_RESET}\n"
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+  if [[ ! "$acme_server" =~ ^https://[a-zA-Z0-9._/-]+$ ]]; then
+    echo -e "\n${C_RED}❌ Lỗi: Đường dẫn ACME Server phải bắt đầu bằng https:// và đúng định dạng URL!${C_RESET}\n"
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+
+  # Khởi tạo Deploy Hook và kích hoạt lịch gia hạn tự động lũy đẳng của WPTangToc OLS
+  hook_script="/etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh"
+  _ensure_paid_deploy_hook
+  if [[ -f /etc/wptt/ssl/gia-han-tu-dong-ssl-let-encrypt ]]; then
+    /bin/bash /etc/wptt/ssl/gia-han-tu-dong-ssl-let-encrypt >/dev/null 2>&1 || true
+  fi
+
+  # Tạo file cấu hình EAB ẩn quyền 0600 (Bảo vệ EAB HMAC Key không bị lộ qua ps aux / /proc)
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+  old_umask_eab=$(umask)
+  umask 077
+  tmp_eab_ini="$(mktemp -p /etc/wptt/tmp wptt_eab_XXXXXX.ini)"
+  cat >"$tmp_eab_ini" <<EOF
+eab-kid = $eab_kid
+eab-hmac-key = $eab_hmac
+EOF
+  umask "$old_umask_eab"
+
+  paid_cert_name="${NAME}-paid"
+  task_issue="Xác thực & Cấp phát SSL ($ca_provider_label) bằng Certbot cho $NAME"
+  _runing "$task_issue"
+
+  log_file="/var/log/letsencrypt/letsencrypt.log"
+  line_start=0
+  [[ -f "$log_file" ]] && line_start=$(wc -l <"$log_file" 2>/dev/null || echo 0)
+
+  issue_ok=0
+  cb_common_args=(
+    certonly --webroot -w "$webroot_path"
+    --config "$tmp_eab_ini"
+    --server "$acme_server"
+    --email "admin@${NAME}"
+    --agree-tos --non-interactive
+    --cert-name "$paid_cert_name"
+    --deploy-hook "$hook_script"
+    --force-renewal
+  )
+
+  # Nếu www.$NAME đã được trỏ đúng DNS, ưu tiên xin cấp gộp cả www trước; nếu chưa trỏ thì chỉ xin $NAME
+  if ((HAS_VALID_WWW_DNS == 1)); then
+    if "$certbot_bin" "${cb_common_args[@]}" --key-type ecdsa --elliptic-curve secp256r1 -d "$NAME" -d "www.$NAME" >/dev/null 2>&1; then
+      issue_ok=1
+    elif "$certbot_bin" "${cb_common_args[@]}" --key-type ecdsa --elliptic-curve secp256r1 -d "$NAME" >/dev/null 2>&1; then
+      issue_ok=1
+    elif "$certbot_bin" "${cb_common_args[@]}" --key-type rsa --rsa-key-size 2048 -d "$NAME" -d "www.$NAME" >/dev/null 2>&1; then
+      issue_ok=1
+    elif "$certbot_bin" "${cb_common_args[@]}" --key-type rsa --rsa-key-size 2048 -d "$NAME" >/dev/null 2>&1; then
+      issue_ok=1
+    fi
+  else
+    if "$certbot_bin" "${cb_common_args[@]}" --key-type ecdsa --elliptic-curve secp256r1 -d "$NAME" >/dev/null 2>&1; then
+      issue_ok=1
+    elif "$certbot_bin" "${cb_common_args[@]}" --key-type rsa --rsa-key-size 2048 -d "$NAME" >/dev/null 2>&1; then
+      issue_ok=1
+    fi
+  fi
+
+  # Xóa ngay file chứa khóa EAB trên RAM/Disk sau khi Certbot chạy xong
+  /bin/rm -f -- "$tmp_eab_ini" 2>/dev/null || true
+  tmp_eab_ini=""
+
+  line_end=0
+  [[ -f "$log_file" ]] && line_end=$(wc -l <"$log_file" 2>/dev/null || echo 0)
+  lines_new=$((line_end - line_start))
+  ((lines_new <= 0)) && lines_new=150
+  recent_log="$(tail -n "$lines_new" "$log_file" 2>/dev/null || true)"
+
+  if ((issue_ok == 0)); then
+    _runloi "$task_issue"
+    _diagnose_certbot_failure "$NAME" "$recent_log"
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+  _rundone "$task_issue"
+
+  task_install="Tích hợp chứng chỉ vào OpenLiteSpeed & Đồng bộ Tự động gia hạn"
+  _runing "$task_install"
+
+  live_dir="/etc/letsencrypt/live/${paid_cert_name}"
+  if [[ -d "$live_dir" ]]; then
+    old_umask=$(umask)
+    umask 077
+    [[ -f "${live_dir}/privkey.pem" ]] && /bin/cp -pfL -- "${live_dir}/privkey.pem" "$key_file"
+    [[ -f "${live_dir}/cert.pem" ]] && /bin/cp -pfL -- "${live_dir}/cert.pem" "$cert_file"
+    [[ -f "${live_dir}/chain.pem" ]] && /bin/cp -pfL -- "${live_dir}/chain.pem" "$ca_file"
+    [[ -f "${live_dir}/fullchain.pem" ]] && /bin/cp -pfL -- "${live_dir}/fullchain.pem" "$ssl_dir/fullchain.pem"
+    umask "$old_umask"
+
+    /bin/chmod 600 -- "$key_file" 2>/dev/null || true
+    /bin/chmod 644 -- "$cert_file" "$ca_file" "$ssl_dir/fullchain.pem" 2>/dev/null || true
+  fi
+
+  _apply_paid_vhssl_config "$NAME"
+  if [[ -x /etc/wptt/ssl/wptt-renew-chuyen-huong ]]; then
+    /bin/bash /etc/wptt/ssl/wptt-renew-chuyen-huong "$NAME" >/dev/null 2>&1 || true
+  fi
+  declare -F wptt_smart_reload_lsws >/dev/null 2>&1 && wptt_smart_reload_lsws >/dev/null 2>&1
+  _rundone "$task_install"
+
+  # Kiểm tra xác nhận máy chủ nạp cấu hình HTTPS cục bộ và mở Port 443 CSF
+  task_verify_https="Kiểm tra phản hồi HTTPS trên OpenLiteSpeed ($NAME)"
+  _runing "$task_verify_https"
+  http_status="000"
+  for _ in {1..10}; do
+    http_status="$(curl -o /dev/null -s -w "%{http_code}" --resolve "$NAME:443:127.0.0.1" --connect-timeout 4 "https://$NAME" 2>/dev/null || echo "000")"
+    if [[ "$http_status" =~ ^(200|301|302|403|404)$ ]]; then
+      break
+    fi
+    sleep 1.5
+  done
+  _rundone "$task_verify_https"
+
+  if [[ -f /etc/csf/csf.conf ]]; then
+    if ! grep '^TCP_IN' /etc/csf/csf.conf | grep -q "443"; then
+      /bin/sed -i 's/^TCP_IN = "/TCP_IN = "443,/g' /etc/csf/csf.conf
+      csf -x >/dev/null 2>&1 || true
+      csf -e >/dev/null 2>&1 || true
+    fi
+  fi
+
+  wptt_logs "INFO" "Kích hoạt thành công SSL Tự động hóa ($ca_provider_label - Certbot ACME EAB) cho $NAME"
+
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}CẤU HÌNH HỆ THỐNG HOÀN TẤT - BƯỚC TIẾP THEO${C_RESET}"
+  center_text "${C_BOLD_WHITE}KÍCH HOẠT TỰ ĐỘNG HÓA SSL (${ca_provider_label^^}) THÀNH CÔNG!${C_RESET}"
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Hệ thống đã dọn đường sẵn. Bây giờ bạn cần UPLOAD CÁC FILE CHỨNG CHỈ" 2
-  left_text "mà nhà cung cấp gửi cho bạn vào thư mục sau:" 2
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  center_text "${C_YELLOW}$ssl_dir/${C_RESET}"
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-
-  if [[ "$dongy2" == "y" ]]; then
-    left_text "Yêu cầu upload 2 file (Phải đổi đúng tên như dưới đây):" 2
-    left_text "1. ${C_CYAN}cert.crt${C_RESET}       (File chứng chỉ SSL của tên miền)" 4
-    left_text "2. ${C_CYAN}ca_bundle.crt${C_RESET}  (File chứng chỉ CA trung gian / Chain)" 4
-  else
-    left_text "Yêu cầu upload 3 file (Phải đổi đúng tên như dưới đây):" 2
-    left_text "1. ${C_CYAN}$NAME.key${C_RESET}  (File Private Key của bạn)" 4
-    left_text "2. ${C_CYAN}cert.crt${C_RESET}       (File chứng chỉ SSL của tên miền)" 4
-    left_text "3. ${C_CYAN}ca_bundle.crt${C_RESET}  (File chứng chỉ CA trung gian / Chain)" 4
+  left_text "Tên miền       : ${C_YELLOW}https://$NAME${C_RESET}" 2
+  if ((HAS_VALID_WWW_DNS == 1)); then
+    left_text "Kèm Subdomain  : ${C_GREEN}Đã tích hợp www.$NAME${C_RESET}" 2
   fi
-
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "${C_YELLOW}SAU KHI UPLOAD XONG, HÃY CHẠY LỆNH NÀY NGOÀI TERMINAL ĐỂ KÍCH HOẠT:${C_RESET}" 2
-  center_text "${C_GREEN}wptt ssl-tra-phi-config -d $NAME${C_RESET}"
+  left_text "Nhà cung cấp   : ${C_CYAN}${ca_provider_label}${C_RESET}" 2
+  left_text "Định danh      : ${C_CYAN}${paid_cert_name} (Không ảnh hưởng SSL miễn phí cũ)${C_RESET}" 2
+  left_text "Tự động tái cấp: ${C_GREEN}Đồng bộ 100% cùng Cron / Systemd Timer của WPTangToc OLS${C_RESET}" 2
+  left_text "Đường dẫn SSL  : ${C_YELLOW}$ssl_dir/${C_RESET}" 2
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+  wptt_quay_ve_menu "$route_arg" 0 "enter"
 fi
 
-wptt_quay_ve_menu "${1:-}" 0 "enter"
+# ==============================================================================
+# NHÁNH B: THỦ CÔNG / BÁN TỰ ĐỘNG (TẠO CSR + DÁN TRỰC TIẾP HOẶC UPLOAD FILE)
+# ==============================================================================
+dongy2="n"
+echo ""
+if wptt_xac_nhan "Bạn có muốn hệ thống tự tạo Private Key (.key) và mã CSR không?" \
+  "${C_BOLD_WHITE}Gợi ý:${C_RESET} Chọn [Có] nếu bạn chưa có CSR để gửi cho nhà cung cấp SSL." \
+  "Nếu bạn đã có sẵn bộ file (.key, .crt, .ca-bundle) trên máy tính, hãy chọn [Không cần]." \
+  "Có (Tự động tạo CSR)" "Không cần (Đã có sẵn)"; then
+  dongy2="y"
+fi
+
+if [[ "$dongy2" == "y" ]]; then
+  echo -e "\n${C_CYAN}Chọn thuật toán mã hóa cho chứng chỉ SSL:${C_RESET}"
+  echo -e " [1] ${C_GREEN}RSA 2048-bit${C_RESET} (Khuyên dùng - Tương thích 100% mọi nhà cung cấp)"
+  echo -e " [2] ${C_YELLOW}RSA 4096-bit${C_RESET} (Bảo mật cao nhất - Tiêu tốn CPU máy chủ hơn)"
+  echo -e " [3] ${C_CYAN}ECDSA P-256${C_RESET}  (Hiệu năng tối đa - Siêu nhẹ, tốc độ tốt nhất)"
+  echo ""
+
+  ssl_algo_choice=""
+  _safe_prompt_input "Nhập lựa chọn của bạn [Mặc định 1]: " ssl_algo_choice
+  ssl_algo_choice="${ssl_algo_choice//[[:space:]]/}"
+  ssl_algo_choice="${ssl_algo_choice:-1}"
+
+  case "$ssl_algo_choice" in
+    2) algo_name="RSA 4096-bit" ;;
+    3) algo_name="ECDSA P-256" ;;
+    *) algo_name="RSA 2048-bit" ;;
+  esac
+
+  UI_TASK="Khởi tạo Private Key & CSR mã hóa ($algo_name) cho $NAME"
+  _runing "$UI_TASK"
+
+  subj_string="/C=VN/ST=Hai Phong/L=Hai Phong/O=$NAME/OU=$NAME/CN=$NAME/emailAddress=admin@${NAME}"
+
+  old_umask=$(umask)
+  umask 077
+
+  case "$ssl_algo_choice" in
+    2)
+      openssl req -new -newkey rsa:4096 -nodes \
+        -keyout "$key_file" -out "$csr_file" -subj "$subj_string" \
+        -addext "subjectAltName=DNS:$NAME,DNS:www.$NAME" >/dev/null 2>&1 || true
+      ;;
+    3)
+      openssl ecparam -name prime256v1 -genkey -noout -out "$key_file" >/dev/null 2>&1 || true
+      openssl req -new -key "$key_file" -out "$csr_file" -subj "$subj_string" \
+        -addext "subjectAltName=DNS:$NAME,DNS:www.$NAME" >/dev/null 2>&1 || true
+      ;;
+    *)
+      openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "$key_file" -out "$csr_file" -subj "$subj_string" \
+        -addext "subjectAltName=DNS:$NAME,DNS:www.$NAME" >/dev/null 2>&1 || true
+      ;;
+  esac
+
+  umask "$old_umask"
+  [[ -f "$key_file" ]] && /bin/chmod 600 -- "$key_file"
+  [[ -f "$csr_file" ]] && /bin/chmod 644 -- "$csr_file"
+
+  if [[ -s "$csr_file" && -s "$key_file" ]]; then
+    _rundone "$UI_TASK"
+
+    echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_BOLD_WHITE}MÃ CSR XÁC THỰC CỦA BẠN (CERTIFICATE SIGNING REQUEST)${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "Hãy COPY toàn bộ đoạn mã bên dưới và gửi cho nhà cung cấp SSL:" 2
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+    echo -e "${C_YELLOW}"
+    cat "$csr_file"
+    echo -e "${C_RESET}\n"
+  else
+    _runloi "$UI_TASK"
+    wptt_quay_ve_menu "$route_arg" 1 "enter"
+  fi
+fi
+
+# ==============================================================================
+# TÙY CHỌN NHANH: DÁN TRỰC TIẾP CHỨNG CHỈ NGAY TRÊN TERMINAL (KHÔNG CẦN SFTP)
+# ==============================================================================
+if [[ -s "$key_file" ]]; then
+  if wptt_xac_nhan "Nhà cung cấp đã cấp chứng chỉ (.crt) cho bạn chưa?" \
+    "Nếu đã có mã chứng chỉ, bạn có thể DÁN (Paste) trực tiếp ngay tại đây để kích hoạt luôn" \
+    "mà không cần mở phần mềm SFTP/File Manager để upload file!" \
+    "Đã có (Dán mã kích hoạt ngay)" "Chưa có (Tôi sẽ upload file sau)"; then
+
+    /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+    tmp_cert_paste="$(mktemp -p /etc/wptt/tmp cert_paste_XXXXXX.crt)"
+    tmp_ca_paste="$(mktemp -p /etc/wptt/tmp ca_paste_XXXXXX.crt)"
+
+    echo -e "\n${C_CYAN}➤ Bước 1: Hãy DÁN nội dung Chứng chỉ chính (${C_YELLOW}cert.crt${C_CYAN}) vào bên dưới:${C_RESET}"
+    echo -e "${C_GREEN}(Hệ thống sẽ tự động chuyển bước ngay khi thấy dòng -----END CERTIFICATE-----):${C_RESET}"
+    _read_pem_from_terminal "$tmp_cert_paste" 1
+
+    echo -e "\n${C_CYAN}➤ Bước 2: Hãy DÁN nội dung Chứng chỉ Trung gian (${C_YELLOW}ca_bundle.crt${C_CYAN}) vào bên dưới:${C_RESET}"
+    echo -e "${C_GREEN}(Dán xong hãy nhấn phím ${C_YELLOW}Enter 2 lần${C_GREEN} để hoàn tất, hoặc nhấn Enter 2 lần để bỏ qua):${C_RESET}"
+    _read_pem_from_terminal "$tmp_ca_paste" 0
+
+    task_verify="Kiểm tra cặp khóa Toán học (Private Key & Certificate Match)"
+    _runing "$task_verify"
+
+    if _verify_key_cert_match "$key_file" "$tmp_cert_paste"; then
+      /bin/cp -f -- "$tmp_cert_paste" "$cert_file"
+      /bin/chmod 644 -- "$cert_file" 2>/dev/null || true
+
+      if [[ -s "$tmp_ca_paste" ]] && grep -q "BEGIN CERTIFICATE" "$tmp_ca_paste" 2>/dev/null; then
+        /bin/cp -f -- "$tmp_ca_paste" "$ca_file"
+        /bin/chmod 644 -- "$ca_file" 2>/dev/null || true
+        cat "$cert_file" "$ca_file" >"$ssl_dir/fullchain.pem" 2>/dev/null || true
+      fi
+
+      _apply_paid_vhssl_config "$NAME"
+      if [[ -x /etc/wptt/ssl/wptt-renew-chuyen-huong ]]; then
+        /bin/bash /etc/wptt/ssl/wptt-renew-chuyen-huong "$NAME" >/dev/null 2>&1 || true
+      fi
+      declare -F wptt_smart_reload_lsws >/dev/null 2>&1 && wptt_smart_reload_lsws >/dev/null 2>&1
+      _rundone "$task_verify"
+
+      echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      center_text "${C_BOLD_WHITE}KÍCH HOẠT SSL TRẢ PHÍ THÀNH CÔNG 100%!${C_RESET}"
+      echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "Chứng chỉ SSL và Private Key khớp nhau hoàn hảo." 2
+      left_text "Website ${C_YELLOW}$NAME${C_RESET} đã được nạp chứng chỉ mới (Zero-Downtime)." 2
+      echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+      wptt_quay_ve_menu "$route_arg" 0 "enter"
+    else
+      _runloi "$task_verify"
+      echo -e "\n${C_RED}❌ LỖI: Chứng chỉ bạn vừa dán KHÔNG KHỚP với Private Key ($key_file) hoặc bị lỗi cú pháp PEM!${C_RESET}"
+      echo -e "${C_YELLOW}Hệ thống đã chặn việc ghi vào Vhost để bảo vệ OpenLiteSpeed không bị lỗi.${C_RESET}\n"
+    fi
+  fi
+fi
+
+# ==============================================================================
+# HƯỚNG DẪN UPLOAD FILE QUA SFTP / QUẢN LÝ FILE (UX BO CONG)
+# ==============================================================================
+if _verify_key_cert_match "$key_file" "$cert_file"; then
+  task_apply_existing="Thiết lập cấu hình SSL trả phí Vhost"
+  _runing "$task_apply_existing"
+  _apply_paid_vhssl_config "$NAME"
+  _rundone "$task_apply_existing"
+fi
+
+echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}KHỞI TẠO KHÔNG GIAN SSL HOÀN TẤT - BƯỚC TIẾP THEO${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Khi nhà cung cấp gửi file chứng chỉ, hãy UPLOAD CÁC FILE ĐÓ vào thư mục:" 2
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+center_text "${C_YELLOW}$ssl_dir/${C_RESET}"
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+if [[ "$dongy2" == "y" ]]; then
+  left_text "Yêu cầu upload 2 file (Phải đổi đúng tên như dưới đây):" 2
+  left_text "1. ${C_CYAN}cert.crt${C_RESET}        (File chứng chỉ SSL của tên miền)" 4
+  left_text "2. ${C_CYAN}ca_bundle.crt${C_RESET}  (File chứng chỉ CA trung gian / Chain)" 4
+else
+  left_text "Yêu cầu upload 3 file (Phải đổi đúng tên như dưới đây):" 2
+  left_text "1. ${C_CYAN}$NAME.key${C_RESET}      (File Private Key của bạn)" 4
+  left_text "2. ${C_CYAN}cert.crt${C_RESET}        (File chứng chỉ SSL của tên miền)" 4
+  left_text "3. ${C_CYAN}ca_bundle.crt${C_RESET}  (File chứng chỉ CA trung gian / Chain)" 4
+fi
+
+echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "${C_YELLOW}SAU KHI UPLOAD XONG, HÃY CHẠY LỆNH NÀY NGOÀI TERMINAL ĐỂ KÍCH HOẠT:${C_RESET}" 2
+center_text "${C_GREEN}wptt ssl-tra-phi-config -d $NAME${C_RESET}"
+echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+
+wptt_quay_ve_menu "$route_arg" 0 "enter"
