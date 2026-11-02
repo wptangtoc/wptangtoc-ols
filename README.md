@@ -123,6 +123,13 @@
 <a href="https://semgrep.dev/">Semgrep (SAST)</a>
 </p>
 
+
+<h2>🛡️ Sẵn sàng Kháng Lượng Tử (Post-Quantum Cryptography - PQC Ready)</h2>
+WPTangToc OLS tự hào là một trong những script quản trị máy chủ đi tiên phong trong việc tích hợp và mặc định kích hoạt tiêu chuẩn bảo mật của tương lai, bảo vệ hệ thống khỏi các cuộc tấn công giải mã từ siêu máy tính lượng tử (Store Now, Decrypt Later):
+
+*   **Bảo mật Web (HTTPS):** Tích hợp sẵn core OpenLiteSpeed với thư viện BoringSSL mới nhất, tự động kích hoạt cơ chế đàm phán khóa lai hậu lượng tử (Hybrid Post-Quantum Key Exchange - thuật toán Kyber / ML-KEM).
+*   **Bảo mật Kết nối (SSH):** Cấu hình SSH Hardening áp dụng các thuật toán trao đổi khóa kháng lượng tử hiện đại nhất (như `mlkem768x25519 và sntrup761x25519`), đảm bảo đường truyền quản trị tới máy chủ không thể bị bẻ khóa trong tương lai.
+
 <hr>
 
 <h2>🤝 Ủng hộ tác giả (Donate)</h2>
