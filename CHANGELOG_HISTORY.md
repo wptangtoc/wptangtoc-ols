@@ -1,3 +1,17 @@
+# WPTangToc OLS 8.3.4
+
+🚀 **Tính năng mới**
+- **Tự động gia hạn chứng chỉ SSL trả phí:** Bổ sung tính năng tự động hóa hoàn toàn quy trình gia hạn chứng chỉ SSL trả phí, giúp quản trị viên loại bỏ hoàn toàn rủi ro gián đoạn dịch vụ website do hết hạn chứng chỉ.
+
+🛠️ **Tối ưu hệ thống**
+- **Nâng cao bảo mật và trải nghiệm SSH kháng lượng tử:** Tinh chỉnh và tối ưu hóa sâu cơ chế mã hóa SSH chống lượng tử, gia tăng cường độ bảo mật tuyệt đối trước các nguy cơ công nghệ tương lai đồng thời cải thiện mượt mà trải nghiệm tương tác (UX) cho quản trị viên khi kết nối máy chủ từ xa.
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.3.3
 
 🚀 **Tính năng mới**
