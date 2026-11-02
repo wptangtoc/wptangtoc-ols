@@ -1,9 +1,73 @@
 #!/bin/bash
-#find tim file được tạo và sửa đổi dưới 1640 phút (bằng 27,3 tiếng, đợi vòng cron ssl khoảng 0 giờ và 12 giờ gia hạn ssl) và kiểm tra phải đáp ứng được điều kiện trong 27,3 chưa có lần nào reset -newer /usr/local/lsws/cgid -print -quit
-# Tìm file SSL (.pem) được sửa đổi trong 1640 phút và mới hơn lần OLS reload cuối cùng
-if [[ -n $(find /etc/letsencrypt/archive -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
-    # Reload cơ chế "vừa chạy vừa thay lốp" (Zero Downtime)
-	. /etc/wptt/core-functions 2>/dev/null
-	wptt_logs "INFO" "Gia hạn tự động ssl letsencrypt"
-	wptt_smart_reload_lsws >/dev/null 2>&1
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Tự động kiểm tra chứng chỉ SSL mới (Let's Encrypt & Paid SSL) và nạp lại OpenLiteSpeed
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+# ==============================================================================
+# 1. ĐỒNG BỘ DỰ PHÒNG CHO SSL TRẢ PHÍ TỰ ĐỘNG (NẾU CÓ CÀI ĐẶT)
+# ==============================================================================
+# Đặt trước để dù nhánh Let's Encrypt hay nhánh Paid SSL kích hoạt reload thì
+# file chứng chỉ trả phí mới nhất cũng đã nằm sẵn trong /usr/local/lsws/*/ssl/
+if [[ -f /etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh ]]; then
+  shopt -s nullglob
+  for paid_live_dir in /etc/letsencrypt/live/*-paid; do
+    [[ -d "$paid_live_dir" ]] || continue
+
+    cert_folder_name="${paid_live_dir##*/}"
+    domain_name="${cert_folder_name%-paid}"
+    target_ssl_dir="/usr/local/lsws/${domain_name}/ssl"
+
+    if [[ -d "/usr/local/lsws/${domain_name}" && -f "${paid_live_dir}/cert.pem" ]]; then
+      if [[ ! -f "${target_ssl_dir}/cert.crt" || "${paid_live_dir}/cert.pem" -nt "${target_ssl_dir}/cert.crt" ]]; then
+        /bin/mkdir -p -- "$target_ssl_dir"
+        old_umask=$(umask)
+        umask 077
+        [[ -f "${paid_live_dir}/privkey.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/privkey.pem" "${target_ssl_dir}/${domain_name}.key"
+        [[ -f "${paid_live_dir}/cert.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/cert.pem" "${target_ssl_dir}/cert.crt"
+        [[ -f "${paid_live_dir}/chain.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/chain.pem" "${target_ssl_dir}/ca_bundle.crt"
+        [[ -f "${paid_live_dir}/fullchain.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/fullchain.pem" "${target_ssl_dir}/fullchain.pem"
+        umask "$old_umask"
+
+        /bin/chmod 600 -- "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
+        /bin/chmod 644 -- "${target_ssl_dir}/cert.crt" "${target_ssl_dir}/ca_bundle.crt" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
+      fi
+    fi
+  done
+  shopt -u nullglob
+fi
+
+# ==============================================================================
+# 2. KIỂM TRA SSL LET'S ENCRYPT MỚI TRONG 1640 PHÚT (27.3 TIẾNG)
+# ==============================================================================
+# Tìm file SSL (.pem) được sửa đổi trong 1640 phút và mới hơn lần OLS reload cuối cùng (/usr/local/lsws/cgid)
+if [[ -d /etc/letsencrypt/archive ]] && [[ -n $(find /etc/letsencrypt/archive -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
+  # Reload cơ chế "vừa chạy vừa thay lốp" (Zero-Downtime)
+  # shellcheck source=/dev/null
+  . /etc/wptt/core-functions 2>/dev/null || true
+  wptt_logs "INFO" "Gia hạn tự động SSL Let's Encrypt"
+  wptt_smart_reload_lsws >/dev/null 2>&1
+  exit 0
+fi
+
+# ==============================================================================
+# 3. KIỂM TRA SSL TRẢ PHÍ MỚI TRONG /usr/local/lsws/*/ssl/
+# ==============================================================================
+if [[ -f /etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh ]]; then
+  shopt -s nullglob
+  paid_ssl_dirs=(/usr/local/lsws/*/ssl)
+  shopt -u nullglob
+
+  if ((${#paid_ssl_dirs[@]} > 0)) && [[ -n $(find "${paid_ssl_dirs[@]}" -maxdepth 1 -type f \( -name "*.crt" -o -name "*.pem" -o -name "*.key" \) -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
+    # shellcheck source=/dev/null
+    . /etc/wptt/core-functions 2>/dev/null || true
+    wptt_logs "INFO" "Gia hạn tự động SSL trả phí"
+    wptt_smart_reload_lsws >/dev/null 2>&1
+    exit 0
+  fi
 fi
