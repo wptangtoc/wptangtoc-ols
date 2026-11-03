@@ -12,7 +12,6 @@ umask 022
 # shellcheck source=/dev/null
 [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
 
-# Tự động định vị file thực thi wptt-htaccess-sync
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYNC_BIN="/etc/wptt/wptt-htaccess-sync"
 if [[ ! -f "$SYNC_BIN" && -f "${SCRIPT_DIR}/wptt-htaccess-sync" ]]; then
@@ -39,13 +38,11 @@ for html_dir in /usr/local/lsws/*/html; do
 done
 shopt -u nullglob
 
-# Nếu chưa có website nào trên máy chủ, nghỉ chờ để không tốn CPU
 if ((${#WATCH_DIRS[@]} == 0)) || { ((${#WATCH_DIRS[@]} == 1)) && [[ "${WATCH_DIRS[0]}" == "/etc/wptt/vhost" ]]; }; then
   sleep 60
   exit 0
 fi
 
-# Đảm bảo dọn sạch tiến trình con inotifywait khi Systemd dừng hoặc khởi động lại dịch vụ
 INOTIFY_PID=""
 cleanup_watcher() {
   trap - EXIT INT TERM HUP
@@ -55,26 +52,22 @@ trap cleanup_watcher EXIT INT TERM HUP
 
 declare -A PENDING_DOMAINS=()
 
-# Hàm kiểm tra xem có Vhost mới hoặc thư mục wp-content/uploads mới xuất hiện không
 _check_topology_change() {
   local path="$1"
   local evt="$2"
   local base_name="${path##*/}"
 
-  # Nếu thêm/xóa file cấu hình Vhost -> Thoát để Systemd tự động Restart nạp lại danh sách WATCH_DIRS
   if [[ "$path" == /etc/wptt/vhost/.*.conf ]]; then
     sleep 1
     exit 0
   fi
 
-  # Nếu thư mục wp-content hoặc uploads vừa được tạo mới (khi cài WP hoặc giải nén code)
   if [[ "$evt" == *"ISDIR"* ]] && [[ "$base_name" == "wp-content" || "$base_name" == "uploads" ]]; then
     sleep 1
     exit 0
   fi
 }
 
-# Hàm xác thực 3 lớp khiên và đưa domain vào hàng đợi xử lý
 _queue_htaccess_event() {
   local raw_path="$1"
   local evt="$2"
@@ -82,7 +75,6 @@ _queue_htaccess_event() {
 
   [[ "${raw_path##*/}" == ".htaccess" ]] || return 0
 
-  # LỚP KHIÊN 1: Realpath bóc trần đường dẫn thật (Hỗ trợ cả khi file .htaccess vừa bị DELETE)
   if [[ -e "$raw_path" ]]; then
     resolved_path="$(realpath -q "$raw_path" 2>/dev/null || true)"
   else
@@ -91,11 +83,9 @@ _queue_htaccess_event() {
   fi
   [[ -z "$resolved_path" ]] && resolved_path="$raw_path"
 
-  # LỚP KHIÊN 2: Strict Domain Validation bằng Regex thuần Bash
   if [[ "$resolved_path" =~ ^/usr/local/lsws/([a-zA-Z0-9._-]+)/html/ ]]; then
     domain="${BASH_REMATCH[1]}"
 
-    # LỚP KHIÊN 3: Domain ↔ Vhost Mapping (Xác thực domain có Vhost thật và không chứa ..)
     if [[ -n "$domain" && "$domain" != -* && "$domain" != *..* ]]; then
       if [[ -f "/etc/wptt/vhost/.${domain}.conf" || -f "/usr/local/lsws/conf/vhosts/${domain}/${domain}.conf" ]]; then
         PENDING_DOMAINS["$domain"]=1
@@ -106,7 +96,7 @@ _queue_htaccess_event() {
 
 # 3. Đồng bộ khởi tạo 1 lần khi dịch vụ Watcher bắt đầu khởi chạy
 if [[ -f "$SYNC_BIN" ]]; then
-  /bin/bash "$SYNC_BIN" --all >/dev/null 2>&1 || true
+  /bin/bash "$SYNC_BIN" --all --quiet >/dev/null 2>&1 || true
 fi
 
 # 4. Lắng nghe sự kiện Kernel (Định dạng: EVENT|PATH)
@@ -120,31 +110,33 @@ while IFS='|' read -r -u 3 event_type raw_filepath; do
     PENDING_DOMAINS=()
     _queue_htaccess_event "$raw_filepath" "$event_type"
 
-    # LỚP KHIÊN 5 (DEBOUNCE COALESCING CHUẨN):
-    # Chờ 0.5s để gom toàn bộ chuỗi ghi liên tiếp từ Plugin (WP Rocket, Wordfence, LSCache...)
     while IFS='|' read -r -u 3 -t 0.5 next_event next_filepath; do
       _check_topology_change "$next_filepath" "$next_event"
       _queue_htaccess_event "$next_filepath" "$next_event"
     done
 
-    # Thực thi sau khi cơn bão ghi file đã hoàn tất 100%
     if ((${#PENDING_DOMAINS[@]} > 0)); then
-      # BƯỚC A: Biên dịch tự động các chỉ thị Apache (IP Deny/Allow, Header, PHP, Expires, ErrorDocument) sang Vhost
-      if [[ -f "$SYNC_BIN" ]]; then
-        /bin/bash "$SYNC_BIN" --no-reload "${!PENDING_DOMAINS[@]}" >/dev/null 2>&1 || true
+      # BƯỚC A: Nếu đang bật chế độ tắt .htaccess chuyển sang Vhost, cập nhật khung context / trước
+      if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
+        for target_domain in "${!PENDING_DOMAINS[@]}"; do
+          if [[ -f "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" ]]; then
+            /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$target_domain" --no-reload >/dev/null 2>&1 || true
+          elif [[ -f "/etc/wptt/vhost/wptt-tat-htaccees-chuyen-vhosts" ]]; then
+            /bin/bash "/etc/wptt/vhost/wptt-tat-htaccees-chuyen-vhosts" "$target_domain" --no-reload >/dev/null 2>&1 || true
+          fi
+        done
       fi
 
-      # BƯỚC B: Xử lý chế độ Htaccess Cache hoặc Reload OpenLiteSpeed đúng 1 lần duy nhất
-      if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" && -f "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" ]]; then
-        for target_domain in "${!PENDING_DOMAINS[@]}"; do
-          /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$target_domain" >/dev/null 2>&1 || true
-        done
+      # BƯỚC B: Chạy wptt-htaccess-sync để biên dịch Redirect, Header, PHP, IP Deny/Allow, Expires vào Vhost
+      if [[ -f "$SYNC_BIN" ]]; then
+        /bin/bash "$SYNC_BIN" --no-reload --quiet "${!PENDING_DOMAINS[@]}" >/dev/null 2>&1 || true
+      fi
+
+      # BƯỚC C: Reload OpenLiteSpeed đúng 1 lần duy nhất cho cả đợt thay đổi
+      if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+        wptt_smart_reload_lsws >/dev/null 2>&1 || true
       else
-        if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
-          wptt_smart_reload_lsws >/dev/null 2>&1 || true
-        else
-          /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
-        fi
+        /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
       fi
     fi
   fi

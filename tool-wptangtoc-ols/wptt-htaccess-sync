@@ -10,7 +10,6 @@ export LC_ALL=en_US.UTF-8
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 umask 022
 
-# Khôi phục IFS chuẩn phòng trường hợp thư viện ngoài làm biến đổi
 IFS=$' \t\n'
 
 tmp_dir=""
@@ -91,6 +90,7 @@ _compile_htaccess_to_ols_block() {
     gsub(/[\r\000-\037]/, "", s)
     gsub(/[{}]/, "", s)
     gsub(/END_extraHeaders/, "", s)
+    gsub(/END_rules/, "", s)
     return trim(s)
   }
   function add_warn(level, msg,    key) {
@@ -103,7 +103,7 @@ _compile_htaccess_to_ols_block() {
   function is_valid_ip_token(ip) {
     ip = tolower(trim(ip))
     if (ip == "all") return 1
-    if (ip ~ /^[0-9.\/]+T?$/) return 1
+    if (ip ~ /^[0-9.*\/]+T?$/) return 1
     if (ip ~ /^[0-9a-f:\/]+T?$/) return 1
     return 0
   }
@@ -120,6 +120,35 @@ _compile_htaccess_to_ols_block() {
       else out = out c
     }
     return out
+  }
+  function convert_redirect_to_rewriterule(kw, rcode, rsrc, rdst, is_rmatch,    clean_src, esc_src, clean_dst) {
+    if (rsrc == "") return ""
+    if (is_rmatch) {
+      clean_src = rsrc
+      sub(/^\^\/?/, "^/?", clean_src)
+      if (rcode == "410") return "RewriteRule " clean_src " - [G,L]"
+      if (rdst != "")     return "RewriteRule " clean_src " " rdst " [R=" rcode ",L]"
+      return ""
+    }
+    sub(/^\/+/, "", rsrc)
+    sub(/\/+$/, "", rsrc)
+    if (rsrc == "") {
+      if (rcode == "410") return "RewriteRule ^/?(.*)$ - [G,L]"
+      if (rdst != "") {
+        clean_dst = rdst
+        sub(/\/+$/, "", clean_dst)
+        return "RewriteRule ^/?(.*)$ " clean_dst "/$1 [R=" rcode ",L]"
+      }
+      return ""
+    }
+    esc_src = glob_to_regex(rsrc)
+    if (rcode == "410") return "RewriteRule ^/?" esc_src "(/.*)?$ - [G,L]"
+    if (rdst != "") {
+      clean_dst = rdst
+      sub(/\/+$/, "", clean_dst)
+      return "RewriteRule ^/?" esc_src "(/.*)?$ " clean_dst "$1 [R=" rcode ",L]"
+    }
+    return ""
   }
   function parse_apache_expires(spec,    s, prefix, total, n, i, num, unit, parts) {
     s = tolower(unquote(spec))
@@ -149,7 +178,6 @@ _compile_htaccess_to_ols_block() {
   BEGIN {
     hrs_open = "\074\074\074END_extraHeaders"
 
-    # Whitelist các chỉ thị PHP an toàn được phép override từ .htaccess
     safe_php["memory_limit"] = 1
     safe_php["upload_max_filesize"] = 1
     safe_php["post_max_size"] = 1
@@ -182,7 +210,6 @@ _compile_htaccess_to_ols_block() {
     safe_php["pcre.backtrack_limit"] = 1
     safe_php["pcre.recursion_limit"] = 1
 
-    # Danh sách đen PHP nguy hiểm (Phá vỡ cô lập Multi-tenant nếu cho phép)
     dangerous_php["allow_url_include"] = 1
     dangerous_php["open_basedir"] = 1
     dangerous_php["disable_functions"] = 1
@@ -228,9 +255,6 @@ _compile_htaccess_to_ols_block() {
     cur_files_hdr_count = 0
   }
 
-  # ============================================================================
-  # PHÂN TÍCH .HTACCESS TRONG THƯ MỤC CON (/wp-content/ & /wp-content/uploads/)
-  # ============================================================================
   FILENAME == ht_wpcontent || FILENAME == ht_uploads {
     gsub(/\xc2\xa0/, " ", $0)
     sub_line = sanitize_ols_val($0)
@@ -244,15 +268,11 @@ _compile_htaccess_to_ols_block() {
     next
   }
 
-  # ============================================================================
-  # PHÂN TÍCH FILE /html/.htaccess CHÍNH
-  # ============================================================================
   FILENAME == ht_root {
     gsub(/\xc2\xa0/, " ", $0)
     raw_line = trim($0)
     if (raw_line == "" || raw_line ~ /^#/) next
 
-    # A. BẮT ĐẦU HOẶC KẾT THÚC KHỐI <Files ...> / <FilesMatch ...>
     if (raw_line ~ /^<[Ff]iles([Mm]atch)?[ \t]+/) {
       in_files_block++
       if (in_files_block == 1) {
@@ -300,7 +320,6 @@ _compile_htaccess_to_ols_block() {
       next
     }
 
-    # Xử lý câu lệnh bên trong <Files> / <FilesMatch>
     if (in_files_block > 0) {
       fline = sanitize_ols_val(raw_line)
       if (fline == "" || fline ~ /^<\/?[A-Za-z]/) next
@@ -337,7 +356,6 @@ _compile_htaccess_to_ols_block() {
       next
     }
 
-    # Bỏ qua các thẻ đóng/mở <IfModule ...>, <Limit ...>
     if (raw_line ~ /^<\/?[A-Za-z]/) next
 
     line = sanitize_ols_val(raw_line)
@@ -346,7 +364,6 @@ _compile_htaccess_to_ols_block() {
     ntok = split(line, tok, /[ \t]+/)
     kw = tolower(tok[1])
 
-    # 0. PHÁT HIỆN & CẢNH BÁO CÁC CHỈ THỊ BẢO VỆ MẬT KHẨU / KHÔNG HỖ TRỢ TRỰC TIẾP
     if (kw ~ /^(authtype|authname|authuserfile|authgroupfile)$/) {
       add_warn("SECURITY-CRITICAL", "Phát hiện \"" tok[1] "\" (Bảo vệ mật khẩu HTTP Basic/Digest). OpenLiteSpeed KHÔNG đọc AuthType từ .htaccess! Vui lòng cấu hình Realm trong Vhost để tránh lộ khu vực nhạy cảm.")
       next
@@ -366,7 +383,7 @@ _compile_htaccess_to_ols_block() {
 
     if (ntok < 2) next
 
-    # 1. XỬ LÝ PHP OVERRIDE: php_value, php_flag, php_admin_value, php_admin_flag
+    # 1. XỬ LÝ PHP OVERRIDE
     if (kw ~ /^php_(admin_)?(value|flag)$/) {
       setting = tolower(tok[2])
       if (setting in dangerous_php) {
@@ -399,7 +416,7 @@ _compile_htaccess_to_ols_block() {
       next
     }
 
-    # 2. XỬ LÝ ORDER / DENY / ALLOW / REQUIRE (CHUẨN APACHE 2.2 & 2.4)
+    # 2. XỬ LÝ ORDER / DENY / ALLOW / REQUIRE
     if (kw == "order") {
       ord_str = tolower(line)
       sub(/^[ \t]*order[ \t]+/, "", ord_str)
@@ -476,7 +493,7 @@ _compile_htaccess_to_ols_block() {
       next
     }
 
-    # 3. XỬ LÝ HEADER [always] set|append|add|merge|unset
+    # 3. XỬ LÝ HEADER
     if (kw == "header") {
       rest = line
       sub(/^[ \t]*[Hh]eader[ \t]+/, "", rest)
@@ -515,7 +532,7 @@ _compile_htaccess_to_ols_block() {
       next
     }
 
-    # 4. XỬ LÝ EXPIRES (ExpiresActive, ExpiresDefault, ExpiresByType)
+    # 4. XỬ LÝ EXPIRES
     if (kw == "expiresactive") {
       act = tolower(unquote(tok[2]))
       if (act == "on" || act == "1") exp_active = "1"
@@ -549,7 +566,7 @@ _compile_htaccess_to_ols_block() {
       next
     }
 
-    # 5. XỬ LÝ ERRORDOCUMENT <code 400-599> <url_path>
+    # 5. XỬ LÝ ERRORDOCUMENT
     if (kw == "errordocument" && ntok >= 3) {
       ecode = tok[2]
       eurl = unquote(tok[3])
@@ -590,24 +607,9 @@ _compile_htaccess_to_ols_block() {
         }
       }
 
-      if (rsrc != "") {
-        if (is_rmatch) {
-          clean_src = rsrc
-          sub(/^\^\/?/, "^/?", clean_src)
-          if (rcode == "410") {
-            rw_list[++rw_count] = "RewriteRule " clean_src " - [G,L]"
-          } else if (rdst != "") {
-            rw_list[++rw_count] = "RewriteRule " clean_src " " rdst " [R=" rcode ",L]"
-          }
-        } else {
-          sub(/^\/+/, "", rsrc)
-          esc_src = glob_to_regex(rsrc)
-          if (rcode == "410") {
-            rw_list[++rw_count] = "RewriteRule ^/?" esc_src "(/.*)?$ - [G,L]"
-          } else if (rdst != "") {
-            rw_list[++rw_count] = "RewriteRule ^/?" esc_src "(/.*)?$ " rdst "$1 [R=" rcode ",L]"
-          }
-        }
+      rw_rule = convert_redirect_to_rewriterule(kw, rcode, rsrc, rdst, is_rmatch)
+      if (rw_rule != "") {
+        rw_list[++rw_count] = rw_rule
       }
       next
     }
@@ -752,7 +754,7 @@ _compile_htaccess_to_ols_block() {
 }
 
 # ==============================================================================
-# CHÈN HEADER VÀ REDIRECT (.HTACCESS) VÀO context / CÓ SẴN (KHÔNG TẠO context / THỨ 2)
+# CHÈN HEADER VÀ REDIRECT (.HTACCESS) VÀO context / CÓ SẴN
 # ==============================================================================
 _merge_headers_and_rewrites_into_root_context() {
   local conf="$1" new_hdr="$2" old_hdr="$3" applied_out="$4" rw_file="$5" domain="$6"
@@ -776,19 +778,27 @@ _merge_headers_and_rewrites_into_root_context() {
         print h > applied_out
       }
     }
-    function emit_new_rewrites(    i) {
+    function emit_sync_rw_lines(    i) {
+      if (nrw > 0) {
+        print "# BEGIN_WPTT_SYNC_RW"
+        for (i = 1; i <= nrw; i++) {
+          print rwl[i]
+        }
+        print "# END_WPTT_SYNC_RW"
+      }
+    }
+    function emit_full_rules_block() {
       if (nrw > 0) {
         if (!rw_has_enable)  print "    enable                1"
         if (!rw_has_inherit) print "    inherit               1"
-        print "    # BEGIN_WPTT_SYNC_RW"
-        for (i = 1; i <= nrw; i++) {
-          print "    " rwl[i]
-        }
-        print "    # END_WPTT_SYNC_RW"
+        print "    rules                 " rules_open
+        emit_sync_rw_lines()
+        print "    END_rules"
       }
     }
     BEGIN {
       hrs_open = "\074\074\074END_extraHeaders"
+      rules_open = "\074\074\074END_rules"
       nnew = 0
       while ((getline l < new_hdr) > 0) { l = trim(l); if (l != "") newh[++nnew] = l }
       close(new_hdr)
@@ -797,7 +807,7 @@ _merge_headers_and_rewrites_into_root_context() {
       nrw = 0
       while ((getline l < rw_file) > 0) { l = trim(l); if (l != "") rwl[++nrw] = l }
       close(rw_file)
-      state = 0; done = 0; has_eh = 0; has_rw = 0; skip_sync_rw = 0
+      state = 0; done = 0; has_eh = 0; has_rw = 0; has_rules = 0; skip_sync_rw = 0
     }
     state == 0 && done == 0 && /^context[ \t]+\/[ \t]*\{[ \t]*$/ {
       state = 1; has_eh = 0; has_rw = 0; print; next
@@ -813,7 +823,25 @@ _merge_headers_and_rewrites_into_root_context() {
       print; next
     }
     state == 1 && /^[ \t]*rewrite[ \t]*\{[ \t]*$/ {
-      state = 3; has_rw = 1; rw_has_enable = 0; rw_has_inherit = 0; skip_sync_rw = 0
+      state = 3; has_rw = 1; has_rules = 0; rw_has_enable = 0; rw_has_inherit = 0; skip_sync_rw = 0
+      print; next
+    }
+    state == 3 && index($0, "rules") > 0 && index($0, "END_rules") > 0 {
+      state = 4; has_rules = 1; skip_sync_rw = 0
+      print
+      emit_sync_rw_lines()
+      next
+    }
+    state == 4 {
+      t = trim($0)
+      if (t == "# BEGIN_WPTT_SYNC_RW") { skip_sync_rw = 1; next }
+      if (t == "# END_WPTT_SYNC_RW")   { skip_sync_rw = 0; next }
+      if (skip_sync_rw) next
+      if (t == "END_rules") {
+        state = 3
+        print
+        next
+      }
       print; next
     }
     state == 3 {
@@ -824,7 +852,9 @@ _merge_headers_and_rewrites_into_root_context() {
       if (tolower(t) ~ /^enable[ \t]+/)  rw_has_enable = 1
       if (tolower(t) ~ /^inherit[ \t]+/) rw_has_inherit = 1
       if (t == "}") {
-        emit_new_rewrites()
+        if (!has_rules && nrw > 0) {
+          emit_full_rules_block()
+        }
         state = 1
         print
         next
@@ -840,7 +870,7 @@ _merge_headers_and_rewrites_into_root_context() {
       if (!has_rw && nrw > 0) {
         print "  rewrite  {"
         rw_has_enable = 0; rw_has_inherit = 0
-        emit_new_rewrites()
+        emit_full_rules_block()
         print "  }"
       }
       state = 0; done = 1; print; next
@@ -860,7 +890,7 @@ _merge_headers_and_rewrites_into_root_context() {
         if (nrw > 0) {
           print "  rewrite  {"
           rw_has_enable = 0; rw_has_inherit = 0
-          emit_new_rewrites()
+          emit_full_rules_block()
           print "  }"
         }
         print "}"
@@ -880,20 +910,19 @@ _apply_metadata_to_vhost() {
   while IFS='=' read -r key val; do
     [[ -z "$key" || -z "$val" ]] && continue
     case "$key" in
-      autoIndex)
-        sed -i "s/^\([[:space:]]*autoIndex[[:space:]]*\)[0-9]\+/\1${val}/" "$conf" 2>/dev/null || true
-        ;;
-      indexFiles)
-        sed -i "s/^\([[:space:]]*indexFiles[[:space:]]*\).*$/\1${val}/" "$conf" 2>/dev/null || true
-        ;;
-      addDefaultCharset)
-        sed -i "s/^\([[:space:]]*addDefaultCharset[[:space:]]*\)[a-zA-Z]\+/\1${val}/" "$conf" 2>/dev/null || true
-        ;;
+    autoIndex)
+      sed -i "s/^\([[:space:]]*autoIndex[[:space:]]*\)[0-9]\+/\1${val}/" "$conf" 2>/dev/null || true
+      ;;
+    indexFiles)
+      sed -i "s/^\([[:space:]]*indexFiles[[:space:]]*\).*$/\1${val}/" "$conf" 2>/dev/null || true
+      ;;
+    addDefaultCharset)
+      sed -i "s/^\([[:space:]]*addDefaultCharset[[:space:]]*\)[a-zA-Z]\+/\1${val}/" "$conf" 2>/dev/null || true
+      ;;
     esac
   done <"$meta_file"
 }
 
-# Cảnh báo khi vhost đã có sẵn khối cùng loại ngoài vùng WPTT_HTACCESS_SYNC
 _warn_duplicate_blocks() {
   local base_conf="$1" block_file="$2" domain="$3" key="" pat=""
   [[ -s "$block_file" ]] || return 0
@@ -919,7 +948,6 @@ _warn_duplicate_blocks() {
   ' "$block_file")
 }
 
-# Lưu trạng thái để lần sau chạy idempotent và phục vụ wptt-htaccess-tat-chuyen-vhosts
 _persist_sync_state() {
   local applied_hdr="$1" hdr_state="$2" rw_src="$3" rw_state="$4"
   /bin/cat -- "$applied_hdr" >"$hdr_state" 2>/dev/null && /bin/chmod 600 "$hdr_state" 2>/dev/null || true
@@ -955,7 +983,7 @@ _sync_single_domain() {
 
   local block_file="${tmp_dir}/${domain}.block"
   local candidate_conf="${tmp_dir}/${domain}.conf"
-  local atomic_stage="/usr/local/lsws/conf/vhosts/${domain}/.${domain}.conf.wptt_tmp_$$"
+  local atomic_stage="/usr/local/lsws/conf/vhosts/${domain}/.${domain}.conf.wptt_tmp_${BASHPID:-$$}"
   local state_dir="/etc/wptt/htaccess_sync"
   local hdr_state="${state_dir}/${domain}.headers"
   local rw_state="${state_dir}/${domain}.rewrite_extra"
@@ -970,11 +998,8 @@ _sync_single_domain() {
   /bin/chmod 700 "$state_dir" 2>/dev/null || true
   [[ -f "$hdr_state" ]] && hdr_old_src="$hdr_state"
 
-  # 1. Biên dịch các chỉ thị từ .htaccess ra file tạm
   _compile_htaccess_to_ols_block "$domain" "$hdr_new" "$rw_new" "$meta_new" "$warn_new" >"$block_file"
-  _debug_log "Dung lượng block_file của $domain: $(wc -c <"$block_file" 2>/dev/null || echo 0) bytes"
 
-  # 1b. Xuất cảnh báo bảo mật / tương thích nếu phát hiện AuthType, PHP nguy hiểm...
   if [[ -s "$warn_new" ]]; then
     local wline=""
     while IFS= read -r wline; do
@@ -988,8 +1013,6 @@ _sync_single_domain() {
     done <"$warn_new"
   fi
 
-  # 2. Loại bỏ khối # BEGIN WPTT_HTACCESS_SYNC ... # END WPTT_HTACCESS_SYNC cũ trong Vhost
-  #    Đồng thời xóa các khối phpIniOverride {} rỗng (kể cả rỗng nhiều dòng) bên trong context /
   awk '
     /^# BEGIN WPTT_HTACCESS_SYNC$/ { skip = 1; next }
     /^# END WPTT_HTACCESS_SYNC$/   { skip = 0; next }
@@ -1015,28 +1038,23 @@ _sync_single_domain() {
     }
   ' "$vhost_conf" >"$candidate_conf"
 
-  # 2b. Chèn Header và Redirect/RedirectMatch vào context / có sẵn
   : >"$hdr_applied"
   _merge_headers_and_rewrites_into_root_context "$candidate_conf" "$hdr_new" "$hdr_old_src" "$hdr_applied" "$rw_new" "$domain"
   _warn_duplicate_blocks "$candidate_conf" "$block_file" "$domain"
 
-  # 3. Đồng bộ Options -Indexes / +Indexes, DirectoryIndex, AddDefaultCharset
   _apply_metadata_to_vhost "$candidate_conf" "$meta_new"
 
-  # 4. Nối khối block mới vào cuối file Vhost tạm
   if [[ -s "$block_file" ]]; then
     printf '\n' >>"$candidate_conf"
     /bin/cat -- "$block_file" >>"$candidate_conf"
   fi
 
-  # 5. So sánh nhị phân: Nếu không có gì thay đổi thì thoát nhanh
   if cmp -s "$vhost_conf" "$candidate_conf" 2>/dev/null; then
     _debug_log "File Vhost của $domain đã đồng bộ sẵn, không cần ghi lại."
     _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state"
     return 2
   fi
 
-  # 6. Thay thế nguyên tử ngay trên cùng thư mục của Vhost (Đảm bảo cùng Filesystem 100% cho mv -fT)
   /bin/cp -fp -- "$vhost_conf" "${vhost_conf}.wptt_sync.bak" 2>/dev/null || true
   /bin/cp -fp -- "$vhost_conf" "$atomic_stage" 2>/dev/null || true
   /bin/cat -- "$candidate_conf" >"$atomic_stage"
@@ -1064,28 +1082,28 @@ main() {
 
   for arg in "$@"; do
     case "$arg" in
-      --debug | -v)
-        DEBUG_MODE=1
-        ;;
-      --quiet | -q)
-        QUIET_WARN=1
-        ;;
-      --no-reload)
-        no_reload=1
-        ;;
-      --all | -a)
-        shopt -s nullglob
-        local vh_dir="" dname=""
-        for vh_dir in /usr/local/lsws/conf/vhosts/*; do
-          [[ -d "$vh_dir" ]] || continue
-          dname="${vh_dir##*/}"
-          [[ -f "${vh_dir}/${dname}.conf" ]] && targets+=("$dname")
-        done
-        shopt -u nullglob
-        ;;
-      *)
-        targets+=("$arg")
-        ;;
+    --debug | -v)
+      DEBUG_MODE=1
+      ;;
+    --quiet | -q)
+      QUIET_WARN=1
+      ;;
+    --no-reload)
+      no_reload=1
+      ;;
+    --all | -a)
+      shopt -s nullglob
+      local vh_dir="" dname=""
+      for vh_dir in /usr/local/lsws/conf/vhosts/*; do
+        [[ -d "$vh_dir" ]] || continue
+        dname="${vh_dir##*/}"
+        [[ -f "${vh_dir}/${dname}.conf" ]] && targets+=("$dname")
+      done
+      shopt -u nullglob
+      ;;
+    *)
+      targets+=("$arg")
+      ;;
     esac
   done
 
@@ -1101,12 +1119,10 @@ main() {
   fi
 
   local any_changed=0
-  local dom="" rc=0
+  local dom=""
   for dom in "${targets[@]}"; do
     [[ -z "$dom" ]] && continue
-    _sync_single_domain "$dom"
-    rc=$?
-    if ((rc == 0)); then
+    if _sync_single_domain "$dom"; then
       any_changed=1
     fi
   done
