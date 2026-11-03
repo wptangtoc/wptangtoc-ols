@@ -1,0 +1,1376 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+# @description: Trình biên dịch tự động .htaccess (Apache Directives) sang Native OpenLiteSpeed Vhost
+
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+IFS=$' \t\n' # nosemgrep: bash.lang.security.ifs-tampering.ifs-tampering
+
+tmp_dir=""
+DEBUG_MODE=0
+QUIET_WARN=0
+
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]] && /bin/rm -rf -- "${tmp_dir:?}" 2>/dev/null || true
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+_debug_log() {
+  if ((DEBUG_MODE == 1)); then
+    printf '[DEBUG] %s\n' "$*" >&2
+  fi
+}
+
+# ==============================================================================
+# HÀM THU HOẠCH CÁC CHỈ THỊ PHP HỆ THỐNG CÓ SẴN TRONG VHOST (VD: open_basedir)
+# ==============================================================================
+_extract_native_vhost_php_overrides() {
+  local vhost_conf="$1"
+  local state_php="$2"
+  local native_php_out="$3"
+
+  : >"$native_php_out"
+  [[ -f "$vhost_conf" ]] || return 0
+
+  awk -v state_php="$state_php" '
+    function trim(s) {
+      sub(/^[ \t\r\n]+/, "", s)
+      sub(/[ \t\r\n]+$/, "", s)
+      return s
+    }
+    function get_setting_key(line,    n, tok) {
+      n = split(line, tok, /[ \t]+/)
+      if (n >= 2 && tolower(tok[1]) ~ /^php_(admin_)?(value|flag)$/) {
+        return tolower(tok[2])
+      }
+      return ""
+    }
+    BEGIN {
+      while ((getline l < state_php) > 0) {
+        l = trim(l)
+        if (l != "") {
+          k = get_setting_key(l)
+          if (k != "") synced_keys[k] = 1
+          synced_lines[l] = 1
+        }
+      }
+      close(state_php)
+      in_php = 0
+    }
+    /^[ \t]*phpIniOverride[ \t]*\{[ \t]*$/ {
+      in_php = 1
+      next
+    }
+    in_php && /^[ \t]*\}[ \t]*$/ {
+      in_php = 0
+      next
+    }
+    in_php {
+      t = trim($0)
+      if (t == "" || t ~ /^#/) next
+      k = get_setting_key(t)
+      if (k == "open_basedir" || k == "disable_functions" || k == "disable_classes" || !(k in synced_keys)) {
+        if (!(t in seen_native)) {
+          seen_native[t] = 1
+          print t
+        }
+      }
+    }
+  ' "$vhost_conf" >"$native_php_out"
+}
+
+# ==============================================================================
+# HÀM BIÊN DỊCH .HTACCESS SANG NATIVE OLS VHOST BLOCK BẰNG AWK (100% POSIX SAFE)
+# ==============================================================================
+_compile_htaccess_to_ols_block() {
+  local domain="$1"
+  local hdr_out="$2"
+  local rw_out="$3"
+  local meta_out="$4"
+  local warn_out="$5"
+  local php_out="$6"
+  local native_php_in="$7"
+
+  local ht_root="/usr/local/lsws/${domain}/html/.htaccess"
+  local ht_wpcontent="/usr/local/lsws/${domain}/html/wp-content/.htaccess"
+  local ht_uploads="/usr/local/lsws/${domain}/html/wp-content/uploads/.htaccess"
+
+  : >"$hdr_out"
+  : >"$rw_out"
+  : >"$meta_out"
+  : >"$warn_out"
+  : >"$php_out"
+
+  local awk_files=()
+  [[ -f "$ht_root" ]] && awk_files+=("$ht_root")
+  [[ -f "$ht_wpcontent" ]] && awk_files+=("$ht_wpcontent")
+  [[ -f "$ht_uploads" ]] && awk_files+=("$ht_uploads")
+
+  if ((${#awk_files[@]} == 0)); then
+    awk_files+=("/dev/null")
+  fi
+
+  awk \
+    -v domain="$domain" \
+    -v ht_root="$ht_root" \
+    -v ht_wpcontent="$ht_wpcontent" \
+    -v ht_uploads="$ht_uploads" \
+    -v hdr_out="$hdr_out" \
+    -v rw_out="$rw_out" \
+    -v meta_out="$meta_out" \
+    -v warn_out="$warn_out" \
+    -v php_out="$php_out" \
+    -v native_php_in="$native_php_in" '
+  function trim(s) {
+    sub(/^[ \t\r\n]+/, "", s)
+    sub(/[ \t\r\n]+$/, "", s)
+    return s
+  }
+  function unquote(s,    fc, lc) {
+    s = trim(s)
+    if (length(s) >= 2) {
+      fc = substr(s, 1, 1)
+      lc = substr(s, length(s), 1)
+      if ((fc == "\"" && lc == "\"") || (fc == "\x27" && lc == "\x27")) {
+        s = substr(s, 2, length(s) - 2)
+      }
+    }
+    return s
+  }
+  function sanitize_ols_val(s) {
+    gsub(/[\r\000-\037]/, "", s)
+    gsub(/[{}]/, "", s)
+    gsub(/END_extraHeaders/, "", s)
+    gsub(/END_rules/, "", s)
+    return trim(s)
+  }
+  function add_warn(level, msg,    key) {
+    key = level "|" msg
+    if (!(key in warn_seen)) {
+      warn_seen[key] = 1
+      warn_list[++warn_count] = "[" level "] " domain ": " msg
+    }
+  }
+  function is_valid_ip_token(ip) {
+    ip = tolower(trim(ip))
+    if (ip == "all") return 1
+    if (ip ~ /^[0-9.*\/]+T?$/) return 1
+    if (ip ~ /^[0-9a-f:\/]+T?$/) return 1
+    return 0
+  }
+  function glob_to_regex(pat,    out, i, c) {
+    pat = unquote(pat)
+    if (pat ~ /^\^/ || pat ~ /\$$/) return pat
+    out = ""
+    for (i = 1; i <= length(pat); i++) {
+      c = substr(pat, i, 1)
+      if (c == ".") out = out "\\."
+      else if (c == "*") out = out ".*"
+      else if (c == "?") out = out "."
+      else if (c ~ /[+()\[\]{}^$\\|]/) out = out "\\" c
+      else out = out c
+    }
+    return out
+  }
+  # Tách chuỗi có hỗ trợ dấu ngoặc kép (VD: SetEnvIf User-Agent "Mozilla 5.0" var1 var2=val)
+  function split_apache_args(str, out_arr,    n, len, i, c, in_q, q_char, cur) {
+    n = 0
+    cur = ""
+    in_q = 0
+    q_char = ""
+    len = length(str)
+    for (i = 1; i <= len; i++) {
+      c = substr(str, i, 1)
+      if (in_q) {
+        if (c == q_char) {
+          in_q = 0
+        } else {
+          cur = cur c
+        }
+      } else {
+        if (c == "\"" || c == "\x27") {
+          in_q = 1
+          q_char = c
+        } else if (c ~ /[ \t]/) {
+          if (cur != "") {
+            out_arr[++n] = cur
+            cur = ""
+          }
+        } else {
+          cur = cur c
+        }
+      }
+    }
+    if (cur != "") {
+      out_arr[++n] = cur
+    }
+    return n
+  }
+  # Ánh xạ thuộc tính của SetEnvIf sang biến máy chủ của OpenLiteSpeed RewriteCond
+  function map_setenvif_attr(attr,    low) {
+    low = tolower(unquote(attr))
+    if (low == "user-agent" || low == "http_user_agent") return "%{HTTP_USER_AGENT}"
+    if (low == "host" || low == "http_host")             return "%{HTTP_HOST}"
+    if (low == "referer" || low == "http_referer")       return "%{HTTP_REFERER}"
+    if (low == "cookie" || low == "http_cookie")         return "%{HTTP_COOKIE}"
+    if (low == "accept" || low == "http_accept")         return "%{HTTP_ACCEPT}"
+    if (low == "forwarded" || low == "x-forwarded-for")  return "%{HTTP:X-Forwarded-For}"
+    if (low == "x-forwarded-proto")                      return "%{HTTP:X-Forwarded-Proto}"
+    if (low == "remote_addr")                            return "%{REMOTE_ADDR}"
+    if (low == "remote_host")                            return "%{REMOTE_HOST}"
+    if (low == "request_uri")                            return "%{REQUEST_URI}"
+    if (low == "request_method")                         return "%{REQUEST_METHOD}"
+    if (low == "request_filename")                       return "%{REQUEST_FILENAME}"
+    if (low == "query_string")                           return "%{QUERY_STRING}"
+    if (low == "server_protocol")                        return "%{SERVER_PROTOCOL}"
+    if (low == "https")                                  return "%{HTTPS}"
+    if (attr ~ /^[A-Za-z0-9_-]+$/)                       return "%{HTTP:" attr "}"
+    return ""
+  }
+  # Biên dịch danh sách biến gán của SetEnvIf / BrowserMatch thành chuỗi cờ [E=...,E=...]
+  function build_env_flags_from_tokens(arr, start_idx, end_idx,    i, tok, eq_pos, vname, vval, e_str) {
+    e_str = ""
+    for (i = start_idx; i <= end_idx; i++) {
+      tok = unquote(arr[i])
+      if (tok == "" || tok ~ /^#/) break
+      if (tok ~ /^![A-Za-z_][A-Za-z0-9_]*$/) {
+        vname = substr(tok, 2)
+        vval = ""
+      } else if ((eq_pos = index(tok, "=")) > 0) {
+        vname = substr(tok, 1, eq_pos - 1)
+        vval = unquote(substr(tok, eq_pos + 1))
+      } else {
+        vname = tok
+        vval = "1"
+      }
+      if (vname ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && vval !~ /[\], \t]/) {
+        e_str = (e_str == "" ? "E=" vname ":" vval : e_str ",E=" vname ":" vval)
+      }
+    }
+    return e_str
+  }
+  function convert_redirect_to_rewriterule(kw, rcode, rsrc, rdst, is_rmatch,    clean_src, esc_src, clean_dst) {
+    if (rsrc == "") return ""
+    if (is_rmatch) {
+      clean_src = rsrc
+      sub(/^\^\/?/, "^/?", clean_src)
+      if (rcode == "410") return "RewriteRule " clean_src " - [G,L]"
+      if (rdst != "")     return "RewriteRule " clean_src " " rdst " [R=" rcode ",L]"
+      return ""
+    }
+    sub(/^\/+/, "", rsrc)
+    sub(/\/+$/, "", rsrc)
+    if (rsrc == "") {
+      if (rcode == "410") return "RewriteRule ^/?(.*)$ - [G,L]"
+      if (rdst != "") {
+        clean_dst = rdst
+        sub(/\/+$/, "", clean_dst)
+        return "RewriteRule ^/?(.*)$ " clean_dst "/$1 [R=" rcode ",L]"
+      }
+      return ""
+    }
+    esc_src = glob_to_regex(rsrc)
+    if (rcode == "410") return "RewriteRule ^/?" esc_src "(/.*)?$ - [G,L]"
+    if (rdst != "") {
+      clean_dst = rdst
+      sub(/\/+$/, "", clean_dst)
+      return "RewriteRule ^/?" esc_src "(/.*)?$ " clean_dst "$1 [R=" rcode ",L]"
+    }
+    return ""
+  }
+  function parse_apache_expires(spec,    s, prefix, total, n, i, num, unit, parts) {
+    s = tolower(unquote(spec))
+    if (s ~ /^[am][0-9]+$/) {
+      return toupper(substr(s, 1, 1)) substr(s, 2)
+    }
+    prefix = "A"
+    if (s ~ /^modification/) prefix = "M"
+    sub(/^(access|now|modification)[ \t]*(plus)?[ \t]*/, "", s)
+    total = 0
+    n = split(s, parts, /[ \t]+/)
+    for (i = 1; i <= n; i += 2) {
+      num = parts[i] + 0
+      unit = (i + 1 <= n) ? parts[i+1] : "sec"
+      if (unit ~ /^year/)        total += num * 31536000
+      else if (unit ~ /^month/)  total += num * 2592000
+      else if (unit ~ /^week/)   total += num * 604800
+      else if (unit ~ /^day/)    total += num * 86400
+      else if (unit ~ /^hour/)   total += num * 3600
+      else if (unit ~ /^min/)    total += num * 60
+      else if (unit ~ /^sec/)    total += num
+    }
+    if (total > 0) return prefix total
+    return ""
+  }
+
+  BEGIN {
+    hrs_open = "\074\074\074END_extraHeaders"
+
+    native_php_count = 0
+    while ((getline np < native_php_in) > 0) {
+      np = trim(np)
+      if (np != "") {
+        native_php_list[++native_php_count] = np
+        if (split(np, nptok, /[ \t]+/) >= 2) {
+          native_php_keys[tolower(nptok[2])] = 1
+        }
+      }
+    }
+    close(native_php_in)
+
+    safe_php["memory_limit"] = 1
+    safe_php["upload_max_filesize"] = 1
+    safe_php["post_max_size"] = 1
+    safe_php["max_execution_time"] = 1
+    safe_php["max_input_time"] = 1
+    safe_php["max_input_vars"] = 1
+    safe_php["max_input_nesting_level"] = 1
+    safe_php["max_file_uploads"] = 1
+    safe_php["default_socket_timeout"] = 1
+    safe_php["default_charset"] = 1
+    safe_php["date.timezone"] = 1
+    safe_php["display_errors"] = 1
+    safe_php["display_startup_errors"] = 1
+    safe_php["log_errors"] = 1
+    safe_php["error_reporting"] = 1
+    safe_php["error_log"] = 1
+    safe_php["short_open_tag"] = 1
+    safe_php["zlib.output_compression"] = 1
+    safe_php["zlib.output_compression_level"] = 1
+    safe_php["session.gc_maxlifetime"] = 1
+    safe_php["session.cookie_httponly"] = 1
+    safe_php["session.cookie_secure"] = 1
+    safe_php["session.cookie_samesite"] = 1
+    safe_php["session.use_strict_mode"] = 1
+    safe_php["session.use_only_cookies"] = 1
+    safe_php["opcache.enable"] = 1
+    safe_php["opcache.revalidate_freq"] = 1
+    safe_php["allow_url_fopen"] = 1
+    safe_php["output_buffering"] = 1
+    safe_php["pcre.backtrack_limit"] = 1
+    safe_php["pcre.recursion_limit"] = 1
+
+    dangerous_php["allow_url_include"] = 1
+    dangerous_php["open_basedir"] = 1
+    dangerous_php["disable_functions"] = 1
+    dangerous_php["disable_classes"] = 1
+    dangerous_php["auto_prepend_file"] = 1
+    dangerous_php["auto_append_file"] = 1
+    dangerous_php["extension"] = 1
+    dangerous_php["zend_extension"] = 1
+    dangerous_php["doc_root"] = 1
+    dangerous_php["user_dir"] = 1
+
+    php_count = 0
+    hdr_count = 0
+    exp_count = 0
+    err_count = 0
+    allow_count = 0
+    deny_count = 0
+    rw_count = 0
+    fctx_count = 0
+    warn_count = 0
+
+    exp_active = ""
+    exp_default = ""
+    ip_order_mode = "allow,deny"
+
+    in_files_block = 0
+    cur_files_regex = ""
+    cur_files_deny_all = 0
+    cur_files_allow_all = 0
+    cur_files_hdr_count = 0
+
+    meta_autoindex = ""
+    meta_dirindex = ""
+    meta_charset = ""
+    uploads_block_php = 0
+  }
+
+  FNR == 1 {
+    in_files_block = 0
+    cur_files_regex = ""
+    cur_files_deny_all = 0
+    cur_files_allow_all = 0
+    cur_files_hdr_count = 0
+  }
+
+  FILENAME == ht_wpcontent || FILENAME == ht_uploads {
+    gsub(/\xc2\xa0/, " ", $0)
+    sub_line = sanitize_ols_val($0)
+    if (sub_line == "" || sub_line ~ /^#/) next
+    if (tolower(sub_line) ~ /\.(php|phtml|phar)/ && tolower(sub_line) ~ /(deny|denied|\[f)/) {
+      uploads_block_php = 1
+    }
+    if (tolower(sub_line) ~ /^deny[ \t]+from[ \t]+all$/ || tolower(sub_line) ~ /^require[ \t]+all[ \t]+denied$/) {
+      uploads_block_php = 1
+    }
+    next
+  }
+
+  FILENAME == ht_root {
+    gsub(/\xc2\xa0/, " ", $0)
+    raw_line = trim($0)
+    if (raw_line == "" || raw_line ~ /^#/) next
+
+    if (raw_line ~ /^<[Ff]iles([Mm]atch)?[ \t]+/) {
+      in_files_block++
+      if (in_files_block == 1) {
+        fpat = raw_line
+        is_fmatch = (tolower(fpat) ~ /^<filesmatch/)
+        sub(/^<[Ff]iles([Mm]atch)?[ \t]+/, "", fpat)
+        sub(/>[ \t]*$/, "", fpat)
+        if (!is_fmatch && fpat ~ /^~[ \t]*/) {
+          is_fmatch = 1
+          sub(/^~[ \t]*/, "", fpat)
+        }
+        fpat = unquote(fpat)
+        cur_files_regex = is_fmatch ? fpat : glob_to_regex(fpat)
+        cur_files_deny_all = 0
+        cur_files_allow_all = 0
+        cur_files_hdr_count = 0
+      }
+      next
+    }
+
+    if (raw_line ~ /^<\/[Ff]iles([Mm]atch)?>/) {
+      if (in_files_block == 1 && cur_files_regex != "") {
+        clean_rx = cur_files_regex
+        sub(/^\^/, "", clean_rx)
+        sub(/\$$/, "", clean_rx)
+
+        if (cur_files_deny_all && !cur_files_allow_all) {
+          fctx_idx = ++fctx_count
+          fctx_regex[fctx_idx] = "exp:(^|/)(" clean_rx ")$"
+          fctx_browse[fctx_idx] = 0
+          fctx_hdrs[fctx_idx] = ""
+        } else if (cur_files_hdr_count > 0) {
+          fctx_idx = ++fctx_count
+          fctx_regex[fctx_idx] = "exp:(^|/)(" clean_rx ")$"
+          fctx_browse[fctx_idx] = 1
+          joined_fh = ""
+          for (fi = 1; fi <= cur_files_hdr_count; fi++) {
+            joined_fh = (joined_fh == "" ? cur_files_hdr[fi] : joined_fh "\n" cur_files_hdr[fi])
+          }
+          fctx_hdrs[fctx_idx] = joined_fh
+        }
+      }
+      if (in_files_block > 0) in_files_block--
+      cur_files_regex = ""
+      next
+    }
+
+    if (in_files_block > 0) {
+      fline = sanitize_ols_val(raw_line)
+      if (fline == "" || fline ~ /^<\/?[A-Za-z]/) next
+      nftok = split(fline, ftok, /[ \t]+/)
+      fkw = tolower(ftok[1])
+
+      if (fkw == "deny" && nftok >= 3 && tolower(ftok[2]) == "from" && tolower(ftok[3]) == "all") {
+        cur_files_deny_all = 1
+      } else if (fkw == "allow" && nftok >= 3 && tolower(ftok[2]) == "from" && tolower(ftok[3]) == "all") {
+        cur_files_allow_all = 1
+      } else if (fkw == "require" && nftok >= 3 && tolower(ftok[2]) == "all") {
+        if (tolower(ftok[3]) == "denied") cur_files_deny_all = 1
+        else if (tolower(ftok[3]) == "granted") cur_files_allow_all = 1
+      } else if (fkw == "header") {
+        frest = fline
+        sub(/^[ \t]*[Hh]eader[ \t]+/, "", frest)
+        if (tolower(frest) ~ /^always[ \t]+/) sub(/^[Aa]lways[ \t]+/, "", frest)
+        nfh = split(frest, fhtok, /[ \t]+/)
+        if (nfh >= 2) {
+          faction = tolower(fhtok[1])
+          fhname = unquote(fhtok[2])
+          if (faction == "unset" && fhname ~ /^[A-Za-z0-9_-]+$/) {
+            cur_files_hdr[++cur_files_hdr_count] = "unset " fhname
+          } else if (faction ~ /^(set|append|add|merge)$/ && fhname ~ /^[A-Za-z0-9_-]+$/) {
+            fhval = frest
+            sub(/^[A-Za-z]+[ \t]+[^ \t]+[ \t]+/, "", fhval)
+            if (fhval !~ /"[ \t]+env=/) {
+              fhval = unquote(fhval)
+              if (fhval != "") cur_files_hdr[++cur_files_hdr_count] = fhname ": " fhval
+            }
+          }
+        }
+      }
+      next
+    }
+
+    if (raw_line ~ /^<\/?[A-Za-z]/) next
+
+    line = sanitize_ols_val(raw_line)
+    if (line == "") next
+
+    ntok = split(line, tok, /[ \t]+/)
+    kw = tolower(tok[1])
+
+    if (kw ~ /^(authtype|authname|authuserfile|authgroupfile)$/) {
+      add_warn("SECURITY-CRITICAL", "Phát hiện \"" tok[1] "\" (Bảo vệ mật khẩu HTTP Basic/Digest). OpenLiteSpeed KHÔNG đọc AuthType từ .htaccess! Vui lòng cấu hình Realm trong Vhost để tránh lộ khu vực nhạy cảm.")
+      next
+    }
+    if (kw == "require" && ntok >= 2 && tolower(tok[2]) ~ /^(valid-user|user|group)$/) {
+      add_warn("SECURITY-CRITICAL", "Phát hiện \"Require " tok[2] "\" trong .htaccess. OpenLiteSpeed bỏ qua chỉ thị xác thực user trong .htaccess!")
+      next
+    }
+    if (kw == "satisfy") {
+      add_warn("WARN", "Phát hiện chỉ thị \"Satisfy " (ntok >= 2 ? tok[2] : "") "\". OpenLiteSpeed không hỗ trợ gộp điều kiện Satisfy giữa Auth và IP.")
+      next
+    }
+
+    if (ntok < 2) next
+
+    # ==========================================================================
+    # BIÊN DỊCH SetEnv, SetEnvIf, SetEnvIfNoCase, BrowserMatch, RequestHeader
+    # SANG NATIVE OLS REWRITE RULES ([E=VAR:VAL])
+    # ==========================================================================
+    if (kw == "setenv") {
+      nq = split_apache_args(line, qtok)
+      if (nq >= 2) {
+        ev_name = unquote(qtok[2])
+        ev_val = (nq >= 3) ? unquote(qtok[3]) : "1"
+        if (ev_name ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && ev_val !~ /[\], \t]/) {
+          rw_list[++rw_count] = "RewriteRule .* - [E=" ev_name ":" ev_val "]"
+        }
+      }
+      next
+    }
+
+    if (kw == "setenvif" || kw == "setenvifnocase") {
+      nq = split_apache_args(line, qtok)
+      if (nq >= 4) {
+        cond_var = map_setenvif_attr(qtok[2])
+        cond_pat = qtok[3]
+        env_flags = build_env_flags_from_tokens(qtok, 4, nq)
+        if (cond_var != "" && cond_pat != "" && env_flags != "") {
+          nc_flag = (kw == "setenvifnocase") ? " [NC]" : ""
+          if (cond_pat ~ /[ \t]/) cond_pat = "\"" cond_pat "\""
+          rw_list[++rw_count] = "RewriteCond " cond_var " " cond_pat nc_flag
+          rw_list[++rw_count] = "RewriteRule .* - [" env_flags "]"
+        }
+      }
+      next
+    }
+
+    if (kw == "browsermatch" || kw == "browsermatchnocase") {
+      nq = split_apache_args(line, qtok)
+      if (nq >= 3) {
+        cond_pat = qtok[2]
+        env_flags = build_env_flags_from_tokens(qtok, 3, nq)
+        if (cond_pat != "" && env_flags != "") {
+          nc_flag = (kw == "browsermatchnocase") ? " [NC]" : ""
+          if (cond_pat ~ /[ \t]/) cond_pat = "\"" cond_pat "\""
+          rw_list[++rw_count] = "RewriteCond %{HTTP_USER_AGENT} " cond_pat nc_flag
+          rw_list[++rw_count] = "RewriteRule .* - [" env_flags "]"
+        }
+      }
+      next
+    }
+
+    if (kw == "requestheader") {
+      nq = split_apache_args(line, qtok)
+      idx = 2
+      if (idx <= nq && tolower(qtok[idx]) == "always") idx++
+      if (idx + 1 <= nq) {
+        rh_act = tolower(qtok[idx])
+        rh_name = unquote(qtok[idx + 1])
+        if (rh_name ~ /^[A-Za-z0-9_-]+$/) {
+          cgi_name = toupper(rh_name)
+          gsub(/-/, "_", cgi_name)
+          cgi_var = "HTTP_" cgi_name
+          if (rh_act == "unset") {
+            rw_list[++rw_count] = "RewriteRule .* - [E=" cgi_var ":]"
+          } else if (rh_act ~ /^(set|append|add|merge)$/ && idx + 2 <= nq) {
+            rh_val = unquote(qtok[idx + 2])
+            if (rh_val !~ /[\], \t]/) {
+              extra_https = (cgi_var == "HTTP_X_FORWARDED_PROTO" && tolower(rh_val) == "https") ? ",E=HTTPS:on" : ""
+              rw_list[++rw_count] = "RewriteRule .* - [E=" cgi_var ":" rh_val extra_https "]"
+            }
+          }
+        }
+      }
+      next
+    }
+
+    # 1. XỬ LÝ PHP OVERRIDE
+    if (kw ~ /^php_(admin_)?(value|flag)$/) {
+      setting = tolower(tok[2])
+      if (setting in dangerous_php) {
+        add_warn("SECURITY-BLOCKED", "Đã chặn chỉ thị PHP nguy hiểm \"" kw " " setting "\" trong .htaccess để bảo vệ cô lập máy chủ.")
+        next
+      }
+      if (setting in native_php_keys) {
+        next
+      }
+      if (setting in safe_php) {
+        val = line
+        sub(/^[ \t]*[Pp][Hh][Pp]_(admin_)?(value|flag)[ \t]+[^ \t]+[ \t]+/, "", val)
+        sub(/[ \t]*#.*$/, "", val)
+        val = unquote(val)
+
+        if (setting == "error_log") {
+          if (val ~ /\.\./ || (val ~ /^\// && index(val, "/usr/local/lsws/" domain "/") != 1)) {
+            add_warn("SECURITY-BLOCKED", "Đã chặn đường dẫn error_log không an toàn: " val)
+            next
+          }
+        }
+
+        if (val ~ /^[A-Za-z0-9._:\/~|&^!()-]+$/) {
+          key_id = setting
+          if (!(key_id in php_seen)) {
+            php_order[++php_count] = key_id
+          }
+          php_seen[key_id] = kw " " setting " " val
+        }
+      } else {
+        add_warn("INFO", "Bỏ qua chỉ thị PHP ngoài danh sách cho phép: " kw " " setting)
+      }
+      next
+    }
+
+    # 2. XỬ LÝ ORDER / DENY / ALLOW / REQUIRE
+    if (kw == "order") {
+      ord_str = tolower(line)
+      sub(/^[ \t]*order[ \t]+/, "", ord_str)
+      gsub(/[ \t]+/, "", ord_str)
+      if (ord_str == "deny,allow") ip_order_mode = "deny,allow"
+      else if (ord_str == "allow,deny") ip_order_mode = "allow,deny"
+      next
+    }
+    if (kw == "deny" && tolower(tok[2]) == "from") {
+      for (i = 3; i <= ntok; i++) {
+        ip_tok = tok[i]
+        if (ip_tok == "" || ip_tok ~ /^#/) break
+        if (is_valid_ip_token(ip_tok)) {
+          ip_val = (tolower(ip_tok) == "all") ? "*" : ip_tok
+          if (!(ip_val in deny_seen)) {
+            deny_seen[ip_val] = 1
+            deny_list[++deny_count] = ip_val
+          }
+        }
+      }
+      next
+    }
+    if (kw == "allow" && tolower(tok[2]) == "from") {
+      for (i = 3; i <= ntok; i++) {
+        ip_tok = tok[i]
+        if (ip_tok == "" || ip_tok ~ /^#/) break
+        if (is_valid_ip_token(ip_tok)) {
+          ip_val = (tolower(ip_tok) == "all") ? "*" : ip_tok
+          if (!(ip_val in allow_seen)) {
+            allow_seen[ip_val] = 1
+            allow_list[++allow_count] = ip_val
+          }
+        }
+      }
+      next
+    }
+    if (kw == "require") {
+      sub_kw = tolower(tok[2])
+      if (sub_kw == "all" && ntok >= 3) {
+        if (tolower(tok[3]) == "denied") {
+          if (!("*" in deny_seen)) {
+            deny_seen["*"] = 1
+            deny_list[++deny_count] = "*"
+          }
+        } else if (tolower(tok[3]) == "granted") {
+          if (!("*" in allow_seen)) {
+            allow_seen["*"] = 1
+            allow_list[++allow_count] = "*"
+          }
+        }
+      } else if (sub_kw == "not" && ntok >= 4 && tolower(tok[3]) == "ip") {
+        for (i = 4; i <= ntok; i++) {
+          ip_tok = tok[i]
+          if (ip_tok == "" || ip_tok ~ /^#/) break
+          if (is_valid_ip_token(ip_tok)) {
+            if (!(ip_tok in deny_seen)) {
+              deny_seen[ip_tok] = 1
+              deny_list[++deny_count] = ip_tok
+            }
+          }
+        }
+      } else if (sub_kw == "ip" && ntok >= 3) {
+        for (i = 3; i <= ntok; i++) {
+          ip_tok = tok[i]
+          if (ip_tok == "" || ip_tok ~ /^#/) break
+          if (is_valid_ip_token(ip_tok)) {
+            if (!(ip_tok in allow_seen)) {
+              allow_seen[ip_tok] = 1
+              allow_list[++allow_count] = ip_tok
+            }
+          }
+        }
+      }
+      next
+    }
+
+    # 3. XỬ LÝ HEADER
+    if (kw == "header") {
+      rest = line
+      sub(/^[ \t]*[Hh]eader[ \t]+/, "", rest)
+      if (tolower(rest) ~ /^always[ \t]+/) {
+        sub(/^[Aa]lways[ \t]+/, "", rest)
+      }
+      nhtok = split(rest, htok, /[ \t]+/)
+      if (nhtok >= 2) {
+        action = tolower(htok[1])
+        hname = unquote(htok[2])
+        if (action ~ /^(set|append|add|merge|unset)$/ && hname ~ /^[A-Za-z0-9_-]+$/) {
+          if (action == "unset") {
+            hline = "unset " hname
+            if (!(hline in hdr_seen)) {
+              hdr_seen[hline] = 1
+              hdr_list[++hdr_count] = hline
+            }
+          } else {
+            hval = rest
+            sub(/^[A-Za-z]+[ \t]+[^ \t]+[ \t]+/, "", hval)
+            if (hval ~ /"[ \t]+env=/) {
+              add_warn("INFO", "Bỏ qua Header \"" hname "\" có điều kiện env= (OLS extraHeaders không hỗ trợ điều kiện biến môi trường).")
+            } else {
+              hval = unquote(hval)
+              if (hval != "") {
+                hline = hname ": " hval
+                if (!(hline in hdr_seen)) {
+                  hdr_seen[hline] = 1
+                  hdr_list[++hdr_count] = hline
+                }
+              }
+            }
+          }
+        }
+      }
+      next
+    }
+
+    # 4. XỬ LÝ EXPIRES
+    if (kw == "expiresactive") {
+      act = tolower(unquote(tok[2]))
+      if (act == "on" || act == "1") exp_active = "1"
+      else if (act == "off" || act == "0") exp_active = "0"
+      next
+    }
+    if (kw == "expiresdefault") {
+      rest = line
+      sub(/^[ \t]*[Ee]xpires[Dd]efault[ \t]+/, "", rest)
+      parsed = parse_apache_expires(rest)
+      if (parsed != "") {
+        exp_active = "1"
+        exp_default = parsed
+      }
+      next
+    }
+    if (kw == "expiresbytype") {
+      mime = tolower(tok[2])
+      if (mime ~ /^[a-z0-9.+*-]+\/[a-z0-9.+*-]+$/) {
+        rest = line
+        sub(/^[ \t]*[Ee]xpires[Bb]y[Tt]ype[ \t]+[^ \t]+[ \t]+/, "", rest)
+        parsed = parse_apache_expires(rest)
+        if (parsed != "") {
+          exp_active = "1"
+          if (!(mime in exp_map)) {
+            exp_order[++exp_count] = mime
+          }
+          exp_map[mime] = mime "=" parsed
+        }
+      }
+      next
+    }
+
+    # 5. XỬ LÝ ERRORDOCUMENT
+    if (kw == "errordocument" && ntok >= 3) {
+      ecode = tok[2]
+      eurl = unquote(tok[3])
+      if (ecode ~ /^(400|401|403|404|405|408|410|413|414|429|500|502|503|504)$/ && eurl ~ /^\/[A-Za-z0-9._\/-]*$/) {
+        if (!(ecode in err_map)) {
+          err_order[++err_count] = ecode
+        }
+        err_map[ecode] = eurl
+      }
+      next
+    }
+
+    # 6. XỬ LÝ REDIRECT, REDIRECTPERMANENT, REDIRECTTEMP, REDIRECTMATCH
+    if (kw ~ /^redirect(permanent|temp|match)?$/) {
+      rcode = "301"
+      rsrc = ""
+      rdst = ""
+      is_rmatch = (kw == "redirectmatch")
+
+      if (kw == "redirectpermanent") {
+        rcode = "301"; rsrc = unquote(tok[2]); rdst = (ntok >= 3) ? unquote(tok[3]) : ""
+      } else if (kw == "redirecttemp") {
+        rcode = "302"; rsrc = unquote(tok[2]); rdst = (ntok >= 3) ? unquote(tok[3]) : ""
+      } else {
+        if (tok[2] ~ /^(301|302|303|307|308|410|permanent|temp|seeother|gone)$/) {
+          st_arg = tolower(tok[2])
+          if (st_arg == "permanent") rcode = "301"
+          else if (st_arg == "temp") rcode = "302"
+          else if (st_arg == "seeother") rcode = "303"
+          else if (st_arg == "gone") rcode = "410"
+          else rcode = st_arg
+          rsrc = (ntok >= 3) ? unquote(tok[3]) : ""
+          rdst = (ntok >= 4) ? unquote(tok[4]) : ""
+        } else {
+          rcode = "302"
+          rsrc = unquote(tok[2])
+          rdst = (ntok >= 3) ? unquote(tok[3]) : ""
+        }
+      }
+
+      rw_rule = convert_redirect_to_rewriterule(kw, rcode, rsrc, rdst, is_rmatch)
+      if (rw_rule != "") {
+        rw_list[++rw_count] = rw_rule
+      }
+      next
+    }
+
+    # 7. XỬ LÝ OPTIONS (-Indexes / +Indexes), DIRECTORYINDEX, ADDDEFAULTCHARSET
+    if (kw == "options") {
+      if (tolower(line) ~ /-indexes/) meta_autoindex = "0"
+      else if (tolower(line) ~ /\+indexes/) meta_autoindex = "1"
+      next
+    }
+    if (kw == "directoryindex") {
+      dfiles = ""
+      for (i = 2; i <= ntok; i++) {
+        df = unquote(tok[i])
+        if (df ~ /^[A-Za-z0-9._-]+$/) {
+          dfiles = (dfiles == "" ? df : dfiles ", " df)
+        }
+      }
+      if (dfiles != "") meta_dirindex = dfiles
+      next
+    }
+    if (kw == "adddefaultcharset") {
+      cs = unquote(tok[2])
+      if (tolower(cs) == "off") meta_charset = "off"
+      else if (cs ~ /^[A-Za-z0-9._-]+$/) meta_charset = "on"
+      next
+    }
+  }
+
+  END {
+    for (i = 1; i <= hdr_count; i++) print hdr_list[i] > hdr_out
+    close(hdr_out)
+
+    for (i = 1; i <= rw_count; i++) print rw_list[i] > rw_out
+    close(rw_out)
+
+    for (i = 1; i <= php_count; i++) {
+      k = php_order[i]
+      print php_seen[k] > php_out
+    }
+    close(php_out)
+
+    if (meta_autoindex != "") print "autoIndex=" meta_autoindex > meta_out
+    if (meta_dirindex != "")  print "indexFiles=" meta_dirindex > meta_out
+    if (meta_charset != "")   print "addDefaultCharset=" meta_charset > meta_out
+    close(meta_out)
+
+    for (i = 1; i <= warn_count; i++) print warn_list[i] > warn_out
+    close(warn_out)
+
+    if (uploads_block_php == 1) {
+      fctx_idx = ++fctx_count
+      fctx_regex[fctx_idx] = "exp:^/wp-content/(uploads|blogs\\.dir)/.*\\.(php|phtml|phar|php[0-9])$"
+      fctx_browse[fctx_idx] = 0
+      fctx_hdrs[fctx_idx] = ""
+    }
+
+    final_allow_count = 0
+    final_deny_count = 0
+    for (i = 1; i <= allow_count; i++) {
+      ip = allow_list[i]
+      if (ip != "*" && (ip in deny_seen) && ip_order_mode == "allow,deny") continue
+      final_allow[++final_allow_count] = ip
+    }
+    for (i = 1; i <= deny_count; i++) {
+      ip = deny_list[i]
+      if (ip != "*" && (ip in allow_seen) && ip_order_mode == "deny,allow") continue
+      final_deny[++final_deny_count] = ip
+    }
+
+    has_sync_block = (php_count > 0 || exp_active != "" || exp_count > 0 || err_count > 0 || final_allow_count > 0 || final_deny_count > 0 || fctx_count > 0)
+
+    if (!has_sync_block) {
+      if (native_php_count > 0) {
+        print "phpIniOverride  {"
+        for (i = 1; i <= native_php_count; i++) {
+          print "  " native_php_list[i]
+        }
+        print "}"
+      }
+      exit 0
+    }
+
+    print "# BEGIN WPTT_HTACCESS_SYNC"
+
+    if (native_php_count > 0 || php_count > 0) {
+      print "phpIniOverride  {"
+      for (i = 1; i <= native_php_count; i++) {
+        print "  " native_php_list[i]
+      }
+      for (i = 1; i <= php_count; i++) {
+        k = php_order[i]
+        print "  " php_seen[k]
+      }
+      print "}"
+    }
+
+    if (final_allow_count > 0 || final_deny_count > 0) {
+      print "accessControl  {"
+      if (final_allow_count > 0) {
+        allow_str = ""
+        for (i = 1; i <= final_allow_count; i++) {
+          if (final_allow[i] == "*" && ("*" in deny_seen) && ip_order_mode == "deny,allow" && final_allow_count > 1) continue
+          allow_str = (allow_str == "" ? final_allow[i] : allow_str ", " final_allow[i])
+        }
+        if (allow_str != "") print "  allow                   " allow_str
+      } else if (!("*" in deny_seen)) {
+        print "  allow                   *"
+      }
+      if (final_deny_count > 0) {
+        deny_str = ""
+        for (i = 1; i <= final_deny_count; i++) {
+          deny_str = (deny_str == "" ? final_deny[i] : deny_str ", " final_deny[i])
+        }
+        print "  deny                    " deny_str
+      }
+      print "}"
+    }
+
+    if (exp_active != "" || exp_count > 0) {
+      print "expires  {"
+      print "  enableExpires           " (exp_active != "" ? exp_active : "1")
+      if (exp_default != "") {
+        print "  expiresDefault          " exp_default
+      }
+      if (exp_count > 0) {
+        bytype_str = ""
+        for (i = 1; i <= exp_count; i++) {
+          m = exp_order[i]
+          bytype_str = (bytype_str == "" ? exp_map[m] : bytype_str ", " exp_map[m])
+        }
+        print "  expiresByType           " bytype_str
+      }
+      print "}"
+    }
+
+    for (i = 1; i <= err_count; i++) {
+      c = err_order[i]
+      print "errorpage " c " {"
+      print "  url                     " err_map[c]
+      print "}"
+    }
+
+    for (i = 1; i <= fctx_count; i++) {
+      rx = fctx_regex[i]
+      if (rx in fctx_emitted) continue
+      fctx_emitted[rx] = 1
+      print "context " rx " {"
+      print "  allowBrowse             " fctx_browse[i]
+      if (fctx_hdrs[i] != "") {
+        print "  extraHeaders            " hrs_open
+        print fctx_hdrs[i]
+        print "  END_extraHeaders"
+      }
+      print "}"
+    }
+
+    print "# END WPTT_HTACCESS_SYNC"
+  }
+  ' "${awk_files[@]}"
+}
+
+# ==============================================================================
+# CHÈN HEADER VÀ REDIRECT/ENV (.HTACCESS) VÀO context / CÓ SẴN
+# ==============================================================================
+_merge_headers_and_rewrites_into_root_context() {
+  local conf="$1" new_hdr="$2" old_hdr="$3" applied_out="$4" rw_file="$5" domain="$6"
+  local merged="${conf}.merged"
+
+  awk -v new_hdr="$new_hdr" -v old_hdr="$old_hdr" -v applied_out="$applied_out" \
+    -v rw_file="$rw_file" -v docroot="/usr/local/lsws/${domain}/html" '
+    function trim(s) { sub(/^[ \t\r]+/, "", s); sub(/[ \t\r]+$/, "", s); return s }
+    function hname(l,    n) {
+      n = l
+      sub(/^unset[ \t]+/i, "", n)
+      sub(/[ \t:].*$/, "", n)
+      return tolower(n)
+    }
+    function emit_new_headers(    i, h, nm) {
+      for (i = 1; i <= nnew; i++) {
+        h = newh[i]; nm = hname(h)
+        if (nm in have) continue
+        have[nm] = 1
+        print h
+        print h > applied_out
+      }
+    }
+    function emit_sync_rw_lines(    i) {
+      if (nrw > 0) {
+        print "# BEGIN_WPTT_SYNC_RW"
+        for (i = 1; i <= nrw; i++) {
+          print rwl[i]
+        }
+        print "# END_WPTT_SYNC_RW"
+      }
+    }
+    function emit_full_rules_block() {
+      if (nrw > 0) {
+        if (!rw_has_enable)  print "    enable                1"
+        if (!rw_has_inherit) print "    inherit               1"
+        print "    rules                 " rules_open
+        emit_sync_rw_lines()
+        print "    END_rules"
+      }
+    }
+    BEGIN {
+      hrs_open = "\074\074\074END_extraHeaders"
+      rules_open = "\074\074\074END_rules"
+      nnew = 0
+      while ((getline l < new_hdr) > 0) { l = trim(l); if (l != "") newh[++nnew] = l }
+      close(new_hdr)
+      while ((getline l < old_hdr) > 0) { l = trim(l); if (l != "") oldh[l] = 1 }
+      close(old_hdr)
+      nrw = 0
+      while ((getline l < rw_file) > 0) { l = trim(l); if (l != "") rwl[++nrw] = l }
+      close(rw_file)
+      state = 0; done = 0; has_eh = 0; has_rw = 0; has_rules = 0; skip_sync_rw = 0
+    }
+    state == 0 && done == 0 && /^context[ \t]+\/[ \t]*\{[ \t]*$/ {
+      state = 1; has_eh = 0; has_rw = 0; print; next
+    }
+    state == 1 && index($0, "extraHeaders") > 0 && index($0, "END_extraHeaders") > 0 {
+      state = 2; has_eh = 1; print; next
+    }
+    state == 2 {
+      t = trim($0)
+      if (t == "END_extraHeaders") { emit_new_headers(); state = 1; print; next }
+      if (t in oldh) next
+      if (t != "") have[hname(t)] = 1
+      print; next
+    }
+    state == 1 && /^[ \t]*rewrite[ \t]*\{[ \t]*$/ {
+      state = 3; has_rw = 1; has_rules = 0; rw_has_enable = 0; rw_has_inherit = 0; skip_sync_rw = 0
+      print; next
+    }
+    state == 3 && index($0, "rules") > 0 && index($0, "END_rules") > 0 {
+      state = 4; has_rules = 1; skip_sync_rw = 0
+      print
+      emit_sync_rw_lines()
+      next
+    }
+    state == 4 {
+      t = trim($0)
+      if (t == "# BEGIN_WPTT_SYNC_RW") { skip_sync_rw = 1; next }
+      if (t == "# END_WPTT_SYNC_RW")   { skip_sync_rw = 0; next }
+      if (skip_sync_rw) next
+      if (t == "END_rules") {
+        state = 3
+        print
+        next
+      }
+      print; next
+    }
+    state == 3 {
+      t = trim($0)
+      if (t == "# BEGIN_WPTT_SYNC_RW") { skip_sync_rw = 1; next }
+      if (t == "# END_WPTT_SYNC_RW")   { skip_sync_rw = 0; next }
+      if (skip_sync_rw) next
+      if (tolower(t) ~ /^enable[ \t]+/)  rw_has_enable = 1
+      if (tolower(t) ~ /^inherit[ \t]+/) rw_has_inherit = 1
+      if (t == "}") {
+        if (!has_rules && nrw > 0) {
+          emit_full_rules_block()
+        }
+        state = 1
+        print
+        next
+      }
+      print; next
+    }
+    state == 1 && /^\}[ \t]*$/ {
+      if (!has_eh && nnew > 0) {
+        print "  extraHeaders            " hrs_open
+        emit_new_headers()
+        print "  END_extraHeaders"
+      }
+      if (!has_rw && nrw > 0) {
+        print "  rewrite  {"
+        rw_has_enable = 0; rw_has_inherit = 0
+        emit_full_rules_block()
+        print "  }"
+      }
+      state = 0; done = 1; print; next
+    }
+    { print }
+    END {
+      if (done == 0 && (nnew > 0 || nrw > 0)) {
+        print ""
+        print "context / {"
+        print "  location                " docroot
+        print "  allowBrowse             1"
+        if (nnew > 0) {
+          print "  extraHeaders            " hrs_open
+          emit_new_headers()
+          print "  END_extraHeaders"
+        }
+        if (nrw > 0) {
+          print "  rewrite  {"
+          rw_has_enable = 0; rw_has_inherit = 0
+          emit_full_rules_block()
+          print "  }"
+        }
+        print "}"
+      }
+    }
+  ' "$conf" >"$merged" && /bin/mv -f -- "$merged" "$conf"
+}
+
+# ==============================================================================
+# ÁP DỤNG METADATA (autoIndex, indexFiles, addDefaultCharset) VÀO VHOST
+# ==============================================================================
+_apply_metadata_to_vhost() {
+  local conf="$1" meta_file="$2"
+  [[ -s "$meta_file" ]] || return 0
+
+  local key="" val=""
+  while IFS='=' read -r key val; do
+    [[ -z "$key" || -z "$val" ]] && continue
+    case "$key" in
+      autoIndex)
+        sed -i "s/^\([[:space:]]*autoIndex[[:space:]]*\)[0-9]\+/\1${val}/" "$conf" 2>/dev/null || true
+        ;;
+      indexFiles)
+        sed -i "s/^\([[:space:]]*indexFiles[[:space:]]*\).*$/\1${val}/" "$conf" 2>/dev/null || true
+        ;;
+      addDefaultCharset)
+        sed -i "s/^\([[:space:]]*addDefaultCharset[[:space:]]*\)[a-zA-Z]\+/\1${val}/" "$conf" 2>/dev/null || true
+        ;;
+    esac
+  done <"$meta_file"
+}
+
+_warn_duplicate_blocks() {
+  local base_conf="$1" block_file="$2" domain="$3" key="" pat=""
+  [[ -s "$block_file" ]] || return 0
+  while IFS= read -r key; do
+    [[ -z "$key" ]] && continue
+    pat="^${key// /[[:space:]]+}[[:space:]]*\{"
+    if grep -qE "$pat" "$base_conf" 2>/dev/null; then
+      printf '[WPTT] CẢNH BÁO %s: vhost đã có khối "%s" ngoài vùng WPTT_HTACCESS_SYNC, OLS chỉ nhận 1 khối nên phần lấy từ .htaccess có thể không có tác dụng.\n' "$domain" "$key" >&2
+    fi
+  done < <(awk '
+    /^(accessControl|expires)[ \t]*\{/ { sub(/[ \t]*\{.*$/, ""); print; next }
+    /^errorpage[ \t]+[0-9]+/ { print $1 " " $2 }
+  ' "$block_file")
+}
+
+_persist_sync_state() {
+  local applied_hdr="$1" hdr_state="$2" rw_src="$3" rw_state="$4" php_src="$5" php_state="$6"
+  /bin/cat -- "$applied_hdr" >"$hdr_state" 2>/dev/null && /bin/chmod 600 "$hdr_state" 2>/dev/null || true
+  /bin/cat -- "$rw_src" >"$rw_state" 2>/dev/null && /bin/chmod 600 "$rw_state" 2>/dev/null || true
+  /bin/cat -- "$php_src" >"$php_state" 2>/dev/null && /bin/chmod 600 "$php_state" 2>/dev/null || true
+}
+
+# ==============================================================================
+# HÀM ĐỒNG BỘ NGUYÊN TỬ (ATOMIC SYNC) CHO 1 TÊN MIỀN
+# ==============================================================================
+_sync_single_domain() {
+  local domain="$1"
+
+  if [[ -z "$domain" || ! "$domain" =~ ^[a-zA-Z0-9._-]+$ || "$domain" == -* || "$domain" == *..* ]]; then
+    _debug_log "Tên miền không hợp lệ: $domain"
+    return 1
+  fi
+
+  local vhost_conf="/usr/local/lsws/conf/vhosts/${domain}/${domain}.conf"
+  if [[ ! -f "$vhost_conf" ]]; then
+    _debug_log "Không tìm thấy file Vhost: $vhost_conf"
+    return 1
+  fi
+  if [[ ! -d "/usr/local/lsws/${domain}/html" ]]; then
+    _debug_log "Không tìm thấy thư mục html: /usr/local/lsws/${domain}/html"
+    return 1
+  fi
+
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+  /bin/chmod 700 /etc/wptt/tmp 2>/dev/null || true
+  if [[ -z "${tmp_dir:-}" || ! -d "$tmp_dir" ]]; then
+    tmp_dir="$(mktemp -d /etc/wptt/tmp/htaccess_sync_XXXXXX)"
+  fi
+
+  local block_file="${tmp_dir}/${domain}.block"
+  local candidate_conf="${tmp_dir}/${domain}.conf"
+  local atomic_stage="/usr/local/lsws/conf/vhosts/${domain}/.${domain}.conf.wptt_tmp_${BASHPID:-$$}"
+  local state_dir="/etc/wptt/htaccess_sync"
+  local hdr_state="${state_dir}/${domain}.headers"
+  local rw_state="${state_dir}/${domain}.rewrite_extra"
+  local php_state="${state_dir}/${domain}.php_override"
+  local hdr_new="${tmp_dir}/${domain}.hdr_new"
+  local hdr_applied="${tmp_dir}/${domain}.hdr_applied"
+  local rw_new="${tmp_dir}/${domain}.rw_new"
+  local php_new="${tmp_dir}/${domain}.php_new"
+  local native_php_file="${tmp_dir}/${domain}.native_php"
+  local meta_new="${tmp_dir}/${domain}.meta_new"
+  local warn_new="${tmp_dir}/${domain}.warn_new"
+  local hdr_old_src="/dev/null"
+  local php_old_src="/dev/null"
+
+  /bin/mkdir -p "$state_dir" 2>/dev/null || true
+  /bin/chmod 700 "$state_dir" 2>/dev/null || true
+  [[ -f "$hdr_state" ]] && hdr_old_src="$hdr_state"
+  [[ -f "$php_state" ]] && php_old_src="$php_state"
+
+  _extract_native_vhost_php_overrides "$vhost_conf" "$php_old_src" "$native_php_file"
+
+  _compile_htaccess_to_ols_block "$domain" "$hdr_new" "$rw_new" "$meta_new" "$warn_new" "$php_new" "$native_php_file" >"$block_file"
+
+  if [[ -s "$warn_new" ]]; then
+    local wline=""
+    while IFS= read -r wline; do
+      [[ -z "$wline" ]] && continue
+      if ((QUIET_WARN == 0)); then
+        printf '[WPTT-HTACCESS] %s\n' "$wline" >&2
+      fi
+      if declare -F wptt_logs >/dev/null 2>&1; then
+        wptt_logs "WARN" "$wline" 2>/dev/null || true
+      fi
+    done <"$warn_new"
+  fi
+
+  awk '
+    /^# BEGIN WPTT_HTACCESS_SYNC$/ { skip = 1; next }
+    /^# END WPTT_HTACCESS_SYNC$/   { skip = 0; next }
+    skip { next }
+    /^[ \t]*phpIniOverride[ \t]*\{[ \t]*$/ {
+      in_php = 1
+      next
+    }
+    in_php {
+      if ($0 ~ /^[ \t]*\}[ \t]*$/) {
+        in_php = 0
+      }
+      next
+    }
+    { lines[++n] = $0 }
+    END {
+      while (n > 0 && lines[n] ~ /^[ \t]*$/) n--
+      for (i = 1; i <= n; i++) print lines[i]
+    }
+  ' "$vhost_conf" >"$candidate_conf"
+
+  : >"$hdr_applied"
+  _merge_headers_and_rewrites_into_root_context "$candidate_conf" "$hdr_new" "$hdr_old_src" "$hdr_applied" "$rw_new" "$domain"
+  _warn_duplicate_blocks "$candidate_conf" "$block_file" "$domain"
+
+  _apply_metadata_to_vhost "$candidate_conf" "$meta_new"
+
+  if [[ -s "$block_file" ]]; then
+    printf '\n' >>"$candidate_conf"
+    /bin/cat -- "$block_file" >>"$candidate_conf"
+  fi
+
+  if cmp -s "$vhost_conf" "$candidate_conf" 2>/dev/null; then
+    _debug_log "File Vhost của $domain đã đồng bộ sẵn, không cần ghi lại."
+    _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state" "$php_new" "$php_state"
+    return 2
+  fi
+
+  /bin/cp -fp -- "$vhost_conf" "${vhost_conf}.wptt_sync.bak" 2>/dev/null || true
+  /bin/cp -fp -- "$vhost_conf" "$atomic_stage" 2>/dev/null || true
+  /bin/cat -- "$candidate_conf" >"$atomic_stage"
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -F "$atomic_stage" >/dev/null 2>&1 || true
+  fi
+  /bin/mv -fT -- "$atomic_stage" "$vhost_conf"
+  _debug_log "Đã cập nhật thành công Vhost: $vhost_conf"
+  _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state" "$php_new" "$php_state"
+
+  return 0
+}
+
+# ==============================================================================
+# ĐIỂM KHỞI CHẠY CHÍNH
+# ==============================================================================
+main() {
+  local no_reload=0
+  local targets=()
+  local arg=""
+
+  # shellcheck source=/dev/null
+  [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
+  IFS=$' \t\n' # nosemgrep: bash.lang.security.ifs-tampering.ifs-tampering
+
+  for arg in "$@"; do
+    case "$arg" in
+      --debug | -v)
+        DEBUG_MODE=1
+        ;;
+      --quiet | -q)
+        QUIET_WARN=1
+        ;;
+      --no-reload)
+        no_reload=1
+        ;;
+      --all | -a)
+        shopt -s nullglob
+        local vh_dir="" dname=""
+        for vh_dir in /usr/local/lsws/conf/vhosts/*; do
+          [[ -d "$vh_dir" ]] || continue
+          dname="${vh_dir##*/}"
+          [[ -f "${vh_dir}/${dname}.conf" ]] && targets+=("$dname")
+        done
+        shopt -u nullglob
+        ;;
+      *)
+        targets+=("$arg")
+        ;;
+    esac
+  done
+
+  if ((${#targets[@]} == 0)); then
+    shopt -s nullglob
+    local vh_dir="" dname=""
+    for vh_dir in /usr/local/lsws/conf/vhosts/*; do
+      [[ -d "$vh_dir" ]] || continue
+      dname="${vh_dir##*/}"
+      [[ -f "${vh_dir}/${dname}.conf" ]] && targets+=("$dname")
+    done
+    shopt -u nullglob
+  fi
+
+  local any_changed=0
+  local dom=""
+  for dom in "${targets[@]}"; do
+    [[ -z "$dom" ]] && continue
+    if _sync_single_domain "$dom"; then
+      any_changed=1
+    fi
+  done
+
+  if ((any_changed == 1 && no_reload == 0)); then
+    if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+      wptt_smart_reload_lsws >/dev/null 2>&1 || true
+    else
+      /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+    fi
+  fi
+
+  return 0
+}
+
+main "$@"

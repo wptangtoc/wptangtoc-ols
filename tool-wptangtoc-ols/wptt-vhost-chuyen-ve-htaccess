@@ -1,112 +1,191 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @email: giatuan@wptangtoc.com
+# @since: 2026
+# @description: Khôi phục đọc trực tiếp .htaccess (autoLoadHtaccess 1) và đồng bộ wptt-htaccess-sync
 
-. /etc/wptt/echo-color
-. /etc/wptt/core-functions 2>/dev/null
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
 
-NAME=$1
-if [[ $NAME = "98" ]]; then
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null || true
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && . /etc/wptt/.wptt.conf 2>/dev/null || true
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
+
+NAME="${1:-}"
+NO_RELOAD="${2:-}"
+if [[ "$NAME" == "98" ]]; then
   NAME=""
 fi
 
 if [[ -z "$NAME" ]]; then
+  # shellcheck source=/dev/null
   . /etc/wptt/tenmien
-  lua_chon_NAME "chuyển vhost sang .htaccess"
+  lua_chon_NAME "chuyển vhost về .htaccess"
 fi
 
-if [[ "$NAME" = "0" || -z "$NAME" ]]; then
-  exit
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  return 0 2>/dev/null || exit 0
 fi
 
-path="/etc/wptt/vhost/.$NAME.conf"
-path_bk="/etc/wptt/vhost_bk/.$NAME.conf"
+# Validate tên miền chống Path Traversal
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ || "$NAME" == -* || "$NAME" == *..* ]]; then
+  echoDo "Tên miền không hợp lệ: $NAME"
+  return 1 2>/dev/null || exit 1
+fi
 
-if [[ ! -f "$path" && ! -f $path_bk ]]; then
+path="/etc/wptt/vhost/.${NAME}.conf"
+path_bk="/etc/wptt/vhost_bk/.${NAME}.conf"
+vhost_dir="/usr/local/lsws/conf/vhosts/${NAME}"
+vhost_conf="${vhost_dir}/${NAME}.conf"
+html_dir="/usr/local/lsws/${NAME}/html"
+htaccess_file="${html_dir}/.htaccess"
+
+if [[ ! -f "$path" && ! -f "$path_bk" ]]; then
   clear
-  echoDo "Domain khong ton tai tren VPS."
-  return 2>/dev/null
-  exit
+  echoDo "Domain không tồn tại trên VPS."
+  return 1 2>/dev/null || exit 1
 fi
 
-# pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-# if [[ ! -f "$pathcheckwp" ]]; then
-#   clear
-#   echoDo "He thong xac nhan ban chua kich hoat su dung WordPress"
-#   sleep 3
-#   return 2>/dev/null;exit
-# fi
-
-#kiểm tra .htaccess
-if [[ ! -f /usr/local/lsws/$NAME/html/.htaccess ]]; then
-  echoDo "Khong xac dinh duoc .htaccess cua website $NAME"
-  return 2>/dev/null
-  exit
+if [[ ! -f "$vhost_conf" || ! -d "$html_dir" ]]; then
+  echoDo "Không tìm thấy cấu hình Vhost hoặc thư mục gốc của website $NAME"
+  return 1 2>/dev/null || exit 1
 fi
 
-#sed-multiline-delete-with-pattern
-#tự động xác định tìm block rewrite xóa theo block {}
-# sed -i '/^rewrite/{:a;N;/}$/!ba};/enable/d' /usr/local/lsws/conf/vhosts/$NAME.conf
+# Tự động khởi tạo file .htaccess rỗng nếu người dùng lỡ tay xóa mất trước đó
+if [[ ! -f "$htaccess_file" ]]; then
+  : >"$htaccess_file" 2>/dev/null || true
+  chmod 644 "$htaccess_file" 2>/dev/null || true
+fi
 
-_runing "Thiết lập chuyển vhost về .htaccess"
-sed -i -e '/^rewrite/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+TASK_MSG="Thiết lập chuyển vhost về .htaccess"
+_runing "$TASK_MSG"
 
-#thiết lập tắt tự động chạy file .htaccess:
-echo "
-rewrite  {
-  enable                  1
-  autoLoadHtaccess        1
-  /usr/local/lsws/$NAME/html/.htaccess
-}" >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+# Backup cấu hình Vhost trước khi thao tác
+/bin/cp -fp -- "$vhost_conf" "${vhost_conf}.bak-wptt" 2>/dev/null || true
 
-# sed -i '/^context/{:a;N;/}$/!ba};/enable/d' /usr/local/lsws/conf/vhosts/$NAME.conf
+# Tạo file staging trên cùng thư mục Vhost để đảm bảo Atomic Replace (cùng Filesystem)
+stage_conf="${vhost_dir}/.${NAME}.conf.revert_tmp_${BASHPID:-$$}"
+/bin/cp -fp -- "$vhost_conf" "$stage_conf" 2>/dev/null || : >"$stage_conf"
 
-#xác định context
-# context=$(cat /usr/local/lsws/conf/vhosts/$NAME.conf | sed -e '/^context/,/^}/!d')
-
-# xóa context hiện tại:
-sed -i -e '/^context/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
-#xác định các code đã được add vào sử dụng tại .htaccess
-lenh_htaccess=$(cat /usr/local/lsws/"$NAME"/html/.htaccess)
-echo "
-context / {
-  location                /usr/local/lsws/$NAME/html
-  allowBrowse             1
-  extraHeaders            <<<END_extraHeaders
-X-XSS-Protection 1;mode=block
-X-Frame-Options SAMEORIGIN
-Referrer-Policy strict-origin-when-cross-origin
-X-Content-Type-Options nosniff
-X-Powered-By WPTangTocOLS
-permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
-  END_extraHeaders
-
-
-  rewrite  {
-  }
-  addDefaultCharset       off
-
-  phpIniOverride  {
-
-  }
+cleanup_stage() {
+  [[ -n "${stage_conf:-}" && -f "$stage_conf" ]] && /bin/rm -f -- "$stage_conf" 2>/dev/null || true
 }
-" >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+trap cleanup_stage EXIT INT TERM HUP
 
-if [[ -f /etc/wptt/vhost/.$NAME.conf ]]; then
-  wptt_atomic_edit_config "/etc/wptt/vhost/.$NAME.conf" "vhost_chuyen_htaccess" "delete"
+# 1. Xóa sạch chỉ đúng khối rewrite {} cấp Vhost và khối context / {} (Giữ nguyên các context bảo mật khác)
+awk '
+  /^rewrite[ \t]*\{[ \t]*$/ { skip_rw = 1; next }
+  skip_rw && /^\}[ \t]*$/   { skip_rw = 0; next }
+  skip_rw { next }
+
+  /^context[ \t]+\/[ \t]*\{[ \t]*$/ { skip_ctx = 1; next }
+  skip_ctx && /^\}[ \t]*$/          { skip_ctx = 0; next }
+  skip_ctx { next }
+
+  /^# BEGIN WPTT_HTACCESS_SYNC$/ { skip_sync = 1; next }
+  /^# END WPTT_HTACCESS_SYNC$/   { skip_sync = 0; next }
+  skip_sync { next }
+
+  { lines[++n] = $0 }
+  END {
+    while (n > 0 && lines[n] ~ /^[ \t]*$/) n--
+    for (i = 1; i <= n; i++) print lines[i]
+  }
+' "$vhost_conf" >"$stage_conf"
+
+# 2. Xác định cấu hình X-Powered-By từ Website chính (đồng bộ chuẩn với wptt-tat-htaccees-chuyen-vhosts)
+powered_by_line="X-Powered-By WPTangTocOLS"
+if [[ -n "${Website_chinh:-}" && -f "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" ]]; then
+  hostname_custom="$(grep 'X-Powered-By' "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" 2>/dev/null | cut -f2 -d ' ' | sort -u || true)"
+  if [[ -z "$hostname_custom" ]]; then
+    powered_by_line=""
+  else
+    powered_by_line="X-Powered-By ${hostname_custom}"
+  fi
 fi
 
-if [[ -f /etc/wptt/vhost_bk/.$NAME.conf ]]; then
-  wptt_atomic_edit_config "/etc/wptt/vhost_bk/.$NAME.conf" "vhost_chuyen_htaccess" "delete"
+# Khởi tạo chuỗi mở Heredoc của OLS bằng printf để tránh lỗi parser
+ols_heredoc_open="$(printf '\074\074\074')"
+
+# 3. Ghi khối rewrite (autoLoadHtaccess 1) và context / tiêu chuẩn vào file staging
+{
+  printf '\nrewrite  {\n'
+  printf '  enable                  1\n'
+  printf '  autoLoadHtaccess        1\n'
+  printf '}\n\n'
+  printf 'context / {\n'
+  printf '  location                /usr/local/lsws/%s/html\n' "$NAME"
+  printf '  allowBrowse             1\n'
+  printf '  extraHeaders            %sEND_extraHeaders\n' "$ols_heredoc_open"
+  printf 'X-XSS-Protection 1;mode=block\n'
+  printf 'X-Frame-Options SAMEORIGIN\n'
+  printf 'Referrer-Policy strict-origin-when-cross-origin\n'
+  printf 'X-Content-Type-Options nosniff\n'
+  [[ -n "$powered_by_line" ]] && printf '%s\n' "$powered_by_line"
+  printf 'permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()\n'
+  printf '  END_extraHeaders\n\n'
+  printf '  rewrite  {\n'
+  printf '  }\n'
+  printf '  addDefaultCharset       off\n'
+  printf '}\n'
+} >>"$stage_conf"
+
+# 4. Thay thế nguyên tử (Atomic Swap) vào file Vhost chính thức
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon -F "$stage_conf" >/dev/null 2>&1 || true
+fi
+/bin/mv -fT -- "$stage_conf" "$vhost_conf"
+trap - EXIT INT TERM HUP
+
+# 5. Gọi ngay wptt-htaccess-sync để biên dịch lại các chỉ thị Apache (Redirect, Header, php_value, IP Deny/Allow, Expires) từ .htaccess vào Vhost
+if [[ -f /etc/wptt/wptt-htaccess-sync ]]; then
+  /bin/bash /etc/wptt/wptt-htaccess-sync --no-reload --quiet "$NAME" >/dev/null 2>&1 || true
 fi
 
-if grep -q -i "ubuntu" /etc/os-release 2>/dev/null; then
-	tuong_thich_nhom_litespeed="nogroup"
+# 6. Cập nhật cờ trạng thái trong /etc/wptt/vhost/.$NAME.conf
+if [[ -f "$path" ]]; then
+  sed -i '/^$/d' "$path" 2>/dev/null || true
+  wptt_atomic_edit_config "$path" "vhost_chuyen_htaccess" "delete"
+fi
+
+if [[ -f "$path_bk" ]]; then
+  sed -i '/^$/d' "$path_bk" 2>/dev/null || true
+  wptt_atomic_edit_config "$path_bk" "vhost_chuyen_htaccess" "delete"
+fi
+
+# Nếu không còn bất kỳ website nào bật vhost_chuyen_htaccess=1, tự động gỡ cờ htaccess-cache-active toàn cục
+if ! grep -qs '^vhost_chuyen_htaccess=1' /etc/wptt/vhost/.*.conf 2>/dev/null; then
+  /bin/rm -f -- /etc/wptt/cau-hinh/htaccess-cache-active 2>/dev/null || true
+fi
+
+# 7. Phân quyền chuẩn theo hệ điều hành (Ubuntu/Debian vs RHEL/AlmaLinux/Rocky)
+if grep -qi "ubuntu\|debian" /etc/os-release 2>/dev/null; then
+  tuong_thich_nhom_litespeed="nogroup"
 else
-	tuong_thich_nhom_litespeed="nobody"
+  tuong_thich_nhom_litespeed="nobody"
 fi
-chown -hR lsadm:"$tuong_thich_nhom_litespeed" /usr/local/lsws/conf/vhosts/"$NAME"
-chmod -R 750 /usr/local/lsws/conf/vhosts/"$NAME"
-wptt_smart_reload_lsws >/dev/null 2>&1
-wptt_logs "INFO" "Thiết lập chuyển vhost về .htaccess website $NAME"
 
-_rundone "Thiết lập chuyển vhost về .htaccess"
+/bin/chown -hR "lsadm:${tuong_thich_nhom_litespeed}" "$vhost_dir" 2>/dev/null || true
+/bin/chmod -R 750 "$vhost_dir" 2>/dev/null || true
+/bin/chmod 640 "$vhost_conf" 2>/dev/null || true
+
+# 8. Reload OpenLiteSpeed Zero-Downtime
+if [[ "$NO_RELOAD" != "--no-reload" ]]; then
+  if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+    wptt_smart_reload_lsws >/dev/null 2>&1 || true
+  else
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+  fi
+fi
+
+if declare -F wptt_logs >/dev/null 2>&1; then
+  wptt_logs "INFO" "Thiết lập chuyển vhost về .htaccess website $NAME"
+fi
+
+_rundone "$TASK_MSG"
