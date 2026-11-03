@@ -1,3 +1,16 @@
+# WPTangToc OLS 8.4.0
+
+🚀 **Tính năng mới & Nâng cấp bảo mật**
+
+- **Tương thích toàn diện Apache .htaccess:** Nâng cấp sâu cơ chế xử lý tệp `.htaccess` tương thích tuyệt đối với chuẩn Apache trên OpenLiteSpeed, đảm bảo các quy tắc định tuyến, đường dẫn tĩnh và bảo mật của WordPress hoạt động mượt mà, chính xác hoàn toàn.
+- **Cập nhật chứng chỉ Google Trust Services (GTS):** Tích hợp và cập nhật các tiêu chuẩn chứng chỉ SSL mới nhất từ Google Trust Services, mang đến sự lựa chọn bảo mật uy tín và gia tăng độ tin cậy HTTPS cho toàn bộ website.
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS v8.3.4.0
 
 🚀 **Tính năng mới & Nâng cấp bảo mật**
