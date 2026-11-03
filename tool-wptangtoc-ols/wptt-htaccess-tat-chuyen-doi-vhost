@@ -3,6 +3,45 @@
 . /etc/wptt/echo-color
 . /etc/wptt/core-functions 2>/dev/null
 
+# Lọc .htaccess: chỉ giữ các chỉ thị mà rules {} của OLS chạy được:
+#   RewriteEngine/RewriteBase/RewriteCond/RewriteRule + CacheLookup/CacheKeyModify (LSCache)
+# - Giữ cặp <IfModule ...> ... </IfModule> chứa nội dung hợp lệ; cặp rỗng hoặc mất cân bằng thì bỏ
+# - Bỏ comment, dòng trống; nối dòng bị ngắt bằng "\" ở cuối
+# - Bỏ mọi chỉ thị Apache khác (php_value, Header, Deny from, ExpiresActive, ...)
+# Dùng allowlist nên dòng lạ (kể cả "}") không thể chèn vào/đóng khối cấu hình vhost.
+WPTT_HTACCESS_KEEP='^(rewrite(engine|base|cond|rule)|cachelookup|cachekeymodify)[[:space:]]'
+
+# chuẩn hoá: bỏ \r, nối dòng "\", trim, bỏ comment + dòng trống
+wptt_htaccess_clean() {
+  tr -d '\r' <"$1" |
+    sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ta' -e '}' |
+    sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' |
+    grep -vE '^(#|$)'
+}
+
+wptt_htaccess_rewrite_only() {
+  wptt_htaccess_clean "$1" | awk -v keep="$WPTT_HTACCESS_KEEP" '
+    function add(s) { if (depth > 0) body[depth] = body[depth] s; else out = out s }
+    {
+      low = tolower($0)
+      if (low ~ /^<ifmodule[ \t]+[^>]*>$/) { depth++; head[depth] = $0; body[depth] = ""; next }
+      if (low ~ /^<\/ifmodule>$/) {
+        if (depth == 0) next
+        blk = (body[depth] != "") ? head[depth] "\n" body[depth] "</IfModule>\n" : ""
+        depth--
+        if (blk != "") add(blk)
+        next
+      }
+      if (low ~ keep) add($0 "\n")
+    }
+    END { printf "%s", out }'
+}
+
+# Các dòng bị bỏ qua (để báo cho người dùng biết)
+wptt_htaccess_skipped() {
+  wptt_htaccess_clean "$1" | grep -viE '^</?IfModule' | grep -viE "$WPTT_HTACCESS_KEEP"
+}
+
 NAME=$1
 if [[ $NAME = "98" ]]; then
   NAME=""
@@ -28,14 +67,6 @@ if [[ ! -f "$path" && ! -f $path_bk ]]; then
   exit
 fi
 
-# pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-# if [[ ! -f "$pathcheckwp" ]]; then
-#   clear
-#   echoDo "Hệ thống xác nhận bạn không sử dụng mã nguồn WordPress"
-#   sleep 3
-# return 2>/dev/null ; exit
-# fi
-
 #kiểm tra .htaccess
 if [[ ! -f /usr/local/lsws/$NAME/html/.htaccess ]]; then
   echoDo "Không xác định được .htaccess của website $NAME"
@@ -43,10 +74,15 @@ if [[ ! -f /usr/local/lsws/$NAME/html/.htaccess ]]; then
   exit
 fi
 
+vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
+htaccess_file="/usr/local/lsws/$NAME/html/.htaccess"
+
+# backup cấu hình vhost trước khi sửa (rollback thủ công: cp -p file.bak-wptt file.conf)
+cp -p "$vhost_conf" "$vhost_conf.bak-wptt" 2>/dev/null
+
 #sed-multiline-delete-with-pattern
 #tự động xác định tìm block rewrite xóa theo block {}
-# sed -i '/^rewrite/{:a;N;/}$/!ba};/enable/d' /usr/local/lsws/conf/vhosts/$NAME.conf
-sed -i -e '/^rewrite/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+sed -i -e '/^rewrite/,/^}$/d' "$vhost_conf"
 
 #thiết lập tắt tự động chạy file .htaccess:
 
@@ -55,20 +91,19 @@ echo "
 rewrite  {
   enable                  1
   autoLoadHtaccess        0
-}" >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
-# sed -i '/^context/{:a;N;/}$/!ba};/enable/d' /usr/local/lsws/conf/vhosts/$NAME.conf
-
-#xác định context
-# context=$(cat /usr/local/lsws/conf/vhosts/$NAME.conf | sed -e '/^context/,/^}/!d')
+}" >>"$vhost_conf"
 
 # xóa context hiện tại:
-sed -i -e '/^context \/ {/,/^}$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+sed -i -e '/^context \/ {/,/^}$/d' "$vhost_conf"
 
-#xác định các code đã được add vào sử dụng tại .htaccess
-sed -i '/^$/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf #xoá dòng rỗng
-unset lenh_htaccess
-lenh_htaccess=$(cat /usr/local/lsws/"$NAME"/html/.htaccess | sed '/^#/d' | sed '/^$/d') #đọc file htaccess, và xoá những dòng rỗng và xoá dòng bình luận đi
+#xác định các code rewrite được add vào sử dụng tại .htaccess
+sed -i '/^$/d' "$vhost_conf" #xoá dòng rỗng
+unset lenh_htaccess lenh_bo_qua
+# chỉ lấy RewriteEngine/RewriteBase/RewriteCond/RewriteRule
+# (rule phải nằm trong rules <<<END_rules ... END_rules của OLS, không được để trần trong khối rewrite {})
+lenh_htaccess=$(wptt_htaccess_rewrite_only "$htaccess_file")
+lenh_bo_qua=$(wptt_htaccess_skipped "$htaccess_file")
+
 echo "
 context / {
   location                /usr/local/lsws/$NAME/html
@@ -85,8 +120,10 @@ permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), ma
 
   rewrite  {
       enable                1
-	  inherit               1
+      inherit               1
+      rules                 <<<END_rules
 $lenh_htaccess
+      END_rules
   }
   addDefaultCharset       off
 
@@ -94,16 +131,16 @@ $lenh_htaccess
 
   }
 }
-" >>/usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+" >>"$vhost_conf"
 
-hostname_custom=$(cat /usr/local/lsws/conf/vhosts/"$Website_chinh"/"$Website_chinh".conf | grep 'X-Powered-By' | cut -f2 -d ' ' | sort -u)
+hostname_custom=$(cat /usr/local/lsws/conf/vhosts/"$Website_chinh"/"$Website_chinh".conf | grep 'X-Powered-By' | cut -f2 -d ' ' | sort -u) # VERIFY: $Website_chinh được định nghĩa ở core-functions/.wptt.conf?
 if [[ $hostname_custom = '' || $hostname_custom != 'WPTangTocOLS' ]]; then
-  sed -i '/X-Powered-By/d' /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
+  sed -i '/X-Powered-By/d' "$vhost_conf"
 fi
 
 if [[ $hostname_custom != 'WPTangTocOLS' ]]; then
   if [[ $hostname_custom ]]; then
-    sed -i "/extraHeaders /a X-Powered-By $hostname_custom" /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf #custom hostname
+    sed -i "/extraHeaders /a X-Powered-By $hostname_custom" "$vhost_conf" #custom hostname
   fi
 fi
 unset hostname_custom
@@ -123,4 +160,13 @@ wptt_smart_reload_lsws >/dev/null 2>&1
 sed -i '/^$/d' /etc/wptt/vhost/."$NAME".conf
 wptt_atomic_edit_config "/etc/wptt/vhost/.$NAME.conf" "vhost_chuyen_htaccess=1"
 _rundone "Thiết lập chuyển htaccess sang vhosts"
+
+# báo các chỉ thị Apache không chuyển được (không ảnh hưởng tới kết quả)
+if [[ -n "$lenh_bo_qua" ]]; then
+  echo "Các chỉ thị .htaccess sau không tương thích rewrite OLS nên đã được bỏ qua:"
+  echo "$lenh_bo_qua" | sed 's/^/  - /'
+  wptt_logs "INFO" "Bỏ qua chỉ thị .htaccess không tương thích OLS website $NAME: $(echo "$lenh_bo_qua" | tr '\n' ';')"
+fi
+unset lenh_htaccess lenh_bo_qua
+
 wptt_logs "INFO" "Thiết lập chuyển htaccess sang vhosts website $NAME"
