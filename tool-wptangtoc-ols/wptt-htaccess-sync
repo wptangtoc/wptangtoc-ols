@@ -10,7 +10,7 @@ export LC_ALL=en_US.UTF-8
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 umask 022
 
-IFS=$' \t\n'
+IFS=$' \t\n' # nosemgrep: bash.lang.security.ifs-tampering.ifs-tampering
 
 tmp_dir=""
 DEBUG_MODE=0
@@ -33,6 +33,67 @@ _debug_log() {
 }
 
 # ==============================================================================
+# HÀM THU HOẠCH CÁC CHỈ THỊ PHP HỆ THỐNG CÓ SẴN TRONG VHOST (VD: open_basedir)
+# Đảm bảo tính năng bat-tat-open-basedir chạy trước hay chạy sau đều được giữ nguyên
+# và gộp chung vào 1 khối phpIniOverride duy nhất.
+# ==============================================================================
+_extract_native_vhost_php_overrides() {
+  local vhost_conf="$1"
+  local state_php="$2"
+  local native_php_out="$3"
+
+  : >"$native_php_out"
+  [[ -f "$vhost_conf" ]] || return 0
+
+  awk -v state_php="$state_php" '
+    function trim(s) {
+      sub(/^[ \t\r\n]+/, "", s)
+      sub(/[ \t\r\n]+$/, "", s)
+      return s
+    }
+    function get_setting_key(line,    n, tok) {
+      n = split(line, tok, /[ \t]+/)
+      if (n >= 2 && tolower(tok[1]) ~ /^php_(admin_)?(value|flag)$/) {
+        return tolower(tok[2])
+      }
+      return ""
+    }
+    BEGIN {
+      while ((getline l < state_php) > 0) {
+        l = trim(l)
+        if (l != "") {
+          k = get_setting_key(l)
+          if (k != "") synced_keys[k] = 1
+          synced_lines[l] = 1
+        }
+      }
+      close(state_php)
+      in_php = 0
+    }
+    /^[ \t]*phpIniOverride[ \t]*\{[ \t]*$/ {
+      in_php = 1
+      next
+    }
+    in_php && /^[ \t]*\}[ \t]*$/ {
+      in_php = 0
+      next
+    }
+    in_php {
+      t = trim($0)
+      if (t == "" || t ~ /^#/) next
+      k = get_setting_key(t)
+      # Luôn bảo toàn open_basedir, disable_functions... hoặc các cấu hình không do htaccess_sync sinh ra
+      if (k == "open_basedir" || k == "disable_functions" || k == "disable_classes" || !(k in synced_keys)) {
+        if (!(t in seen_native)) {
+          seen_native[t] = 1
+          print t
+        }
+      }
+    }
+  ' "$vhost_conf" >"$native_php_out"
+}
+
+# ==============================================================================
 # HÀM BIÊN DỊCH .HTACCESS SANG NATIVE OLS VHOST BLOCK BẰNG AWK (100% POSIX SAFE)
 # ==============================================================================
 _compile_htaccess_to_ols_block() {
@@ -41,6 +102,8 @@ _compile_htaccess_to_ols_block() {
   local rw_out="$3"
   local meta_out="$4"
   local warn_out="$5"
+  local php_out="$6"
+  local native_php_in="$7"
 
   local ht_root="/usr/local/lsws/${domain}/html/.htaccess"
   local ht_wpcontent="/usr/local/lsws/${domain}/html/wp-content/.htaccess"
@@ -50,15 +113,16 @@ _compile_htaccess_to_ols_block() {
   : >"$rw_out"
   : >"$meta_out"
   : >"$warn_out"
+  : >"$php_out"
 
   local awk_files=()
   [[ -f "$ht_root" ]] && awk_files+=("$ht_root")
   [[ -f "$ht_wpcontent" ]] && awk_files+=("$ht_wpcontent")
   [[ -f "$ht_uploads" ]] && awk_files+=("$ht_uploads")
 
+  # Ngay cả khi không có file .htaccess, nếu có native_php_in (ví dụ open_basedir) vẫn phải chạy END để giữ lại
   if ((${#awk_files[@]} == 0)); then
-    _debug_log "Không tìm thấy file .htaccess nào cho $domain"
-    return 0
+    awk_files+=("/dev/null")
   fi
 
   awk \
@@ -69,7 +133,9 @@ _compile_htaccess_to_ols_block() {
     -v hdr_out="$hdr_out" \
     -v rw_out="$rw_out" \
     -v meta_out="$meta_out" \
-    -v warn_out="$warn_out" '
+    -v warn_out="$warn_out" \
+    -v php_out="$php_out" \
+    -v native_php_in="$native_php_in" '
   function trim(s) {
     sub(/^[ \t\r\n]+/, "", s)
     sub(/[ \t\r\n]+$/, "", s)
@@ -177,6 +243,19 @@ _compile_htaccess_to_ols_block() {
 
   BEGIN {
     hrs_open = "\074\074\074END_extraHeaders"
+
+    # Nạp trước các chỉ thị PHP cấp hệ thống của Vhost (như open_basedir)
+    native_php_count = 0
+    while ((getline np < native_php_in) > 0) {
+      np = trim(np)
+      if (np != "") {
+        native_php_list[++native_php_count] = np
+        if (split(np, nptok, /[ \t]+/) >= 2) {
+          native_php_keys[tolower(nptok[2])] = 1
+        }
+      }
+    }
+    close(native_php_in)
 
     safe_php["memory_limit"] = 1
     safe_php["upload_max_filesize"] = 1
@@ -388,6 +467,10 @@ _compile_htaccess_to_ols_block() {
       setting = tolower(tok[2])
       if (setting in dangerous_php) {
         add_warn("SECURITY-BLOCKED", "Đã chặn chỉ thị PHP nguy hiểm \"" kw " " setting "\" trong .htaccess để bảo vệ cô lập máy chủ.")
+        next
+      }
+      # Nếu cấu hình này đã được khóa cứng ở cấp Vhost Native thì không cho .htaccess ghi đè
+      if (setting in native_php_keys) {
         next
       }
       if (setting in safe_php) {
@@ -646,6 +729,13 @@ _compile_htaccess_to_ols_block() {
     for (i = 1; i <= rw_count; i++) print rw_list[i] > rw_out
     close(rw_out)
 
+    # Lưu riêng các dòng PHP từ .htaccess để lần chạy sau phân biệt với PHP hệ thống (như open_basedir)
+    for (i = 1; i <= php_count; i++) {
+      k = php_order[i]
+      print php_seen[k] > php_out
+    }
+    close(php_out)
+
     if (meta_autoindex != "") print "autoIndex=" meta_autoindex > meta_out
     if (meta_dirindex != "")  print "indexFiles=" meta_dirindex > meta_out
     if (meta_charset != "")   print "addDefaultCharset=" meta_charset > meta_out
@@ -674,13 +764,29 @@ _compile_htaccess_to_ols_block() {
       final_deny[++final_deny_count] = ip
     }
 
-    has_any = (php_count > 0 || exp_active != "" || exp_count > 0 || err_count > 0 || final_allow_count > 0 || final_deny_count > 0 || fctx_count > 0)
-    if (!has_any) exit 0
+    has_sync_block = (php_count > 0 || exp_active != "" || exp_count > 0 || err_count > 0 || final_allow_count > 0 || final_deny_count > 0 || fctx_count > 0)
+
+    # Trường hợp .htaccess không có bất kỳ chỉ thị nào nhưng Vhost có open_basedir (native_php_count > 0):
+    # Xuất khối phpIniOverride chuẩn của Vhost bên ngoài tag WPTT_HTACCESS_SYNC để bảo toàn nguyên trạng.
+    if (!has_sync_block) {
+      if (native_php_count > 0) {
+        print "phpIniOverride  {"
+        for (i = 1; i <= native_php_count; i++) {
+          print "  " native_php_list[i]
+        }
+        print "}"
+      }
+      exit 0
+    }
 
     print "# BEGIN WPTT_HTACCESS_SYNC"
 
-    if (php_count > 0) {
+    # Hợp nhất 1 khối phpIniOverride duy nhất trong toàn bộ Vhost (Gồm open_basedir + .htaccess PHP)
+    if (native_php_count > 0 || php_count > 0) {
       print "phpIniOverride  {"
+      for (i = 1; i <= native_php_count; i++) {
+        print "  " native_php_list[i]
+      }
       for (i = 1; i <= php_count; i++) {
         k = php_order[i]
         print "  " php_seen[k]
@@ -928,30 +1034,21 @@ _warn_duplicate_blocks() {
   [[ -s "$block_file" ]] || return 0
   while IFS= read -r key; do
     [[ -z "$key" ]] && continue
-    if [[ "$key" == "phpIniOverride" ]]; then
-      if ! awk '
-        /^context[ \t]+\// { in_ctx=1 }
-        in_ctx && /^\}/ { in_ctx=0 }
-        !in_ctx && /^[ \t]*phpIniOverride[ \t]*\{/ { found=1 }
-        END { exit(found ? 0 : 1) }
-      ' "$base_conf"; then
-        continue
-      fi
-    fi
     pat="^${key// /[[:space:]]+}[[:space:]]*\{"
     if grep -qE "$pat" "$base_conf" 2>/dev/null; then
       printf '[WPTT] CẢNH BÁO %s: vhost đã có khối "%s" ngoài vùng WPTT_HTACCESS_SYNC, OLS chỉ nhận 1 khối nên phần lấy từ .htaccess có thể không có tác dụng.\n' "$domain" "$key" >&2
     fi
   done < <(awk '
-    /^(phpIniOverride|accessControl|expires)[ \t]*\{/ { sub(/[ \t]*\{.*$/, ""); print; next }
+    /^(accessControl|expires)[ \t]*\{/ { sub(/[ \t]*\{.*$/, ""); print; next }
     /^errorpage[ \t]+[0-9]+/ { print $1 " " $2 }
   ' "$block_file")
 }
 
 _persist_sync_state() {
-  local applied_hdr="$1" hdr_state="$2" rw_src="$3" rw_state="$4"
+  local applied_hdr="$1" hdr_state="$2" rw_src="$3" rw_state="$4" php_src="$5" php_state="$6"
   /bin/cat -- "$applied_hdr" >"$hdr_state" 2>/dev/null && /bin/chmod 600 "$hdr_state" 2>/dev/null || true
   /bin/cat -- "$rw_src" >"$rw_state" 2>/dev/null && /bin/chmod 600 "$rw_state" 2>/dev/null || true
+  /bin/cat -- "$php_src" >"$php_state" 2>/dev/null && /bin/chmod 600 "$php_state" 2>/dev/null || true
 }
 
 # ==============================================================================
@@ -987,18 +1084,27 @@ _sync_single_domain() {
   local state_dir="/etc/wptt/htaccess_sync"
   local hdr_state="${state_dir}/${domain}.headers"
   local rw_state="${state_dir}/${domain}.rewrite_extra"
+  local php_state="${state_dir}/${domain}.php_override"
   local hdr_new="${tmp_dir}/${domain}.hdr_new"
   local hdr_applied="${tmp_dir}/${domain}.hdr_applied"
   local rw_new="${tmp_dir}/${domain}.rw_new"
+  local php_new="${tmp_dir}/${domain}.php_new"
+  local native_php_file="${tmp_dir}/${domain}.native_php"
   local meta_new="${tmp_dir}/${domain}.meta_new"
   local warn_new="${tmp_dir}/${domain}.warn_new"
   local hdr_old_src="/dev/null"
+  local php_old_src="/dev/null"
 
   /bin/mkdir -p "$state_dir" 2>/dev/null || true
   /bin/chmod 700 "$state_dir" 2>/dev/null || true
   [[ -f "$hdr_state" ]] && hdr_old_src="$hdr_state"
+  [[ -f "$php_state" ]] && php_old_src="$php_state"
 
-  _compile_htaccess_to_ols_block "$domain" "$hdr_new" "$rw_new" "$meta_new" "$warn_new" >"$block_file"
+  # 1. Thu hoạch các chỉ thị PHP gốc của Vhost (như open_basedir) bất kể nó đang nằm ở đâu
+  _extract_native_vhost_php_overrides "$vhost_conf" "$php_old_src" "$native_php_file"
+
+  # 2. Biên dịch các chỉ thị từ .htaccess và hợp nhất với native_php_file vào 1 khối phpIniOverride duy nhất
+  _compile_htaccess_to_ols_block "$domain" "$hdr_new" "$rw_new" "$meta_new" "$warn_new" "$php_new" "$native_php_file" >"$block_file"
 
   if [[ -s "$warn_new" ]]; then
     local wline=""
@@ -1013,22 +1119,20 @@ _sync_single_domain() {
     done <"$warn_new"
   fi
 
+  # 3. Loại bỏ khối # BEGIN WPTT_HTACCESS_SYNC cũ VÀ mọi khối phpIniOverride rời rạc trong Vhost
+  #    (Vì toàn bộ nội dung phpIniOverride hợp lệ đã được gom vào block_file)
   awk '
     /^# BEGIN WPTT_HTACCESS_SYNC$/ { skip = 1; next }
     /^# END WPTT_HTACCESS_SYNC$/   { skip = 0; next }
     skip { next }
     /^[ \t]*phpIniOverride[ \t]*\{[ \t]*$/ {
-      buf_n = 1
-      buf[1] = $0
-      is_empty_php = 0
-      while ((getline nxt) > 0) {
-        buf[++buf_n] = nxt
-        if (nxt ~ /^[ \t]*$/) continue
-        if (nxt ~ /^[ \t]*\}[ \t]*$/) { is_empty_php = 1; break }
-        break
+      in_php = 1
+      next
+    }
+    in_php {
+      if ($0 ~ /^[ \t]*\}[ \t]*$/) {
+        in_php = 0
       }
-      if (is_empty_php) next
-      for (bi = 1; bi <= buf_n; bi++) lines[++n] = buf[bi]
       next
     }
     { lines[++n] = $0 }
@@ -1051,7 +1155,7 @@ _sync_single_domain() {
 
   if cmp -s "$vhost_conf" "$candidate_conf" 2>/dev/null; then
     _debug_log "File Vhost của $domain đã đồng bộ sẵn, không cần ghi lại."
-    _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state"
+    _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state" "$php_new" "$php_state"
     return 2
   fi
 
@@ -1063,7 +1167,7 @@ _sync_single_domain() {
   fi
   /bin/mv -fT -- "$atomic_stage" "$vhost_conf"
   _debug_log "Đã cập nhật thành công Vhost: $vhost_conf"
-  _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state"
+  _persist_sync_state "$hdr_applied" "$hdr_state" "$rw_new" "$rw_state" "$php_new" "$php_state"
 
   return 0
 }
@@ -1078,7 +1182,7 @@ main() {
 
   # shellcheck source=/dev/null
   [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
-  IFS=$' \t\n'
+  IFS=$' \t\n' # nosemgrep: bash.lang.security.ifs-tampering.ifs-tampering
 
   for arg in "$@"; do
     case "$arg" in
