@@ -34,8 +34,6 @@ _debug_log() {
 
 # ==============================================================================
 # HÀM THU HOẠCH CÁC CHỈ THỊ PHP HỆ THỐNG CÓ SẴN TRONG VHOST (VD: open_basedir)
-# Đảm bảo tính năng bat-tat-open-basedir chạy trước hay chạy sau đều được giữ nguyên
-# và gộp chung vào 1 khối phpIniOverride duy nhất.
 # ==============================================================================
 _extract_native_vhost_php_overrides() {
   local vhost_conf="$1"
@@ -82,7 +80,6 @@ _extract_native_vhost_php_overrides() {
       t = trim($0)
       if (t == "" || t ~ /^#/) next
       k = get_setting_key(t)
-      # Luôn bảo toàn open_basedir, disable_functions... hoặc các cấu hình không do htaccess_sync sinh ra
       if (k == "open_basedir" || k == "disable_functions" || k == "disable_classes" || !(k in synced_keys)) {
         if (!(t in seen_native)) {
           seen_native[t] = 1
@@ -120,7 +117,6 @@ _compile_htaccess_to_ols_block() {
   [[ -f "$ht_wpcontent" ]] && awk_files+=("$ht_wpcontent")
   [[ -f "$ht_uploads" ]] && awk_files+=("$ht_uploads")
 
-  # Ngay cả khi không có file .htaccess, nếu có native_php_in (ví dụ open_basedir) vẫn phải chạy END để giữ lại
   if ((${#awk_files[@]} == 0)); then
     awk_files+=("/dev/null")
   fi
@@ -187,6 +183,83 @@ _compile_htaccess_to_ols_block() {
     }
     return out
   }
+  # Tách chuỗi có hỗ trợ dấu ngoặc kép (VD: SetEnvIf User-Agent "Mozilla 5.0" var1 var2=val)
+  function split_apache_args(str, out_arr,    n, len, i, c, in_q, q_char, cur) {
+    n = 0
+    cur = ""
+    in_q = 0
+    q_char = ""
+    len = length(str)
+    for (i = 1; i <= len; i++) {
+      c = substr(str, i, 1)
+      if (in_q) {
+        if (c == q_char) {
+          in_q = 0
+        } else {
+          cur = cur c
+        }
+      } else {
+        if (c == "\"" || c == "\x27") {
+          in_q = 1
+          q_char = c
+        } else if (c ~ /[ \t]/) {
+          if (cur != "") {
+            out_arr[++n] = cur
+            cur = ""
+          }
+        } else {
+          cur = cur c
+        }
+      }
+    }
+    if (cur != "") {
+      out_arr[++n] = cur
+    }
+    return n
+  }
+  # Ánh xạ thuộc tính của SetEnvIf sang biến máy chủ của OpenLiteSpeed RewriteCond
+  function map_setenvif_attr(attr,    low) {
+    low = tolower(unquote(attr))
+    if (low == "user-agent" || low == "http_user_agent") return "%{HTTP_USER_AGENT}"
+    if (low == "host" || low == "http_host")             return "%{HTTP_HOST}"
+    if (low == "referer" || low == "http_referer")       return "%{HTTP_REFERER}"
+    if (low == "cookie" || low == "http_cookie")         return "%{HTTP_COOKIE}"
+    if (low == "accept" || low == "http_accept")         return "%{HTTP_ACCEPT}"
+    if (low == "forwarded" || low == "x-forwarded-for")  return "%{HTTP:X-Forwarded-For}"
+    if (low == "x-forwarded-proto")                      return "%{HTTP:X-Forwarded-Proto}"
+    if (low == "remote_addr")                            return "%{REMOTE_ADDR}"
+    if (low == "remote_host")                            return "%{REMOTE_HOST}"
+    if (low == "request_uri")                            return "%{REQUEST_URI}"
+    if (low == "request_method")                         return "%{REQUEST_METHOD}"
+    if (low == "request_filename")                       return "%{REQUEST_FILENAME}"
+    if (low == "query_string")                           return "%{QUERY_STRING}"
+    if (low == "server_protocol")                        return "%{SERVER_PROTOCOL}"
+    if (low == "https")                                  return "%{HTTPS}"
+    if (attr ~ /^[A-Za-z0-9_-]+$/)                       return "%{HTTP:" attr "}"
+    return ""
+  }
+  # Biên dịch danh sách biến gán của SetEnvIf / BrowserMatch thành chuỗi cờ [E=...,E=...]
+  function build_env_flags_from_tokens(arr, start_idx, end_idx,    i, tok, eq_pos, vname, vval, e_str) {
+    e_str = ""
+    for (i = start_idx; i <= end_idx; i++) {
+      tok = unquote(arr[i])
+      if (tok == "" || tok ~ /^#/) break
+      if (tok ~ /^![A-Za-z_][A-Za-z0-9_]*$/) {
+        vname = substr(tok, 2)
+        vval = ""
+      } else if ((eq_pos = index(tok, "=")) > 0) {
+        vname = substr(tok, 1, eq_pos - 1)
+        vval = unquote(substr(tok, eq_pos + 1))
+      } else {
+        vname = tok
+        vval = "1"
+      }
+      if (vname ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && vval !~ /[\], \t]/) {
+        e_str = (e_str == "" ? "E=" vname ":" vval : e_str ",E=" vname ":" vval)
+      }
+    }
+    return e_str
+  }
   function convert_redirect_to_rewriterule(kw, rcode, rsrc, rdst, is_rmatch,    clean_src, esc_src, clean_dst) {
     if (rsrc == "") return ""
     if (is_rmatch) {
@@ -244,7 +317,6 @@ _compile_htaccess_to_ols_block() {
   BEGIN {
     hrs_open = "\074\074\074END_extraHeaders"
 
-    # Nạp trước các chỉ thị PHP cấp hệ thống của Vhost (như open_basedir)
     native_php_count = 0
     while ((getline np < native_php_in) > 0) {
       np = trim(np)
@@ -455,12 +527,80 @@ _compile_htaccess_to_ols_block() {
       add_warn("WARN", "Phát hiện chỉ thị \"Satisfy " (ntok >= 2 ? tok[2] : "") "\". OpenLiteSpeed không hỗ trợ gộp điều kiện Satisfy giữa Auth và IP.")
       next
     }
-    if (kw ~ /^(setenv|setenvif|setenvifnocase|browsermatch|requestheader)$/) {
-      add_warn("INFO", "Chỉ thị Apache \"" tok[1] "\" không được hỗ trợ trực tiếp trong .htaccess của OpenLiteSpeed (khuyến nghị chuyển sang RewriteCond/RewriteRule [E=...]).")
+
+    if (ntok < 2) next
+
+    # ==========================================================================
+    # BIÊN DỊCH SetEnv, SetEnvIf, SetEnvIfNoCase, BrowserMatch, RequestHeader
+    # SANG NATIVE OLS REWRITE RULES ([E=VAR:VAL])
+    # ==========================================================================
+    if (kw == "setenv") {
+      nq = split_apache_args(line, qtok)
+      if (nq >= 2) {
+        ev_name = unquote(qtok[2])
+        ev_val = (nq >= 3) ? unquote(qtok[3]) : "1"
+        if (ev_name ~ /^[A-Za-z_][A-Za-z0-9_]*$/ && ev_val !~ /[\], \t]/) {
+          rw_list[++rw_count] = "RewriteRule .* - [E=" ev_name ":" ev_val "]"
+        }
+      }
       next
     }
 
-    if (ntok < 2) next
+    if (kw == "setenvif" || kw == "setenvifnocase") {
+      nq = split_apache_args(line, qtok)
+      if (nq >= 4) {
+        cond_var = map_setenvif_attr(qtok[2])
+        cond_pat = qtok[3]
+        env_flags = build_env_flags_from_tokens(qtok, 4, nq)
+        if (cond_var != "" && cond_pat != "" && env_flags != "") {
+          nc_flag = (kw == "setenvifnocase") ? " [NC]" : ""
+          if (cond_pat ~ /[ \t]/) cond_pat = "\"" cond_pat "\""
+          rw_list[++rw_count] = "RewriteCond " cond_var " " cond_pat nc_flag
+          rw_list[++rw_count] = "RewriteRule .* - [" env_flags "]"
+        }
+      }
+      next
+    }
+
+    if (kw == "browsermatch" || kw == "browsermatchnocase") {
+      nq = split_apache_args(line, qtok)
+      if (nq >= 3) {
+        cond_pat = qtok[2]
+        env_flags = build_env_flags_from_tokens(qtok, 3, nq)
+        if (cond_pat != "" && env_flags != "") {
+          nc_flag = (kw == "browsermatchnocase") ? " [NC]" : ""
+          if (cond_pat ~ /[ \t]/) cond_pat = "\"" cond_pat "\""
+          rw_list[++rw_count] = "RewriteCond %{HTTP_USER_AGENT} " cond_pat nc_flag
+          rw_list[++rw_count] = "RewriteRule .* - [" env_flags "]"
+        }
+      }
+      next
+    }
+
+    if (kw == "requestheader") {
+      nq = split_apache_args(line, qtok)
+      idx = 2
+      if (idx <= nq && tolower(qtok[idx]) == "always") idx++
+      if (idx + 1 <= nq) {
+        rh_act = tolower(qtok[idx])
+        rh_name = unquote(qtok[idx + 1])
+        if (rh_name ~ /^[A-Za-z0-9_-]+$/) {
+          cgi_name = toupper(rh_name)
+          gsub(/-/, "_", cgi_name)
+          cgi_var = "HTTP_" cgi_name
+          if (rh_act == "unset") {
+            rw_list[++rw_count] = "RewriteRule .* - [E=" cgi_var ":]"
+          } else if (rh_act ~ /^(set|append|add|merge)$/ && idx + 2 <= nq) {
+            rh_val = unquote(qtok[idx + 2])
+            if (rh_val !~ /[\], \t]/) {
+              extra_https = (cgi_var == "HTTP_X_FORWARDED_PROTO" && tolower(rh_val) == "https") ? ",E=HTTPS:on" : ""
+              rw_list[++rw_count] = "RewriteRule .* - [E=" cgi_var ":" rh_val extra_https "]"
+            }
+          }
+        }
+      }
+      next
+    }
 
     # 1. XỬ LÝ PHP OVERRIDE
     if (kw ~ /^php_(admin_)?(value|flag)$/) {
@@ -469,7 +609,6 @@ _compile_htaccess_to_ols_block() {
         add_warn("SECURITY-BLOCKED", "Đã chặn chỉ thị PHP nguy hiểm \"" kw " " setting "\" trong .htaccess để bảo vệ cô lập máy chủ.")
         next
       }
-      # Nếu cấu hình này đã được khóa cứng ở cấp Vhost Native thì không cho .htaccess ghi đè
       if (setting in native_php_keys) {
         next
       }
@@ -729,7 +868,6 @@ _compile_htaccess_to_ols_block() {
     for (i = 1; i <= rw_count; i++) print rw_list[i] > rw_out
     close(rw_out)
 
-    # Lưu riêng các dòng PHP từ .htaccess để lần chạy sau phân biệt với PHP hệ thống (như open_basedir)
     for (i = 1; i <= php_count; i++) {
       k = php_order[i]
       print php_seen[k] > php_out
@@ -766,8 +904,6 @@ _compile_htaccess_to_ols_block() {
 
     has_sync_block = (php_count > 0 || exp_active != "" || exp_count > 0 || err_count > 0 || final_allow_count > 0 || final_deny_count > 0 || fctx_count > 0)
 
-    # Trường hợp .htaccess không có bất kỳ chỉ thị nào nhưng Vhost có open_basedir (native_php_count > 0):
-    # Xuất khối phpIniOverride chuẩn của Vhost bên ngoài tag WPTT_HTACCESS_SYNC để bảo toàn nguyên trạng.
     if (!has_sync_block) {
       if (native_php_count > 0) {
         print "phpIniOverride  {"
@@ -781,7 +917,6 @@ _compile_htaccess_to_ols_block() {
 
     print "# BEGIN WPTT_HTACCESS_SYNC"
 
-    # Hợp nhất 1 khối phpIniOverride duy nhất trong toàn bộ Vhost (Gồm open_basedir + .htaccess PHP)
     if (native_php_count > 0 || php_count > 0) {
       print "phpIniOverride  {"
       for (i = 1; i <= native_php_count; i++) {
@@ -860,7 +995,7 @@ _compile_htaccess_to_ols_block() {
 }
 
 # ==============================================================================
-# CHÈN HEADER VÀ REDIRECT (.HTACCESS) VÀO context / CÓ SẴN
+# CHÈN HEADER VÀ REDIRECT/ENV (.HTACCESS) VÀO context / CÓ SẴN
 # ==============================================================================
 _merge_headers_and_rewrites_into_root_context() {
   local conf="$1" new_hdr="$2" old_hdr="$3" applied_out="$4" rw_file="$5" domain="$6"
@@ -1100,10 +1235,8 @@ _sync_single_domain() {
   [[ -f "$hdr_state" ]] && hdr_old_src="$hdr_state"
   [[ -f "$php_state" ]] && php_old_src="$php_state"
 
-  # 1. Thu hoạch các chỉ thị PHP gốc của Vhost (như open_basedir) bất kể nó đang nằm ở đâu
   _extract_native_vhost_php_overrides "$vhost_conf" "$php_old_src" "$native_php_file"
 
-  # 2. Biên dịch các chỉ thị từ .htaccess và hợp nhất với native_php_file vào 1 khối phpIniOverride duy nhất
   _compile_htaccess_to_ols_block "$domain" "$hdr_new" "$rw_new" "$meta_new" "$warn_new" "$php_new" "$native_php_file" >"$block_file"
 
   if [[ -s "$warn_new" ]]; then
@@ -1119,8 +1252,6 @@ _sync_single_domain() {
     done <"$warn_new"
   fi
 
-  # 3. Loại bỏ khối # BEGIN WPTT_HTACCESS_SYNC cũ VÀ mọi khối phpIniOverride rời rạc trong Vhost
-  #    (Vì toàn bộ nội dung phpIniOverride hợp lệ đã được gom vào block_file)
   awk '
     /^# BEGIN WPTT_HTACCESS_SYNC$/ { skip = 1; next }
     /^# END WPTT_HTACCESS_SYNC$/   { skip = 0; next }
