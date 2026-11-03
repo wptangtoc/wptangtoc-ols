@@ -1,3 +1,14 @@
+# WPTangToc OLS v8.3.4.0
+
+🚀 **Tính năng mới & Nâng cấp bảo mật**
+
+* **Bổ sung chứng chỉ SSL Google Trust Services:** Mở rộng thêm lựa chọn nhà cung cấp chứng chỉ SSL uy tín, giúp quản trị viên dễ dàng tăng cường bảo mật cho website.
+* **Hỗ trợ chuẩn mã hóa kháng lượng tử:** Nâng cấp hệ thống sẵn sàng với các tiêu chuẩn bảo mật kháng lượng tử (Quantum-Resistant) đón đầu công nghệ tương lai.
+* **Cài đặt ZeroSSL 1 chạm:** Đơn giản hóa toàn bộ quy trình thiết lập chứng chỉ ZeroSSL với cơ chế cài đặt một chạm nhanh chóng, thuận tiện như Let's Encrypt.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.3.4
 
 🚀 **Tính năng mới**
