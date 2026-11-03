@@ -2,17 +2,17 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026 - Enterprise Standard
-# @description: Gỡ bỏ Chứng chỉ SSL Trả phí
+# @description: Gỡ bỏ Chứng chỉ SSL Trả phí / GTS / ZeroSSL (Paid & Custom ACME SSL)
 
 function huong_dan() {
   cat <<'EOF'
-  Tính năng Xóa SSL trả phí là quá trình gỡ bỏ một chứng chỉ SSL/TLS thương mại [mà bạn đã mua từ các nhà cung cấp như DigiCert, Sectigo, Comodo, hoặc cấp qua ZeroSSL ACME EAB] khỏi máy chủ web cho một tên miền cụ thể.
+  Tính năng Xóa SSL trả phí là quá trình gỡ bỏ một chứng chỉ SSL/TLS thương mại [mà bạn đã mua từ các nhà cung cấp như DigiCert, Sectigo, Comodo] hoặc chứng chỉ cấp qua ACME EAB [Google Trust Services (GTS), ZeroSSL] khỏi máy chủ web cho một tên miền cụ thể.
 
-  Nói một cách đơn giản, đây là hành động gỡ bỏ giấy phép bảo mật trả phí khỏi website của bạn và tự động chuyển đổi an toàn về chứng chỉ Let's Encrypt miễn phí sẵn có (hoặc chứng chỉ Tự ký bảo vệ Socket 443 của OpenLiteSpeed).
+  Nói một cách đơn giản, đây là hành động gỡ bỏ giấy phép bảo mật hiện tại khỏi website của bạn và tự động chuyển đổi an toàn về chứng chỉ Let's Encrypt miễn phí sẵn có (hoặc chứng chỉ Tự ký bảo vệ Socket 443 của OpenLiteSpeed).
 
   Mục Đích Chính
   * Chứng chỉ hết hạn và không gia hạn: Chuyển về Let's Encrypt miễn phí hoặc ngừng sử dụng gói trả phí.
-  * Ngắt chu kỳ gia hạn tự động ACME EAB (${NAME}-paid) của ZeroSSL / Sectigo / DigiCert.
+  * Ngắt chu kỳ gia hạn tự động ACME EAB (${NAME}-paid) của Google Trust Services (GTS) / ZeroSSL / Sectigo / DigiCert.
   * Thay đổi nhà cung cấp: Làm sạch cấu hình SSL cũ để nạp chứng chỉ mới.
   * Sự cố khóa bí mật: Khóa riêng tư (.key) bị lộ, cần thu hồi và gỡ bỏ ngay lập tức.
 EOF
@@ -67,7 +67,7 @@ fi
 
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_ssl:-Quản lý SSL} ➜ Gỡ bỏ Chứng chỉ SSL Trả phí / ZeroSSL (Paid SSL)${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_ssl:-Quản lý SSL} ➜ Gỡ bỏ Chứng chỉ SSL Trả phí / GTS / ZeroSSL${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 route_arg="${1:-}"
@@ -80,8 +80,62 @@ _has_paid_ssl_installed() {
   [[ -d "/usr/local/lsws/${dom}/ssl" || -f "/etc/letsencrypt/renewal/${dom}-paid.conf" || -d "/etc/letsencrypt/live/${dom}-paid" ]]
 }
 
+# Hàm nhận diện chính xác tên hãng CA (GTS, ZeroSSL, Sectigo, DigiCert...) 0-Subshell
+_detect_paid_ssl_provider() {
+  local dom="$1"
+  local renewal_conf="/etc/letsencrypt/renewal/${dom}-paid.conf"
+  local line="" server_url=""
+
+  if [[ -f "$renewal_conf" ]]; then
+    while IFS= read -r line; do
+      if [[ "$line" == server[[:space:]]*=* ]]; then
+        server_url="${line#*=}"
+        server_url="${server_url//[[:space:]]/}"
+        break
+      fi
+    done <"$renewal_conf"
+
+    case "${server_url,,}" in
+      *pki.goog* | *google*)
+        printf 'Google Trust (GTS)'
+        return 0
+        ;;
+      *zerossl.com*)
+        printf 'ZeroSSL ACME'
+        return 0
+        ;;
+      *sectigo.com* | *comodo*)
+        printf 'Sectigo ACME'
+        return 0
+        ;;
+      *digicert.com*)
+        printf 'DigiCert ACME'
+        return 0
+        ;;
+      *ssl.com*)
+        printf 'SSL.com ACME'
+        return 0
+        ;;
+      *buypass.com*)
+        printf 'Buypass ACME'
+        return 0
+        ;;
+      *)
+        printf 'Auto ACME EAB'
+        return 0
+        ;;
+    esac
+  fi
+
+  if [[ -d "/etc/letsencrypt/live/${dom}-paid" ]]; then
+    printf 'Auto ACME EAB'
+  else
+    printf 'SSL Paid Thủ công'
+  fi
+}
+
 # ==============================================================================
-# 1. MENU LỌC & CHỌN WEBSITE ĐANG DÙNG SSL TRẢ PHÍ (0-SUBSHELL & STTY BLACKBOX)
+# 1. MENU LỌC & CHỌN WEBSITE ĐANG DÙNG SSL TRẢ PHÍ / GTS / ZEROSSL
 # ==============================================================================
 if [[ -z "$NAME" ]]; then
   function lua_chon_NAME() {
@@ -115,7 +169,7 @@ if [[ -z "$NAME" ]]; then
 
     if ((${#selects[@]} == 0)); then
       if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
-      echo -e "${C_YELLOW}⚠️ Hệ thống hiện không có Website nào đang sử dụng cấu hình SSL Trả phí / ZeroSSL!${C_RESET}"
+      echo -e "${C_YELLOW}⚠️ Hệ thống hiện không có Website nào đang sử dụng SSL Trả phí / GTS / ZeroSSL!${C_RESET}"
       sleep 2.5
       wptt_quay_ve_menu "$route_arg" 0
     fi
@@ -126,7 +180,7 @@ if [[ -z "$NAME" ]]; then
 
     # Render Khung Bo Cong chuẩn 78 ký tự (0 Subshell)
     echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    local title_text="Lựa chọn Website bạn muốn XÓA chứng chỉ SSL Trả phí / ZeroSSL:"
+    local title_text="Lựa chọn Website bạn muốn XÓA SSL Trả phí / GTS / ZeroSSL:"
     local len=${#title_text}
     local pad_r=$((box_inner_width - len - 2))
     ((pad_r < 0)) && pad_r=0
@@ -144,18 +198,19 @@ if [[ -z "$NAME" ]]; then
     printf -v pad_line_str '%*s' "$pad_line_r" ""
     echo -e "${C_CYAN}├${short_line}${pad_line_str}│${C_RESET}"
 
-    local i=1 dom badge_plain badge_color item_text clean_text item_len pad pad_str
+    local i=1 dom provider_label badge_plain badge_color item_text clean_text item_len pad pad_str
     for dom in "${selects[@]}"; do
-      if [[ -f "/etc/letsencrypt/renewal/${dom}-paid.conf" || -d "/etc/letsencrypt/live/${dom}-paid" ]]; then
-        badge_plain="[SSL Paid + Auto ACME]"
-        badge_color="${C_GREEN}[SSL Paid + Auto ACME]${C_RESET}"
+      provider_label="$(_detect_paid_ssl_provider "$dom")"
+      if [[ "$provider_label" == "SSL Paid Thủ công" ]]; then
+        badge_plain="[${provider_label}]"
+        badge_color="${C_CYAN}[${provider_label}]${C_RESET}"
       else
-        badge_plain="[Có SSL Paid Thủ công]"
-        badge_color="${C_CYAN}[Có SSL Paid Thủ công]${C_RESET}"
+        badge_plain="[Auto: ${provider_label}]"
+        badge_color="${C_GREEN}[Auto: ${provider_label}]${C_RESET}"
       fi
 
-      printf -v item_text "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-38s${C_RESET} %s" "$i" "$dom" "$badge_color"
-      printf -v clean_text "  %3d) %-38s %s" "$i" "$dom" "$badge_plain"
+      printf -v item_text "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-36s${C_RESET} %s" "$i" "$dom" "$badge_color"
+      printf -v clean_text "  %3d) %-36s %s" "$i" "$dom" "$badge_plain"
 
       item_len=${#clean_text}
       pad=$((box_inner_width - item_len))
@@ -230,7 +285,7 @@ if [[ -z "$NAME" ]]; then
             if [[ "$found_d" == true ]]; then
               return 0
             else
-              echo -e "\n${C_RED}❌ Tên miền '$REPLY' không có trong danh sách đang dùng SSL Trả phí!${C_RESET}"
+              echo -e "\n${C_RED}❌ Tên miền '$REPLY' không có trong danh sách đang dùng SSL Trả phí / GTS / ZeroSSL!${C_RESET}"
             fi
           else
             echo -e "\n${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}"
@@ -255,10 +310,12 @@ if [[ ! -f "$pathcheck" && ! -f "/etc/wptt/chuyen-huong/.${NAME}.conf" ]]; then
 fi
 
 if ! _has_paid_ssl_installed "$NAME"; then
-  echo -e "\n${C_RED}❌ Website $NAME chưa thiết lập SSL Trả phí / ZeroSSL (Không tìm thấy thư mục cấu hình).${C_RESET}"
+  echo -e "\n${C_RED}❌ Website $NAME chưa thiết lập SSL Trả phí / GTS / ZeroSSL (Không tìm thấy thư mục cấu hình).${C_RESET}"
   sleep 2
   wptt_quay_ve_menu "$route_arg" 1
 fi
+
+current_provider="$(_detect_paid_ssl_provider "$NAME")"
 
 # ==============================================================================
 # 2. KIỂM TRA CHỨNG CHỈ FALLBACK (LET'S ENCRYPT CÒN HẠN HAY SELF-SIGNED)
@@ -282,18 +339,18 @@ else
 fi
 
 if [[ -f "/etc/letsencrypt/renewal/${NAME}-paid.conf" || -d "/etc/letsencrypt/live/${NAME}-paid" ]]; then
-  extra_msg="${extra_msg}\n${C_CYAN}* Đồng thời ngắt và dọn dẹp cấu hình tự động gia hạn ACME EAB (${NAME}-paid).${C_RESET}"
+  extra_msg="${extra_msg}\n${C_CYAN}* Đồng thời ngắt và dọn dẹp cấu hình tự động gia hạn ACME EAB [${current_provider}] (${NAME}-paid).${C_RESET}"
 fi
 
 # ==============================================================================
 # 3. XÁC NHẬN & THỰC THI GỠ BỎ NGUYÊN TỬ
 # ==============================================================================
-if wptt_xac_nhan "Bạn có chắc chắn muốn GỠ BỎ cấu hình SSL Trả phí / ZeroSSL của website này?" \
-  "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$NAME${C_RESET}\n$extra_msg" \
+if wptt_xac_nhan "Bạn có chắc chắn muốn GỠ BỎ chứng chỉ [${current_provider}] của website này?" \
+  "${C_BOLD_WHITE}Website:${C_RESET} ${C_YELLOW}$NAME${C_RESET} (${C_CYAN}${current_provider}${C_RESET})\n$extra_msg" \
   "" "Đồng ý Gỡ bỏ" "Hủy thao tác"; then
 
   echo ""
-  TASK_REMOVE="Tiến hành gỡ bỏ cấu hình SSL Trả phí và thiết lập Fallback SSL ($NAME)"
+  TASK_REMOVE="Tiến hành gỡ bỏ cấu hình SSL [${current_provider}] và thiết lập Fallback SSL ($NAME)"
   _runing "$TASK_REMOVE"
 
   # --- BƯỚC 1: CHUẨN BỊ SSL TỰ KÝ 10 NĂM (BẢO VỆ QUYỀN 0600 CHO PRIVATE KEY) ---
@@ -337,7 +394,7 @@ if wptt_xac_nhan "Bạn có chắc chắn muốn GỠ BỎ cấu hình SSL Trả
   # --- BƯỚC 3: CẬP NHẬT LISTENER HTTPD NGUYÊN TỬ (NẾU LÀ WEBSITE CHÍNH) ---
   if [[ -n "${Website_chinh:-}" && "$NAME" == "$Website_chinh" ]]; then
     ols_conf="/usr/local/lsws/conf/httpd_config.conf"
-    if [[ -f "$ols_conf" ]]; then
+    if [[ -f "$ols_conf" ]] && ! grep -qF "$key_file_tu_ky" "$ols_conf" 2>/dev/null; then
       if declare -F wptt_atomic_begin >/dev/null 2>&1; then
         tmp_ols="$(wptt_atomic_begin "$ols_conf")"
       else
@@ -347,10 +404,8 @@ if wptt_xac_nhan "Bạn có chắc chắn muốn GỠ BỎ cấu hình SSL Trả
       fi
 
       if [[ -n "$tmp_ols" && -f "$tmp_ols" ]]; then
-        /bin/sed -i "/keyFile/d" "$tmp_ols"
-        /bin/sed -i "/certFile/d" "$tmp_ols"
-        /bin/sed -i "/CACertFile/d" "$tmp_ols"
-        /bin/sed -i "/https/a \\  keyFile               ${key_file_tu_ky}\\n  certFile              ${crt_file_tu_ky}" "$tmp_ols"
+        /bin/sed -i "/keyFile/d; /certFile/d; /CACertFile/d" "$tmp_ols"
+        /bin/sed -i "/listener[[:space:]]\+https[[:space:]]*{/a \\  keyFile                 ${key_file_tu_ky}\\n  certFile                ${crt_file_tu_ky}" "$tmp_ols"
 
         if declare -F wptt_atomic_commit >/dev/null 2>&1; then
           wptt_atomic_commit "$tmp_ols" "$ols_conf"
@@ -433,8 +488,6 @@ EOF
   fi
 
   # --- BƯỚC 6: ĐỒNG BỘ RULE CHUYỂN HƯỚNG TRONG .HTACCESS THEO LOẠI FALLBACK ---
-  # Nếu Fallback về Self-Signed thì xóa rule ép HTTP -> HTTPS để khách truy cập không bị chặn bởi cảnh báo trình duyệt.
-  # Nếu Fallback về Let's Encrypt còn hạn thì giữ nguyên HTTPS để website hoạt động liền mạch.
   if [[ "$ssl_type" == "self-signed" ]]; then
     ht_file="/usr/local/lsws/${NAME}/html/.htaccess"
     if [[ -f "$ht_file" ]]; then
@@ -466,16 +519,17 @@ EOF
   # Nạp lại OpenLiteSpeed không gián đoạn
   declare -F wptt_smart_reload_lsws >/dev/null 2>&1 && wptt_smart_reload_lsws >/dev/null 2>&1
 
-  wptt_logs "INFO" "Xóa cài đặt SSL trả phí / ZeroSSL website $NAME (Fallback: $ssl_type)" 2>/dev/null || true
+  wptt_logs "INFO" "Xóa cài đặt SSL [${current_provider}] website $NAME (Fallback: $ssl_type)" 2>/dev/null || true
   _rundone "$TASK_REMOVE"
 
   # ==============================================================================
   # BÁO CÁO HOÀN TẤT
   # ==============================================================================
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ SSL TRẢ PHÍ / ZEROSSL${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ CHỨNG CHỈ SSL (${current_provider^^})${C_RESET}"
   echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "Website thao tác : ${C_YELLOW}$NAME${C_RESET}" 2
+  left_text "Đã gỡ bỏ gói     : ${C_RED}$current_provider${C_RESET}" 2
   left_text "Trạng thái mới   : ${C_GREEN}$fallback_status${C_RESET}" 2
   if [[ "$ssl_type" == "self-signed" ]]; then
     left_text "Gợi ý tiếp theo  : ${C_CYAN}Bạn có thể vào mục [Cài đặt SSL Let's Encrypt] để cấp SSL miễn phí.${C_RESET}" 2
@@ -483,7 +537,7 @@ EOF
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 else
-  echo -e "\n${C_YELLOW}Đã hủy thao tác xóa cấu hình SSL Trả phí.${C_RESET}"
+  echo -e "\n${C_YELLOW}Đã hủy thao tác xóa cấu hình SSL (${current_provider}).${C_RESET}"
 fi
 
 wptt_quay_ve_menu "$route_arg" 0 "enter"
