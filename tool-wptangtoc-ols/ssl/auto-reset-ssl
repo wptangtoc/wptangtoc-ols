@@ -20,7 +20,7 @@ reload_log_msg=""
 # 1. KIỂM TRA & ĐỒNG BỘ SSL TRẢ PHÍ TỰ ĐỘNG (/etc/letsencrypt/live/*-paid)
 # ==============================================================================
 # Chỉ quét khi tính năng SSL trả phí ACME EAB đã được kích hoạt trên hệ thống
-if [[ -f /etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh ]]; then
+if [[ -f /etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh && -d /etc/letsencrypt/live ]]; then
   shopt -s nullglob
   for paid_live_dir in /etc/letsencrypt/live/*-paid; do
     [[ -d "$paid_live_dir" ]] || continue
@@ -28,29 +28,50 @@ if [[ -f /etc/wptt/ssl/wptt-paid-ssl-deploy-hook.sh ]]; then
     cert_folder_name="${paid_live_dir##*/}"
     domain_name="${cert_folder_name%-paid}"
     target_ssl_dir="/usr/local/lsws/${domain_name}/ssl"
+    vhost_conf="/usr/local/lsws/conf/vhosts/${domain_name}/${domain_name}.conf"
 
-    # Bỏ qua nếu thư mục vhost của domain không còn tồn tại
-    [[ -d "/usr/local/lsws/${domain_name}" ]] || continue
+    # Bỏ qua nếu thư mục vhost của domain không còn tồn tại hoặc thiếu file cert.pem nguồn
+    if [[ ! -d "/usr/local/lsws/${domain_name}" || ! -f "${paid_live_dir}/cert.pem" ]]; then
+      continue
+    fi
 
-    # Dùng cờ -L để xuyên qua Symlink trong live/, kiểm tra xem file .pem thực tế
-    # có mới hơn mốc /usr/local/lsws/cgid trong vòng 1640 phút (27.3 giờ) hay không
-    if [[ ! -f "${target_ssl_dir}/cert.crt" ]] || [[ -n $(find -L "$paid_live_dir" -maxdepth 1 -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
+    # Chốt chặn tương thích: Nếu Vhost đã chuyển về dùng Let's Encrypt Free thì bỏ qua
+    if [[ -f "$vhost_conf" ]] && ! grep -q "$target_ssl_dir" "$vhost_conf" 2>/dev/null; then
+      continue
+    fi
+
+    # Đồng bộ khi:
+    # 1. File đích cert.crt chưa tồn tại, HOẶC
+    # 2. Chứng chỉ nguồn (cert.pem qua symlink) mới hơn file đích (cert.crt), HOẶC
+    # 3. Chứng chỉ nguồn vừa được cấp mới sau mốc khởi chạy OLS (/usr/local/lsws/cgid) nhưng chưa reload
+    sync_this_domain=0
+    if [[ ! -s "${target_ssl_dir}/cert.crt" ]] || [[ "${paid_live_dir}/cert.pem" -nt "${target_ssl_dir}/cert.crt" ]]; then
+      sync_this_domain=1
+    elif [[ -n $(find -L "$paid_live_dir" -maxdepth 1 -type f -name "*.pem" -mmin -1640 -newer /usr/local/lsws/cgid -print -quit 2>/dev/null) ]]; then
+      # Kiểm tra thêm nội dung cert.pem và cert.crt có khác nhau không để tránh reload lặp
+      if ! cmp -s "${paid_live_dir}/cert.pem" "${target_ssl_dir}/cert.crt" 2>/dev/null; then
+        sync_this_domain=1
+      fi
+    fi
+
+    if ((sync_this_domain == 1)); then
       /bin/mkdir -p -- "$target_ssl_dir"
       /bin/chmod 700 -- "$target_ssl_dir" 2>/dev/null || true
 
       old_umask=$(umask)
       umask 077
-      [[ -f "${paid_live_dir}/privkey.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/privkey.pem" "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
-      [[ -f "${paid_live_dir}/cert.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/cert.pem" "${target_ssl_dir}/cert.crt" 2>/dev/null || true
-      [[ -f "${paid_live_dir}/chain.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/chain.pem" "${target_ssl_dir}/ca_bundle.crt" 2>/dev/null || true
-      [[ -f "${paid_live_dir}/fullchain.pem" ]] && /bin/cp -pfL -- "${paid_live_dir}/fullchain.pem" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
+      # Dùng -fL (không dùng -p) để cập nhật mtime mới nhất cho cert.crt, chống lặp ở lần Cron sau, để sau này đổi chiếu: nếu archive lớn file lớn hơn trong đường dẫn ssl thì thực thi, nếu ngược lại file mtime trong thư mục: /usr/local/lsws/$NAME/ssl/cert.crt mà lớn thì archive thì không cần phải thực thi bypas bỏ qua, không dùng -p để đối chiếu mtime
+      [[ -f "${paid_live_dir}/privkey.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/privkey.pem" "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
+      [[ -f "${paid_live_dir}/cert.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/cert.pem" "${target_ssl_dir}/cert.crt" 2>/dev/null || true
+      [[ -f "${paid_live_dir}/chain.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/chain.pem" "${target_ssl_dir}/ca_bundle.crt" 2>/dev/null || true
+      [[ -f "${paid_live_dir}/fullchain.pem" ]] && /bin/cp -fL -- "${paid_live_dir}/fullchain.pem" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
       umask "$old_umask"
 
       /bin/chmod 600 -- "${target_ssl_dir}/${domain_name}.key" 2>/dev/null || true
       /bin/chmod 644 -- "${target_ssl_dir}/cert.crt" "${target_ssl_dir}/ca_bundle.crt" "${target_ssl_dir}/fullchain.pem" 2>/dev/null || true
 
       need_reload=1
-      reload_log_msg="Gia hạn tự động SSL trả phí (ACME EAB)"
+      reload_log_msg="Gia hạn tự động SSL trả phí / ZeroSSL / GTS ($domain_name)"
     fi
   done
   shopt -u nullglob
@@ -72,12 +93,12 @@ fi
 # ==============================================================================
 if ((need_reload == 1)); then
   # shellcheck source=/dev/null
-  . /etc/wptt/core-functions 2>/dev/null || true
+  [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
   if declare -F wptt_logs >/dev/null 2>&1; then
     wptt_logs "INFO" "$reload_log_msg"
   fi
   if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
-    wptt_smart_reload_lsws >/dev/null 2>&1
+    wptt_smart_reload_lsws >/dev/null 2>&1 || true
   else
     /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
   fi

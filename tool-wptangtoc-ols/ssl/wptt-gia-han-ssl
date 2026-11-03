@@ -2,11 +2,11 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Gia hạn thủ công toàn bộ chứng chỉ SSL (Let's Encrypt Free & ZeroSSL / Paid ACME EAB)
+# @description: Gia hạn thủ công toàn bộ chứng chỉ SSL (Let's Encrypt Free & GTS / ZeroSSL / Paid ACME EAB)
 
 function huong_dan() {
   cat <<'EOF'
-  Gia hạn chứng chỉ SSL thủ công: Tính năng này sẽ kiểm tra và yêu cầu gia hạn toàn bộ chứng chỉ SSL Let's Encrypt miễn phí cũng như chứng chỉ ZeroSSL / SSL Trả phí tự động (ACME EAB) trên máy chủ.
+  Gia hạn chứng chỉ SSL thủ công: Tính năng này sẽ kiểm tra và yêu cầu gia hạn toàn bộ chứng chỉ SSL Let's Encrypt miễn phí cũng như chứng chỉ Google Trust Services (GTS), ZeroSSL, Sectigo, DigiCert... (ACME EAB) trên máy chủ.
 
   Ghi chú: Mặc định WPTangToc OLS đã có cơ chế tự động gia hạn ngầm vĩnh viễn qua Cron / Systemd Timer.
   Nếu vì lý do sự cố mạng tạm thời, tường lửa chặn IP quốc tế hoặc lỗi DNS vừa mới khắc phục xong, bạn có thể sử dụng tính năng này để chủ động kích hoạt gia hạn và kiểm tra báo cáo chi tiết ngay lập tức.
@@ -80,11 +80,99 @@ if declare -F wptt_check_lsws >/dev/null 2>&1; then
 fi
 
 # ==============================================================================
+# HÀM NHẬN DIỆN TÊN HÃNG CA TỰ ĐỘNG TỪ CẤU HÌNH RENEWAL (0-SUBSHELL)
+# ==============================================================================
+_detect_ca_provider_name() {
+  local raw_lineage="$1"
+  local renewal_conf="/etc/letsencrypt/renewal/${raw_lineage}.conf"
+  local line="" server_url=""
+
+  if [[ -f "$renewal_conf" ]]; then
+    while IFS= read -r line; do
+      if [[ "$line" == server[[:space:]]*=* ]]; then
+        server_url="${line#*=}"
+        server_url="${server_url//[[:space:]]/}"
+        break
+      fi
+    done <"$renewal_conf"
+  fi
+
+  case "${server_url,,}" in
+  *pki.goog* | *google*)
+    printf 'Google Trust Services (GTS)'
+    ;;
+  *zerossl.com*)
+    printf 'ZeroSSL'
+    ;;
+  *sectigo.com* | *comodo*)
+    printf 'Sectigo Commercial'
+    ;;
+  *digicert.com*)
+    printf 'DigiCert Commercial'
+    ;;
+  *ssl.com*)
+    printf 'SSL.com Commercial'
+    ;;
+  *buypass.com*)
+    printf 'Buypass Go SSL'
+    ;;
+  *letsencrypt.org*)
+    printf "Let's Encrypt Free"
+    ;;
+  *)
+    # Fallback: Nếu file renewal chưa ghi server, đọc nhanh Issuer từ cert.pem bằng openssl
+    local cert_p="/etc/letsencrypt/live/${raw_lineage}/cert.pem"
+    if [[ -f "$cert_p" ]] && command -v openssl >/dev/null 2>&1; then
+      local issuer_str
+      issuer_str="$(openssl x509 -in "$cert_p" -noout -issuer 2>/dev/null || true)"
+      case "${issuer_str,,}" in
+      *"google trust"* | *gts*)
+        printf 'Google Trust Services (GTS)'
+        return 0
+        ;;
+      *zerossl*)
+        printf 'ZeroSSL'
+        return 0
+        ;;
+      *sectigo* | *comodo*)
+        printf 'Sectigo Commercial'
+        return 0
+        ;;
+      *digicert*)
+        printf 'DigiCert Commercial'
+        return 0
+        ;;
+      *"let's encrypt"*)
+        printf "Let's Encrypt Free"
+        return 0
+        ;;
+      esac
+    fi
+
+    if [[ "$raw_lineage" == *-paid ]]; then
+      printf 'Paid / Custom ACME EAB'
+    else
+      printf "Let's Encrypt Free"
+    fi
+    ;;
+  esac
+}
+
+_format_cert_lineage_label() {
+  local raw_name="$1"
+  local clean_dom="${raw_name%-paid}"
+  local ca_label
+  ca_label="$(_detect_ca_provider_name "$raw_name")"
+  printf '%s [%s]' "$clean_dom" "$ca_label"
+}
+
+# ==============================================================================
 # 1. QUÉT HỆ THỐNG KIỂM TRA SỐ LƯỢNG CHỨNG CHỈ ACME (0-SUBSHELL)
 # ==============================================================================
 free_ssl_count=0
 paid_acme_count=0
 paid_domains=()
+declare -A paid_ca_stats=()
 
 shopt -s nullglob
 for filepath in /etc/wptt/vhost/.*.conf /etc/wptt/chuyen-huong/.*.conf; do
@@ -101,6 +189,8 @@ for filepath in /etc/wptt/vhost/.*.conf /etc/wptt/chuyen-huong/.*.conf; do
     if [[ -f "/etc/letsencrypt/live/${domain}-paid/cert.pem" ]]; then
       ((paid_acme_count++))
       paid_domains+=("$domain")
+      ca_name="$(_detect_ca_provider_name "${domain}-paid")"
+      paid_ca_stats["$ca_name"]=$((${paid_ca_stats["$ca_name"]:-0} + 1))
     fi
   fi
 done
@@ -109,7 +199,7 @@ shopt -u nullglob
 total_ssl_count=$((free_ssl_count + paid_acme_count))
 
 if ((total_ssl_count == 0)); then
-  echo -e "${C_RED}❌ Hệ thống hiện chưa có tên miền nào cài đặt SSL Let's Encrypt hoặc ZeroSSL / Paid ACME.${C_RESET}"
+  echo -e "${C_RED}❌ Hệ thống hiện chưa có tên miền nào cài đặt SSL Let's Encrypt hoặc Paid / Custom ACME.${C_RESET}"
   sleep 2.5
   wptt_quay_ve_menu "$route_arg" 1
 fi
@@ -124,12 +214,17 @@ fi
 # ==============================================================================
 summary_line="Phát hiện: ${C_GREEN}${free_ssl_count} SSL Let's Encrypt Free${C_RESET}"
 if ((paid_acme_count > 0)); then
-  summary_line="${summary_line} + ${C_CYAN}${paid_acme_count} ZeroSSL / Paid ACME${C_RESET}"
+  paid_breakdown=""
+  for ca_key in "${!paid_ca_stats[@]}"; do
+    [[ -n "$paid_breakdown" ]] && paid_breakdown+=", "
+    paid_breakdown+="${paid_ca_stats[$ca_key]} ${ca_key}"
+  done
+  summary_line="${summary_line} + ${C_CYAN}${paid_breakdown}${C_RESET}"
 fi
 
 if wptt_xac_nhan "Bạn muốn chạy kiểm tra & gia hạn chứng chỉ SSL trên toàn máy chủ?" \
   "$summary_line" \
-  "Mặc định WPTangToc OLS đã có tiến trình gia hạn tự động. Tính năng này giúp bạn chủ động xử lý ngay khi cần." \
+  "Mặc định WPTangToc OLS đã có tiến trình gia hạn tự động." \
   "Đồng ý (Gia hạn ngay)" "Không đồng ý (Hủy thao tác)"; then
 
   echo ""
@@ -171,7 +266,7 @@ if wptt_xac_nhan "Bạn muốn chạy kiểm tra & gia hạn chứng chỉ SSL t
       echo -e "${C_RED}Lỗi nghiêm trọng: Không thể cài đặt Certbot sau $max_attempts lần thử!${C_RESET}"
       echo -e "=> Chi tiết lỗi đã được lưu tại: ${C_YELLOW}${log_certbot_install}${C_RESET}"
       echo -e "=> Bạn hãy dùng lệnh: cat ${log_certbot_install} để xem nguyên nhân cụ thể."
-      log_certbot_install="" # Giữ lại file log để người dùng đọc
+      log_certbot_install=""
       wptt_quay_ve_menu "$route_arg" 1 "enter"
     else
       _rundone "$UI_HEAL"
@@ -225,7 +320,7 @@ if wptt_xac_nhan "Bạn muốn chạy kiểm tra & gia hạn chứng chỉ SSL t
   done
   shopt -u nullglob
 
-  # 2. Tạm mở tường lửa chặn IP quốc tế (Tránh chặn Bot xác thực của Let's Encrypt / ZeroSSL / Sectigo)
+  # 2. Tạm mở tường lửa chặn IP quốc tế (Tránh chặn Bot xác thực của Let's Encrypt / GTS / ZeroSSL / Sectigo)
   if [[ -f /etc/csf/csf.conf ]]; then
     countryblicklist="$(awk -F'"' '/^CC_ALLOW_FILTER/ {print $2}' /etc/csf/csf.conf 2>/dev/null || true)"
     if [[ -n "$countryblicklist" ]]; then
@@ -265,23 +360,26 @@ if wptt_xac_nhan "Bạn muốn chạy kiểm tra & gia hạn chứng chỉ SSL t
   RECENT_LOG="$(tail -n "$LINES_NEW" "$LOG_FILE" 2>/dev/null || true)"
 
   # ============================================================================
-  # ĐỒNG BỘ CHỨNG CHỈ ${DOMAIN}-PAID VỀ /usr/local/lsws/${DOMAIN}/ssl
+  # ĐỒNG BỘ CHỨNG CHỈ ${DOMAIN}-PAID VỀ /usr/local/lsws/${DOMAIN}/ssl (CHỈ KHI MỚI HƠN)
   # ============================================================================
-  for pdom in "${paid_domains[@]}"; do
+  for pdom in "${paid_domains[@]+"${paid_domains[@]}"}"; do
+    [[ -z "$pdom" ]] && continue
     live_pdir="/etc/letsencrypt/live/${pdom}-paid"
     target_sdir="/usr/local/lsws/${pdom}/ssl"
     vconf_p="/usr/local/lsws/conf/vhosts/${pdom}/${pdom}.conf"
 
     if [[ -d "$live_pdir" && -d "$target_sdir" ]] && grep -q "$target_sdir" "$vconf_p" 2>/dev/null; then
-      old_umask=$(umask)
-      umask 077
-      [[ -f "${live_pdir}/privkey.pem" ]] && /bin/cp -pfL -- "${live_pdir}/privkey.pem" "${target_sdir}/${pdom}.key"
-      [[ -f "${live_pdir}/cert.pem" ]] && /bin/cp -pfL -- "${live_pdir}/cert.pem" "${target_sdir}/cert.crt"
-      [[ -f "${live_pdir}/chain.pem" ]] && /bin/cp -pfL -- "${live_pdir}/chain.pem" "${target_sdir}/ca_bundle.crt"
-      [[ -f "${live_pdir}/fullchain.pem" ]] && /bin/cp -pfL -- "${live_pdir}/fullchain.pem" "${target_sdir}/fullchain.pem"
-      umask "$old_umask"
-      /bin/chmod 600 -- "${target_sdir}/${pdom}.key" 2>/dev/null || true
-      /bin/chmod 644 -- "${target_sdir}/cert.crt" "${target_sdir}/ca_bundle.crt" "${target_sdir}/fullchain.pem" 2>/dev/null || true
+      if [[ ! -f "${target_sdir}/cert.crt" || "${live_pdir}/cert.pem" -nt "${target_sdir}/cert.crt" ]]; then
+        old_umask=$(umask)
+        umask 077
+        [[ -f "${live_pdir}/privkey.pem" ]] && /bin/cp -fL -- "${live_pdir}/privkey.pem" "${target_sdir}/${pdom}.key"
+        [[ -f "${live_pdir}/cert.pem" ]] && /bin/cp -fL -- "${live_pdir}/cert.pem" "${target_sdir}/cert.crt"
+        [[ -f "${live_pdir}/chain.pem" ]] && /bin/cp -fL -- "${live_pdir}/chain.pem" "${target_sdir}/ca_bundle.crt"
+        [[ -f "${live_pdir}/fullchain.pem" ]] && /bin/cp -fL -- "${live_pdir}/fullchain.pem" "${target_sdir}/fullchain.pem"
+        umask "$old_umask"
+        /bin/chmod 600 -- "${target_sdir}/${pdom}.key" 2>/dev/null || true
+        /bin/chmod 644 -- "${target_sdir}/cert.crt" "${target_sdir}/ca_bundle.crt" "${target_sdir}/fullchain.pem" 2>/dev/null || true
+      fi
     fi
   done
 
@@ -292,16 +390,6 @@ if wptt_xac_nhan "Bạn muốn chạy kiểm tra & gia hạn chứng chỉ SSL t
   declare -F wptt_smart_reload_lsws >/dev/null 2>&1 && wptt_smart_reload_lsws >/dev/null 2>&1
 
   _rundone "$UI_STRING"
-
-  # Hàm định dạng hiển thị tên chứng chỉ (Phân biệt rõ bản Free và bản ZeroSSL/Paid ACME)
-  _format_cert_lineage_label() {
-    local raw_name="$1"
-    if [[ "$raw_name" == *-paid ]]; then
-      printf '%s [ZeroSSL / Paid ACME]' "${raw_name%-paid}"
-    else
-      printf '%s [Let'\''s Encrypt Free]' "$raw_name"
-    fi
-  }
 
   # ============================================================================
   # HIỂN THỊ BÁO CÁO UX CHI TIẾT
