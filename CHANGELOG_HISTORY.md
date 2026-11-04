@@ -179,22 +179,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## Phiên bản 8.3.0
-
-🚀 **Tính năng mới & Nâng cấp**
-- **Đại tu hệ thống Preload Cache:** Nâng cấp toàn diện cơ chế nạp trước bộ nhớ đệm (Preload Cache) với hiệu năng vượt trội, giúp website WordPress tải nhanh chóng, tối ưu hóa tài nguyên máy chủ và mang lại trải nghiệm mượt mà cho người truy cập.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## Phiên bản 8.2.4.6
-
-🐛 **Sửa lỗi**
-- **Khắc phục lỗi kiểm tra Preload Cache:** Nâng cấp cơ chế kiểm tra và xử lý ngoại lệ trong tiến trình nạp trước bộ nhớ đệm, giúp hệ thống vận hành chính xác và ngăn ngừa triệt để các lỗi phát sinh trong quá trình quét dữ liệu.
-
-🛠️ **Tối ưu hệ thống**
-- **Cải tiến độ ổn định:** Tinh chỉnh các thuật toán kiểm tra lỗi và tối ưu hóa tiến trình nền, đảm bảo hiệu suất hoạt động liên tục, mượt mà và an toàn cho máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*

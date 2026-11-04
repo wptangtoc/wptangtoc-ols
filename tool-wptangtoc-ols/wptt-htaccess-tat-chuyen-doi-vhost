@@ -13,7 +13,7 @@ WPTT_HTACCESS_KEEP='^(rewrite(engine|base|cond|rule)|cachelookup|cachekeymodify)
 WPTT_HTACCESS_SYNC_SUPPORTED='^(redirect(permanent|temp|match)?|php_(admin_)?(value|flag)|header|expires(active|default|bytype)|errordocument|order|allow|deny|require|options|directoryindex|adddefaultcharset)[[:space:]]'
 
 wptt_htaccess_clean() {
-  tr -d '\r' <"$1" |
+  tr -d '\r' < "$1" |
     sed -e 's/\xc2\xa0/ /g' |
     sed -e ':a' -e '/\\$/{N;s/\\\n[[:space:]]*/ /;ta' -e '}' |
     sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' |
@@ -45,6 +45,11 @@ wptt_htaccess_skipped() {
     grep -viE "$WPTT_HTACCESS_SYNC_SUPPORTED" || true
 }
 
+wptt_exit_safe() {
+  local rc="${1:-0}"
+  return "$rc" 2>/dev/null || exit "$rc"
+}
+
 NAME="${1:-}"
 NO_RELOAD="${2:-}"
 if [[ "$NAME" = "98" ]]; then
@@ -58,7 +63,12 @@ if [[ -z "$NAME" ]]; then
 fi
 
 if [[ "$NAME" = "0" || -z "$NAME" ]]; then
-  return 2>/dev/null || exit 0
+  wptt_exit_safe 0
+fi
+
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ || "$NAME" == -* || "$NAME" == *..* ]]; then
+  echoDo "Tên miền không hợp lệ: $NAME"
+  wptt_exit_safe 1
 fi
 
 path="/etc/wptt/vhost/.$NAME.conf"
@@ -67,23 +77,46 @@ path_bk="/etc/wptt/vhost_bk/.$NAME.conf"
 if [[ ! -f "$path" && ! -f "$path_bk" ]]; then
   clear
   echoDo "Domain khong ton tai tren VPS."
-  return 2>/dev/null || exit 1
-fi
-
-if [[ ! -f "/usr/local/lsws/$NAME/html/.htaccess" ]]; then
-  echoDo "Không xác định được .htaccess của website $NAME"
-  return 2>/dev/null || exit 1
+  wptt_exit_safe 1
 fi
 
 vhost_conf="/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf"
 htaccess_file="/usr/local/lsws/$NAME/html/.htaccess"
 
+if [[ ! -f "$htaccess_file" || -L "$htaccess_file" ]]; then
+  echoDo "Không xác định được .htaccess hợp lệ của website $NAME"
+  wptt_exit_safe 1
+fi
+
+if [[ ! -f "$vhost_conf" ]]; then
+  echoDo "Không tìm thấy file cấu hình Vhost của website $NAME"
+  wptt_exit_safe 1
+fi
+
+TASK_MSG="Thiết lập chuyển htaccess sang vhosts"
+_runing "$TASK_MSG"
+
 /bin/cp -p -- "$vhost_conf" "$vhost_conf.bak-wptt" 2>/dev/null || true
 
-sed -i -e '/^rewrite/,/^}$/d' "$vhost_conf"
+vhost_tmp=""
+if ! vhost_tmp="$(wptt_atomic_begin "$vhost_conf")" || [[ -z "$vhost_tmp" || ! -f "$vhost_tmp" ]]; then
+  _runloi "$TASK_MSG"
+  wptt_logs "ERROR" "Không thể khởi tạo file tạm atomic cho $vhost_conf"
+  wptt_exit_safe 1
+fi
 
-_runing "Thiết lập chuyển htaccess sang vhosts"
-cat <<'EOF' >>"$vhost_conf"
+_wptt_htaccess_rollback() {
+  [[ -n "${vhost_tmp:-}" && -f "$vhost_tmp" ]] && /bin/rm -f -- "$vhost_tmp"
+  if [[ -f "$vhost_conf.bak-wptt" ]]; then
+    /bin/cp -p -- "$vhost_conf.bak-wptt" "$vhost_conf" 2>/dev/null || true
+  fi
+  _runloi "$TASK_MSG"
+  wptt_logs "ERROR" "Lỗi khi chuyển .htaccess sang vhosts cho website $NAME (Đã rollback)"
+}
+
+sed -i -e '/^rewrite/,/^}$/d' "$vhost_tmp"
+
+cat <<'EOF' >> "$vhost_tmp"
 
 rewrite  {
   enable                  1
@@ -91,17 +124,16 @@ rewrite  {
 }
 EOF
 
-sed -i -e '/^context \/ {/,/^}$/d' "$vhost_conf"
-sed -i '/^$/d' "$vhost_conf"
+sed -i -e '/^context \/ {/,/^}$/d' "$vhost_tmp"
+sed -i '/^$/d' "$vhost_tmp"
 
 unset lenh_htaccess lenh_bo_qua
-lenh_htaccess=$(wptt_htaccess_rewrite_only "$htaccess_file")
-lenh_bo_qua=$(wptt_htaccess_skipped "$htaccess_file")
+lenh_htaccess="$(wptt_htaccess_rewrite_only "$htaccess_file")"
+lenh_bo_qua="$(wptt_htaccess_skipped "$htaccess_file")"
 
-# Khởi tạo ký tự mở Heredoc của OLS bằng printf để tránh lỗi hiển thị
 ols_heredoc_open="$(printf '\074\074\074')"
 
-cat <<EOF >>"$vhost_conf"
+cat <<EOF >> "$vhost_tmp"
 
 context / {
   location                /usr/local/lsws/$NAME/html
@@ -117,9 +149,9 @@ permissions-policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), ma
 
 
   rewrite  {
-      enable                1
-      inherit               1
-      rules                 ${ols_heredoc_open}END_rules
+      enable                 1
+      inherit                1
+      rules                  ${ols_heredoc_open}END_rules
 $lenh_htaccess
       END_rules
   }
@@ -132,47 +164,65 @@ $lenh_htaccess
 EOF
 
 if [[ -n "${Website_chinh:-}" && -f "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" ]]; then
-  hostname_custom=$(grep 'X-Powered-By' "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" 2>/dev/null | cut -f2 -d ' ' | sort -u)
+  hostname_custom="$(grep 'X-Powered-By' "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" 2>/dev/null | cut -f2 -d ' ' | sort -u)"
 else
   hostname_custom="WPTangTocOLS"
 fi
 
 if [[ -z "$hostname_custom" || "$hostname_custom" != "WPTangTocOLS" ]]; then
-  sed -i '/X-Powered-By/d' "$vhost_conf"
+  sed -i '/X-Powered-By/d' "$vhost_tmp"
 fi
 
 if [[ -n "$hostname_custom" && "$hostname_custom" != "WPTangTocOLS" ]]; then
-  sed -i "/extraHeaders /a X-Powered-By $hostname_custom" "$vhost_conf"
+  sed -i "/extraHeaders /a X-Powered-By $hostname_custom" "$vhost_tmp"
 fi
 unset hostname_custom ols_heredoc_open
 
-# Gọi ngay wptt-htaccess-sync để biên dịch Redirect 301, Header, php_value, Deny/Allow, Expires vào Vhost
+if ! wptt_atomic_commit "$vhost_tmp" "$vhost_conf"; then
+  _wptt_htaccess_rollback
+  unset vhost_tmp lenh_htaccess lenh_bo_qua TASK_MSG
+  wptt_exit_safe 1
+fi
+vhost_tmp=""
+
 if [[ -f /etc/wptt/wptt-htaccess-sync ]]; then
   /bin/bash /etc/wptt/wptt-htaccess-sync --no-reload --quiet "$NAME" >/dev/null 2>&1 || true
 fi
 
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
+if getent group nogroup >/dev/null 2>&1 && [[ "$(wptt_get_os_family 2>/dev/null)" == "debian" || -f /etc/debian_version ]]; then
   tuong_thich_nhom_litespeed="nogroup"
 else
   tuong_thich_nhom_litespeed="nobody"
 fi
 
-chown -hR "lsadm:${tuong_thich_nhom_litespeed}" "/usr/local/lsws/conf/vhosts/$NAME"
-chmod -R 750 "/usr/local/lsws/conf/vhosts/$NAME"
+/bin/chown -hR "lsadm:${tuong_thich_nhom_litespeed}" -- "/usr/local/lsws/conf/vhosts/$NAME"
+/bin/chmod -R 750 -- "/usr/local/lsws/conf/vhosts/$NAME"
 
 if [[ "$NO_RELOAD" != "--no-reload" ]]; then
-  wptt_smart_reload_lsws >/dev/null 2>&1
+  if ! wptt_smart_reload_lsws >/dev/null 2>&1; then
+    _wptt_htaccess_rollback
+    wptt_smart_reload_lsws >/dev/null 2>&1 || true
+    unset vhost_tmp lenh_htaccess lenh_bo_qua TASK_MSG
+    wptt_exit_safe 1
+  fi
 fi
 
-sed -i '/^$/d' "/etc/wptt/vhost/.$NAME.conf" 2>/dev/null || true
-wptt_atomic_edit_config "/etc/wptt/vhost/.$NAME.conf" "vhost_chuyen_htaccess=1"
-_rundone "Thiết lập chuyển htaccess sang vhosts"
+if [[ -f "$path" ]]; then
+  conf_tmp=""
+  if conf_tmp="$(wptt_atomic_begin "$path")" && [[ -n "$conf_tmp" && -f "$conf_tmp" ]]; then
+    sed -i '/^$/d' "$conf_tmp" 2>/dev/null || true
+    wptt_atomic_commit "$conf_tmp" "$path" 2>/dev/null || /bin/rm -f -- "$conf_tmp"
+  fi
+  wptt_atomic_edit_config "$path" "vhost_chuyen_htaccess=1"
+fi
+
+_rundone "$TASK_MSG"
 
 if [[ -n "$lenh_bo_qua" ]]; then
-  echo "Các chỉ thị .htaccess sau không tương thích rewrite OLS nên đã được bỏ qua:"
-  echo "$lenh_bo_qua" | sed 's/^/  - /'
-  wptt_logs "INFO" "Bỏ qua chỉ thị .htaccess không tương thích OLS website $NAME: $(echo "$lenh_bo_qua" | tr '\n' ';')"
+  printf 'Các chỉ thị .htaccess sau không tương thích rewrite OLS nên đã được bỏ qua:\n'
+  printf '%s\n' "$lenh_bo_qua" | sed 's/^/  - /'
+  wptt_logs "INFO" "Bỏ qua chỉ thị .htaccess không tương thích OLS website $NAME: $(printf '%s' "$lenh_bo_qua" | tr '\n' ';')"
 fi
-unset lenh_htaccess lenh_bo_qua
+unset vhost_tmp lenh_htaccess lenh_bo_qua TASK_MSG
 
 wptt_logs "INFO" "Thiết lập chuyển htaccess sang vhosts website $NAME"

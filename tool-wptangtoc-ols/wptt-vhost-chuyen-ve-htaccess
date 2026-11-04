@@ -17,6 +17,11 @@ umask 022
 # shellcheck source=/dev/null
 [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
 
+wptt_exit_safe() {
+  local rc="${1:-0}"
+  return "$rc" 2>/dev/null || exit "$rc"
+}
+
 NAME="${1:-}"
 NO_RELOAD="${2:-}"
 if [[ "$NAME" == "98" ]]; then
@@ -30,13 +35,12 @@ if [[ -z "$NAME" ]]; then
 fi
 
 if [[ "$NAME" == "0" || -z "$NAME" ]]; then
-  return 0 2>/dev/null || exit 0
+  wptt_exit_safe 0
 fi
 
-# Validate tên miền chống Path Traversal
 if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ || "$NAME" == -* || "$NAME" == *..* ]]; then
   echoDo "Tên miền không hợp lệ: $NAME"
-  return 1 2>/dev/null || exit 1
+  wptt_exit_safe 1
 fi
 
 path="/etc/wptt/vhost/.${NAME}.conf"
@@ -49,37 +53,46 @@ htaccess_file="${html_dir}/.htaccess"
 if [[ ! -f "$path" && ! -f "$path_bk" ]]; then
   clear
   echoDo "Domain không tồn tại trên VPS."
-  return 1 2>/dev/null || exit 1
+  wptt_exit_safe 1
 fi
 
 if [[ ! -f "$vhost_conf" || ! -d "$html_dir" ]]; then
   echoDo "Không tìm thấy cấu hình Vhost hoặc thư mục gốc của website $NAME"
-  return 1 2>/dev/null || exit 1
+  wptt_exit_safe 1
 fi
 
-# Tự động khởi tạo file .htaccess rỗng nếu người dùng lỡ tay xóa mất trước đó
+if [[ -L "$htaccess_file" ]]; then
+  echoDo "Phát hiện file .htaccess là symlink không an toàn trên website $NAME"
+  wptt_exit_safe 1
+fi
+
 if [[ ! -f "$htaccess_file" ]]; then
-  : >"$htaccess_file" 2>/dev/null || true
-  chmod 644 "$htaccess_file" 2>/dev/null || true
+  : > "$htaccess_file" 2>/dev/null || true
+  /bin/chmod 644 -- "$htaccess_file" 2>/dev/null || true
 fi
 
 TASK_MSG="Thiết lập chuyển vhost về .htaccess"
 _runing "$TASK_MSG"
 
-# Backup cấu hình Vhost trước khi thao tác
 /bin/cp -fp -- "$vhost_conf" "${vhost_conf}.bak-wptt" 2>/dev/null || true
 
-# Tạo file staging trên cùng thư mục Vhost để đảm bảo Atomic Replace (cùng Filesystem)
-stage_conf="${vhost_dir}/.${NAME}.conf.revert_tmp_${BASHPID:-$$}"
-/bin/cp -fp -- "$vhost_conf" "$stage_conf" 2>/dev/null || : >"$stage_conf"
+vhost_tmp=""
+if ! vhost_tmp="$(wptt_atomic_begin "$vhost_conf")" || [[ -z "$vhost_tmp" || ! -f "$vhost_tmp" ]]; then
+  _runloi "$TASK_MSG"
+  wptt_logs "ERROR" "Không thể khởi tạo file tạm atomic cho $vhost_conf"
+  wptt_exit_safe 1
+fi
 
-cleanup_stage() {
-  [[ -n "${stage_conf:-}" && -f "$stage_conf" ]] && /bin/rm -f -- "$stage_conf" 2>/dev/null || true
+_wptt_vhost_revert_rollback() {
+  [[ -n "${vhost_tmp:-}" && -f "$vhost_tmp" ]] && /bin/rm -f -- "$vhost_tmp" 2>/dev/null || true
+  if [[ -f "${vhost_conf}.bak-wptt" ]]; then
+    /bin/cp -fp -- "${vhost_conf}.bak-wptt" "$vhost_conf" 2>/dev/null || true
+  fi
+  _runloi "$TASK_MSG"
+  wptt_logs "ERROR" "Lỗi khi chuyển vhost về .htaccess cho website $NAME (Đã rollback)"
 }
-trap cleanup_stage EXIT INT TERM HUP
 
-# 1. Xóa sạch chỉ đúng khối rewrite {} cấp Vhost và khối context / {} (Giữ nguyên các context bảo mật khác)
-awk '
+if ! awk '
   /^rewrite[ \t]*\{[ \t]*$/ { skip_rw = 1; next }
   skip_rw && /^\}[ \t]*$/   { skip_rw = 0; next }
   skip_rw { next }
@@ -97,9 +110,12 @@ awk '
     while (n > 0 && lines[n] ~ /^[ \t]*$/) n--
     for (i = 1; i <= n; i++) print lines[i]
   }
-' "$vhost_conf" >"$stage_conf"
+' "$vhost_conf" > "$vhost_tmp"; then
+  _wptt_vhost_revert_rollback
+  unset vhost_tmp TASK_MSG
+  wptt_exit_safe 1
+fi
 
-# 2. Xác định cấu hình X-Powered-By từ Website chính (đồng bộ chuẩn với wptt-tat-htaccees-chuyen-vhosts)
 powered_by_line="X-Powered-By WPTangTocOLS"
 if [[ -n "${Website_chinh:-}" && -f "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" ]]; then
   hostname_custom="$(grep 'X-Powered-By' "/usr/local/lsws/conf/vhosts/${Website_chinh}/${Website_chinh}.conf" 2>/dev/null | cut -f2 -d ' ' | sort -u || true)"
@@ -110,10 +126,8 @@ if [[ -n "${Website_chinh:-}" && -f "/usr/local/lsws/conf/vhosts/${Website_chinh
   fi
 fi
 
-# Khởi tạo chuỗi mở Heredoc của OLS bằng printf để tránh lỗi parser
 ols_heredoc_open="$(printf '\074\074\074')"
 
-# 3. Ghi khối rewrite (autoLoadHtaccess 1) và context / tiêu chuẩn vào file staging
 {
   printf '\nrewrite  {\n'
   printf '  enable                  1\n'
@@ -134,58 +148,63 @@ ols_heredoc_open="$(printf '\074\074\074')"
   printf '  }\n'
   printf '  addDefaultCharset       off\n'
   printf '}\n'
-} >>"$stage_conf"
+} >> "$vhost_tmp"
 
-# 4. Thay thế nguyên tử (Atomic Swap) vào file Vhost chính thức
-if command -v restorecon >/dev/null 2>&1; then
-  restorecon -F "$stage_conf" >/dev/null 2>&1 || true
+unset powered_by_line hostname_custom ols_heredoc_open
+
+if ! wptt_atomic_commit "$vhost_tmp" "$vhost_conf"; then
+  _wptt_vhost_revert_rollback
+  unset vhost_tmp TASK_MSG
+  wptt_exit_safe 1
 fi
-/bin/mv -fT -- "$stage_conf" "$vhost_conf"
-trap - EXIT INT TERM HUP
+vhost_tmp=""
 
-# 5. Gọi ngay wptt-htaccess-sync để biên dịch lại các chỉ thị Apache (Redirect, Header, php_value, IP Deny/Allow, Expires) từ .htaccess vào Vhost
 if [[ -f /etc/wptt/wptt-htaccess-sync ]]; then
   /bin/bash /etc/wptt/wptt-htaccess-sync --no-reload --quiet "$NAME" >/dev/null 2>&1 || true
 fi
 
-# 6. Cập nhật cờ trạng thái trong /etc/wptt/vhost/.$NAME.conf
-if [[ -f "$path" ]]; then
-  sed -i '/^$/d' "$path" 2>/dev/null || true
-  wptt_atomic_edit_config "$path" "vhost_chuyen_htaccess" "delete"
-fi
+for target_cfg in "$path" "$path_bk"; do
+  if [[ -f "$target_cfg" ]]; then
+    cfg_tmp=""
+    if cfg_tmp="$(wptt_atomic_begin "$target_cfg")" && [[ -n "$cfg_tmp" && -f "$cfg_tmp" ]]; then
+      sed -i '/^$/d' "$cfg_tmp" 2>/dev/null || true
+      wptt_atomic_commit "$cfg_tmp" "$target_cfg" 2>/dev/null || /bin/rm -f -- "$cfg_tmp"
+    fi
+    wptt_atomic_edit_config "$target_cfg" "vhost_chuyen_htaccess" "delete"
+  fi
+done
+unset target_cfg cfg_tmp
 
-if [[ -f "$path_bk" ]]; then
-  sed -i '/^$/d' "$path_bk" 2>/dev/null || true
-  wptt_atomic_edit_config "$path_bk" "vhost_chuyen_htaccess" "delete"
-fi
-
-# Nếu không còn bất kỳ website nào bật vhost_chuyen_htaccess=1, tự động gỡ cờ htaccess-cache-active toàn cục
 if ! grep -qs '^vhost_chuyen_htaccess=1' /etc/wptt/vhost/.*.conf 2>/dev/null; then
   /bin/rm -f -- /etc/wptt/cau-hinh/htaccess-cache-active 2>/dev/null || true
 fi
 
-# 7. Phân quyền chuẩn theo hệ điều hành (Ubuntu/Debian vs RHEL/AlmaLinux/Rocky)
-if grep -qi "ubuntu\|debian" /etc/os-release 2>/dev/null; then
+if getent group nogroup >/dev/null 2>&1 && [[ "$(wptt_get_os_family 2>/dev/null)" == "debian" || -f /etc/debian_version ]]; then
   tuong_thich_nhom_litespeed="nogroup"
 else
   tuong_thich_nhom_litespeed="nobody"
 fi
 
-/bin/chown -hR "lsadm:${tuong_thich_nhom_litespeed}" "$vhost_dir" 2>/dev/null || true
-/bin/chmod -R 750 "$vhost_dir" 2>/dev/null || true
-/bin/chmod 640 "$vhost_conf" 2>/dev/null || true
+/bin/chown -hR "lsadm:${tuong_thich_nhom_litespeed}" -- "$vhost_dir" 2>/dev/null || true
+/bin/chmod -R 750 -- "$vhost_dir" 2>/dev/null || true
+/bin/chmod 640 -- "$vhost_conf" 2>/dev/null || true
 
-# 8. Reload OpenLiteSpeed Zero-Downtime
 if [[ "$NO_RELOAD" != "--no-reload" ]]; then
   if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
-    wptt_smart_reload_lsws >/dev/null 2>&1 || true
+    if ! wptt_smart_reload_lsws >/dev/null 2>&1; then
+      _wptt_vhost_revert_rollback
+      wptt_smart_reload_lsws >/dev/null 2>&1 || true
+      unset vhost_tmp TASK_MSG
+      wptt_exit_safe 1
+    fi
   else
     /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
   fi
 fi
 
+_rundone "$TASK_MSG"
+unset vhost_tmp TASK_MSG
+
 if declare -F wptt_logs >/dev/null 2>&1; then
   wptt_logs "INFO" "Thiết lập chuyển vhost về .htaccess website $NAME"
 fi
-
-_rundone "$TASK_MSG"
