@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.4.0.0
+
+🛠️ **Tối ưu hệ thống**
+- **Tối ưu hóa cơ chế tải lại dịch vụ (LSWS):** Cải tiến quy trình vô hiệu hóa tệp `.htaccess` và chuyển đổi Virtual Hosts, giúp quá trình reload OpenLiteSpeed diễn ra nhanh chóng, mượt mà và giảm thiểu tối đa độ trễ cho máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0
 
 🚀 **Tính năng mới & Nâng cấp bảo mật**
