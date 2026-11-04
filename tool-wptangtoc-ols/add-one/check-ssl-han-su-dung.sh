@@ -19,8 +19,8 @@ for filepath in /etc/wptt/vhost/.*.conf; do
   fi
 done
 
-. /etc/wptt/.wptt.conf 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
 
 telegram_tmp_api=$(wptt_giai_ma "$telegram_api" 2>/dev/null)
 telegram_api="${telegram_tmp_api:-$telegram_api}"

@@ -25,7 +25,7 @@ if [[ -f "/usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadA
   PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' #bien moi truong full day du
   
   # Bọc ngoặc kép an toàn cho đường dẫn include
-  . "/etc/wptt/vhost/.${NAME}.conf" 2>/dev/null
+  wptt_load_vhost_conf "/etc/wptt/vhost/.${NAME}.conf" 2>/dev/null
 
 	if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
 		wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."

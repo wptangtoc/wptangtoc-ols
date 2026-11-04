@@ -9,11 +9,11 @@ export LC_ALL=en_US.UTF-8
 stty iutf8 2>/dev/null || true
 
 # shellcheck source=/dev/null
-if [[ -f /etc/wptt/.wptt.conf ]]; then . /etc/wptt/.wptt.conf 2>/dev/null; fi
+if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
+# shellcheck source=/dev/null
+if [[ -f /etc/wptt/.wptt.conf ]]; then wptt_load_main_conf 2>/dev/null; fi
 # shellcheck source=/dev/null
 if [[ -f /etc/wptt/echo-color ]]; then . /etc/wptt/echo-color 2>/dev/null; fi
-# shellcheck source=/dev/null
-if [[ -f /etc/wptt/core-functions ]]; then . /etc/wptt/core-functions 2>/dev/null; fi
 
 # ==============================================================================
 # 1. HÀM LƯU TRẠNG THÁI RUNTIME RA FILE /etc/nftables.conf NGUYÊN TỬ

@@ -20,7 +20,7 @@ for path in /etc/wptt/vhost/.*; do
   fi
 done
 
-. /etc/wptt/.wptt.conf 2>/dev/null
+wptt_load_main_conf 2>/dev/null
 
 # Telegram Bot API Token (LẤY TỪ BOTFATHER)
 BOT_TOKEN=$(wptt_giai_ma "$telegram_api" 2>/dev/null); BOT_TOKEN="${BOT_TOKEN:-$telegram_api}"
