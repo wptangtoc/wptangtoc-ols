@@ -1,10 +1,13 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
+. /etc/wptt/core-functions 2>/dev/null || true
+
 # ==============================================================================
-# HÀM XÓA OPCACHE WEBSITE KHÔNG GÂY DOWNTIME (ZERO DOWNTIME)
+# HÀM XÓA OPCACHE WEBSITE KHÔNG GÂY DOWNTIME (ZERO DOWNTIME - ENTERPRISE)
 # ==============================================================================
 function wptt_xoa_opcache() {
-    local domain="$1"
+    local domain="${1:-}"
+    [[ -z "$domain" ]] && return 1
+
     local web_root="/usr/local/lsws/$domain/html"
     local path_conf="/etc/wptt/vhost/.$domain.conf"
 
@@ -17,66 +20,104 @@ function wptt_xoa_opcache() {
         return 1
     fi
 
-    # 1. Tải cấu hình WPTangToc OLS để check trạng thái Lockdown và lấy User
+    # 1. Tải cấu hình WPTangToc OLS an toàn bằng wptt_load_vhost_conf
     local is_locked=0
+    unset lock_down User_name_vhost
     if [[ -f "$path_conf" ]]; then
-        source "$path_conf"
-        # Kiểm tra biến lock_down từ file cấu hình
-        [[ "$lock_down" == "1" ]] && is_locked=1
+        wptt_load_vhost_conf "$domain" || true
+        [[ "${lock_down:-}" == "1" ]] && is_locked=1
     fi
 
-    # 2. Định tuyến thư mục ghi file OPcache
-    local target_dir
-    local relative_path
-    target_dir="$web_root"
-    relative_path=""
-    # Nếu Lockdown đang BẬT, chuyển hướng ngay vào các thư mục động
-		if [[ -d "$web_root/wp-content/litespeed" ]]; then
-			target_dir="$web_root/wp-content/litespeed"
-			relative_path="wp-content/litespeed/"
-		elif [[ -d "$web_root/wp-content/cache" ]]; then
-			target_dir="$web_root/wp-content/cache"
-			relative_path="wp-content/cache/"
-		elif [[ -d "$web_root/wp-content/uploads" ]]; then
-			target_dir="$web_root/wp-content/uploads"
-			relative_path="wp-content/uploads/"
-		else
-			target_dir="$web_root"
-			relative_path=""
-		fi
+    # ==========================================================================
+    # PHƯƠNG ÁN 1: TẠO FILE PHP & KÍCH HOẠT BẰNG CURL NỘI BỘ
+    # ==========================================================================
+    local target_dir="$web_root"
+    local relative_path=""
 
-		if [[ "$is_locked" -eq 1 ]]; then
-			if [[ -z "$relative_path" ]];then
-				echo -e "${C_RED}Lỗi: Website bật Lockdown nhưng không tìm thấy thư mục ghi đệm hợp lệ!${C_RESET}"
-				return 1
-			fi
-		fi
+    # Nếu có các thư mục động (hỗ trợ chế độ Lockdown), ưu tiên chọn thư mục không chặn PHP
+    if [[ -d "$web_root/wp-content/litespeed" && ! -f "$web_root/wp-content/litespeed/.htaccess" ]]; then
+        target_dir="$web_root/wp-content/litespeed"
+        relative_path="wp-content/litespeed/"
+    elif [[ -d "$web_root/wp-content/cache" && ! -f "$web_root/wp-content/cache/.htaccess" ]]; then
+        target_dir="$web_root/wp-content/cache"
+        relative_path="wp-content/cache/"
+    elif [[ -d "$web_root/wp-content/uploads" ]]; then
+        target_dir="$web_root/wp-content/uploads"
+        relative_path="wp-content/uploads/"
+    else
+        target_dir="$web_root"
+        relative_path=""
+    fi
 
-    # 3. Tạo chuỗi bí mật ngẫu nhiên (16 ký tự) để chống rò rỉ
-    local secret_key=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16)
+    if [[ "$is_locked" -eq 1 && -z "$relative_path" ]]; then
+        echo -e "${C_RED}Lỗi: Website bật Lockdown nhưng không tìm thấy thư mục ghi đệm hợp lệ!${C_RESET}"
+        return 1
+    fi
+
+    # Tạo chuỗi bí mật ngẫu nhiên (16 ký tự)
+    local secret_key=""
+    secret_key="$(tr -dc 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head -c 16 || printf '%s%s' "$$" "$RANDOM")"
     local file_name="wptt_opcache_clear_${secret_key}.php"
     local file_path="${target_dir}/${file_name}"
+    local watcher_file="/etc/wptt/tmp/lock_chmod_watcher_${domain}.active"
 
-		touch "/etc/wptt/tmp/lock_chmod_watcher_${domain}.active" 2>/dev/null
+    touch "$watcher_file" 2>/dev/null || true
 
-    # 4. Tạo file PHP chứa lệnh reset OPcache
-    cat <<'EOF' > "$file_path"
+    # Tạo file PHP chứa lệnh reset OPcache + trả về cờ xác nhận "WPTT_OPCACHE_OK"
+    local curl_ok=0
+    if cat <<'EOF' > "$file_path" 2>/dev/null; then
 <?php
+$ok = false;
 if (function_exists('opcache_reset')) {
-    opcache_reset();
+    if (@opcache_reset()) {
+        $ok = true;
+    }
 }
+if (function_exists('apcu_clear_cache')) {
+    @apcu_clear_cache();
+}
+echo $ok ? "WPTT_OPCACHE_OK" : "WPTT_OPCACHE_FAIL";
 EOF
+        # Chown chuẩn quyền User của vhost
+        if [[ -n "${User_name_vhost:-}" ]]; then
+            chown "${User_name_vhost}:${User_name_vhost}" "$file_path" 2>/dev/null || true
+        fi
+        chmod 644 "$file_path" 2>/dev/null || true
 
-    # 5. Chown chuẩn quyền User của vhost (Đã có sẵn khi dùng lệnh source ở bước 1)
-    if [[ -n "$User_name_vhost" ]]; then
-        chown "${User_name_vhost}:${User_name_vhost}" "$file_path" 2>/dev/null
+        # Kích hoạt File bằng cURL nội bộ
+        local resp=""
+        resp="$(curl -s -k -L -m 5 \
+            --resolve "${domain}:443:127.0.0.1" \
+            --resolve "${domain}:80:127.0.0.1" \
+            -H "Host: $domain" \
+            "http://127.0.0.1/${relative_path}${file_name}" 2>/dev/null || true)"
+
+        if [[ "$resp" != *"WPTT_OPCACHE_OK"* ]]; then
+            resp="$(curl -s -k -L -m 5 \
+                --resolve "${domain}:443:127.0.0.1" \
+                "https://${domain}/${relative_path}${file_name}" 2>/dev/null || true)"
+        fi
+
+        [[ "$resp" == *"WPTT_OPCACHE_OK"* ]] && curl_ok=1
     fi
-    chmod 644 "$file_path" 2>/dev/null
 
-    # 6. Kích hoạt File bằng cURL nội bộ (Tự động nối đường dẫn tương đối)
-    curl -s -k -m 5 -H "Host: $domain" "http://127.0.0.1/${relative_path}${file_name}" >/dev/null
+    # Thủ tiêu file bí mật và file lock watcher ngay lập tức (Không dùng trap để bảo toàn trap của script cha)
+    [[ -n "${file_path:-}" && -f "$file_path" ]] && /bin/rm -f -- "$file_path" 2>/dev/null || true
+    [[ -f "$watcher_file" ]] && /bin/rm -f -- "$watcher_file" 2>/dev/null || true
 
-    # 7. Thủ tiêu file bí mật ngay lập tức
-    rm -f "${file_path:?}"
-		rm -f "/etc/wptt/tmp/lock_chmod_watcher_${domain}.active" 2>/dev/null
+    # ==========================================================================
+    # PHƯƠNG ÁN 2 dự phòng: GRACEFUL RESTART LSAPI WORKERS
+    # Chạy khi Phương án 1 thất bại HOẶC bồi thêm SIGUSR1 để ép toàn bộ children
+    # workers đồng bộ OPcache mới ngay lập tức (Zero-Downtime)
+		#Nó vẫn tiếp tục phục vụ nốt các HTTP request đang xử lý dang dở cho đến khi hoàn tất 100%.
+		#Sau khi hoàn thành xong các request cũ, tiến trình tự động giải phóng và tái sinh (respawn) tiến trình mới với mã nguồn và RAM hoàn toàn sạch sẽ.
+    # ==========================================================================
+    if (( curl_ok == 0 )) || [[ -n "${User_name_vhost:-}" ]]; then
+        if [[ -n "${User_name_vhost:-}" ]]; then
+            pkill -USR1 -U "$User_name_vhost" -x lsphp 2>/dev/null || true
+            pkill -USR1 -U "$User_name_vhost" -f "lsphp" 2>/dev/null || true
+        fi
+    fi
+
+    return 0
 }
