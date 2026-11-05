@@ -1,3 +1,14 @@
+## WPTangToc OLS 8.4.0.1
+
+🛠️ Tối ưu hệ thống:
+- Tối ưu hóa cơ chế tắt đồng bộ file `.htaccess` sang vhost, giúp tăng tốc độ và giảm tải đáng kể khi nạp lại (reload) LiteSpeed Web Server.
+
+🚀 Tính năng mới & Bảo mật:
+- Nâng cấp toàn diện các lớp bảo mật, giúp hệ thống phòng thủ kiên cố hơn trước các mối đe dọa và lỗ hổng tiềm ẩn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.0
 
 🚀 **Tính năng mới**
