@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.4.0.2
+
+### 🛠️ Tối ưu hệ thống
+- **Cải tiến cơ chế xóa OPcache PHP**: Tối ưu hóa quy trình làm sạch bộ nhớ đệm OPcache, giúp áp dụng các thay đổi mã nguồn PHP tức thì, ngăn ngừa lỗi lưu cache cũ (stale cache) và giải phóng tài nguyên RAM hiệu quả mà không làm gián đoạn hoạt động của máy chủ web.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.0.1
 
 🛠️ Tối ưu hệ thống:
