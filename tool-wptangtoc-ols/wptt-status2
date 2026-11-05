@@ -31,6 +31,9 @@ export LC_ALL=en_US.UTF-8 2>/dev/null || true
 export LANG=en_US.UTF-8 2>/dev/null || true
 shopt -s extglob
 
+# Đường dẫn Runtime đồng bộ 100% với wptt_smart_reload_lsws mới
+WPTT_RUN_DIR="/etc/wptt/tmp/run"
+
 clear
 
 # ==============================================================================
@@ -86,7 +89,7 @@ fi
 # Nếu chưa có file cache hoặc file đã cũ quá 6 giờ -> Kiểm tra ngầm
 (
   /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
-  chmod 700 /etc/wptt/tmp 2>/dev/null || true
+  /bin/chmod 700 /etc/wptt/tmp 2>/dev/null || true
   need_fetch=0
   if [[ ! -s "$VERSION_CACHE_FILE" ]]; then
     need_fetch=1
@@ -102,10 +105,10 @@ fi
     remote_ver="${remote_ver//[$'\r\n\t ']/}"
     if [[ "$remote_ver" =~ ^[0-9]+\.[0-9]+ ]]; then
       tmp_ver="${VERSION_CACHE_FILE}.$$.tmp"
-      printf '%s\n' "$remote_ver" >"$tmp_ver" 2>/dev/null && /bin/mv -fT -- "$tmp_ver" "$VERSION_CACHE_FILE" 2>/dev/null || /bin/rm -f -- "$tmp_ver" 2>/dev/null || true
+      printf '%s\n' "$remote_ver" > "$tmp_ver" 2>/dev/null && /bin/mv -fT -- "$tmp_ver" "$VERSION_CACHE_FILE" 2>/dev/null || /bin/rm -f -- "$tmp_ver" 2>/dev/null || true
     fi
   fi
-) &
+) </dev/null >/dev/null 2>&1 &
 disown 2>/dev/null || true
 
 if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptangtoc_ols:-}" ]]; then
@@ -114,7 +117,7 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptang
 fi
 
 # ==============================================================================
-# 3. ENGINE KIỂM TRA DỊCH VỤ (ĐỒNG BỘ 100% VỚI wptt_smart_reload_lsws & wptt-header-menu)
+# 3. ENGINE KIỂM TRA DỊCH VỤ (ĐỒNG BỘ 100% VỚI wptt_smart_reload_lsws MỚI)
 # ==============================================================================
 CACHED_MARIADB_PID=0
 
@@ -122,8 +125,9 @@ CACHED_MARIADB_PID=0
 _wptt_pidfile_alive() {
   local pfile="$1"
   local pid=""
-  if [[ -r "$pfile" ]]; then
-    IFS= read -r pid <"$pfile" 2>/dev/null || true
+  if [[ -r "$pfile" && ! -L "$pfile" ]]; then
+    IFS= read -r pid < "$pfile" 2>/dev/null || true
+    pid="${pid%%[![:digit:]]*}"
     if [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && kill -0 "$pid" 2>/dev/null; then
       return 0
     fi
@@ -131,9 +135,9 @@ _wptt_pidfile_alive() {
   return 1
 }
 
-# HELPER 2: Kiểm tra Circuit Breaker của OLS (/run/wptangtoc/lsws-reload.cb)
+# HELPER 2: Kiểm tra Circuit Breaker của OLS (/etc/wptt/tmp/run/lsws-reload.cb)
 _wptt_ols_cb_is_allowed() {
-  local cb_file="/run/wptangtoc/lsws-reload.cb"
+  local cb_file="${WPTT_RUN_DIR}/lsws-reload.cb"
   [[ -r "$cb_file" ]] || return 0
 
   local now=0 line="" count=0
@@ -144,7 +148,7 @@ _wptt_ols_cb_is_allowed() {
     if ((now - line < 300)); then
       ((count++))
     fi
-  done <"$cb_file"
+  done < "$cb_file"
 
   ((count < 5))
 }
@@ -152,13 +156,14 @@ _wptt_ols_cb_is_allowed() {
 # HELPER 3: Ngủ ngắn không tạo tiến trình con (Zero-Fork Micro-Sleep)
 _wptt_micro_sleep() {
   local duration="${1:-0.1}"
-  local fifo="/run/wptangtoc/.header_wait.fifo"
+  local fifo="${WPTT_RUN_DIR}/.header_wait.fifo"
   if [[ ! -p "$fifo" ]]; then
-    /bin/mkdir -p /run/wptangtoc 2>/dev/null || true
+		(umask 077 && /bin/mkdir -p -- "$WPTT_RUN_DIR") 2>/dev/null || true
+
     mkfifo -m 600 "$fifo" 2>/dev/null || true
   fi
   if [[ -p "$fifo" ]]; then
-    read -r -t "$duration" _ <>"$fifo" 2>/dev/null || true
+    read -r -t "$duration" _ <> "$fifo" 2>/dev/null || true
   else
     sleep "$duration" 2>/dev/null || true
   fi
@@ -168,9 +173,9 @@ _wptt_micro_sleep() {
 _wptt_check_ols_status() {
   local max_ticks="${1:-22}"
   local pid_file="/tmp/lshttpd/lshttpd.pid"
-  local worker_pid_file="/run/wptangtoc/lsws-reload.worker.pid"
-  local pending_file="/run/wptangtoc/lsws-reload.pending"
-  local processing_file="/run/wptangtoc/lsws-reload.processing"
+  local worker_pid_file="${WPTT_RUN_DIR}/lsws-reload.worker.pid"
+  local pending_file="${WPTT_RUN_DIR}/lsws-reload.pending"
+  local processing_file="${WPTT_RUN_DIR}/lsws-reload.processing"
   local i
 
   # 1. FAST-PATH (0 Subshell, ~0.01ms): Kiểm tra trực tiếp PID file của OLS
@@ -219,7 +224,7 @@ _wptt_check_ols_status() {
   if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
     wptt_smart_reload_lsws >/dev/null 2>&1 || true
   elif [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
-    (systemctl start lsws.service >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true) &
+    (systemctl start lsws.service >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true) </dev/null >/dev/null 2>&1 &
     disown 2>/dev/null || true
   fi
 
@@ -239,7 +244,7 @@ _wptt_check_ols_status() {
 _wptt_check_mariadb_status() {
   local max_ticks="${1:-15}"
   local pf="" state="" now=0 last_fail=0 found_pid="" proc_comm="" i
-  local db_cb_file="/run/wptangtoc/mariadb-heal.ts"
+  local db_cb_file="${WPTT_RUN_DIR}/mariadb-heal.ts"
 
   # 1. FAST-PATH (0 Subshell, ~0.01ms): Đọc trực tiếp các đường dẫn PID chuẩn
   for pf in /run/mariadb/mariadb.pid /var/run/mariadb/mariadb.pid /run/mysqld/mysqld.pid /var/run/mysqld/mysqld.pid; do
@@ -252,7 +257,7 @@ _wptt_check_mariadb_status() {
   # 1b. FAST-PATH CACHE (0 Subshell): Nếu MariaDB đặt PID trong /var/lib/mysql
   if ((CACHED_MARIADB_PID > 1)) && kill -0 "$CACHED_MARIADB_PID" 2>/dev/null; then
     if [[ -r "/proc/$CACHED_MARIADB_PID/comm" ]]; then
-      IFS= read -r proc_comm <"/proc/$CACHED_MARIADB_PID/comm" 2>/dev/null || true
+      IFS= read -r proc_comm < "/proc/$CACHED_MARIADB_PID/comm" 2>/dev/null || true
       if [[ "$proc_comm" == "mariadbd" || "$proc_comm" == "mysqld" ]]; then
         REPLY_MARIADB_STATE="active"
         return 0
@@ -290,7 +295,7 @@ _wptt_check_mariadb_status() {
   # 4. Chống bão Auto-Restart nếu MariaDB vừa được kích hoạt cứu hộ trong vòng 30 giây qua
   printf -v now '%(%s)T' -1 2>/dev/null || now="$(date +%s)"
   if [[ -r "$db_cb_file" ]]; then
-    IFS= read -r last_fail <"$db_cb_file" 2>/dev/null || true
+    IFS= read -r last_fail < "$db_cb_file" 2>/dev/null || true
     if [[ "$last_fail" =~ ^[0-9]+$ ]] && ((now - last_fail < 30)); then
       REPLY_MARIADB_STATE="${state:-inactive}"
       return 1
@@ -298,14 +303,15 @@ _wptt_check_mariadb_status() {
   fi
 
   # 5. NON-BLOCKING AUTO-HEALING: Khởi chạy ngầm để không bao giờ treo cứng giao diện Dashboard
-  /bin/mkdir -p /run/wptangtoc 2>/dev/null || true
-  printf '%s\n' "$now" >"$db_cb_file" 2>/dev/null || true
+	(umask 077 && /bin/mkdir -p -- "$WPTT_RUN_DIR") 2>/dev/null || true
+
+  printf '%s\n' "$now" > "$db_cb_file" 2>/dev/null || true
 
   (
     if systemctl start mariadb.service >/dev/null 2>&1 || systemctl start mysql.service >/dev/null 2>&1; then
       /bin/rm -f -- "$db_cb_file" 2>/dev/null || true
     fi
-  ) &
+  ) </dev/null >/dev/null 2>&1 &
   disown 2>/dev/null || true
 
   for ((i = 0; i < max_ticks; i++)); do
@@ -559,17 +565,17 @@ render_dashboard_buffer() {
   local name value mem_total=1048576 mem_free=0 mem_buf=0 mem_cached=0 mem_avail=-1
   while read -r name value _; do
     case "$name" in
-    MemTotal:) mem_total=$value ;;
-    MemFree:) mem_free=$value ;;
-    MemAvailable:)
-      mem_avail=$value
-      break
-      ;;
-    Buffers:) mem_buf=$value ;;
-    Cached:)
-      mem_cached=$value
-      break
-      ;;
+      MemTotal:) mem_total=$value ;;
+      MemFree:) mem_free=$value ;;
+      MemAvailable:)
+        mem_avail=$value
+        break
+        ;;
+      Buffers:) mem_buf=$value ;;
+      Cached:)
+        mem_cached=$value
+        break
+        ;;
     esac
   done </proc/meminfo
 

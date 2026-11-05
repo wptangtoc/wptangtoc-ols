@@ -4,14 +4,18 @@
 # @since: 2026
 # @description: Render Header Menu Trung tâm (Đồng bộ State-Machine với wptt_smart_reload_lsws)
 
+WPTT_RUN_DIR="/etc/wptt/tmp/run"
+CACHED_MARIADB_PID="${CACHED_MARIADB_PID:-0}"
+
 # ------------------------------------------------------------------------------
 # HELPER 1: Kiểm tra PID sống từ file (100% Pure Bash, 0 Subshell)
 # ------------------------------------------------------------------------------
 _wptt_pidfile_alive() {
   local pfile="$1"
   local pid=""
-  if [[ -r "$pfile" ]]; then
-    IFS= read -r pid <"$pfile" 2>/dev/null || true
+  if [[ -r "$pfile" && ! -L "$pfile" ]]; then
+    IFS= read -r pid < "$pfile" 2>/dev/null || true
+    pid="${pid%%[![:digit:]]*}"
     if [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && kill -0 "$pid" 2>/dev/null; then
       return 0
     fi
@@ -20,11 +24,11 @@ _wptt_pidfile_alive() {
 }
 
 # ------------------------------------------------------------------------------
-# HELPER 2: Kiểm tra Circuit Breaker của OLS (/run/wptangtoc/lsws-reload.cb)
+# HELPER 2: Kiểm tra Circuit Breaker của OLS (/etc/wptt/tmp/run/lsws-reload.cb)
 # Trả về 0 nếu cho phép Auto-Heal, trả về 1 nếu Circuit Breaker đang OPEN
 # ------------------------------------------------------------------------------
 _wptt_ols_cb_is_allowed() {
-  local cb_file="/run/wptangtoc/lsws-reload.cb"
+  local cb_file="${WPTT_RUN_DIR}/lsws-reload.cb"
   [[ -r "$cb_file" ]] || return 0
 
   local now=0 line="" count=0
@@ -35,7 +39,7 @@ _wptt_ols_cb_is_allowed() {
     if ((now - line < 300)); then
       ((count++))
     fi
-  done <"$cb_file"
+  done < "$cb_file"
 
   ((count < 5))
 }
@@ -45,13 +49,13 @@ _wptt_ols_cb_is_allowed() {
 # ------------------------------------------------------------------------------
 _wptt_micro_sleep() {
   local duration="${1:-0.1}"
-  local fifo="/run/wptangtoc/.header_wait.fifo"
+  local fifo="${WPTT_RUN_DIR}/.header_wait.fifo"
   if [[ ! -p "$fifo" ]]; then
-    /bin/mkdir -p /run/wptangtoc 2>/dev/null || true
+		(umask 077 && /bin/mkdir -p -- "$WPTT_RUN_DIR") 2>/dev/null || true
     mkfifo -m 600 "$fifo" 2>/dev/null || true
   fi
   if [[ -p "$fifo" ]]; then
-    read -r -t "$duration" _ <>"$fifo" 2>/dev/null || true
+    read -r -t "$duration" _ <> "$fifo" 2>/dev/null || true
   else
     sleep "$duration" 2>/dev/null || true
   fi
@@ -62,9 +66,9 @@ _wptt_micro_sleep() {
 # ------------------------------------------------------------------------------
 _wptt_check_ols_status() {
   local pid_file="/tmp/lshttpd/lshttpd.pid"
-  local worker_pid_file="/run/wptangtoc/lsws-reload.worker.pid"
-  local pending_file="/run/wptangtoc/lsws-reload.pending"
-  local processing_file="/run/wptangtoc/lsws-reload.processing"
+  local worker_pid_file="${WPTT_RUN_DIR}/lsws-reload.worker.pid"
+  local pending_file="${WPTT_RUN_DIR}/lsws-reload.pending"
+  local processing_file="${WPTT_RUN_DIR}/lsws-reload.processing"
   local i
 
   # 1. FAST-PATH (0 Subshell, ~0.01ms): Kiểm tra trực tiếp PID file của OLS
@@ -93,6 +97,12 @@ _wptt_check_ols_status() {
         break
       fi
     done
+
+    # Nếu Worker vẫn đang trong chu kỳ xử lý hợp lệ -> giữ trạng thái running để không báo lỗi giả
+    if _wptt_pidfile_alive "$worker_pid_file" && _wptt_ols_cb_is_allowed; then
+      REPLY_OLS_STATUS="running"
+      return 0
+    fi
   fi
 
   # 3. KIỂM TRA LẠI TRONG RAM (Trường hợp file PID bị xóa nhầm nhưng tiến trình vẫn sống)
@@ -111,7 +121,8 @@ _wptt_check_ols_status() {
   if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
     wptt_smart_reload_lsws >/dev/null 2>&1 || true
   elif [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
-    systemctl start lsws.service >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true
+    (systemctl start lsws.service >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl start >/dev/null 2>&1 || true) </dev/null >/dev/null 2>&1 &
+    disown 2>/dev/null || true
   fi
 
   # Chờ tối đa 2.2s để tiến trình phục hồi ghi file PID
@@ -128,11 +139,11 @@ _wptt_check_ols_status() {
 }
 
 # ------------------------------------------------------------------------------
-# KIỂM TRA TRẠNG THÁI MARIADB (ZERO-FORK FAST-PATH + CHỐNG BÃO RESTART)
+# KIỂM TRA TRẠNG THÁI MARIADB (ZERO-FORK FAST-PATH + NON-BLOCKING AUTO-HEAL)
 # ------------------------------------------------------------------------------
 _wptt_check_mariadb_status() {
-  local pf="" state="" now=0 last_fail=0 i
-  local db_cb_file="/run/wptangtoc/mariadb-heal.ts"
+  local pf="" state="" now=0 last_fail=0 found_pid="" proc_comm="" i
+  local db_cb_file="${WPTT_RUN_DIR}/mariadb-heal.ts"
 
   # 1. FAST-PATH (0 Subshell, ~0.01ms): Đọc trực tiếp các đường dẫn PID chuẩn
   for pf in /run/mariadb/mariadb.pid /var/run/mariadb/mariadb.pid /run/mysqld/mysqld.pid /var/run/mysqld/mysqld.pid; do
@@ -142,8 +153,21 @@ _wptt_check_mariadb_status() {
     fi
   done
 
+  # 1b. FAST-PATH CACHE (0 Subshell): Nếu MariaDB đặt PID trong /var/lib/mysql
+  if ((CACHED_MARIADB_PID > 1)) && kill -0 "$CACHED_MARIADB_PID" 2>/dev/null; then
+    if [[ -r "/proc/$CACHED_MARIADB_PID/comm" ]]; then
+      IFS= read -r proc_comm < "/proc/$CACHED_MARIADB_PID/comm" 2>/dev/null || true
+      if [[ "$proc_comm" == "mariadbd" || "$proc_comm" == "mysqld" ]]; then
+        REPLY_MARIADB_STATUS="active"
+        return 0
+      fi
+    fi
+  fi
+
   # 2. Kiểm tra nhanh trong RAM (Trường hợp PID đặt trong /var/lib/mysql)
-  if pgrep -x "mariadbd" >/dev/null 2>&1 || pgrep -x "mysqld" >/dev/null 2>&1; then
+  found_pid="$(pgrep -x "mariadbd" 2>/dev/null | head -n 1 || pgrep -x "mysqld" 2>/dev/null | head -n 1 || true)"
+  if [[ "$found_pid" =~ ^[0-9]+$ ]] && ((found_pid > 1)); then
+    CACHED_MARIADB_PID=$found_pid
     REPLY_MARIADB_STATUS="active"
     return 0
   fi
@@ -166,23 +190,33 @@ _wptt_check_mariadb_status() {
   # 4. Chống bão Auto-Restart nếu MariaDB vừa thất bại khởi động trong vòng 30 giây qua
   printf -v now '%(%s)T' -1 2>/dev/null || now="$(date +%s)"
   if [[ -r "$db_cb_file" ]]; then
-    IFS= read -r last_fail <"$db_cb_file" 2>/dev/null || true
+    IFS= read -r last_fail < "$db_cb_file" 2>/dev/null || true
     if [[ "$last_fail" =~ ^[0-9]+$ ]] && ((now - last_fail < 30)); then
       REPLY_MARIADB_STATUS="${state:-inactive}"
       return 1
     fi
   fi
 
-  # 5. AUTO-HEALING: Khởi động lại khi xác nhận MariaDB thực sự dừng
-  /bin/mkdir -p /run/wptangtoc 2>/dev/null || true
-  printf '%s\n' "$now" >"$db_cb_file" 2>/dev/null || true
+  # 5. NON-BLOCKING AUTO-HEALING: Khởi động lại ngầm khi xác nhận MariaDB thực sự dừng
+	(umask 077 && /bin/mkdir -p -- "$WPTT_RUN_DIR") 2>/dev/null || true
 
-  systemctl start mariadb.service >/dev/null 2>&1 || systemctl start mysql.service >/dev/null 2>&1 || true
-  if pgrep -x "mariadbd" >/dev/null 2>&1 || pgrep -x "mysqld" >/dev/null 2>&1 || systemctl is-active --quiet mariadb.service 2>/dev/null; then
-    /bin/rm -f -- "$db_cb_file" 2>/dev/null || true
-    REPLY_MARIADB_STATUS="active"
-    return 0
-  fi
+  printf '%s\n' "$now" > "$db_cb_file" 2>/dev/null || true
+
+  (
+    if systemctl start mariadb.service >/dev/null 2>&1 || systemctl start mysql.service >/dev/null 2>&1; then
+      /bin/rm -f -- "$db_cb_file" 2>/dev/null || true
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+
+  for ((i = 0; i < 15; i++)); do
+    _wptt_micro_sleep 0.1
+    if pgrep -x "mariadbd" >/dev/null 2>&1 || pgrep -x "mysqld" >/dev/null 2>&1; then
+      /bin/rm -f -- "$db_cb_file" 2>/dev/null || true
+      REPLY_MARIADB_STATUS="active"
+      return 0
+    fi
+  done
 
   REPLY_MARIADB_STATUS="${state:-inactive}"
   return 1
@@ -191,12 +225,12 @@ _wptt_check_mariadb_status() {
 function header_menu() {
   clear
 
-  #tắt tạm thời chế độ tự in phím của Terminal để lúc đang chạy lệnh người dùng gõ phím gì nó print thẳng vào màn hình nhìn xấu không được ux
-  if [[ -t 0 ]]; then stty -echo 2>/dev/null; fi
+  # Tắt tạm thời chế độ tự in phím của Terminal để lúc đang chạy lệnh người dùng gõ phím không bị in đè làm vỡ khung UX
+  if [[ -t 0 ]]; then stty -echo 2>/dev/null || true; fi
 
   # Nạp cấu hình và thư viện (Chống nạp chồng dư thừa)
-  # shellcheck source=/dev/null
   if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
+    # shellcheck source=/dev/null
     [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
   fi
 
@@ -266,6 +300,6 @@ function header_menu() {
 
   print_border_bot "$C_CYAN"
 
-  #Bật lại tắt tạm thời chế độ tự in phím của Terminal để lúc đang chạy lệnh người dùng gõ phím gì nó print thẳng vào màn hình nhìn xấu không được ux
-  if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
+  # Bật lại chế độ tự in phím của Terminal sau khi vẽ xong Header
+  if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
 }
