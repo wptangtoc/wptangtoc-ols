@@ -6,8 +6,8 @@ umask 077
 # shellcheck disable=SC1091,SC2154,SC1090
 
 . /etc/wptt/echo-color 2>/dev/null
-. /etc/wptt/.wptt.conf 2>/dev/null
 . /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
 
 export box_inner_width=78
 
@@ -131,7 +131,7 @@ telegram_uploads_backup() {
 
 # Vá lỗi SC1001: Bỏ các dấu gạch chéo ngược (\) thừa
 timedate=$(date +_%Mphut_%Hgio_%d_%m_%Y)
-. "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
+wptt_load_vhost_conf "/etc/wptt/vhost/.$domain.conf" 2>/dev/null
 
 . /etc/wptt/backup-restore/wptt-check-disk-dieu-kien-backup "$path" "${domain}${timedate}.zip"
 if [[ "$dieu_kien_disk" == '0' ]]; then

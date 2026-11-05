@@ -1011,3 +1011,170 @@ wptt_flush_stdin() {
   ((_wptt_xtrace_was_on == 1)) && set -x
   return 0
 }
+
+# Hàm nạp cấu hình Vhost nâng cao bảo mật hơn thay vì dùng source trực tiếp.
+# cách dùng: wptt_load_vhost_conf $NAME
+# hoặc cách dùng: wptt_load_vhost_conf /etc/wptt/vhost/.$NAME.conf
+# Hàm nạp cấu hình Vhost
+# Chống RCE (Safe Parser), chống Path Traversal, chống Symlink, tối ưu Zero-Subshell
+# Cách dùng: wptt_load_vhost_conf "$NAME" [allow_bk]
+wptt_load_vhost_conf() {
+  local input="${1:-}"
+  local allow_bk="${2:-0}"
+  local conf_file=""
+  local domain=""
+
+  [[ -z "$input" ]] && return 1
+
+  # 1. Nhận diện thông minh cả đường dẫn file lẫn tên miền
+  if [[ "$input" == */* ]]; then
+    conf_file="$input"
+    domain="${conf_file##*/.}"
+    domain="${domain%.conf}"
+  else
+    domain="$input"
+    if [[ -f "/etc/wptt/vhost/.${domain}.conf" ]]; then
+      conf_file="/etc/wptt/vhost/.${domain}.conf"
+    elif [[ "$allow_bk" == "1" && -f "/etc/wptt/vhost_bk/.${domain}.conf" ]]; then
+      conf_file="/etc/wptt/vhost_bk/.${domain}.conf"
+    else
+      conf_file="/etc/wptt/vhost/.${domain}.conf"
+    fi
+  fi
+
+  # 2. Validate tên miền và khóa chặt Allowlist thư mục (chỉ cho phép trong /etc/wptt/vhost hoặc vhost_bk)
+  if [[ -z "$domain" || ! "$domain" =~ ^[a-zA-Z0-9._-]+$ || "$domain" == -* || "$domain" == *..* ]]; then
+    return 1
+  fi
+  case "$conf_file" in
+  "/etc/wptt/vhost/.${domain}.conf" | "/etc/wptt/vhost_bk/.${domain}.conf") ;;
+  *) return 1 ;;
+  esac
+
+  # 3. Kiểm tra file tồn tại, cấm tuyệt đối Symlink
+  if [[ ! -f "$conf_file" || -L "$conf_file" ]]; then
+    return 1
+  fi
+
+  # 4. Kiểm tra chủ sở hữu phải là root (UID 0) và quyền file an toàn
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    # Khi chạy quyền root: dùng toán tử built-in -O (nhanh tức thì, không tốn subshell)
+    if [[ ! -O "$conf_file" ]]; then
+      wptt_logs "ERROR" "Bảo mật: File $conf_file không thuộc sở hữu của root!" 2>/dev/null || true
+      return 1
+    fi
+  else
+    # Khi chạy quyền user (wptangtoc-user): kiểm tra UID chủ file bằng stat
+    local file_uid=""
+    file_uid="$(/usr/bin/stat -c '%u' -- "$conf_file" 2>/dev/null || printf '999')"
+    if [[ "$file_uid" != "0" ]]; then
+      return 1
+    fi
+  fi
+
+  # 5. Safe Key-Value Parser: Đọc trực tiếp từng biến vào bộ nhớ (Không dùng '.' hay 'eval' -> Miễn nhiễm 100% RCE)
+  local line="" key="" val=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # Xóa ký tự CR (\r) nếu file từng bị sửa trên Windows và cắt khoảng trắng đầu dòng
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+
+    # Bỏ qua dòng trống hoặc comment
+    [[ -z "$line" || "$line" == \#* ]] && continue
+
+    # Hỗ trợ cả trường hợp dòng bắt đầu bằng chữ "export "
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+
+    # Bỏ qua nếu dòng không có dấu '='
+    [[ "$line" != *=* ]] && continue
+
+    key="${line%%=*}"
+    val="${line#*=}"
+
+    # Cắt khoảng trắng thừa quanh key và cuối val
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+
+    # Chỉ chấp nhận tên biến hợp lệ của Bash
+    [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
+
+    # Gỡ dấu nháy kép "..." hoặc nháy đơn '...' bọc ngoài giá trị (nếu có)
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+
+    # Gán biến an toàn tuyệt đối vào phạm vi toàn cục của script gọi (không kích hoạt subshell/command substitution)
+    printf -v "$key" '%s' "$val"
+  done <"$conf_file"
+
+  return 0
+}
+
+# Hàm nạp cấu hình tổng (/etc/wptt/.wptt.conf)
+# Chống RCE (Safe Parser), chống Symlink, tối ưu Zero-Subshell
+# Cách dùng: wptt_load_main_conf
+wptt_load_main_conf() {
+  local conf_file="/etc/wptt/.wptt.conf"
+
+  # 1. Kiểm tra file tồn tại và cấm tuyệt đối Symlink
+  if [[ ! -f "$conf_file" || -L "$conf_file" ]]; then
+    return 1
+  fi
+
+  # 2. Kiểm tra chủ sở hữu bắt buộc phải là root (UID 0)
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    if [[ ! -O "$conf_file" ]]; then
+      wptt_logs "ERROR" "Bảo mật: File $conf_file không thuộc sở hữu của root!" 2>/dev/null || true
+      return 1
+    fi
+  else
+    local file_uid=""
+    file_uid="$(/usr/bin/stat -c '%u' -- "$conf_file" 2>/dev/null || printf '999')"
+    if [[ "$file_uid" != "0" ]]; then
+      return 1
+    fi
+  fi
+
+  # 3. Safe Key-Value Parser: Đọc trực tiếp từng biến vào bộ nhớ (Không dùng '.' hay 'eval')
+  local line="" key="" val=""
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+
+    [[ -z "$line" || "$line" == \#* ]] && continue
+
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+
+    [[ "$line" != *=* ]] && continue
+
+    key="${line%%=*}"
+    val="${line#*=}"
+
+    key="${key%"${key##*[![:space:]]}"}"
+    val="${val#"${val%%[![:space:]]*}"}"
+    val="${val%"${val##*[![:space:]]}"}"
+
+    [[ "$key" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || continue
+
+    if [[ "$val" =~ ^\"(.*)\"$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
+      val="${BASH_REMATCH[1]}"
+    fi
+
+    printf -v "$key" '%s' "$val"
+  done <"$conf_file"
+
+  # Đảm bảo biến ngôn ngữ luôn có giá trị mặc định nếu file cấu hình trống
+  : "${ngon_ngu:=vi}"
+  return 0
+}
