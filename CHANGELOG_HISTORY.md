@@ -1,3 +1,15 @@
+# WPTangToc OLS 8.4.0.3
+
+### 🛠️ Tối ưu hệ thống
+- **Cải tiến hệ thống cập nhật**: Tối ưu hóa toàn diện quy trình cập nhật phần mềm, giúp quá trình nâng cấp phiên bản diễn ra mượt mà, ổn định, nhanh chóng và an toàn tuyệt đối cho máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.2
 
 ### 🛠️ Tối ưu hệ thống
