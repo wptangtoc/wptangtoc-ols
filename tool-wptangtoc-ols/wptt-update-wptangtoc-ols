@@ -246,18 +246,40 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptang
 
   ls -dt /etc/wptt/wptt-backup-system/*.zip 2>/dev/null | tail -n +11 | xargs -r rm -f 2>/dev/null || true
 
-  kiem_tra_ton_tai_nhom=$(grep -E '^wptangtoc-ols:' /etc/group 2>/dev/null || true)
+	kiem_tra_ton_tai_nhom=$(grep -E '^wptangtoc-ols:' /etc/group 2>/dev/null || true)
 
   unzip -oq wptangtoc-ols.zip
 
-  if ! \cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null; then
+  # Nếu đang có tiến trình nén/sao lưu/dump DB chạy ngầm thì đợi hoàn tất mới tráo file
+  local_wait_ok=0
+  for ((i = 0; i < 120; i++)); do
+    if ! pgrep -f "/etc/wptt/.*(backup|sao-luu|restore|khoi-phuc|rsync|chuyen-host)|mysqldump|mariadb-dump|rclone" >/dev/null 2>&1; then
+      local_wait_ok=1
+      break
+    fi
+    ((i == 0)) && _runing "Đang đợi tiến trình Sao lưu/Database chạy ngầm hoàn tất..."
+    sleep 5
+  done
+
+  # Nếu sau 10 phút (120 * 5s) mà tiến trình Backup vẫn chưa xong -> Hủy update để bảo vệ Backup
+  if ((local_wait_ok == 0)); then
     umask "${OLD_UMASK:-0022}"
+    _runloi "Tiến trình Sao lưu chạy quá lâu! Tạm hoãn cập nhật để bảo vệ an toàn dữ liệu."
+    [[ -f "$BACKUP_FILE" ]] && rm -f -- "$BACKUP_FILE" 2>/dev/null || true
+    cd "$OLD_PWD" || cd /root || exit 1
+    rm -rf "${TMP_DIR:?}"
+    exit 1
+  fi
+
+  if ! \cp -rf --remove-destination tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null; then
+    umask "${OLD_UMASK:-0022}"
+    _runloi "Lỗi giải nén! Đang tự động khôi phục lại phiên bản cũ..."
     unzip -oq "$BACKUP_FILE" -d /etc/wptt/ 2>/dev/null || true
-    \cp -f /etc/wptt/wptangtoc /usr/bin 2>/dev/null || true
+    \cp -f --remove-destination /etc/wptt/wptangtoc /usr/bin/ 2>/dev/null || true
     rm -f /etc/wptt/wptangtoc
-    \cp -f /etc/wptt/wptt /usr/bin 2>/dev/null || true
+    \cp -f --remove-destination /etc/wptt/wptt /usr/bin/ 2>/dev/null || true
     rm -f /etc/wptt/wptt
-    \cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin 2>/dev/null || true
+    \cp -f --remove-destination /etc/wptt/tai-nguyen-server/wtop /usr/bin/ 2>/dev/null || true
     cd "$OLD_PWD" || cd /root || exit 1
     rm -rf "${TMP_DIR:?}"
     exit 1
@@ -268,7 +290,7 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptang
   rm -f wptangtoc-ols.zip wptangtoc-ols.zip.sig
   rm -rf tool-wptangtoc-ols
 
-  [[ -d /etc/wptt/wptt-child ]] && \cp -rf /etc/wptt/wptt-child/* /etc/wptt 2>/dev/null || true
+  [[ -d /etc/wptt/wptt-child ]] && \cp -rf --remove-destination /etc/wptt/wptt-child/* /etc/wptt 2>/dev/null || true
 
   chmod -R 700 /etc/wptt
   if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
@@ -279,11 +301,11 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptang
     chmod 700 /etc/wptt /etc/wptt/vhost
   fi
 
-  \cp -f /etc/wptt/wptangtoc /usr/bin
+  \cp -f --remove-destination /etc/wptt/wptangtoc /usr/bin
   rm -f /etc/wptt/wptangtoc
-  \cp -f /etc/wptt/wptt /usr/bin
+  \cp -f --remove-destination /etc/wptt/wptt /usr/bin
   rm -f /etc/wptt/wptt
-  \cp -f /etc/wptt/tai-nguyen-server/wtop /usr/bin 2>/dev/null || true
+  \cp -f --remove-destination /etc/wptt/tai-nguyen-server/wtop /usr/bin 2>/dev/null || true
 
   # ==========================================================================
   # 6. CẬP NHẬT PHÂN QUYỀN VHOST THEO CƠ CHẾ BẢO MẬT (ZERO TRUST)
@@ -326,7 +348,7 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptang
   umask 007
   mkdir -p /etc/wptt-user 2>/dev/null || true
   unzip -qo wptangtoc-ols-user.zip
-  \cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user 2>/dev/null || true
+  \cp -rf --remove-destination tool-wptangtoc-ols-user/* /etc/wptt-user 2>/dev/null || true
   umask "${OLD_UMASK:-0022}"
 
   rm -f wptangtoc-ols-user.zip wptangtoc-ols-user.zip.sig
@@ -335,13 +357,13 @@ if [[ -n "$wptangtocols_version" && "$wptangtocols_version" != "${version_wptang
   if [[ -n "$kiem_tra_ton_tai_nhom" ]]; then
     chown -hR root:wptangtoc-ols /etc/wptt-user
     chmod -R 750 /etc/wptt-user
-    \cp -f /etc/wptt-user/wptangtoc-user /usr/bin
+    \cp -f --remove-destination /etc/wptt-user/wptangtoc-user /usr/bin
     chown root:wptangtoc-ols /usr/bin/wptangtoc-user
     chmod 750 /usr/bin/wptangtoc-user
   else
     chown -hR root:root /etc/wptt-user
     chmod -R 700 /etc/wptt-user
-    \cp -f /etc/wptt-user/wptangtoc-user /usr/bin
+    \cp -f --remove-destination /etc/wptt-user/wptangtoc-user /usr/bin
     chown root:root /usr/bin/wptangtoc-user
     chmod 700 /usr/bin/wptangtoc-user
   fi
