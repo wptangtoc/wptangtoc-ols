@@ -4,6 +4,9 @@
 # @email: giatuan@wptangtoc.com
 # @since: 2026
 
+# Bọc toàn bộ script trong khối { ... } để Bash nạp 100% vào RAM trước khi thực thi,
+# chống lỗi lệch byte (syntax error) khi lệnh cp -rf tự ghi đè chính file wptt-update đang chạy.
+{
 function huong_dan() {
   cat <<'EOF'
  Tính năng cập nhật WPTangToc OLS là một chức năng quan trọng giúp người dùng dễ dàng nâng cấp script WPTangToc OLS lên phiên bản mới nhất.
@@ -24,18 +27,26 @@ function huong_dan() {
 EOF
 }
 
-PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin'
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
 unset khong_dau_vi_ngon_ngu wptangtocols_version ngon_ngu
+# shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 wptt_load_main_conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
 . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 
 # ==============================================================================
-# HÀM TIỆN ÍCH BẢO MẬT & RETRY LOGIC (MỚI BỔ SUNG)
+# HÀM TIỆN ÍCH BẢO MẬT & RETRY LOGIC (CHUẨN ENTERPRISE)
 # ==============================================================================
+EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
+KEY_EMAIL="giatuan@wptangtoc.com"
+
 # Hàm tải file với cơ chế Retry 3 lần
 secure_download() {
   local url="$1"
@@ -44,7 +55,7 @@ secure_download() {
   local max_attempts=3
   local attempt=1
 
-  while [[ $attempt -le $max_attempts ]]; do
+  while ((attempt <= max_attempts)); do
     if curl --tlsv1.2 -sfL --connect-timeout 10 --max-time 45 -A "$user_agent" "$url" -o "$dest"; then
       if [[ -s "$dest" ]]; then
         return 0
@@ -62,8 +73,8 @@ get_version_safe() {
   local max_attempts=3
   local attempt=1
 
-  while [[ $attempt -le $max_attempts ]]; do
-    local result
+  while ((attempt <= max_attempts)); do
+    local result=""
     result=$(curl --tlsv1.2 -sfL --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)
     result="${result//$'\r'/}"
     result="${result//[[:space:]]/}"
@@ -88,7 +99,7 @@ verify_gpg_package() {
     return 1
   fi
 
-  local status_out
+  local status_out=""
   status_out=$(gpg --status-fd 1 --batch --verify "$sig_file" "$data_file" 2>/dev/null || true)
 
   if grep -qE '\[GNUPG:\] (BADSIG|ERRSIG|EXPSIG|EXPKEYSIG|REVKEYSIG)' <<<"$status_out"; then
@@ -121,6 +132,77 @@ if grep -qi 'ID="centos"' /etc/os-release 2>/dev/null && grep -qE 'VERSION_ID="?
   echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
   exit 1
 fi
+
+# ==============================================================================
+# KIỂM TRA NGẦM DUNG LƯỢNG DISK, INODE, RAM & TRẠNG THÁI GHI (SILENT CHECK)
+# ==============================================================================
+wptt_check_storage_ready() {
+  local check_path="/etc/wptt"
+  [[ ! -d "$check_path" ]] && check_path="/"
+
+  local avail_kb=""
+  local avail_inodes=""
+  avail_kb=$(df -Pk "$check_path" 2>/dev/null | awk 'NR==2 {print $4}')
+  avail_inodes=$(df -Pi "$check_path" 2>/dev/null | awk 'NR==2 {print $4}')
+
+  local avail_ram_kb=0
+  if [[ -r /proc/meminfo ]]; then
+    avail_ram_kb=$(awk '
+      /^MemAvailable:/ { avail=$2 }
+      /^MemFree:/      { free=$2 }
+      /^Buffers:/      { buf=$2 }
+      /^Cached:/       { cache=$2 }
+      END {
+        if (avail > 0) print avail
+        else print (free + buf + cache)
+      }
+    ' /proc/meminfo 2>/dev/null || echo 0)
+  fi
+
+  local err_reason=""
+
+  # 1. Kiểm tra dung lượng trống tối thiểu 150MB (153600 KB) để đủ tải zip, giải nén và tạo bản backup
+  if [[ "$avail_kb" =~ ^[0-9]+$ ]] && ((avail_kb < 153600)); then
+    err_reason="Ổ cứng không đủ dung lượng trống (Còn lại: $((avail_kb / 1024))MB, yêu cầu tối thiểu: 150MB)."
+  # 2. Kiểm tra Inode trống tối thiểu 2000 (tránh kẹt giữa chừng khi giải nén hàng trăm file script)
+  elif [[ "$avail_inodes" =~ ^[0-9]+$ ]] && ((avail_inodes < 2000)); then
+    err_reason="Hệ thống đã cạn kiệt Inode (Còn lại: ${avail_inodes} Inodes, yêu cầu tối thiểu: 2000)."
+  # 3. Kiểm tra RAM khả dụng tối thiểu 30MB (30720 KB) tránh lỗi fork/unzip bị OOM Kill giữa chừng
+  elif [[ "$avail_ram_kb" =~ ^[0-9]+$ ]] && ((avail_ram_kb > 0 && avail_ram_kb < 30720)); then
+    err_reason="Bộ nhớ RAM khả dụng quá thấp (Còn lại: $((avail_ram_kb / 1024))MB, yêu cầu tối thiểu: 30MB)."
+  else
+    # 4. Kiểm tra thực tế khả năng tạo file/cấp phát Inode (phát hiện lỗi Read-only Filesystem)
+    /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+    local test_inode_file="/etc/wptt/tmp/.wptt_disk_probe_$$"
+    if ! ( : >"$test_inode_file" ) 2>/dev/null; then
+      err_reason="Không thể ghi dữ liệu lên ổ cứng (Phân vùng bị đầy 100%, hết sạch Inode hoặc đang bị khóa Read-Only)."
+    else
+      /bin/rm -f -- "$test_inode_file" 2>/dev/null || true
+    fi
+  fi
+
+  if [[ -n "$err_reason" ]]; then
+    _runloi "Không đủ điều kiện tài nguyên hệ thống để cập nhật!"
+    echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    echo -e "${C_RED}│${C_RESET} ${C_YELLOW}CẢNH BÁO: DỪNG CẬP NHẬT ĐỂ BẢO VỆ AN TOÀN HỆ THỐNG${C_RESET}                           ${C_RED}│${C_RESET}"
+    echo -e "${C_RED}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    echo -e "${C_RED}│${C_RESET} ${C_BOLD_WHITE}Nguyên nhân:${C_RESET} ${err_reason}${C_RESET}"
+    echo -e "${C_RED}│${C_RESET} Quá trình cập nhật đã tự động dừng lại nhằm tránh lỗi hỏng file cấu hình.    ${C_RED}│${C_RESET}"
+    echo -e "${C_RED}│${C_RESET} Vui lòng giải phóng bớt tài nguyên máy chủ rồi thực hiện cập nhật lại sau!   ${C_RED}│${C_RESET}"
+    echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+    sleep 4
+    if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+      exit 1
+    fi
+    if [[ -n "${1:-}" ]]; then
+      wptt_quay_ve_menu "${1:-}" 1
+      [[ "${1:-}" == "97" ]] && exec /usr/bin/wptangtoc 1
+    fi
+    exec /etc/wptt/wptt-status2
+    exit 1
+  fi
+}
+wptt_check_storage_ready "${1:-}"
 
 # 2.1 Kiểm tra Internet / Phân giải tên miền (bọc an toàn tránh lỗi tường lửa ICMP)
 if ! curl -sfI --connect-timeout 3 --max-time 5 https://1.1.1.1 >/dev/null 2>&1 &&
@@ -162,7 +244,7 @@ clear 2>/dev/null || true
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_YELLOW}HỆ THỐNG ➜ CẬP NHẬT WPTANGTOC OLS${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-print_line "${C_BOLD_WHITE}Phiên bản hiện tại:${C_RESET} ${C_YELLOW}$version_wptangtoc_ols${C_RESET}"
+print_line "${C_BOLD_WHITE}Phiên bản hiện tại:${C_RESET} ${C_YELLOW}${version_wptangtoc_ols:-}${C_RESET}"
 print_line "${C_CYAN}Đang kết nối máy chủ để kiểm tra phiên bản mới nhất...${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
@@ -176,7 +258,7 @@ if [[ -z "$wptangtocols_version" ]]; then
   echo -e "\n${C_RED}Lỗi mạng: Không thể kết nối đến máy chủ WPTangToc và trạm dự phòng. Vui lòng thử lại sau!${C_RESET}"
   sleep 3
   wptt_quay_ve_menu "${1:-}" 0
-  [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
+  [[ "${1:-}" == "97" ]] && exec /usr/bin/wptangtoc 1
   exec /etc/wptt/wptt-status2
   exit 1
 fi
@@ -184,20 +266,20 @@ fi
 # ==============================================================================
 # 2. XỬ LÝ LOGIC PHIÊN BẢN
 # ==============================================================================
-if [[ "$wptangtocols_version" == "$version_wptangtoc_ols" ]]; then
+if [[ "$wptangtocols_version" == "${version_wptangtoc_ols:-}" ]]; then
   echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}BẠN ĐANG SỬ DỤNG PHIÊN BẢN MỚI NHẤT${C_RESET}"
   echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   sleep 2
   wptt_quay_ve_menu "${1:-}" 0
-  [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
+  [[ "${1:-}" == "97" ]] && exec /usr/bin/wptangtoc 1
   exec /etc/wptt/wptt-status2
   exit 0
 else
   # ============================================================================
   # DÙNG THƯ VIỆN GIAO DIỆN ĐỂ HỎI NGƯỜI DÙNG CÓ MUỐN CẬP NHẬT HAY KHÔNG
   # ============================================================================
-  if wptt_xac_nhan "Đã có bản cập nhật mới! Bạn có muốn nâng cấp ngay không?" "${C_BOLD_WHITE}Bản hiện tại:${C_RESET} ${C_YELLOW}$version_wptangtoc_ols${C_RESET}" "${C_BOLD_WHITE}Bản mới nhất:${C_RESET} ${C_GREEN}$wptangtocols_version${C_RESET}" "Tiến hành nâng cấp" "Để sau"; then
+  if wptt_xac_nhan "Đã có bản cập nhật mới! Bạn có muốn nâng cấp ngay không?" "${C_BOLD_WHITE}Bản hiện tại:${C_RESET} ${C_YELLOW}${version_wptangtoc_ols:-}${C_RESET}" "${C_BOLD_WHITE}Bản mới nhất:${C_RESET} ${C_GREEN}$wptangtocols_version${C_RESET}" "Tiến hành nâng cấp" "Để sau"; then
     echo ""
 
     OLD_PWD=$(pwd)
@@ -213,8 +295,6 @@ else
     # ==========================================================================
     # BỘ MÁY XÁC THỰC BẢO MẬT GPG & FINGERPRINT PINNING (CHỐNG TRÁO HÀNG)
     # ==========================================================================
-    EXPECTED_FP="EE091EEB9A5189BC80837C059AA528D37B902267"
-    KEY_EMAIL="giatuan@wptangtoc.com"
     if ! gpg --list-keys "$EXPECTED_FP" >/dev/null 2>&1; then
       _runing "Đang nạp Khóa bảo mật GPG..."
 
@@ -237,7 +317,7 @@ else
         rm -rf "${TMP_DIR:?}"
         sleep 4
         wptt_quay_ve_menu "${1:-}" 0
-        [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
+        [[ "${1:-}" == "97" ]] && exec /usr/bin/wptangtoc 1
         exec /etc/wptt/wptt-status2
         exit 1
       fi
@@ -288,6 +368,7 @@ else
       echo -e "${C_RED}│${C_RESET} Quá trình cập nhật đã bị HỦY BỎ để bảo vệ an toàn cho máy chủ của bạn.       ${C_RED}│${C_RESET}"
       echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
 
+      cd "$OLD_PWD" || cd /root || exit 1
       rm -rf "${TMP_DIR:?}"
       sleep 4
 
@@ -296,7 +377,7 @@ else
       fi
 
       wptt_quay_ve_menu "${1:-}" 0
-      [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
+      [[ "${1:-}" == "97" ]] && exec /usr/bin/wptangtoc 1
       exec /etc/wptt/wptt-status2
       exit 1
     fi
@@ -314,7 +395,7 @@ else
     umask 077
     mkdir -p /etc/wptt/wptt-backup-system
     timedate=$(date +%Hgio_%d_%m_%Y)
-    BACKUP_FILE="/etc/wptt/wptt-backup-system/wptt_backup_${timedate}_version:$version_wptangtoc_ols.zip"
+    BACKUP_FILE="/etc/wptt/wptt-backup-system/wptt_backup_${timedate}_version:${version_wptangtoc_ols:-}.zip"
 
     (cd /etc/wptt && zip -r -q "$BACKUP_FILE" . -x "wptt-backup-system/*" -x ".wptt.conf" -x ".ram_hien_tai" -x "vhost/*" -x "tmp/*")
     [[ -f "$BACKUP_FILE" ]] && zip -g -j -q "$BACKUP_FILE" /usr/bin/wptangtoc /usr/bin/wptt /usr/bin/wtop
@@ -322,7 +403,7 @@ else
 
     unzip -oq wptangtoc-ols.zip
     if ! \cp -rf tool-wptangtoc-ols/* /etc/wptt/ 2>/dev/null; then
-umask "${OLD_UMASK:-0022}"
+      umask "${OLD_UMASK:-0022}"
       echo -e "\n${C_RED}❌ Lỗi chép file! Đang tự động khôi phục lại phiên bản cũ...${C_RESET}"
       unzip -oq "$BACKUP_FILE" -d /etc/wptt/
       \cp -f /etc/wptt/wptangtoc /usr/bin
@@ -336,12 +417,12 @@ umask "${OLD_UMASK:-0022}"
       rm -rf "${TMP_DIR:?}"
       sleep 3
       wptt_quay_ve_menu "${1:-}" 0
-      [[ ${1:-} == "97" ]] && exec /usr/bin/wptangtoc 1
+      [[ "${1:-}" == "97" ]] && exec /usr/bin/wptangtoc 1
       exec /etc/wptt/wptt-status2
       exit 1
     fi
     # 3. Tắt khiên, trả lại umask mặc định cho các tiến trình bên dưới
-		umask "${OLD_UMASK:-0022}"
+    umask "${OLD_UMASK:-0022}"
 
     rm -f wptangtoc-ols.zip wptangtoc-ols.zip.sig
     rm -rf tool-wptangtoc-ols
@@ -407,7 +488,7 @@ umask "${OLD_UMASK:-0022}"
     umask 007
     unzip -qo wptangtoc-ols-user.zip
     \cp -rf tool-wptangtoc-ols-user/* /etc/wptt-user
-		umask "${OLD_UMASK:-0022}"
+    umask "${OLD_UMASK:-0022}"
 
     rm -f wptangtoc-ols-user.zip wptangtoc-ols-user.zip.sig
     rm -rf tool-wptangtoc-ols-user
@@ -429,9 +510,9 @@ umask "${OLD_UMASK:-0022}"
     chmod 700 /etc/wptt/tmp
 
     # Khử dấu ngôn ngữ
-    if [[ "$khong_dau_vi_ngon_ngu" == '1' ]]; then
+    if [[ "${khong_dau_vi_ngon_ngu:-}" == '1' ]]; then
       find /etc/wptt -type f ! -path '/etc/wptt/lang/wptt-set-lang-vi' ! -path '/etc/wptt/wptt-update2' ! -path '/etc/wptt/wptt-update' ! -name '.*' -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} +
-      [[ -n "$kiem_tra_ton_tai_nhom" ]] && sudo find /etc/wptt-user -type f -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} +
+      [[ -n "$kiem_tra_ton_tai_nhom" ]] && find /etc/wptt-user -type f -exec sed -i 'y/áàảãạăắằẳẵặâấầẩẫậđéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵÁÀẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬĐÉÈẺẼẸÊẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÚÙỦŨỤƯỨỪỬỮỰÝỲỶỸỴ/aaaaaaaaaaaaaaaaadeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyAAAAAAAAAAAAAAAAADEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYY/' {} +
     fi
 
     # ==========================================================================
@@ -461,9 +542,9 @@ umask "${OLD_UMASK:-0022}"
     wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "version_wptangtoc_ols=$wptangtocols_version" "secure"
 
     echo "$wptangtocols_version" >/etc/wptt/tmp/wptangtoc-ols-version
-    echo "$version_wptangtoc_ols" >/etc/wptt/tmp/wptangtoc-ols-version-main
+    echo "${version_wptangtoc_ols:-}" >/etc/wptt/tmp/wptangtoc-ols-version-main
 
-    #nạp cache tính năng search
+    # Nạp cache tính năng search
     rm -f -- /etc/wptt/tmp/wptt_search_*.tsv 2>/dev/null || true
     rm -f -- /etc/wptt/tmp/wptt_search_*.idx 2>/dev/null || true
     (
@@ -504,3 +585,6 @@ umask "${OLD_UMASK:-0022}"
   fi
   exec /etc/wptt/wptt-status2
 fi
+
+exit 0
+}
