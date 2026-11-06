@@ -47,9 +47,10 @@ wptt_validate_ip() {
       return 0
     fi
   elif [[ "$addr" == *":"* && "$addr" != *":::"* && ! "$addr" =~ ^:[0-9a-fA-F] && ! "$addr" =~ [0-9a-fA-F]:$ && "${addr/::/@}" != *"::"* ]]; then
-    local IFS=':'
-    local -a hextets=()
-    read -r -a hextets <<< "$addr"
+		local -a hextets=()
+		IFS=':' read -r -a hextets <<< "$addr"
+
+
     if ((${#hextets[@]} <= 8)); then
       local valid_v6=1
       local h=""
