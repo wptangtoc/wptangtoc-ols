@@ -1,65 +1,150 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Optimize LiteSpeed LSAPI cho máy chủ chạy nhiều website trong hệ thống VPS
+# @since: 2026
+
 . /etc/wptt/core-functions 2>/dev/null
-# @description: Optimize LiteSpeed cho máy chủ chạy nhiều website
+. /etc/wptt/echo-color 2>/dev/null
 
-# 1. Tạo thư mục Backup cấu hình an toàn
-TEMP_OLS_config_DIR=$(mktemp -d /etc/wptt/tmp/XXXXXX)
-cp -rf /usr/local/lsws/conf/* "${TEMP_OLS_config_DIR:?}"
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 
-# 2. Tính toán tài nguyên (Dùng toán tử $(( )) của Bash nhanh hơn lệnh expr)
-cpucore=$(grep -c ^processor /proc/cpuinfo)
-core_tien_lsphp_child=$((cpucore * 2))
-vhost_dir="/usr/local/lsws/conf/vhosts"
+# ==============================================================================
+# 1. KHỞI TẠO MÔI TRƯỜNG
+# ==============================================================================
+conf_dir="/usr/local/lsws/conf"
+vhost_dir="${conf_dir}/vhosts"
+tmp_base="/etc/wptt/tmp"
 
-# 3. QUÉT VÀ BƠM CẤU HÌNH VÀO TOÀN BỘ VHOST
-# Bỏ qua các file rác như ..conf
-find "$vhost_dir" -type f -name "*.conf" ! -name "..conf" -print0 | while IFS= read -r -d $'\0' file; do
-    
-    # Kỹ thuật Sed Block: Chỉ thao tác bên trong khối extprocessor -> }
-    # - Xóa sạch các dòng chứa chữ 'env' cũ
-    sed -i '/extprocessor/,/}/ { /env[[:space:]]/d }' "$file"
-
-    # - Chèn 1 khối cấu hình mới tinh vào ngay dưới dòng chữ 'priority'
-    sed -i '/extprocessor/,/}/ {
-        /priority[[:space:]]/a \
-  env                     PHP_LSAPI_CHILDREN='"$core_tien_lsphp_child"'\
-  env                     LSAPI_AVOID_FORK=0\
-  env                     LSAPI_MAX_IDLE=30\
-  env                     LSAPI_MAX_IDLE_CHILDREN=1\
-  env                     LSAPI_MAX_PROCESS_TIME=120\
-  env                     LSAPI_PGRP_MAX_IDLE=30\
-  env                     LSAPI_ACCEPT_NOTIFY=1\
-  env                     LSAPI_MAX_CMD_SCRIPT_PATH_LEN=200
-    }' "$file"
-
-done
-
-# 4. CHUẨN HÓA QUYỀN SỞ HỮU (PERMISSIONS)
-if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-  tuong_thich_nhom_litespeed="nogroup"
-else
-  tuong_thich_nhom_litespeed="nobody"
+if [[ ! -d "$vhost_dir" ]]; then
+  exit 0
 fi
 
-chown -hR lsadm:"${tuong_thich_nhom_litespeed:?}" "$vhost_dir"
-find "$vhost_dir" -type f -print0 | xargs -0 chmod 750
+mkdir -p "$tmp_base" && chmod 700 "$tmp_base"
 
-# 5. TEST CÚ PHÁP VÀ ÁP DỤNG (HOẶC KHÔI PHỤC NẾU LỖI)
-if /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
-  rm -rf "${TEMP_OLS_config_DIR:?}"
-  wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning nhiều website Thành công!"
+# Tự động phát hiện group chuẩn của OpenLiteSpeed theo OS (nogroup trên Ubuntu/Debian, nobody trên RHEL)
+if getent group nogroup >/dev/null 2>&1 && grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
+  ols_group="nogroup"
 else
-  echo -e "\033[1;31mLỗi cú pháp OLS! Khôi phục về cấu hình cũ...\033[0m"
-  # Khôi phục an toàn
-  if [[ -n "$TEMP_OLS_config_DIR" ]];then
-	  rm -rf -- /usr/local/lsws/conf/*
-	  cp -rf "${TEMP_OLS_config_DIR:?}"/* /usr/local/lsws/conf/
+  ols_group="nobody"
+fi
 
-	  chown -hR lsadm:"$tuong_thich_nhom_litespeed" /usr/local/lsws/conf
-	  chmod -R 750 /usr/local/lsws/conf
+# ==============================================================================
+# 2. SAO LƯU NGUYÊN BẢN CẤU HÌNH (BẢO TOÀN PERMISSION/INODE METADATA VỚI CP -A)
+# ==============================================================================
+TEMP_OLS_CONFIG_DIR="$(mktemp -d "${tmp_base}/ols_conf_bak.XXXXXX")"
 
-	  rm -rf "${TEMP_OLS_config_DIR:?}"
+_cleanup_temp() {
+  [[ -n "${TEMP_OLS_CONFIG_DIR:-}" && -d "$TEMP_OLS_CONFIG_DIR" ]] && rm -rf -- "${TEMP_OLS_CONFIG_DIR:?}" 2>/dev/null || true
+}
+
+if ! \cp -a "${conf_dir}/." "${TEMP_OLS_CONFIG_DIR}/" 2>/dev/null; then
+  _cleanup_temp
+  exit 1
+fi
+
+# ==============================================================================
+# 3. TÍNH TOÁN TÀI NGUYÊN THEO SỐ CORE CPU (0-SUBSHELL)
+# ==============================================================================
+cpucore=1
+if command -v nproc >/dev/null 2>&1; then
+  cpucore="$(nproc 2>/dev/null || printf '1')"
+elif [[ -r /proc/cpuinfo ]]; then
+  cpucore="$(grep -c '^processor' /proc/cpuinfo 2>/dev/null || printf '1')"
+fi
+[[ "$cpucore" =~ ^[0-9]+$ ]] && ((cpucore >= 1)) || cpucore=1
+
+core_tien_lsphp_child=$((cpucore * 2))
+((core_tien_lsphp_child < 2)) && core_tien_lsphp_child=2
+
+# ==============================================================================
+# 4. QUÉT VÀ CẬP NHẬT NGUYÊN TỬ TOÀN BỘ VHOST (AWK STATE MACHINE)
+# ==============================================================================
+updated_count=0
+
+while IFS= read -r -d '' file; do
+  [[ -f "$file" && ! -L "$file" ]] || continue
+  tmp_file="${file}.wptt_tmp.$$"
+
+  # Dùng AWK tái cấu trúc khối extprocessor an toàn tuyệt đối (không phụ thuộc thứ tự dòng)
+  if awk -v children="$core_tien_lsphp_child" '
+    BEGIN { in_ext = 0 }
+    /^[ \t]*extprocessor[ \t]+[^ \t]+[ \t]*\{/ {
+      in_ext = 1
+      print $0
+      next
+    }
+    in_ext {
+      # Khi gặp dấu đóng khối "}" của extprocessor -> Bơm chuẩn bộ tham số tối ưu nhiều web
+      if ($0 ~ /^[ \t]*\}[ \t]*$/) {
+        printf "  maxConns                %s\n", children
+        printf "  runOnStartUp            2\n"
+        printf "  extMaxIdleTime          30\n"
+        printf "  priority                0\n"
+        printf "  env                     PHP_LSAPI_CHILDREN=%s\n", children
+        printf "  env                     LSAPI_AVOID_FORK=0\n"
+        printf "  env                     LSAPI_MAX_IDLE=30\n"
+        printf "  env                     LSAPI_MAX_IDLE_CHILDREN=1\n"
+        printf "  env                     LSAPI_MAX_PROCESS_TIME=120\n"
+        printf "  env                     LSAPI_PGRP_MAX_IDLE=30\n"
+        printf "  env                     LSAPI_ACCEPT_NOTIFY=1\n"
+        printf "  env                     LSAPI_MAX_CMD_SCRIPT_PATH_LEN=200\n"
+        print $0
+        in_ext = 0
+        next
+      }
+      # Bỏ qua các dòng cũ bên trong extprocessor để tránh trùng lặp hoặc lệch thông số
+      if ($1 == "env" || $1 == "maxConns" || $1 == "runOnStartUp" || $1 == "extMaxIdleTime" || $1 == "maxIdleTime" || $1 == "priority") {
+        next
+      }
+    }
+    { print $0 }
+  ' "$file" >"$tmp_file" 2>/dev/null && [[ -s "$tmp_file" ]]; then
+    \mv -f -- "$tmp_file" "$file"
+    ((updated_count++))
+  else
+    rm -f -- "$tmp_file" 2>/dev/null || true
+  fi
+done < <(find "$vhost_dir" -type f -name "*.conf" ! -name "..conf" ! -name "Example.conf" -print0 2>/dev/null)
+
+# ==============================================================================
+# 5. CHUẨN HÓA PHÂN QUYỀN (DIRECTORY 750, FILE 640)
+# ==============================================================================
+chown -hR "lsadm:${ols_group}" "$vhost_dir" 2>/dev/null || true
+find "$vhost_dir" -type d -exec chmod 750 {} + 2>/dev/null || true
+find "$vhost_dir" -type f -exec chmod 640 {} + 2>/dev/null || true
+
+# ==============================================================================
+# 6. KIỂM ĐỊNH CÚ PHÁP, NẠP LẠI OLS HOẶC ROLLBACK NGUYÊN TỬ
+# ==============================================================================
+printf -v current_ts '%(%d-%m-%Y %H:%M)T' -1 2>/dev/null || current_ts="$(date '+%d-%m-%Y %H:%M')"
+
+if /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
+  _cleanup_temp
+
+ # Kích hoạt nạp cấu hình mới Zero-Downtime
+ if [[ "$1" != "--no-reload" ]]; then
+	 if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+		 wptt_smart_reload_lsws >/dev/null 2>&1 || true
+	 else
+		 /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+	 fi
+ fi
+  if declare -F wptt_logs >/dev/null 2>&1; then
+    wptt_logs "INFO" "${current_ts} - OLS Auto-Tuning nhiều website thành công (${updated_count} vhosts, workers=${core_tien_lsphp_child})!"
+  fi
+else
+  printf '%b\n' "${C_RED:-\033[1;31m}Lỗi cú pháp OLS! Đang tự động khôi phục về cấu hình an toàn trước đó...${C_RESET:-\033[0m}" >&2
+
+  if [[ -n "${TEMP_OLS_CONFIG_DIR:-}" && -d "$TEMP_OLS_CONFIG_DIR" ]]; then
+    \cp -af --remove-destination "${TEMP_OLS_CONFIG_DIR}/." "${conf_dir}/" 2>/dev/null || true
+    chown -hR "lsadm:${ols_group}" "$vhost_dir" 2>/dev/null || true
+    _cleanup_temp
   fi
 
-  wptt_logs "INFO" "$(date '+%d-%m-%Y %H:%M') - OLS Auto-Tuning thất bại, đã restore về cấu hình cũ!"
+  if declare -F wptt_logs >/dev/null 2>&1; then
+    wptt_logs "ERROR" "${current_ts} - OLS Auto-Tuning thất bại, đã rollback về cấu hình cũ!"
+  fi
+  exit 1
 fi
