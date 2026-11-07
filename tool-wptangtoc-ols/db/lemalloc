@@ -1,49 +1,246 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
-echo "Tiến hành cài đặt jemalloc để tối ưu bộ nhớ cho MariaDB..."
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Cài đặt và kích hoạt jemalloc cho MariaDB chuẩn Enterprise (Multi-OS, Atomic & Auto-Rollback)
 
-# 1. Nhận diện Hệ Điều Hành
-if [ -f /etc/os-release ]; then
-  . /etc/os-release
-  OS=$ID
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 077
+
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null || true
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/.wptt.conf ]] && wptt_load_main_conf 2>/dev/null || true
+# shellcheck source=/dev/null
+[[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null || true
+
+
+tmp_dropin=""
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${tmp_dropin:-}" && -f "$tmp_dropin" ]]; then
+    /bin/rm -f -- "${tmp_dropin:?}"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# 1. NHẬN DIỆN HỆ ĐIỀU HÀNH (HỖ TRỢ ORACLE LINUX, ALMALINUX, ROCKY, RHEL, UBUNTU, DEBIAN)
+# ==============================================================================
+OS_FAMILY=""
+OS_ID=""
+
+if [[ -r /etc/os-release ]]; then
+  while IFS='=' read -r k v; do
+    v="${v#\"}"
+    v="${v%\"}"
+    case "$k" in
+      ID) OS_ID="${v,,}" ;;
+      ID_LIKE) OS_LIKE="${v,,}" ;;
+    esac
+  done </etc/os-release
 fi
 
-JEMALLOC_PATH=""
+case "$OS_ID" in
+  ubuntu | debian)
+    OS_FAMILY="DEBIAN"
+    ;;
+  almalinux | rocky | ol | oracle | rhel | centos )
+    OS_FAMILY="RHEL"
+    ;;
+  *)
+    if [[ "${OS_LIKE:-}" == *"rhel"* || "${OS_LIKE:-}" == *"fedora"* || "${OS_LIKE:-}" == *"centos"* ]]; then
+      OS_FAMILY="RHEL"
+    elif [[ "${OS_LIKE:-}" == *"debian"* || "${OS_LIKE:-}" == *"ubuntu"* ]]; then
+      OS_FAMILY="DEBIAN"
+    fi
+    ;;
+esac
 
-# 2. Xử lý cài đặt và tìm đường dẫn theo từng OS
-if [[ "$OS" == "ubuntu" ]]; then
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update >/dev/null 2>&1
-  apt-get install -y libjemalloc2 >/dev/null 2>&1
-  # Tìm đường dẫn trên Ubuntu
-  JEMALLOC_PATH=$(dpkg -L libjemalloc2 | grep -E 'libjemalloc\.so\.[0-9]+$' | head -n 1)
+if [[ -z "$OS_FAMILY" ]]; then
+  _runloi "Hệ điều hành '${OS_ID:-unknown}' không được hỗ trợ tối ưu jemalloc tự động."
+  exit 1
+fi
 
-elif [[ "$OS" == "almalinux" || "$OS" == "rocky" || "$OS" == "centos" || "$OS" == "rhel" ]]; then
-  dnf install jemalloc -y >/dev/null 2>&1
-  # Tìm đường dẫn trên AlmaLinux/RHEL
-  JEMALLOC_PATH=$(rpm -ql jemalloc | grep -E 'libjemalloc\.so\.[0-9]+$' | head -n 1)
+# Kiểm tra dịch vụ MariaDB có tồn tại trên máy chủ không
+if ! systemctl list-unit-files mariadb.service >/dev/null 2>&1 && [[ ! -f /lib/systemd/system/mariadb.service && ! -f /usr/lib/systemd/system/mariadb.service ]]; then
+  _runloi "Không phát hiện dịch vụ MariaDB (mariadb.service) trên hệ thống!"
+  exit 1
+fi
+
+# ==============================================================================
+# 2. HÀM DÒ TÌM ĐƯỜNG DẪN THƯ VIỆN JEMALLOC CHUẨN XÁC (ĐA KIẾN TRÚC X86_64 / ARM64)
+# ==============================================================================
+wptt_find_jemalloc_so() {
+  local found_so=""
+  local cand=""
+  local arch=""
+  arch="$(uname -m 2>/dev/null || echo "x86_64")"
+
+  # Ưu tiên 1: Quét trực tiếp các đường dẫn chuẩn 64-bit theo kiến trúc máy chủ
+  local -a search_dirs=(
+    "/usr/lib64"
+    "/lib64"
+    "/usr/lib/${arch}-linux-gnu"
+    "/lib/${arch}-linux-gnu"
+    "/usr/lib"
+    "/lib"
+  )
+
+  local dir=""
+  for dir in "${search_dirs[@]}"; do
+    [[ -d "$dir" ]] || continue
+    for cand in "$dir"/libjemalloc.so.2 "$dir"/libjemalloc.so.1 "$dir"/libjemalloc.so.[0-9]*; do
+      if [[ -f "$cand" ]]; then
+        found_so="$(readlink -f "$cand" 2>/dev/null || printf '%s' "$cand")"
+        if [[ -f "$found_so" ]]; then
+          printf '%s' "$found_so"
+          return 0
+        fi
+      fi
+    done
+  done
+
+  # Ưu tiên 2: Truy vấn qua trình quản lý gói (dpkg / rpm) hoặc ldconfig
+  if [[ "$OS_FAMILY" == "DEBIAN" ]] && command -v dpkg >/dev/null 2>&1; then
+    found_so="$(dpkg -L libjemalloc2 2>/dev/null | grep -E 'libjemalloc\.so\.[0-9]+$' | head -n 1 || true)"
+  elif [[ "$OS_FAMILY" == "RHEL" ]] && command -v rpm >/dev/null 2>&1; then
+    found_so="$(rpm -ql jemalloc 2>/dev/null | grep -E '(/lib64/|/lib/).*libjemalloc\.so\.[0-9]+$' | head -n 1 || true)"
+  fi
+
+  if [[ -z "$found_so" ]] && command -v ldconfig >/dev/null 2>&1; then
+    found_so="$(ldconfig -p 2>/dev/null | awk '/libjemalloc\.so\.[0-9]+/ {print $NF; exit}')"
+  fi
+
+  if [[ -n "$found_so" && -f "$found_so" ]]; then
+    printf '%s' "$found_so"
+    return 0
+  fi
+
+  return 1
+}
+
+# ==============================================================================
+# 3. CÀI ĐẶT GÓI JEMALLOC (NẾU CHƯA CÓ TRÊN HỆ THỐNG)
+# ==============================================================================
+task_msg="Cài đặt và tối ưu hóa bộ nhớ jemalloc cho MariaDB"
+_runing "$task_msg"
+
+JEMALLOC_PATH="$(wptt_find_jemalloc_so || true)"
+
+if [[ -z "$JEMALLOC_PATH" ]]; then
+  if [[ "$OS_FAMILY" == "DEBIAN" ]]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq libjemalloc2 >/dev/null 2>&1 || true
+  elif [[ "$OS_FAMILY" == "RHEL" ]]; then
+    local_pkg_mgr="dnf"
+    command -v dnf >/dev/null 2>&1 || local_pkg_mgr="yum"
+
+    # Thử cài đặt trực tiếp; nếu trên RHEL/Oracle/AlmaLinux chưa bật EPEL thì tự động kích hoạt EPEL
+    if ! "$local_pkg_mgr" install -y -q jemalloc >/dev/null 2>&1; then
+      if [[ "$OS_ID" == "ol" || "$OS_ID" == "oracle" ]]; then
+        "$local_pkg_mgr" install -y -q oracle-epel-release-el* >/dev/null 2>&1 ||
+          "$local_pkg_mgr" install -y -q epel-release >/dev/null 2>&1 || true
+      else
+        "$local_pkg_mgr" install -y -q epel-release >/dev/null 2>&1 || true
+      fi
+      "$local_pkg_mgr" install -y -q jemalloc >/dev/null 2>&1 || true
+    fi
+  fi
+
+  JEMALLOC_PATH="$(wptt_find_jemalloc_so || true)"
+fi
+
+if [[ -z "$JEMALLOC_PATH" || ! -f "$JEMALLOC_PATH" ]]; then
+  _runloi "Không thể cài đặt hoặc không tìm thấy thư viện libjemalloc.so trên hệ thống ($OS_ID)!"
+  exit 1
+fi
+
+# ==============================================================================
+# 4. KIỂM TRA TRẠNG THÁI HIỆN TẠI & CẬP NHẬT SYSTEMD DROP-IN NGUYÊN TỬ (ATOMIC)
+# ==============================================================================
+dropin_dir="/etc/systemd/system/mariadb.service.d"
+dropin_file="${dropin_dir}/jemalloc.conf"
+expected_content="[Service]
+Environment=\"LD_PRELOAD=${JEMALLOC_PATH}\""
+
+need_daemon_reload=0
+need_restart=0
+
+/bin/mkdir -p "$dropin_dir"
+chmod 755 "$dropin_dir"
+
+# Kiểm tra nội dung file cấu hình hiện tại có khớp 100% không
+if [[ ! -f "$dropin_file" ]] || [[ "$(<"$dropin_file")" != "$expected_content" ]]; then
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+  chmod 700 /etc/wptt/tmp 2>/dev/null || true
+  tmp_dropin="$(mktemp -p /etc/wptt/tmp wptt_jemalloc_XXXXXX.conf)"
+
+  printf '%s\n' "$expected_content" >"$tmp_dropin"
+  chmod 644 "$tmp_dropin"
+  /bin/mv -fT -- "$tmp_dropin" "$dropin_file"
+  tmp_dropin=""
+
+  if command -v restorecon >/dev/null 2>&1; then
+    restorecon -F "$dropin_dir" "$dropin_file" >/dev/null 2>&1 || true
+  fi
+  need_daemon_reload=1
+  need_restart=1
+fi
+
+# Kiểm tra thực tế tiến trình MariaDB đang chạy đã nạp jemalloc vào RAM chưa (0-Subshell SQL)
+mariadb_pid="$(systemctl show -p MainPID --value mariadb 2>/dev/null || echo 0)"
+if [[ "$mariadb_pid" =~ ^[0-9]+$ ]] && ((mariadb_pid > 1)); then
+  if ! grep -q "libjemalloc" "/proc/${mariadb_pid}/maps" 2>/dev/null; then
+    need_restart=1
+  fi
 else
-  echo "Hệ điều hành $OS không được hỗ trợ tối ưu jemalloc tự động."
+  # Dịch vụ đang dừng -> cần khởi động lên
+  need_restart=1
 fi
 
-# 3. Tiến hành cấu hình systemd nếu tìm thấy file thư viện
-if [[ -n "$JEMALLOC_PATH" ]]; then
-  # Tạo thư mục cấu hình ghi đè (drop-in) của systemd cho MariaDB
-  mkdir -p /etc/systemd/system/mariadb.service.d/
+if ((need_daemon_reload == 1)); then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
 
-  # Tạo file cấu hình ép MariaDB nạp thư viện jemalloc (Đã bỏ dấu ngoặc kép)
-  if [[ ! -f /etc/systemd/system/mariadb.service.d/jemalloc.conf ]]; then
-    cat >/etc/systemd/system/mariadb.service.d/jemalloc.conf <<EOF
-[Service]
-Environment=LD_PRELOAD=$JEMALLOC_PATH
-EOF
-    # Thông báo cho systemd biết cấu hình vừa thay đổi
-    systemctl daemon-reload
-    # Khởi động lại bằng stop/start để đảm bảo tiến trình ngắt hoàn toàn
-    systemctl stop mariadb
-    systemctl start mariadb
-    echo "Hoàn tất cài đặt jemalloc để tối ưu bộ nhớ cho MariaDB..."
+# ==============================================================================
+# 5. KHỞI ĐỘNG LẠI MARIADB AN TOÀN KÈM CƠ CHẾ AUTO-ROLLBACK (FAIL-SAFE)
+# ==============================================================================
+if ((need_restart == 1)); then
+  if ! systemctl restart mariadb >/dev/null 2>&1; then
+    # FAIL-SAFE ROLLBACK: Nếu MariaDB lỗi khởi động do xung đột LD_PRELOAD, gỡ ngay để cứu DB
+    _runloi "MariaDB không thể khởi động cùng jemalloc! Đang tự động Rollback cấu hình an toàn..."
+    /bin/rm -f -- "$dropin_file"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl start mariadb >/dev/null 2>&1 || true
+    if declare -F wptt_logs >/dev/null 2>&1; then
+      wptt_logs "ERROR" "MariaDB jemalloc lỗi khởi động -> Đã tự động Rollback an toàn" 2>/dev/null || true
+    fi
+    exit 1
   fi
 fi
 
-#lệnh check xem đã kích hoạt chưa: mariadb -e "SHOW VARIABLES LIKE 'version_malloc_library';"
+# ==============================================================================
+# 6. XÁC MINH HẬU KIỂM (POST-FLIGHT VERIFICATION)
+# ==============================================================================
+mariadb_pid="$(systemctl show -p MainPID --value mariadb 2>/dev/null || echo 0)"
+malloc_status="Đã nạp qua LD_PRELOAD (${JEMALLOC_PATH})"
+
+if command -v mariadb >/dev/null 2>&1; then
+  sql_ver="$(mariadb -NBe "SHOW VARIABLES LIKE 'version_malloc_library';" 2>/dev/null | awk '{$1=""; sub(/^ /,""); print}' || true)"
+  [[ -n "$sql_ver" ]] && malloc_status="$sql_ver"
+fi
+
+_rundone "$task_msg"
+if declare -F wptt_logs >/dev/null 2>&1; then
+  wptt_logs "INFO" "Kích hoạt jemalloc cho MariaDB thành công ($malloc_status)" 2>/dev/null || true
+fi
+
+echo -e "${C_GREEN:-}✔ Trạng thái bộ cấp phát RAM MariaDB: ${C_YELLOW:-}${malloc_status}${C_RESET:-}"

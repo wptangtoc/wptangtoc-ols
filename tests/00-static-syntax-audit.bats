@@ -1,4 +1,4 @@
-  #!/usr/bin/env bats
+#!/usr/bin/env bats
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
