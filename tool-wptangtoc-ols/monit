@@ -61,24 +61,28 @@ fi
 mkdir -p "$DIR_MONIT"
 
 # Cấu hình Monit Core
-if grep -q "^set httpd port 2812" "$FILE_MONITRC"; then
+if grep -Eq "^[[:space:]]*set httpd port 2812" "$FILE_MONITRC"; then
   echo -e "\e[33m[!] Monit Core đã được tối ưu. Bỏ qua.\e[0m"
 else
   echo -e "\e[32m[+] Đang cấu hình Monit Core (HTTP & Daemon 30s)...\e[0m"
-  sed -i 's/# set httpd port 2812/set httpd port 2812/' "$FILE_MONITRC"
-  sed -i 's/#     use address localhost/    use address localhost/' "$FILE_MONITRC"
-  sed -i 's/#     allow localhost/    allow localhost/' "$FILE_MONITRC"
-  sed -i 's/set daemon  120/set daemon 30/; s/set daemon 120/set daemon 30/' "$FILE_MONITRC"
 
-  # Ép dùng IPv4 127.0.0.1 thay cho localhost tránh tốn thời gian phân giải dns
-  sed -i 's/use address localhost/use address 127.0.0.1/g' /etc/monitrc 2>/dev/null
-  sed -i 's/allow localhost/allow 127.0.0.1/g' /etc/monitrc 2>/dev/null
-  sed -i 's/use address localhost/use address 127.0.0.1/g' /etc/monit/monitrc 2>/dev/null
-  sed -i 's/allow localhost/allow 127.0.0.1/g' /etc/monit/monitrc 2>/dev/null
+  # Bỏ comment khối httpd, chịu được mọi kiểu khoảng trắng ("# set", "#set", "#    use"...)
+  sed -i -E 's/^#[[:space:]]*set httpd port 2812.*/set httpd port 2812 and/' "$FILE_MONITRC"
+  sed -i -E 's/^#[[:space:]]*use address[[:space:]]+(localhost|127\.0\.0\.1).*/    use address 127.0.0.1/' "$FILE_MONITRC"
+  sed -i -E 's/^#[[:space:]]*allow[[:space:]]+(localhost|127\.0\.0\.1)([[:space:]].*)?$/    allow 127.0.0.1/' "$FILE_MONITRC"
 
-  if [[ "$OS_FAMILY" == "ubuntu" ]] && ! grep -q "set httpd port 2812" /etc/monit/monitrc; then
-    echo -e "\nset httpd port 2812\n    use address 127.0.0.1\n    allow 127.0.0.1" >>/etc/monit/monitrc
+  # Nếu đã có dòng active thì ép dùng IPv4
+  sed -i -E 's/^([[:space:]]*use address[[:space:]]+)localhost/\1127.0.0.1/' "$FILE_MONITRC"
+  sed -i -E 's/^([[:space:]]*allow[[:space:]]+)localhost/\1127.0.0.1/' "$FILE_MONITRC"
+
+  # Chu kỳ kiểm tra 30s (chịu cả dạng đang bị comment)
+  sed -i -E 's/^#?[[:space:]]*set daemon[[:space:]]+[0-9]+.*/set daemon 30/' "$FILE_MONITRC"
+
+  # Dự phòng: nếu vẫn chưa có dòng active (neo ^) thì append khối mới
+  if ! grep -Eq "^[[:space:]]*set httpd port 2812" "$FILE_MONITRC"; then
+    printf '\nset httpd port 2812 and\n    use address 127.0.0.1\n    allow 127.0.0.1\n' >>"$FILE_MONITRC"
   fi
+
   RELOAD_MONIT=1
 fi
 
@@ -195,6 +199,11 @@ fi
 systemctl enable monit >/dev/null 2>&1
 
 if [ "$RELOAD_MONIT" -eq 1 ]; then
+	if ! monit -t >/dev/null 2>&1; then
+		echo -e "\e[31m[✘] Cấu hình Monit lỗi cú pháp, không restart. Chạy 'monit -t' để xem chi tiết.\e[0m"
+		exit 1
+	fi
+
   echo -e "\e[32m[+] Cập nhật cấu hình mới. Đang nạp lại Monit daemon...\e[0m"
   systemctl daemon-reload >/dev/null 2>&1
   systemctl restart monit >/dev/null 2>&1

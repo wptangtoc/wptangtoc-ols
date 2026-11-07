@@ -78,8 +78,9 @@ _wait_for_monit_heal() {
 @test "✅ Cổng điều khiển nội bộ Monit HTTP (127.0.0.1:2812) đang lắng nghe" {
   local ss_out=""
   ss_out="$(ss -tln)"
-  if ! grep -qE '127\.0\.0\.1:2812[[:space:]]' <<<"$ss_out"; then
-    printf '\n[LỖI] Monit HTTP port 2812 không mở trên 127.0.0.1!\n%s\n' "$ss_out" >&3
+  # Kiểm tra linh hoạt cổng 2812 trên localhost (cả 127.0.0.1, [::1] hoặc * )
+  if ! grep -qE '(127\.0\.0\.1|\[::1\]|\*):2812[[:space:]]' <<<"$ss_out"; then
+    printf '\n[LỖI] Monit HTTP port 2812 không mở trên localhost!\n%s\n' "$ss_out" >&3
     return 1
   fi
 

@@ -89,7 +89,7 @@
     <li><b>Tương thích Cloudflare CDN:</b> Hỗ trợ SSL full Cloudflare và show real ip Cloudflare...</li>
     <li><b>An toàn Dữ liệu & Tự động hóa:</b> Tự động sao lưu định kỳ. và đẩy thẳng lên Cloud (Amazon S3, Cloudflare R2, Google Drive, OneDrive, Telegram...).</li>
     <li><b>Giám sát & Tự phục hồi:</b> Cảnh báo đăng nhập lạ qua Telegram. Giám sát tài nguyên máy chủ (wtop) thời gian thực và tự động Restart các dịch vụ nếu phát hiện tình trạng treo, đảm bảo Uptime tối đa.</li>
-    <li><b>Hỗ trợ .Htaccess Realtime Full Apache .htaccess tương thích</b></li>
+    <li><b>Tương thích .htaccess Apache toàn diện</b> Tự động áp dụng thay đổi tức thì</li>
     <li><b>Còn nhiều tính năng khác đợi bạn trải nghiệm...</b></li>
 </ul>
 
