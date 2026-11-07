@@ -175,16 +175,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS v8.3.2.0
-
-### 🚀 Tính năng mới
-- **Tích hợp NFtables làm tường lửa mặc định:** Thay thế Firewalld bằng NFtables, mang lại hiệu năng xử lý mạng vượt trội, tăng cường bảo mật và tiết kiệm đáng kể tài nguyên hệ thống cho máy chủ.
-
-### 🛠️ Tối ưu hệ thống
-- **Cải tiến hệ thống tường lửa NFtables:** Nâng cao độ ổn định, tối ưu hóa khả năng lọc gói tin và vận hành mượt mà cho tường lửa mới.
-- **Tối ưu cơ chế SSHGuard:** Nâng cấp tính năng quản lý và mở khóa IP, giúp quản trị viên xử lý linh hoạt, chính xác và nhanh chóng hơn đối với các địa chỉ IP bị chặn.
-- **Bảo mật và ổn định phiên kết nối SSH:** Xử lý an toàn và tự động từ chối kết nối khi ngắt kết nối SSH đột ngột trong quá trình xác thực; vô hiệu hóa hiển thị ký tự (echo) và tự động làm sạch bộ đệm bàn phím trong thời gian chờ, ngăn chặn triệt để tình trạng nhập ký tự rác do thao tác vô ý.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
