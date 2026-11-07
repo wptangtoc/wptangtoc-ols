@@ -4,26 +4,36 @@
 # @website: https://wptangtoc.com
 # @email: giatuan@wptangtoc.com
 # @since: 2026
-# Công nghệ restart những service quan trọng bị sập, mariadb, lsws, object cache hỗ trợ thông báo telegram khi bị sập service
+# Công nghệ tự động cứu sống các service quan trọng bị sập (MariaDB, OLS, Object Cache)
+# Bảo mật Zero-Trust: Giao tiếp qua Unix Socket độc quyền cho root (0600), không mở port TCP 2812
+
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 
 # Cấu hình biến sẵn theo hệ điều hành
-if grep -qi "ubuntu" /etc/*release; then
+if grep -qi "ubuntu" /etc/*release 2>/dev/null; then
   OS_FAMILY="ubuntu"
   FILE_MONITRC="/etc/monit/monitrc"
   DIR_MONIT="/etc/monit/conf.d"
-  FILE_PID_MARIADB="/run/mysqld/mysqld.pid"
   SOCK_MARIADB="/run/mysqld/mysqld.sock"
   PATH_MEMCACHE_CONF="/etc/memcached.conf"
 else
   OS_FAMILY="rhel"
   FILE_MONITRC="/etc/monitrc"
   DIR_MONIT="/etc/monit.d"
-  FILE_PID_MARIADB="/run/mariadb/mariadb.pid"
   SOCK_MARIADB="/var/lib/mysql/mysql.sock"
   PATH_MEMCACHE_CONF="/etc/sysconfig/memcached"
 fi
 
-# Cờ theo dõi sự thay đổi (Nếu có thay đổi mới thì mới Restart Monit ở cuối)
+# Tự động dò chính xác Unix Socket thực tế của MariaDB đang chạy trên hệ thống
+for candidate_sock in "/run/mysqld/mysqld.sock" "/var/lib/mysql/mysql.sock" "/var/run/mysqld/mysqld.sock" "/tmp/mysql.sock"; do
+  if [[ -S "$candidate_sock" ]]; then
+    SOCK_MARIADB="$candidate_sock"
+    break
+  fi
+done
+
+MONIT_SOCK="/run/monit.sock"
 RELOAD_MONIT=0
 
 # ==============================================================================
@@ -32,14 +42,13 @@ RELOAD_MONIT=0
 SCRIPT_TELEGRAM="/etc/wptt/service/reboot-app/wptt-monit-telegram.sh"
 TELEGRAM_ACTIVE="0"
 
-# Nếu người dùng đang BẬT Telegram, cờ này sẽ kích hoạt việc thay đổi lệnh Start
 if [[ -f "$SCRIPT_TELEGRAM" ]]; then
   TELEGRAM_ACTIVE="1"
   echo -e "\e[36m[*] Phát hiện tính năng Cảnh báo Telegram đang BẬT. Sẽ tự động chèn Hook...\e[0m"
 fi
 
 # ------------------------------------------------------------------------------
-# 1. CÀI ĐẶT MONIT VÀ CẤU HÌNH LÕI
+# 1. CÀI ĐẶT MONIT VÀ CẤU HÌNH LÕI (BẢO MẬT UNIX SOCKET CHỈ ROOT TƯƠNG TÁC)
 # ------------------------------------------------------------------------------
 if command -v monit >/dev/null 2>&1; then
   echo -e "\e[33m[!] Monit đã được cài đặt. Bỏ qua bước tải gói.\e[0m"
@@ -57,34 +66,30 @@ else
   echo -e "\e[32m[✔] Cài đặt gói Monit thành công.\e[0m"
 fi
 
-# Tạo sẵn thư mục chứa rule
-mkdir -p "$DIR_MONIT"
+mkdir -p "$DIR_MONIT" /var/lib/monit
+chmod 700 "$DIR_MONIT"
 
-# Cấu hình Monit Core
-if grep -Eq "^[[:space:]]*set httpd port 2812" "$FILE_MONITRC"; then
-  echo -e "\e[33m[!] Monit Core đã được tối ưu. Bỏ qua.\e[0m"
-else
-  echo -e "\e[32m[+] Đang cấu hình Monit Core (HTTP & Daemon 30s)...\e[0m"
+echo -e "\e[32m[+] Đang tối ưu Monit Core (Unix Socket 0600 chỉ cho phép root & Daemon 30s)...\e[0m"
 
-  # Bỏ comment khối httpd, chịu được mọi kiểu khoảng trắng ("# set", "#set", "#    use"...)
-  sed -i -E 's/^#[[:space:]]*set httpd port 2812.*/set httpd port 2812 and/' "$FILE_MONITRC"
-  sed -i -E 's/^#[[:space:]]*use address[[:space:]]+(localhost|127\.0\.0\.1).*/    use address 127.0.0.1/' "$FILE_MONITRC"
-  sed -i -E 's/^#[[:space:]]*allow[[:space:]]+(localhost|127\.0\.0\.1)([[:space:]].*)?$/    allow 127.0.0.1/' "$FILE_MONITRC"
+cat >"$FILE_MONITRC" <<EOF
+set daemon 30
+set log syslog
+set pidfile /run/monit.pid
+set idfile /var/lib/monit/id
+set statefile /var/lib/monit/state
 
-  # Nếu đã có dòng active thì ép dùng IPv4
-  sed -i -E 's/^([[:space:]]*use address[[:space:]]+)localhost/\1127.0.0.1/' "$FILE_MONITRC"
-  sed -i -E 's/^([[:space:]]*allow[[:space:]]+)localhost/\1127.0.0.1/' "$FILE_MONITRC"
+set httpd unixsocket $MONIT_SOCK
+    permission 0600
+    uid root
+    gid root
+    allow localhost
 
-  # Chu kỳ kiểm tra 30s (chịu cả dạng đang bị comment)
-  sed -i -E 's/^#?[[:space:]]*set daemon[[:space:]]+[0-9]+.*/set daemon 30/' "$FILE_MONITRC"
+include ${DIR_MONIT}/*
+EOF
 
-  # Dự phòng: nếu vẫn chưa có dòng active (neo ^) thì append khối mới
-  if ! grep -Eq "^[[:space:]]*set httpd port 2812" "$FILE_MONITRC"; then
-    printf '\nset httpd port 2812 and\n    use address 127.0.0.1\n    allow 127.0.0.1\n' >>"$FILE_MONITRC"
-  fi
-
-  RELOAD_MONIT=1
-fi
+chown root:root "$FILE_MONITRC"
+chmod 600 "$FILE_MONITRC"
+RELOAD_MONIT=1
 
 # ------------------------------------------------------------------------------
 # 2. RULE GIÁM SÁT OPENLITESPEED
@@ -194,21 +199,37 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# KHỞI ĐỘNG VÀ ÁP DỤNG CẤU HÌNH
+# KHỞI ĐỘNG VÀ ÁP DỤNG CẤU HÌNH (XÓA STATE CŨ ĐỂ RESET "NOT MONITORED")
 # ------------------------------------------------------------------------------
 systemctl enable monit >/dev/null 2>&1
 
-if [ "$RELOAD_MONIT" -eq 1 ]; then
-	if ! monit -t >/dev/null 2>&1; then
-		echo -e "\e[31m[✘] Cấu hình Monit lỗi cú pháp, không restart. Chạy 'monit -t' để xem chi tiết.\e[0m"
-		exit 1
-	fi
+if [[ "$RELOAD_MONIT" -eq 1 ]]; then
+  if ! monit -t >/dev/null 2>&1; then
+    echo -e "\e[31m[✘] Cấu hình Monit lỗi cú pháp, không restart. Chạy 'monit -t' để xem chi tiết.\e[0m"
+    monit -t
+    exit 1
+  fi
 
   echo -e "\e[32m[+] Cập nhật cấu hình mới. Đang nạp lại Monit daemon...\e[0m"
+  systemctl stop monit >/dev/null 2>&1 || true
+  pkill -9 -x monit 2>/dev/null || true
+  # Xóa cả file state cũ (/var/lib/monit/state & /root/.monit.state) để xóa trạng thái "Not monitored" bị lưu từ trước
+  rm -f -- "$MONIT_SOCK" /run/monit.pid /var/run/monit.pid /var/lib/monit/state /root/.monit.state 2>/dev/null || true
+  sleep 0.5
+
+  # Đảm bảo lshttpd đang chạy trước khi bật lại Monit
+  systemctl start lshttpd >/dev/null 2>&1 || systemctl start lsws >/dev/null 2>&1 || true
+
+  systemctl reset-failed monit >/dev/null 2>&1 || true
   systemctl daemon-reload >/dev/null 2>&1
-  systemctl restart monit >/dev/null 2>&1
-  monit monitor all >/dev/null 2>&1
-  echo -e "\e[32m[✔] HOÀN TẤT! Các rule mới đã được kích hoạt.\e[0m"
+  systemctl start monit >/dev/null 2>&1
+
+  for _ in {1..10}; do
+    [[ -S "$MONIT_SOCK" ]] && break
+    sleep 0.3
+  done
+  monit monitor all >/dev/null 2>&1 || true
+  echo -e "\e[32m[✔] HOÀN TẤT! Các rule mới đã được kích hoạt (Bảo mật Root-Only Socket).\e[0m"
 else
   echo -e "\e[32m[✔] KHÔNG CÓ SỰ THAY ĐỔI NÀO. Hệ thống đã ở trạng thái tối ưu nhất!\e[0m"
 fi

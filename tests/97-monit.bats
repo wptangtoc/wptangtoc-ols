@@ -75,20 +75,29 @@ _wait_for_monit_heal() {
   fi
 }
 
-@test "✅ Cổng điều khiển nội bộ Monit HTTP (127.0.0.1:2812) đang lắng nghe" {
-  local ss_out=""
-  ss_out="$(ss -tln)"
-  # Kiểm tra linh hoạt cổng 2812 trên localhost (cả 127.0.0.1, [::1] hoặc * )
-  if ! grep -qE '(127\.0\.0\.1|\[::1\]|\*):2812[[:space:]]' <<<"$ss_out"; then
-    printf '\n[LỖI] Monit HTTP port 2812 không mở trên localhost!\n%s\n' "$ss_out" >&3
+@test "✅ Giao diện điều khiển Monit dùng Unix Socket bảo mật (0600, chỉ root tương tác được)" {
+  # 1. Đảm bảo không mở cổng TCP 2812 ra ngoài network stack
+  if ss -tln | grep -qE ':2812[[:space:]]'; then
+    printf '\n[LỖI BẢO MẬT] Cổng TCP 2812 vẫn đang mở! Phải dùng Unix Socket để cô lập quyền root.\n' >&3
     return 1
   fi
 
-  run monit summary
-  if [[ "$status" -ne 0 ]]; then
-    printf '\n[LỖI] Lệnh "monit summary" không kết nối được tới Monit daemon:\n%s\n' "$output" >&3
+  # 2. Kiểm tra file /run/monit.sock tồn tại và khóa chặt quyền 600 thuộc root:root
+  [[ -S "/run/monit.sock" ]] || {
+    printf '\n[LỖI] Không tìm thấy Unix Socket /run/monit.sock!\n' >&3
+    return 1
+  }
+
+  local sock_perm=""
+  sock_perm="$(stat -c '%a:%U:%G' /run/monit.sock)"
+  if [[ "$sock_perm" != "600:root:root" ]]; then
+    printf '\n[LỖI BẢO MẬT] Quyền của /run/monit.sock là "%s" (kỳ vọng: 600:root:root)!\n' "$sock_perm" >&3
     return 1
   fi
+
+  # 3. Xác nhận root gọi monit summary thành công qua socket
+  run monit summary
+  [[ "$status" -eq 0 ]]
 }
 
 @test "✅ Kiểm tra tính hợp lệ của đường dẫn PID/Socket trong các rule Monit hiện hành" {
