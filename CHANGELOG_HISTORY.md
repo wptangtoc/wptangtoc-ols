@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.4.0.5
+
+### 🛠️ Tối ưu hệ thống
+- **Tối ưu cơ chế quản lý bộ nhớ OOM Score:** Cải tiến tính năng cấu hình điểm số bảo vệ tiến trình (OOM Score) tương thích hoàn hảo với các môi trường ảo hóa một phần, giúp máy chủ vận hành ổn định và bảo vệ các dịch vụ cốt lõi trước nguy cơ bị hệ thống kết thúc tiến trình khi cạn kiệt tài nguyên RAM.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ### 🐛 Sửa lỗi
 - **Khắc phục lỗi hệ thống**: Xử lý triệt để các sự cố tiềm ẩn, gia tăng độ ổn định và khả năng vận hành liên tục cho toàn bộ hệ thống máy chủ.
 
@@ -163,14 +171,6 @@
 🐛 **Sửa lỗi**
 - Khắc phục triệt để lỗi xung đột thông báo trong quá trình chạy bộ cài đặt WPTangToc OLS.
 - Sửa lỗi kiểm tra phiên bản `nftables` trong mô-đun quản lý dịch vụ, đảm bảo các service vận hành ổn định không bị gián đoạn.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## 📌 Lịch sử cập nhật WPTangToc OLS 8.3.2.1
-
-- 6f7c65ab Cân bằng tải NUMA tối ưu
-- 4361aab5 optimize kernel linux cho wptangtoc ols
 
 
 ---
