@@ -1023,6 +1023,72 @@ function wp-redis() {
   fi
 }
 
+function rm-wp-redis() {
+  local target_domain=""
+  while [[ "$#" -gt 0 ]]; do
+    case $1 in
+    -d | --domain)
+      target_domain="$2"
+      shift
+      ;;
+    esac
+    shift
+  done
+
+  get_web_context "$target_domain"
+  [[ -z "$name_web" ]] && {
+    echoDo "Không xác định được domain website"
+    return 1
+  }
+
+  local wp_root="/usr/local/lsws/$name_web/html"
+  local wp_cfg="${wp_root}/wp-config.php"
+  local obj_cache="${wp_root}/wp-content/object-cache.php"
+
+  [[ ! -f "$wp_cfg" ]] && {
+    echoDo "Không xác định được đây là website WordPress"
+    return 1
+  }
+
+  wptt_load_vhost_conf "$name_web" 2>/dev/null
+  . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null
+  local run_wp=(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp --path="$wp_root")
+
+  # Kiểm tra xem website có đang cài wp-redis hoặc tồn tại cấu hình/drop-in của wp-redis không
+  if ! "${run_wp[@]}" plugin is-installed wp-redis >/dev/null 2>&1 &&
+    ! grep -q '\$redis_server[[:space:]]*=' "$wp_cfg" 2>/dev/null &&
+    ! grep -q -i 'wp-redis' "$obj_cache" 2>/dev/null; then
+    echoDo "Website $name_web hiện không sử dụng Pantheon wp-redis"
+    return 1
+  fi
+
+  _runing "Gỡ bỏ Pantheon wp-redis cho website $name_web"
+
+  # 1. Xả sạch Object Cache của website trong RAM trước khi ngắt kết nối
+  "${run_wp[@]}" cache flush >/dev/null 2>&1 || true
+
+  # 2. Gỡ bỏ file drop-in wp-content/object-cache.php (do lệnh 'wp redis enable' tạo ra)
+  if [[ -f "$obj_cache" || -L "$obj_cache" ]]; then
+    /bin/rm -f -- "$obj_cache" 2>/dev/null || true
+  fi
+
+  # 3. Hủy kích hoạt và xóa hoàn toàn plugin wp-redis
+  if "${run_wp[@]}" plugin is-installed wp-redis >/dev/null 2>&1; then
+    "${run_wp[@]}" plugin deactivate wp-redis --uninstall >/dev/null 2>&1 ||
+      "${run_wp[@]}" plugin delete wp-redis >/dev/null 2>&1 || true
+  fi
+
+  # 4. Dọn dẹp cấu hình $redis_server và WP_CACHE_KEY_SALT trong wp-config.php
+  sed -i '/\$redis_server[[:space:]]*=[[:space:]]*array/d' "$wp_cfg"
+
+  # Đảm bảo quyền sở hữu file wp-config.php vẫn chuẩn theo user của vhost
+  if [[ -n "${User_name_vhost:-}" && -n "${Group_name_vhost:-}" ]]; then
+    chown "${User_name_vhost}:${Group_name_vhost}" "$wp_cfg" 2>/dev/null || true
+  fi
+
+  _rundone "Gỡ bỏ Pantheon wp-redis cho website $name_web"
+}
+
 function status() {
   . /etc/wptt/wptt-status2
 }
