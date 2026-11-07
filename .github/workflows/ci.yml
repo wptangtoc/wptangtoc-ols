@@ -277,11 +277,10 @@ jobs:
           path-exclude=/usr/share/locale/*
           EOF_DPKG
 
-          # Vô hiệu hóa trigger man-db và initramfs-tools vốn rất chậm trên ARM
           sudo rm -f /var/lib/man-db/auto-update 2>/dev/null || true
           echo 'INITRD=No' | sudo tee -a /etc/default/rcS >/dev/null
 
-          # 3. Cấu hình APT tốc độ cao: Ép IPv4, tải song song, không cài gói phụ
+          # 3. Cấu hình APT tốc độ cao
           cat << 'EOF_CONF' | sudo tee /etc/apt/apt.conf.d/99-wptt-ci >/dev/null
           APT::Get::Assume-Yes "true";
           APT::Install-Recommends "false";
@@ -303,14 +302,6 @@ jobs:
 
           sudo apt-get update
           sudo apt-get install -y bats curl e2fsprogs eatmydata libeatmydata1
-
-          # Kích hoạt libeatmydata toàn cục để MariaDB, dpkg, wp-cli không bị nghẽn fsync I/O
-          for libpath in /usr/lib/x86_64-linux-gnu/libeatmydata.so /usr/lib/aarch64-linux-gnu/libeatmydata.so; do
-            if [[ -f "$libpath" ]]; then
-              echo "$libpath" | sudo tee -a /etc/ld.so.preload >/dev/null
-              break
-            fi
-          done
 
           # 4. Khóa cứng toàn bộ lệnh reboot/shutdown/poweroff/halt bằng chattr +i
           sudo systemctl mask reboot.target halt.target poweroff.target shutdown.target 2>/dev/null || true
@@ -352,30 +343,41 @@ jobs:
           EOF
           sudo chmod +x /usr/bin/apt-get
 
-      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS
+      - name: 🚀 Khởi tạo máy chủ WPTangToc OLS (Chống treo Pipe & Stdin)
         shell: bash
         run: |
           export TERM=xterm
           export CI=true
+          export GITHUB_ACTIONS=true
           export DEBIAN_FRONTEND=noninteractive
 
+          # Hàm chạy script cô lập hoàn toàn Pipe (tránh daemon con giữ stdout/stderr làm treo GitHub Step)
+          run_detached_pipe() {
+            local step_log="/tmp/wptt_step_$$.log"
+            : > "$step_log"
+            # Chạy tiến trình chính với stdin đóng (</dev/null) và xuất thẳng ra file (không giữ pipe của Runner)
+            "$@" </dev/null >"$step_log" 2>&1 &
+            local cmd_pid=$!
+            # Stream log ra màn hình GitHub Actions và tự động ngắt ngay khi cmd_pid kết thúc
+            tail -n +1 -f --pid="$cmd_pid" "$step_log" || true
+            wait "$cmd_pid"
+            local rc=$?
+            rm -f "$step_log"
+            return "$rc"
+          }
+
           curl -sO https://wptangtoc.com/share/wptangtoc-ols
-          sudo eatmydata bash wptangtoc-ols --auto
+
+          # 1. Chạy cài đặt thông qua bộ ngắt pipe
+          run_detached_pipe sudo env TERM=xterm CI=true GITHUB_ACTIONS=true DEBIAN_FRONTEND=noninteractive \
+            eatmydata bash wptangtoc-ols --auto
 
           cd "$GITHUB_WORKSPACE"
           echo "🔄 Đang chép đè mã nguồn từ commit hiện tại vào /etc/wptt/..."
           sudo cp -a ./tool-wptangtoc-ols/. /etc/wptt/
           sudo chmod -R 755 /etc/wptt/
 
-          sudo mkdir -p /etc/wptt/tmp
-          curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt \
-            | head -1 | grep '\.' | sudo tee /etc/wptt/tmp/wptangtoc-ols-version-main >/dev/null
-
-          sudo eatmydata bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
-
-      - name: 🛠 Vô hiệu hóa lệnh gọi Menu & Bypass ionice/nice
-        shell: bash
-        run: |
+          # 2. Vô hiệu hóa ngay lập tức các lệnh gọi Menu TRƯỚC khi gọi wptt-thay-domain-chinh
           echo -e '#!/bin/bash\nexit 0' \
             | sudo tee /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 >/dev/null
           for file in /etc/wptt/wptt-*main; do
@@ -386,6 +388,26 @@ jobs:
           sudo chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status \
             /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
 
+          sudo mkdir -p /etc/wptt/tmp
+          curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt \
+            | head -1 | grep '\.' | sudo tee /etc/wptt/tmp/wptangtoc-ols-version-main >/dev/null
+
+          # 3. Đổi domain chính (cũng bọc qua bộ ngắt pipe)
+          run_detached_pipe sudo env TERM=xterm CI=true GITHUB_ACTIONS=true DEBIAN_FRONTEND=noninteractive \
+            eatmydata bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
+
+          # 4. Khóa lại Menu một lần nữa phòng trường hợp script trên tự phục hồi file menu
+          echo -e '#!/bin/bash\nexit 0' \
+            | sudo tee /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 >/dev/null
+          for file in /etc/wptt/wptt-*main; do
+            if [ -f "$file" ]; then
+              echo -e '#!/bin/bash\nexit 0' | sudo tee "$file" >/dev/null
+            fi
+          done
+          sudo chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status \
+            /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
+
+          # 5. Bypass ionice/nice
           cat << 'EOF' | sudo tee /usr/local/bin/ionice >/dev/null
           #!/bin/bash
           while [[ $# -gt 0 ]]; do

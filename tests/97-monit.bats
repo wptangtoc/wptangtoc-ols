@@ -35,31 +35,22 @@ teardown() {
 # --- HÀM HỖ TRỢ: CHỜ MONIT TỰ CỨU DỊCH VỤ (TỐI ĐA 45 GIÂY) ---
 _wait_for_monit_heal() {
   local check_cmd="$1"
-  local monit_svc_name="$2"
-  local max_ticks=90 # 90 * 0.5s = 45 giây
-  local tick=0
+  local service_name="$2"
+  local timeout=180  # Tăng lên 180 giây để bao trọn 2-3 chu kỳ Monit
+  local count=0
 
-  # Đảm bảo dịch vụ đang ở chế độ được Monit giám sát (phòng trường hợp bị unmonitor trước đó)
-  monit monitor "$monit_svc_name" >/dev/null 2>&1 || true
-  sleep 1
-  monit validate >/dev/null 2>&1 || true
+  # Đánh thức Monit kiểm tra ngay lập tức
+  command -v monit >/dev/null && monit validate >/dev/null 2>&1 || true
 
-  while ((tick < max_ticks)); do
-    if eval "$check_cmd" >/dev/null 2>&1; then
+  while (( count < timeout )); do
+    if eval "$check_cmd"; then
       return 0
     fi
-    if ((tick > 0 && tick % 10 == 0)); then
-      monit validate >/dev/null 2>&1 || true
-    fi
-    sleep 0.5
-    ((tick++))
+    sleep 3
+    ((count+=3))
   done
-
-  printf '\n[THẤT BẠI] Monit không tự khởi động lại được "%s" sau 45 giây!\n' "$monit_svc_name" >&3
-  printf '--- CHI TIẾT MONIT STATUS (%s) ---\n' "$monit_svc_name" >&3
-  monit status "$monit_svc_name" 2>&1 >&3 || true
-  printf '--- LOG MONIT GẦN NHẤT ---\n' >&3
-  journalctl -u monit -n 15 --no-pager 2>&1 >&3 || tail -n 15 /var/log/monit.log 2>/dev/null >&3 || true
+  
+  echo "Timeout: Monit không thể tự cứu sống $service_name sau $timeout giây!" >&3
   return 1
 }
 

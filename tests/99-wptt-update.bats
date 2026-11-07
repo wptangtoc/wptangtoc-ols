@@ -44,19 +44,46 @@ in_log_neu_loi() {
 # CÁC BÀI TEST TÍCH HỢP
 # =================================================================
 
+lay_phien_ban_moi_nhat() {
+  local url v
+  for url in \
+    "https://wptangtoc.com/share/version-wptangtoc-ols.txt" \
+    "https://raw.githubusercontent.com/wptangtoc/wptangtoc-ols/refs/heads/main/version-wptangtoc-ols.txt"
+  do
+    v=$(curl -fsSL --connect-timeout 5 --max-time 10 --retry 2 --retry-delay 1 "$url" 2>/dev/null \
+        | head -n 1 | tr -d '[:space:]')
+    # Chỉ chấp nhận chuỗi đúng dạng số phiên bản, loại trang lỗi HTML
+    if [[ "$v" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+      echo "$v"
+      return 0
+    fi
+  done
+  return 1
+}
+
 @test "Update: Báo thành công khi Đang ở Phiên bản Mới nhất" {
-  local LATEST_VERSION=$(curl -sL https://wptangtoc.com/share/version-wptangtoc-ols.txt | head -n 1)
+  local LATEST_VERSION
+  LATEST_VERSION=$(lay_phien_ban_moi_nhat) || skip "Không lấy được version từ bất kỳ nguồn nào (mạng CI lỗi)"
+
   echo "version_wptangtoc_ols=$LATEST_VERSION" > /etc/wptt/.wptt.conf
 
-  # MOCKING: Vượt rào Ping ICMP bị khóa trên Github Actions
-  echo 'ping() { return 0; }' >> /etc/wptt/core-functions
+  # MOCK ping, chỉ thêm 1 lần để tránh nối lặp
+  grep -q '^ping()' /etc/wptt/core-functions \
+    || echo 'ping() { return 0; }' >> /etc/wptt/core-functions
 
   run bash "$SCRIPT_GOC"
-  
+
+  # In output thật khi fail để biết chính xác lỗi
+  if ! [[ "$output" =~ "BẠN ĐANG SỬ DỤNG PHIÊN BẢN MỚI NHẤT" ]]; then
+    echo "--- status=$status ---" >&3
+    echo "$output" >&3
+  fi
+
   in_log_neu_loi 0
   [ "$status" -eq 0 ]
   [[ "$output" =~ "BẠN ĐANG SỬ DỤNG PHIÊN BẢN MỚI NHẤT" ]]
 }
+
 
 @test "Update: Hủy cập nhật khi người dùng chọn 'Để sau'" {
   echo "version_wptangtoc_ols=0.0.1" > /etc/wptt/.wptt.conf
