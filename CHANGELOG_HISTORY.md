@@ -1,3 +1,12 @@
+### 🐛 Sửa lỗi
+- **Khắc phục lỗi hệ thống**: Xử lý triệt để các sự cố tiềm ẩn, gia tăng độ ổn định và khả năng vận hành liên tục cho toàn bộ hệ thống máy chủ.
+
+### 🛠️ Tối ưu hệ thống
+- **Nâng cao chất lượng mã nguồn**: Bổ sung bộ kiểm định tự động (BATS tests) toàn diện, giúp kiểm soát chặt chẽ chất lượng vận hành, đảm bảo tính ổn định và an toàn tuyệt đối cho mọi tác vụ quản trị webserver.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.3
 
 ### 🛠️ Tối ưu hệ thống
