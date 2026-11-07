@@ -1,0 +1,439 @@
+#!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Bật / Tắt bảo mật HSTS (Strict-Transport-Security) trên OpenLiteSpeed
+
+function huong_dan() {
+  cat << 'EOF'
+  Kích hoạt bảo mật HSTS (HTTP Strict Transport Security):
+
+  HSTS giúp bảo vệ kết nối HTTPS của website khỏi các cuộc tấn công hạ cấp giao thức:
+  * Ép buộc trình duyệt chỉ kết nối tới website thông qua HTTPS an toàn.
+  * Chống tấn công SSL Stripping và Man-in-the-Middle (MitM).
+  * Tăng tốc độ tải trang cho lần truy cập sau (bỏ qua bước chuyển hướng 301 từ HTTP sang HTTPS).
+  * Đạt điểm A+ trên các công cụ đánh giá bảo mật SSL Labs.
+
+  Ghi chú: Chỉ nên bật HSTS khi website và các tên miền phụ (Subdomain) đã được cài đặt chứng chỉ SSL hợp lệ.
+EOF
+}
+
+# ==============================================================================
+# NẠP CẤU HÌNH, NGÔN NGỮ VÀ MÀU SẮC
+# ==============================================================================
+. /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
+[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+
+export box_inner_width=78
+
+# Hỗ trợ gọi nhanh hướng dẫn nếu truyền tham số 98
+if [[ "${1:-}" == "98" ]]; then
+	NAME=''
+fi
+
+clear
+echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}${bao_mat:-Bảo Mật} ➜ Bật / Tắt Bảo Mật HSTS (Strict-Transport-Security)${C_RESET}"
+echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+
+# ==============================================================================
+# HÀM CHỌN WEBSITE CÓ HIỂN THỊ TRẠNG THÁI HSTS
+# ==============================================================================
+function lua_chon_NAME() {
+  unset NAME
+  local selects=()
+  local i=1
+
+  # 1. Quét file cấu hình Vhost để lấy trạng thái HSTS hiện hành
+  if [ "$(ls -A /etc/wptt/vhost 2>/dev/null)" ]; then
+    for filepath in /etc/wptt/vhost/.*.conf; do
+      [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+
+      local domain="${filepath##*/}"
+      domain="${domain%.conf}"
+      domain="${domain#.}"
+
+      if [[ "$domain" == ?*.?* ]]; then
+        local vhost_conf="/usr/local/lsws/conf/vhosts/$domain/$domain.conf"
+        if [[ -d "/usr/local/lsws/$domain/html" && -f "$vhost_conf" ]]; then
+          local status_text=""
+          local status_color=""
+
+          if grep -qi 'Strict-Transport-Security' "$vhost_conf" 2>/dev/null; then
+            status_text="[Đang BẬT HSTS]"
+            status_color=$C_GREEN
+          else
+            status_text="[Đang TẮT]"
+            status_color=$C_RED
+          fi
+
+          selects+=("$domain|$status_text|$status_color")
+        fi
+      fi
+    done
+  fi
+
+  if [[ ${#selects[@]} -eq 0 ]]; then
+    echo -e "\n${C_RED}❌ Không tìm thấy website nào có cấu hình Vhost trên hệ thống!${C_RESET}"
+    sleep 3
+    exec /etc/wptt/wptt-bao-mat-main 1
+  fi
+
+  # 2. Sắp xếp mảng
+  mapfile -t selects < <(printf "%s\n" "${selects[@]}" | sort -uV)
+
+  local num_domains=${#selects[@]}
+
+  # 3. THÊM TÙY CHỌN ĐỒNG LOẠT VÀO CUỐI MẢNG NẾU CÓ >= 2 WEBSITE
+  if [[ $num_domains -ge 2 ]]; then
+    selects+=("TẤT CẢ WEBSITE (Thao tác đồng loạt)")
+  fi
+
+  # ============================================================================
+  # 4. RENDER KHỐI BO CONG (TAB GẠCH CHÂN + CHIA CỘT)
+  # ============================================================================
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  local title_text="Nhập lựa chọn website muốn thao tác bảo mật HSTS:"
+  local clean_title
+  clean_title=$(echo -e "$title_text" | sed "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+  local len=${#clean_title}
+  local pad_r=$((box_inner_width - len - 2))
+  [[ $pad_r -lt 0 ]] && pad_r=0
+
+  echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}${title_text}${C_RESET}$(printf '%*s' "$pad_r" "")${C_CYAN}│${C_RESET}"
+
+  local line_len=$((len + 3))
+  local pad_line_r=$((box_inner_width - line_len))
+  [[ $pad_line_r -lt 0 ]] && pad_line_r=0
+  local short_line
+  short_line=$(printf "%${line_len}s" "" | sed 's/ /─/g')
+  echo -e "${C_CYAN}├${short_line}$(printf '%*s' "$pad_line_r" "")│${C_RESET}"
+
+  for val in "${selects[@]}"; do
+    if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      local clean_row
+      clean_row=$(printf "  %3d) [ĐỒNG LOẠT] Bật / Tắt HSTS cho toàn bộ hệ thống" "$i")
+      local item_row
+      item_row=$(printf "  ${C_RED}%3d)${C_RESET} [${C_RED}ĐỒNG LOẠT${C_RESET}] Bật / Tắt HSTS cho toàn bộ hệ thống" "$i")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    else
+      IFS='|' read -r d s c <<<"$val"
+      local clean_row
+      clean_row=$(printf "  %3d) %-34s %s" "$i" "$d" "$s")
+      local item_row
+      item_row=$(printf "  ${C_CYAN}%3d)${C_RESET} ${C_BOLD_WHITE}%-34s${C_RESET} ${c}%s${C_RESET}" "$i" "$d" "$s")
+      local pad=$((box_inner_width - ${#clean_row}))
+      [[ $pad -lt 0 ]] && pad=0
+      echo -e "${C_CYAN}│${C_RESET}${item_row}$(printf '%*s' "$pad" "")${C_CYAN}│${C_RESET}"
+    fi
+    ((i++))
+  done
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+  # 5. Dòng nhắc lệnh (Prompt)
+  local fzf_installed=false
+  command -v fzf &>/dev/null && fzf_installed=true
+  local max_opt=${#selects[@]}
+
+  local prompt_msg="Nhập lựa chọn của bạn (1-${max_opt}) [00=Chọn Nhanh | 0=Thoát]: "
+
+  while true; do
+    echo -en "${C_CYAN}${prompt_msg}${C_RESET}"
+    if ! read -r REPLY; then exit 1; fi
+    REPLY="${REPLY// /}"
+    REPLY="${REPLY,,}"
+
+    case "$REPLY" in
+    0) exec /etc/wptt/wptt-bao-mat-main 1 ;;
+    00)
+      if $fzf_installed; then
+        local fzf_list=()
+        for val in "${selects[@]}"; do
+          if [[ "$val" != "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+            IFS='|' read -r d s c <<<"$val"
+            fzf_list+=("$d $s")
+          fi
+        done
+        local sel
+        sel=$(printf '%s\n' "${fzf_list[@]}" | nl -w 3 -s ': ' | fzf --height=40% --border=rounded --reverse)
+        NAME=$(echo "$sel" | sed 's/^[[:space:]]*[0-9]\+\:[[:space:]]*//' | awk '{print $1}')
+        [[ -n "$NAME" ]] && return 0 || continue
+      fi
+      ;;
+    *)
+      if [[ "$REPLY" =~ ^[0-9]+$ ]] && [ "$REPLY" -ge 1 ] && [ "$REPLY" -le "${#selects[@]}" ]; then
+        local val="${selects[$((REPLY - 1))]}"
+        if [[ "$val" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" ]]; then
+          NAME="TẤT CẢ WEBSITE (Thao tác đồng loạt)"
+        else
+          NAME="${val%%|*}"
+        fi
+        return 0
+      elif [[ "$REPLY" == ?*.?* ]]; then
+        NAME="$REPLY"
+        return 0
+      fi
+      ;;
+    esac
+  done
+}
+
+# ==============================================================================
+# NHẬN DIỆN ĐỐI SỐ DÒNG LỆNH (CLI_MODE) TRÁNH HỎI ĐÁP
+# ==============================================================================
+CLI_MODE=0
+CLI_ACTION=""
+
+if [[ "${1:-}" == "all" && "${2:-}" == "on" ]]; then
+  NAME="all_on"
+  CLI_MODE=1
+elif [[ "${1:-}" == "all" && "${2:-}" == "off" ]]; then
+  NAME="all_off"
+  CLI_MODE=1
+elif [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+  # Hỗ trợ truyền đối số cho 1 domain cụ thể: wptt-hsts domain.com on/off
+  if [[ "${2:-}" == "on" || "${2:-}" == "bat" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="bat"
+  elif [[ "${2:-}" == "off" || "${2:-}" == "tat" ]]; then
+    CLI_MODE=1
+    CLI_ACTION="tat"
+  fi
+else
+  lua_chon_NAME
+fi
+
+# ==============================================================================
+# HÀM THỰC THI BẬT/TẮT HSTS CHO 1 DOMAIN (ATOMIC COMMIT & ATOMIC EDIT CONFIG)
+# ==============================================================================
+function process_hsts() {
+  local target_domain=$1
+  local action=$2 # "bat" hoac "tat"
+  local vhost_conf="/usr/local/lsws/conf/vhosts/$target_domain/$target_domain.conf"
+  local wptt_vhost_cfg="/etc/wptt/vhost/.$target_domain.conf"
+  local hsts_line="Strict-Transport-Security max-age=31536000; includeSubDomains; preload"
+
+  if [[ ! -d "/usr/local/lsws/$target_domain/html" || ! -f "$vhost_conf" ]]; then
+    return
+  fi
+
+  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
+
+  if [[ "$action" == "bat" ]]; then
+    # Kiểm tra tính lũy đẳng: Nếu đã có đúng cấu hình HSTS thì chỉ đồng bộ biến và bỏ qua
+    if grep -qF "$hsts_line" "$vhost_conf" 2>/dev/null; then
+      wptt_atomic_edit_config "$wptt_vhost_cfg" "hsts" "delete" 2>/dev/null
+      wptt_atomic_edit_config "$wptt_vhost_cfg" "hsts=1"
+      return
+    fi
+
+    UI_STRING="Kích hoạt bảo mật HSTS cho $target_domain"
+    _runing "$UI_STRING"
+
+    local tmp_vhost=""
+    tmp_vhost="$(mktemp -p /etc/wptt/tmp "wptt_hsts_${target_domain}_XXXXXX.conf")"
+    cp -pf "$vhost_conf" "$tmp_vhost"
+
+    # 1. Xóa dòng Strict-Transport-Security cũ (nếu có) để tránh trùng lặp
+    sed -i '/Strict-Transport-Security/Id' "$tmp_vhost"
+
+    # 2. Chèn HSTS vào khối extraHeaders (hoặc tạo mới khối context / nếu chưa có extraHeaders)
+    if grep -q 'extraHeaders' "$tmp_vhost"; then
+      sed -i "/extraHeaders/a \\    $hsts_line" "$tmp_vhost"
+    else
+      cat >>"$tmp_vhost" <<EOF
+
+context / {
+  extraHeaders            <<<END_extraHeaders
+    $hsts_line
+  END_extraHeaders
+}
+EOF
+    fi
+
+    # 3. Ghi nguyên tử vào Vhost OLS qua wptt_atomic_commit (hoặc fallback mv -fT an toàn)
+    if declare -F wptt_atomic_commit >/dev/null 2>&1; then
+      wptt_atomic_commit "$tmp_vhost" "$vhost_conf"
+    else
+      chmod 644 "$tmp_vhost"
+      /bin/mv -fT -- "$tmp_vhost" "$vhost_conf"
+    fi
+    rm -f -- "${tmp_vhost:?}" 2>/dev/null || true
+
+    # 4. Lưu trạng thái vào file cấu hình vhost của WPTangToc
+    wptt_atomic_edit_config "$wptt_vhost_cfg" "hsts" "delete" 2>/dev/null
+    wptt_atomic_edit_config "$wptt_vhost_cfg" "hsts=1"
+
+    wptt_logs "INFO" "Bật HSTS website $target_domain"
+    _rundone "$UI_STRING"
+
+  elif [[ "$action" == "tat" ]]; then
+    if ! grep -qi 'Strict-Transport-Security' "$vhost_conf" 2>/dev/null; then
+      wptt_atomic_edit_config "$wptt_vhost_cfg" "hsts" "delete" 2>/dev/null
+      return
+    fi
+
+    UI_STRING="Tắt bảo mật HSTS cho $target_domain"
+    _runing "$UI_STRING"
+
+    local tmp_vhost=""
+    tmp_vhost="$(mktemp -p /etc/wptt/tmp "wptt_hsts_${target_domain}_XXXXXX.conf")"
+    cp -pf "$vhost_conf" "$tmp_vhost"
+
+    # 1. Gỡ bỏ dòng Strict-Transport-Security khỏi file tạm
+    sed -i '/Strict-Transport-Security/Id' "$tmp_vhost"
+
+    # 2. Ghi nguyên tử vào Vhost OLS
+    if declare -F wptt_atomic_commit >/dev/null 2>&1; then
+      wptt_atomic_commit "$tmp_vhost" "$vhost_conf"
+    else
+      chmod 644 "$tmp_vhost"
+      /bin/mv -fT -- "$tmp_vhost" "$vhost_conf"
+    fi
+    rm -f -- "${tmp_vhost:?}" 2>/dev/null || true
+
+    # 3. Xóa trạng thái hsts trong cấu hình vhost WPTangToc
+    wptt_atomic_edit_config "$wptt_vhost_cfg" "hsts" "delete" 2>/dev/null
+
+    wptt_logs "INFO" "Tắt HSTS website $target_domain"
+    _rundone "$UI_STRING"
+  fi
+}
+
+# ==============================================================================
+# XÁC NHẬN BẰNG BOX UI & LẤY DANH SÁCH DOMAIN ĐỂ THỰC THI
+# ==============================================================================
+mass_action=""
+
+echo ""
+if [[ "$NAME" == "TẤT CẢ WEBSITE (Thao tác đồng loạt)" || "$NAME" == "TẤT" || "$NAME" == "all_on" || "$NAME" == "all_off" ]]; then
+
+  # NẾU DÙNG CLI ĐỐI SỐ -> BỎ QUA HỎI ĐÁP
+  if [[ "$NAME" == "all_on" && $CLI_MODE -eq 1 ]]; then
+    mass_action="bat"
+  elif [[ "$NAME" == "all_off" && $CLI_MODE -eq 1 ]]; then
+    mass_action="tat"
+  else
+    # NẾU CHỌN TỪ MENU UI -> MỞ SUB-MENU BOX UI
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}THAO TÁC ĐỒNG LOẠT: BẢO MẬT HSTS${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+    left_text "  Bạn đang thao tác cấu hình HSTS cho toàn bộ hệ thống." 2
+    left_text "  Vui lòng chọn hành động bạn muốn thực hiện:" 2
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    str_opt1="  1) BẬT HSTS (Kích hoạt đồng loạt)"
+    pad_opt1=$((box_inner_width - ${#str_opt1}))
+    [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT HSTS${C_RESET} (Kích hoạt đồng loạt)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+    str_opt2="  2) TẮT HSTS (Gỡ bỏ đồng loạt)"
+    pad_opt2=$((box_inner_width - ${#str_opt2}))
+    [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+    echo -e "${C_CYAN}│${C_RESET}  ${C_RED}2)${C_RESET} ${C_BOLD_WHITE}TẮT HSTS${C_RESET} (Gỡ bỏ đồng loạt)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+    read -r mass_choice
+
+    if [[ "$mass_choice" == "1" || "$NAME" == "all_on" ]]; then
+      mass_action="bat"
+    elif [[ "$mass_choice" == "2" || "$NAME" == "all_off" ]]; then
+      mass_action="tat"
+    else
+      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      exec /etc/wptt/wptt-bao-mat-main 1
+    fi
+  fi
+
+  # Quét toàn bộ danh sách domain để thực thi
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    domain="${filepath##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    if [[ "$domain" == ?*.?* && -d "/usr/local/lsws/$domain/html" ]]; then
+      process_hsts "$domain" "$mass_action"
+    fi
+  done
+
+else
+  # ============================================================================
+  # XỬ LÝ 1 DOMAIN ĐƠN LẺ
+  # ============================================================================
+  pathcheck="/etc/wptt/vhost/.$NAME.conf"
+  [[ ! -f "$pathcheck" ]] && {
+    echo -e "\n${C_RED}❌ Tên miền không tồn tại!${C_RESET}"
+    sleep 2
+    exec /etc/wptt/wptt-bao-mat-main 1
+  }
+
+  # NẾU TRUYỀN CLI_MODE -> BỎ QUA BOX UI
+  if [[ $CLI_MODE -eq 1 ]]; then
+    process_hsts "$NAME" "$CLI_ACTION"
+  else
+    # HIỂN THỊ BOX UI NẾU CHẠY THỦ CÔNG
+    echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+    center_text "${C_YELLOW}XÁC NHẬN CẤU HÌNH BẢO MẬT HSTS${C_RESET}"
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+    if grep -qi 'Strict-Transport-Security' "/usr/local/lsws/conf/vhosts/$NAME/$NAME.conf" 2>/dev/null; then
+      left_text "  Website ${NAME} hiện ĐANG BẬT bảo mật HSTS." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      str_opt1="  1) TẮT HSTS (Gỡ bỏ Strict-Transport-Security)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_RED}1)${C_RESET} ${C_BOLD_WHITE}TẮT HSTS${C_RESET} (Gỡ bỏ Strict-Transport-Security)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+      str_opt2="  2) Không làm gì cả (Giữ nguyên)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Giữ nguyên)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+
+      if [[ "$single_choice" == "1" ]]; then
+        process_hsts "$NAME" "tat"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
+    else
+      left_text "  Website ${NAME} hiện CHƯA BẬT bảo mật HSTS." 2
+      echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+
+      str_opt1="  1) BẬT HSTS (Kích hoạt Strict-Transport-Security)"
+      pad_opt1=$((box_inner_width - ${#str_opt1}))
+      [[ $pad_opt1 -lt 0 ]] && pad_opt1=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_GREEN}1)${C_RESET} ${C_BOLD_WHITE}BẬT HSTS${C_RESET} (Kích hoạt Strict-Transport-Security)$(printf '%*s' "$pad_opt1" "")${C_CYAN}│${C_RESET}"
+
+      str_opt2="  2) Không làm gì cả (Hủy thao tác)"
+      pad_opt2=$((box_inner_width - ${#str_opt2}))
+      [[ $pad_opt2 -lt 0 ]] && pad_opt2=0
+      echo -e "${C_CYAN}│${C_RESET}  ${C_YELLOW}2)${C_RESET} Không làm gì cả (Hủy thao tác)$(printf '%*s' "$pad_opt2" "")${C_CYAN}│${C_RESET}"
+
+      echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      echo -en "${C_CYAN}Nhập lựa chọn của bạn (1-2) [0=Thoát]: ${C_RESET}"
+      read -r single_choice
+
+      if [[ "$single_choice" == "1" ]]; then
+        process_hsts "$NAME" "bat"
+      else
+        echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}" && sleep 1
+      fi
+    fi
+  fi
+fi
+
+wptt_smart_reload_lsws >/dev/null 2>&1
+
+wptt_quay_ve_menu "${1:-}" 0
