@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.4.0.6
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến trải nghiệm quản trị (UX):** Tối ưu hóa giao diện và luồng tương tác dòng lệnh, giúp các thao tác quản trị máy chủ trở nên trực quan, mượt mà và tiết kiệm thời gian hơn cho quản trị viên.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.5
 
 ### 🛠️ Tối ưu hệ thống
