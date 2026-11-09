@@ -55,15 +55,19 @@ function echoXam { echo -e "\033[1;3;94m${1}\033[0m"; }
 # ==============================================================================
 # ==============================================================================
 # BỘ HÀM TRẠNG THÁI TÁC VỤ (PRODUCTION CORE)
-# ZERO-HANG / ZERO-TRAP / HARD-CAPPED LOOP / FLEXIBLE MANUAL UX
+# ZERO-HANG / ZERO-TRAP / HARD-CAPPED LOOP / SMART DOMAIN SUBLINE (80 COLS)
 # ==============================================================================
 WPTT_LAST_RUN_MSG=""
+WPTT_LAST_RUN_SUB=""
 WPTT_SPINNER_PID=""
 WPTT_SPINNER_STIME=""
 WPTT_SPINNER_HIDE=0
 WPTT_RUN_START_TS=0
 WPTT_RESUME_TS=0
 WPTT_ALIGNED_LINE=""
+WPTT_SUB_LINE=""
+WPTT_SPLIT_MSG=""
+WPTT_SPLIT_SUB=""
 WPTT_NOW_VAL=0
 WPTT_DUR_STR=""
 WPTT_CLEAN_STR=""
@@ -166,7 +170,6 @@ _wptt_fingerprint() {
 }
 
 # 5c. Phát hiện tiến trình con của Cha đang vẽ Progress Bar (pv / wget --show-progress).
-#     Khi có pv chạy, Spinner tự đứng im nhường TTY, không xóa đè thanh pv!
 _wptt_has_active_progress_child() {
   local ppid="$1" spid="$2" kids="" kpid="" gkids="" gkpid="" comm="" cmdline=""
   { IFS= read -r kids <"/proc/$ppid/task/$ppid/children"; } 2>/dev/null || return 1
@@ -247,13 +250,129 @@ _wptt_stop_spinner() {
   return 0
 }
 
-# 8. Dựng dòng căn lề phải chuẩn khung 80 cột (box_inner_width + 2).
-#    TUYỆT ĐỐI KHÔNG cắt cụt nội dung raw_msg để bảo toàn 100% thông tin.
+# 8a. Tách thông minh cụm từ nối + Tên Website/Domain xuống dòng phụ `╰─▸` (0-subshell).
+#     VD: "Rewrite permalink cho website $NAME" -> Dòng 1: "Rewrite permalink"
+#                                               -> Dòng 2: "╰─▸ cho website $NAME"
+_wptt_trim_trailing_connector() {
+  local s="$1"
+  s="${s%"${s##*[![:space:]]}"}"
+  local low="${s,,}"
+  local -a connectors=(
+    " của website"
+    " cho website"
+    " trên website"
+    " tại website"
+    " vào website"
+    " khỏi website"
+    " của tên miền"
+    " cho tên miền"
+    " của domain"
+    " cho domain"
+    " for website"
+    " for domain"
+    " of website"
+    " of domain"
+    " website"
+    " tên miền"
+    " domain"
+    " của"
+    " cho"
+    " tại"
+    " trên"
+    " vào"
+    " khỏi"
+    " ở"
+    " từ"
+    " for"
+    " of"
+    " on"
+    " to"
+  )
+  local conn=""
+  for conn in "${connectors[@]}"; do
+    if [[ "$low" == *"$conn" ]]; then
+      local head_len=$(( ${#s} - ${#conn} ))
+      local head="${s:0:$head_len}"
+      # Lấy nguyên văn cụm từ nối gốc (giữ đúng chữ hoa/thường trong biến của bạn)
+      local orig_conn="${s:$head_len}"
+      orig_conn="${orig_conn#"${orig_conn%%[![:space:]]*}"}"
+      head="${head%"${head##*[![:space:]]}"}"
+
+      # Chỉ bẻ cụm từ nối xuống dòng 2 nếu vế chính phía trước vẫn đủ độ dài (>= 6 ký tự)
+      if (( ${#head} >= 6 )); then
+        s="$head"
+        WPTT_SPLIT_SUB="${orig_conn} ${WPTT_SPLIT_SUB}"
+      fi
+      break
+    fi
+  done
+  WPTT_SPLIT_MSG="${s%:}"
+}
+
+_wptt_extract_subtarget() {
+  local in_msg="$1"
+  local in_sub="${2:-}"
+  WPTT_SPLIT_MSG="$in_msg"
+  WPTT_SPLIT_SUB="$in_sub"
+
+  # Không tách dòng trong môi trường BATS test để giữ 100% tương thích assert_output
+  [[ -n "${BATS_TEST_FILENAME:-}" ]] && return 0
+
+  # Trường hợp 1: Người dùng truyền trực tiếp đối số thứ 2 ($2)
+  if [[ -n "$in_sub" ]]; then
+    if [[ "$in_msg" == *" $in_sub" ]]; then
+      in_msg="${in_msg%" $in_sub"}"
+    elif [[ "$in_msg" == *" $in_sub..." ]]; then
+      in_msg="${in_msg%" $in_sub..."}"
+    fi
+    _wptt_trim_trailing_connector "$in_msg"
+    return 0
+  fi
+
+  # Trường hợp 2: Tự động nhận diện tên miền ở cuối câu $1
+  # Ưu tiên 2.1: Khớp với biến $NAME / $domain / $Website_chinh đang có trong script
+  local cand=""
+  for cand in "${NAME:-}" "${domain:-}" "${Website_chinh:-}"; do
+    if [[ -n "$cand" && "${#cand}" -ge 4 ]]; then
+      if [[ "$in_msg" == *" $cand" ]]; then
+        WPTT_SPLIT_SUB="$cand"
+        _wptt_trim_trailing_connector "${in_msg%" $cand"}"
+        return 0
+      elif [[ "$in_msg" == *" $cand..." ]]; then
+        WPTT_SPLIT_SUB="$cand"
+        _wptt_trim_trailing_connector "${in_msg%" $cand..."}"
+        return 0
+      fi
+    fi
+  done
+
+  # Ưu tiên 2.2: Regex thuần Bash bắt domain ở từ cuối câu (VD: "Rewrite permalink cho website al9.wptangtoc-ols.com")
+  local dom_re='^(.*[[:space:]])([a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+)(\.\.\.)?$'
+  if [[ "$in_msg" =~ $dom_re ]]; then
+    local prefix="${BASH_REMATCH[1]}"
+    local matched_dom="${BASH_REMATCH[2]}"
+    # Loại trừ tên file cấu hình hoặc số phiên bản (wp-config.php, 5.2.3...)
+    case "$matched_dom" in
+      *.php | *.conf | *.sh | *.zip | *.gz | *.sql | *.tar | *.ini | *.log | *[0-9].[0-9]*)
+        return 0
+        ;;
+    esac
+    prefix="${prefix%"${prefix##*[![:space:]]}"}"
+    if (( ${#prefix} >= 8 )); then
+      WPTT_SPLIT_SUB="$matched_dom"
+      _wptt_trim_trailing_connector "$prefix"
+    fi
+  fi
+  return 0
+}
+
+# 8b. Dựng dòng căn lề phải chuẩn khung 80 cột (box_inner_width + 2) + Dòng phụ mũi tên (nếu có).
 _wptt_build_aligned_line() {
   local icon_colored="$1"
   local raw_msg="$2"
   local right_plain="$3"
   local right_colored="$4"
+  local sub_target="${5:-}"
 
   local biw="${box_inner_width:-78}"
   [[ "$biw" =~ ^[0-9]+$ ]] || biw=78
@@ -301,14 +420,26 @@ _wptt_build_aligned_line() {
 
   printf -v WPTT_ALIGNED_LINE $'  %s %s \033[2;37m%s\033[0m %s' \
     "$icon_colored" "$raw_msg" "$dots" "$right_colored"
+
+	WPTT_SUB_LINE=""
+  if [[ -n "$sub_target" ]]; then
+    if [[ "$sub_target" == *" "* ]]; then
+      local sub_prefix="${sub_target% *}"
+      local sub_dom="${sub_target##* }"
+      printf -v WPTT_SUB_LINE $'      \033[2;36m╰─▸\033[0m \033[2;37m%s\033[0m \033[1;36m%s\033[0m' "$sub_prefix" "$sub_dom"
+    else
+      printf -v WPTT_SUB_LINE $'      \033[2;36m╰─▸\033[0m \033[1;36m%s\033[0m' "$sub_target"
+    fi
+  fi
+
   return 0
 }
 
 # 9. Bắt đầu tác vụ (_runing).
-#    Đặc biệt: Đỗ con trỏ ở đầu dòng (\r) sau mỗi lần in để nếu script xen `echo "ABC"`
-#    vào giữa, hoặc gọi `_rundone` cho nhiều tác vụ khác nhau, giao diện vẫn sạch!
+#    Cú pháp: _runing "Thông điệp" ["Tên_Website_Tùy_Chọn"]
 function _runing {
-  local msg="${1:-Đang xử lý tác vụ...}"
+  local raw_input_msg="${1:-Đang xử lý tác vụ...}"
+  local raw_input_sub="${2:-}"
   _wptt_stop_spinner
 
   _wptt_now_ts
@@ -318,7 +449,13 @@ function _runing {
   else
     WPTT_RUN_START_TS="$WPTT_NOW_VAL"
   fi
+
+  _wptt_extract_subtarget "$raw_input_msg" "$raw_input_sub"
+  local msg="$WPTT_SPLIT_MSG"
+  local sub_target="$WPTT_SPLIT_SUB"
+
   WPTT_LAST_RUN_MSG="$msg"
+  WPTT_LAST_RUN_SUB="$sub_target"
 
   local label_run="${dang_tien_hanh:-Đang tiến hành}"
   local start_ts="$WPTT_RUN_START_TS"
@@ -337,10 +474,13 @@ function _runing {
 
   if ((live)); then
     _wptt_get_cols
-    _wptt_build_aligned_line "$init_icon" "$msg" "$init_plain" "$init_color"
-    # Đỗ con trỏ về đầu dòng (\r ở cuối) để nếu người dùng gõ echo "..." ngay sau đó
-    # thì không bị nối đuôi vào cột thứ 80 của dòng Spinner!
-    { printf '\r\033[2K%s\r' "$WPTT_ALIGNED_LINE" >/dev/tty; } 2>/dev/null || true
+    _wptt_build_aligned_line "$init_icon" "$msg" "$init_plain" "$init_color" "$sub_target"
+    if [[ -n "$WPTT_SUB_LINE" ]]; then
+      # Vẽ dòng chính + xuống dòng vẽ nhánh `╰─▸ domain` + lùi con trỏ về lại dòng chính (\033[1A\r)
+      { printf '\r\033[2K%s\n\r\033[2K%s\033[1A\r' "$WPTT_ALIGNED_LINE" "$WPTT_SUB_LINE" >/dev/tty; } 2>/dev/null || true
+    else
+      { printf '\r\033[2K%s\r' "$WPTT_ALIGNED_LINE" >/dev/tty; } 2>/dev/null || true
+    fi
 
     local hide="${WPTT_HIDE_CURSOR:-0}"
     [[ "$hide" == "1" ]] || hide=0
@@ -393,12 +533,20 @@ function _runing {
 
           # (a) Kiểm tra cha còn sống và đúng dấu vân tay (chưa chết, chưa exec)
           if ! kill -0 "$parent_pid" 2>/dev/null; then
-            printf '\r\033[2K' 2>/dev/null || true
+            if [[ -n "$sub_target" ]]; then
+              printf '\r\033[2K\n\r\033[2K\033[1A\r' 2>/dev/null || true
+            else
+              printf '\r\033[2K' 2>/dev/null || true
+            fi
             break
           fi
           if [[ -n "$parent_fp" ]]; then
             if ! _wptt_fingerprint "$parent_pid" || [[ "$WPTT_FP" != "$parent_fp" ]]; then
-              printf '\r\033[2K' 2>/dev/null || true
+              if [[ -n "$sub_target" ]]; then
+                printf '\r\033[2K\n\r\033[2K\033[1A\r' 2>/dev/null || true
+              else
+                printf '\r\033[2K' 2>/dev/null || true
+              fi
               break
             fi
           fi
@@ -433,6 +581,7 @@ function _runing {
 
           icon_str=$'\033[1;33m['"${f_char}"$']\033[0m'
           _wptt_build_aligned_line "$icon_str" "$msg" "$r_plain" "$r_color"
+          # Chỉ cập nhật dòng 1 (dòng 2 chứa `╰─▸ domain` ở dưới đứng im không bị chớp!)
           printf '\r\033[2K%s\r' "$WPTT_ALIGNED_LINE" || break
 
           idx=$((idx + 1))
@@ -455,19 +604,19 @@ function _runing {
     fi
   else
     # Chế độ tĩnh (BATS / Cronjob / Pipe): 0 tiến trình nền
-    _wptt_build_aligned_line "$init_icon" "$msg" "$init_plain" "$init_color"
+    _wptt_build_aligned_line "$init_icon" "$raw_input_msg" "$init_plain" "$init_color"
     printf '\r\033[2K%s\r' "$WPTT_ALIGNED_LINE"
   fi
 
   if declare -F wptt_logs >/dev/null 2>&1; then
-    wptt_logs "START" "$msg" || true
+    wptt_logs "START" "${raw_input_msg}${raw_input_sub:+ ($raw_input_sub)}" || true
   fi
   return 0
 }
 
 # 10. In dòng kết quả cuối (dùng chung cho _rundone / _runloi).
 _wptt_emit_final() {
-  local color="$1" ch="$2" label="$3" msg="$4"
+  local color="$1" ch="$2" label="$3" raw_msg="$4" raw_sub="${5:-}"
   local elapsed=0 r_plain="" r_color=""
   local reset=$'\033[0m'
 
@@ -476,7 +625,13 @@ _wptt_emit_final() {
     elapsed=$((WPTT_NOW_VAL - WPTT_RUN_START_TS))
   fi
   WPTT_ELAPSED="$elapsed"
+
+  _wptt_extract_subtarget "$raw_msg" "$raw_sub"
+  local msg="$WPTT_SPLIT_MSG"
+  local sub_target="${WPTT_SPLIT_SUB:-$WPTT_LAST_RUN_SUB}"
+
   WPTT_LAST_RUN_MSG=""
+  WPTT_LAST_RUN_SUB=""
   WPTT_RUN_START_TS=0
 
   local icon_str="${color}[${ch}]${reset}"
@@ -494,8 +649,14 @@ _wptt_emit_final() {
   else
     WPTT_TERM_COLS=0
   fi
-  _wptt_build_aligned_line "$icon_str" "$msg" "$r_plain" "$r_color"
-  printf '\r\033[2K%s\033[K\n' "$WPTT_ALIGNED_LINE"
+
+  if [[ -t 1 && -z "${BATS_TEST_FILENAME:-}" && -n "$sub_target" ]]; then
+    _wptt_build_aligned_line "$icon_str" "$msg" "$r_plain" "$r_color" "$sub_target"
+    printf '\r\033[2K%s\033[K\n\r\033[2K%s\033[K\n' "$WPTT_ALIGNED_LINE" "$WPTT_SUB_LINE"
+  else
+    _wptt_build_aligned_line "$icon_str" "$raw_msg" "$r_plain" "$r_color"
+    printf '\r\033[2K%s\033[K\n' "$WPTT_ALIGNED_LINE"
+  fi
   return 0
 }
 
@@ -504,12 +665,13 @@ function _rundone {
   _wptt_stop_spinner
 
   local msg="${1:-$WPTT_LAST_RUN_MSG}"
+  local sub="${2:-$WPTT_LAST_RUN_SUB}"
   [[ -z "$msg" ]] && msg="Hoàn tất tác vụ"
 
-  _wptt_emit_final $'\033[1;32m' '✔' "${hoan_tat:-Hoàn tất}" "$msg"
+  _wptt_emit_final $'\033[1;32m' '✔' "${hoan_tat:-Hoàn tất}" "$msg" "$sub"
 
   if declare -F wptt_logs >/dev/null 2>&1; then
-    wptt_logs "SUCCESS" "$msg (${WPTT_ELAPSED}s)" || true
+    wptt_logs "SUCCESS" "$msg${sub:+ ($sub)} (${WPTT_ELAPSED}s)" || true
   fi
   if [[ -t 1 && -z "${BATS_TEST_FILENAME:-}" ]]; then
     sleep 0.08 2>/dev/null || true
@@ -522,12 +684,13 @@ function _runloi {
   _wptt_stop_spinner
 
   local msg="${1:-$WPTT_LAST_RUN_MSG}"
+  local sub="${2:-$WPTT_LAST_RUN_SUB}"
   [[ -z "$msg" ]] && msg="Xảy ra sự cố khi thực thi"
 
-  _wptt_emit_final $'\033[1;31m' '✖' "${dang_xay_ra_su_co:-Xảy ra sự cố}" "$msg"
+  _wptt_emit_final $'\033[1;31m' '✖' "${dang_xay_ra_su_co:-Xảy ra sự cố}" "$msg" "$sub"
 
   if declare -F wptt_logs >/dev/null 2>&1; then
-    wptt_logs "ERROR" "$msg (${WPTT_ELAPSED}s)" || true
+    wptt_logs "ERROR" "$msg${sub:+ ($sub)} (${WPTT_ELAPSED}s)" || true
   fi
   if [[ -t 1 && -z "${BATS_TEST_FILENAME:-}" ]]; then
     sleep 0.2 2>/dev/null || true
@@ -552,26 +715,25 @@ _wptt_tty_reset() {
   return 0
 }
 
-# 13. Tạm dừng spinner tại chỗ (Hoàn toàn không tự ý nhảy dòng hay xóa dòng nếu bạn không muốn)
+# 13. Tạm dừng spinner tại chỗ (Nếu đang có dòng phụ `╰─▸` bên dưới thì xóa gọn dòng phụ trước)
 _wptt_pause_spinner() {
   local saved_rc=$?
   _wptt_stop_spinner
   return "$saved_rc"
 }
 
-# 14. Chạy lại spinner tại đúng dòng hiện tại (Không tự ý lùi dòng \033[1A)
-#     và giữ nguyên mốc thời gian WPTT_RUN_START_TS ban đầu cho cả Spinner lẫn _rundone!
+# 14. Chạy lại spinner tại đúng dòng hiện tại (Giữ nguyên cả thông điệp, tên miền phụ lẫn thời gian!)
 _wptt_resume_spinner() {
   local saved_rc=$?
   local msg="${1:-$WPTT_LAST_RUN_MSG}"
+  local sub="${2:-$WPTT_LAST_RUN_SUB}"
   local keep_ts="${WPTT_RUN_START_TS:-0}"
 
   WPTT_RESUME_TS="$keep_ts"
-  _runing "$msg"
+  _runing "$msg" "$sub"
   ((keep_ts > 0)) && WPTT_RUN_START_TS="$keep_ts"
   return "$saved_rc"
 }
-
 # ==============================================================================
 # 4. KHAI BÁO BIẾN MÀU UI & KÍCH THƯỚC KHUNG (Dùng cho Giao diện bo cong)
 # ==============================================================================
