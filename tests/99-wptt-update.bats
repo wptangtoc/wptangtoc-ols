@@ -192,7 +192,7 @@ EOF
   output="$OUT_UPDATE"
   in_log_neu_loi 0
   [ "$STATUS_UPDATE" -eq 0 ]
-  [[ "$OUT_UPDATE" =~ "Xác thực GPG Thành Công" ]]
+  [[ "$OUT_UPDATE" =~ "Xác thực chữ ký GPG hợp lệ. Bản cập nhật chính hãng an toàn" ]]
   [[ "$OUT_UPDATE" =~ "đã cập nhật Hệ thống" ]]
   
   # Đánh giá kết quả Zero-Downtime
