@@ -1,3 +1,14 @@
+# WPTangToc OLS 8.4.0.8
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến giao diện hiển thị tên miền dài:** Tối ưu hóa cách thức trình bày và xử lý giao diện đối với các tên miền có ký tự dài, tự động xuống dòng gọn gàng giúp quản trị viên dễ dàng theo dõi, quan sát và thao tác quản trị máy chủ một cách trực quan và mượt mà hơn.
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.7
 
 🛠️ **Tối ưu hệ thống**
