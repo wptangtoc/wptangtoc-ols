@@ -53,11 +53,16 @@ function echoXam { echo -e "\033[1;3;94m${1}\033[0m"; }
 #   5. Đối chiếu PID của Spinner bằng `starttime` cấp Kernel (/proc/pid/stat) ->
 #      Dừng tức thì 100% chính xác mà không bao giờ kill nhầm PID tái sử dụng.
 # ==============================================================================
+# ==============================================================================
+# BỘ HÀM TRẠNG THÁI TÁC VỤ (PRODUCTION CORE)
+# ZERO-HANG / ZERO-TRAP / HARD-CAPPED LOOP / FLEXIBLE MANUAL UX
+# ==============================================================================
 WPTT_LAST_RUN_MSG=""
 WPTT_SPINNER_PID=""
 WPTT_SPINNER_STIME=""
 WPTT_SPINNER_HIDE=0
 WPTT_RUN_START_TS=0
+WPTT_RESUME_TS=0
 WPTT_ALIGNED_LINE=""
 WPTT_NOW_VAL=0
 WPTT_DUR_STR=""
@@ -69,8 +74,6 @@ WPTT_TERM_COLS_TS=0
 WPTT_ELAPSED=0
 
 # 1. Bảo đảm charset UTF-8 bằng Pure Bash (0-subshell).
-#    Chỉ đặt LC_CTYPE="C.UTF-8" để ${#var} đếm chuẩn ký tự Tiếng Việt có dấu
-#    mà không làm ảnh hưởng thứ tự sort/awk/grep của hệ thống.
 _wptt_eff_cs="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 case "${_wptt_eff_cs,,}" in
   *utf-8* | *utf8*) : ;;
@@ -131,9 +134,7 @@ _wptt_get_proc_stime() {
   rest="${stat##*) }"
   [[ "$rest" != "$stat" ]] || return 1
 
-  # Dùng IFS cục bộ ngay trước lệnh read -a
   IFS=' ' read -r -a sfields <<<"$rest"
-  # Trong mảng sfields (0-indexed): index 0 là state (field 3), index 19 là starttime (field 22)
   case "${sfields[0]:-}" in Z | X | x | "") return 1 ;; esac
   [[ -n "${sfields[19]:-}" ]] || return 1
   WPTT_PROC_STIME="${sfields[19]}"
@@ -150,7 +151,6 @@ _wptt_fingerprint() {
   rest="${stat##*) }"
   [[ "$rest" != "$stat" ]] || return 1
 
-  # Trong mảng sfields (0-indexed): [0]=state, [19]=starttime (field 22), [25]=startstack (field 28)
   IFS=' ' read -r -a sfields <<<"$rest"
   case "${sfields[0]:-}" in Z | X | x | "") return 1 ;; esac
   local stime="${sfields[19]:-}" sstack="${sfields[25]:-}"
@@ -163,6 +163,36 @@ _wptt_fingerprint() {
   } 2>/dev/null || true
   WPTT_FP="${stime}|${sstack}|${cmd}"
   return 0
+}
+
+# 5c. Phát hiện tiến trình con của Cha đang vẽ Progress Bar (pv / wget --show-progress).
+#     Khi có pv chạy, Spinner tự đứng im nhường TTY, không xóa đè thanh pv!
+_wptt_has_active_progress_child() {
+  local ppid="$1" spid="$2" kids="" kpid="" gkids="" gkpid="" comm="" cmdline=""
+  { IFS= read -r kids <"/proc/$ppid/task/$ppid/children"; } 2>/dev/null || return 1
+  [[ -n "$kids" ]] || return 1
+
+  for kpid in $kids; do
+    [[ "$kpid" == "$spid" ]] && continue
+    comm=""
+    { IFS= read -r comm <"/proc/$kpid/comm"; } 2>/dev/null || continue
+    case "$comm" in
+      pv | dialog | whiptail) return 0 ;;
+      wget)
+        cmdline=""
+        { IFS= read -r -d '' cmdline <"/proc/$kpid/cmdline"; } 2>/dev/null || true
+        [[ "$cmdline" == *"show-progress"* ]] && return 0
+        ;;
+    esac
+    gkids=""
+    { IFS= read -r gkids <"/proc/$kpid/task/$kpid/children"; } 2>/dev/null || continue
+    for gkpid in $gkids; do
+      comm=""
+      { IFS= read -r comm <"/proc/$gkpid/comm"; } 2>/dev/null || continue
+      [[ "$comm" == "pv" ]] && return 0
+    done
+  done
+  return 1
 }
 
 # 6. Lấy số cột terminal (Ưu tiên $COLUMNS 0-subshell, cache 5s nếu phải gọi stty).
@@ -218,8 +248,7 @@ _wptt_stop_spinner() {
 }
 
 # 8. Dựng dòng căn lề phải chuẩn khung 80 cột (box_inner_width + 2).
-#    TUYỆT ĐỐI KHÔNG cắt cụt nội dung raw_msg để bảo toàn 100% thông tin
-#    cho tương thích tuyệt đối với mọi bài kiểm thử BATS.
+#    TUYỆT ĐỐI KHÔNG cắt cụt nội dung raw_msg để bảo toàn 100% thông tin.
 _wptt_build_aligned_line() {
   local icon_colored="$1"
   local raw_msg="$2"
@@ -240,7 +269,6 @@ _wptt_build_aligned_line() {
   local esc=$'\033'
   local clean_msg="$raw_msg"
 
-  # Chuẩn hóa chuỗi \033 hoặc \e[ dạng chữ thành mã ESC thật mà không dùng %b
   if [[ "$raw_msg" == *'\033'* ]]; then
     raw_msg="${raw_msg//\\033/$esc}"
   fi
@@ -261,12 +289,8 @@ _wptt_build_aligned_line() {
 
   local msg_len=${#clean_msg}
   local right_len=${#right_plain}
-
-  # Cấu trúc: "  [✔] " (6 cột) + msg + " " (1) + dots + " " (1) + right
   local pad_len=$((total_width - 8 - msg_len - right_len))
 
-  # Nếu câu thông báo dài hơn khung chuẩn, giữ nguyên 100% câu chữ (không cắt cụt)
-  # và chỉ đệm tối thiểu 2 dấu chấm ".." để phân tách với nhãn trạng thái.
   if ((pad_len < 2)); then
     pad_len=2
   fi
@@ -281,19 +305,25 @@ _wptt_build_aligned_line() {
 }
 
 # 9. Bắt đầu tác vụ (_runing).
+#    Đặc biệt: Đỗ con trỏ ở đầu dòng (\r) sau mỗi lần in để nếu script xen `echo "ABC"`
+#    vào giữa, hoặc gọi `_rundone` cho nhiều tác vụ khác nhau, giao diện vẫn sạch!
 function _runing {
   local msg="${1:-Đang xử lý tác vụ...}"
   _wptt_stop_spinner
 
   _wptt_now_ts
-  WPTT_RUN_START_TS="$WPTT_NOW_VAL"
+  if [[ "${WPTT_RESUME_TS:-0}" =~ ^[0-9]+$ ]] && ((WPTT_RESUME_TS > 0)); then
+    WPTT_RUN_START_TS="$WPTT_RESUME_TS"
+    WPTT_RESUME_TS=0
+  else
+    WPTT_RUN_START_TS="$WPTT_NOW_VAL"
+  fi
   WPTT_LAST_RUN_MSG="$msg"
 
   local label_run="${dang_tien_hanh:-Đang tiến hành}"
   local start_ts="$WPTT_RUN_START_TS"
   local parent_pid="${BASHPID:-$$}"
 
-  # Chỉ kích hoạt Live Spinner khi stdout là TTY thật và /dev/tty thực sự mở được
   local live=0
   if [[ -t 1 && -z "${BATS_TEST_FILENAME:-}" ]]; then
     if { : >/dev/tty; } 2>/dev/null; then
@@ -308,13 +338,14 @@ function _runing {
   if ((live)); then
     _wptt_get_cols
     _wptt_build_aligned_line "$init_icon" "$msg" "$init_plain" "$init_color"
-    { printf '\r\033[2K%s' "$WPTT_ALIGNED_LINE" >/dev/tty; } 2>/dev/null || true
+    # Đỗ con trỏ về đầu dòng (\r ở cuối) để nếu người dùng gõ echo "..." ngay sau đó
+    # thì không bị nối đuôi vào cột thứ 80 của dòng Spinner!
+    { printf '\r\033[2K%s\r' "$WPTT_ALIGNED_LINE" >/dev/tty; } 2>/dev/null || true
 
     local hide="${WPTT_HIDE_CURSOR:-0}"
     [[ "$hide" == "1" ]] || hide=0
     local max_sec="${WPTT_SPINNER_MAX_SEC:-21600}"
     [[ "$max_sec" =~ ^[0-9]+$ ]] || max_sec=21600
-    # Giới hạn số vòng lặp cứng (Hard Iteration Cap) bất chấp đồng hồ hệ thống bị sửa đổi
     local max_iter=$((max_sec * 8 + 60))
     local cols="$WPTT_TERM_COLS"
 
@@ -332,8 +363,6 @@ function _runing {
         exec 2>/dev/null
         exec </dev/null >/dev/tty || exit 0
 
-        # Đóng các FD kế thừa (>2, tối đa quét 64 FD mở) để giải phóng hoàn toàn
-        # khóa flock và pipe $(...) của script cha.
         local _fdp _fdn _fd_guard=0
         for _fdp in /proc/self/fd/*; do
           _fd_guard=$((_fd_guard + 1))
@@ -344,6 +373,7 @@ function _runing {
           fi
         done
 
+        local my_spid="${BASHPID:-$$}"
         WPTT_TERM_COLS="$cols"
         local -a frames=('-' '\' '|' '/')
         local -a wave_dots=(
@@ -354,7 +384,6 @@ function _runing {
         local idx=1 elapsed=0 f_char="" d_wave="" sleep_rc=0
         local r_plain="" r_color="" icon_str=""
 
-        # Chốt chặn vòng lặp kép: vừa kiểm tra idx <= max_iter, vừa kiểm tra cha
         while ((idx <= max_iter)); do
           sleep 0.15 2>/dev/null
           sleep_rc=$?
@@ -364,7 +393,6 @@ function _runing {
 
           # (a) Kiểm tra cha còn sống và đúng dấu vân tay (chưa chết, chưa exec)
           if ! kill -0 "$parent_pid" 2>/dev/null; then
-            # Cha đã chết (Ctrl+C / kill): Xóa sạch dòng spinner dở dang trước khi thoát
             printf '\r\033[2K' 2>/dev/null || true
             break
           fi
@@ -377,14 +405,18 @@ function _runing {
 
           _wptt_now_ts
           elapsed=$((WPTT_NOW_VAL - start_ts))
-          # Nếu đồng hồ hệ thống bị lùi (NTP sync), tự hiệu chỉnh lại mốc start_ts
           if ((elapsed < 0)); then
             start_ts="$WPTT_NOW_VAL"
             elapsed=0
           fi
-          # (b) Kiểm tra tuổi thọ tối đa theo thời gian thực
           if ((elapsed >= max_sec)); then
             break
+          fi
+
+          # (b) Nếu script đang chạy pv hoặc wget --show-progress, tự đứng im nhường TTY
+          if _wptt_has_active_progress_child "$parent_pid" "$my_spid"; then
+            idx=$((idx + 1))
+            continue
           fi
 
           f_char="${frames[$((idx % 4))]}"
@@ -401,7 +433,7 @@ function _runing {
 
           icon_str=$'\033[1;33m['"${f_char}"$']\033[0m'
           _wptt_build_aligned_line "$icon_str" "$msg" "$r_plain" "$r_color"
-          printf '\r\033[2K%s' "$WPTT_ALIGNED_LINE" || break
+          printf '\r\033[2K%s\r' "$WPTT_ALIGNED_LINE" || break
 
           idx=$((idx + 1))
         done
@@ -519,6 +551,27 @@ _wptt_tty_reset() {
   fi
   return 0
 }
+
+# 13. Tạm dừng spinner tại chỗ (Hoàn toàn không tự ý nhảy dòng hay xóa dòng nếu bạn không muốn)
+_wptt_pause_spinner() {
+  local saved_rc=$?
+  _wptt_stop_spinner
+  return "$saved_rc"
+}
+
+# 14. Chạy lại spinner tại đúng dòng hiện tại (Không tự ý lùi dòng \033[1A)
+#     và giữ nguyên mốc thời gian WPTT_RUN_START_TS ban đầu cho cả Spinner lẫn _rundone!
+_wptt_resume_spinner() {
+  local saved_rc=$?
+  local msg="${1:-$WPTT_LAST_RUN_MSG}"
+  local keep_ts="${WPTT_RUN_START_TS:-0}"
+
+  WPTT_RESUME_TS="$keep_ts"
+  _runing "$msg"
+  ((keep_ts > 0)) && WPTT_RUN_START_TS="$keep_ts"
+  return "$saved_rc"
+}
+
 # ==============================================================================
 # 4. KHAI BÁO BIẾN MÀU UI & KÍCH THƯỚC KHUNG (Dùng cho Giao diện bo cong)
 # ==============================================================================
