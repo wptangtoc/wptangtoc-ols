@@ -122,37 +122,38 @@ _wptt_strip_ansi() {
 }
 
 # 5a. Lấy riêng `starttime` bất biến (field 22 trong /proc/pid/stat) cho Spinner PID.
-#     Nhanh, 0-subshell, miễn nhiễm hoàn toàn với race condition lúc mới fork.
 _wptt_get_proc_stime() {
   WPTT_PROC_STIME=""
   local pid="${1:-}" stat="" rest=""
+  local -a sfields=()
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   { IFS= read -r stat <"/proc/$pid/stat"; } 2>/dev/null || return 1
   rest="${stat##*) }"
   [[ "$rest" != "$stat" ]] || return 1
-  local IFS=' '
-  # shellcheck disable=SC2086
-  set -- $rest
-  case "${1:-}" in Z | X | x | "") return 1 ;; esac
-  [[ -n "${20:-}" ]] || return 1
-  WPTT_PROC_STIME="${20}"
+
+  # Dùng IFS cục bộ ngay trước lệnh read -a
+  IFS=' ' read -r -a sfields <<<"$rest"
+  # Trong mảng sfields (0-indexed): index 0 là state (field 3), index 19 là starttime (field 22)
+  case "${sfields[0]:-}" in Z | X | x | "") return 1 ;; esac
+  [[ -n "${sfields[19]:-}" ]] || return 1
+  WPTT_PROC_STIME="${sfields[19]}"
   return 0
 }
 
 # 5b. Dấu vân tay đầy đủ của tiến trình Cha (starttime|startstack|cmdline).
-#     Phát hiện cả khi cha chết, biến thành Zombie, hoặc cha gọi `exec` sang menu khác.
 _wptt_fingerprint() {
   WPTT_FP=""
   local pid="${1:-}" stat="" rest="" cmd="" chunk="" n=0
+  local -a sfields=()
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   { IFS= read -r stat <"/proc/$pid/stat"; } 2>/dev/null || return 1
   rest="${stat##*) }"
   [[ "$rest" != "$stat" ]] || return 1
-  local IFS=' '
-  # shellcheck disable=SC2086
-  set -- $rest
-  case "${1:-}" in Z | X | x | "") return 1 ;; esac
-  local stime="${20:-}" sstack="${26:-}"
+
+  # Trong mảng sfields (0-indexed): [0]=state, [19]=starttime (field 22), [25]=startstack (field 28)
+  IFS=' ' read -r -a sfields <<<"$rest"
+  case "${sfields[0]:-}" in Z | X | x | "") return 1 ;; esac
+  local stime="${sfields[19]:-}" sstack="${sfields[25]:-}"
   [[ -n "$stime" ]] || return 1
   {
     while ((n < 32)) && IFS= read -r -d '' chunk; do
