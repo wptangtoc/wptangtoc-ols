@@ -1,3 +1,12 @@
+# WPTangToc OLS 8.4.0.7
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến tính năng kiểm tra hoạt động website:** Tối ưu hóa độ chính xác và tốc độ phản hồi của công cụ kiểm tra trạng thái website, giúp quản trị viên giám sát tình trạng hoạt động của các trang web nhanh chóng và hiệu quả hơn.
+- **Nâng cấp trải nghiệm người dùng (UX):** Tinh chỉnh giao diện và luồng thao tác trực quan, mượt mà hơn, giúp quản trị viên dễ dàng quản lý máy chủ và tiết kiệm thời gian thao tác.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.6
 
 🛠️ **Tối ưu hệ thống**
