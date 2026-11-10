@@ -2,12 +2,16 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Xem danh sách toàn bộ Domain trên hệ thống (Clean Enterprise Layout)
+# @description: Xem danh sách toàn bộ Domain trên hệ thống
 
 function huong_dan() {
   cat << 'EOF'
-  Đây là tính năng xem danh sách toàn bộ domain có trong hệ thống của bạn.
-  Hiển thị trạng thái hoạt động, phiên bản PHP, chứng chỉ SSL và các nhãn bảo mật của từng website.
+  Tính năng xem danh sách toàn bộ domain và kiểm toán nhanh cấu hình trên hệ thống:
+  * Thẩm định thực chất chứng chỉ SSL (Phân biệt rõ SSL do CA cấp còn hạn, SSL sắp hết hạn,
+    SSL đã quá hạn, SSL tự ký Self-Signed và chưa cài SSL).
+  * Hiển thị phiên bản PHP, trạng thái Hoạt động/Tạm khóa và các nhãn bảo mật (Chính, Lock, HSTS).
+  * Tự co giãn cột theo độ dài domain; tự chuyển sang dạng danh sách thuần (TSV) khi
+    đầu ra không phải terminal (pipe/cron) hoặc terminal hẹp hơn 80 cột.
 EOF
 }
 
@@ -19,8 +23,43 @@ wptt_load_main_conf 2>/dev/null
 
 export box_inner_width=78
 
+# Biến màu nào chưa có thì để rỗng (tránh in ra chữ lạ nếu echo-color không nạp được)
+for _wptt_v in C_CYAN C_YELLOW C_GREEN C_RED C_BOLD_WHITE C_RESET; do
+  [[ -v $_wptt_v ]] || printf -v "$_wptt_v" '%s' ''
+done
+unset _wptt_v
 
-# Hàm đọc nhanh thông tin Vhost thuần Bash (0-subshell)
+# Bảo đảm charset UTF-8 bằng Pure Bash (0-subshell) để ${#var} đếm chuẩn ký tự Tiếng Việt
+_wptt_eff_cs="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+case "${_wptt_eff_cs,,}" in
+  *utf-8* | *utf8*) : ;;
+  *)
+    if [[ -n "${LC_ALL:-}" ]]; then
+      export LC_ALL="C.UTF-8"
+    else
+      export LC_CTYPE="C.UTF-8"
+    fi
+    ;;
+esac
+unset _wptt_eff_cs
+
+# Bộ đệm khoảng trắng + thanh ngang trong RAM (0-subshell)
+_SPACES=""
+printf -v _SPACES '%*s' 120 ""
+_HR=""
+printf -v _HR '%*s' "$box_inner_width" ""
+_HR="${_HR// /─}"
+
+# Thời gian hiện tại (Epoch seconds) để tính số ngày SSL còn hạn
+if [[ -n "${EPOCHSECONDS:-}" ]]; then
+  NOW_TS="$EPOCHSECONDS"
+else
+  printf -v NOW_TS '%(%s)T' -1 2>/dev/null || NOW_TS="$(date +%s)"
+fi
+
+# ==============================================================================
+# 1. ĐỌC METADATA VHOST & ĐỊNH DẠNG PHP (0-SUBSHELL)
+# ==============================================================================
 _wptt_read_vhost_meta() {
   local conf_file="$1"
   META_PHP=""
@@ -46,50 +85,336 @@ _wptt_read_vhost_meta() {
       esac
     fi
   done < "$conf_file"
+
+  # Giá trị "tắt" không được tính là đang bật nhãn Lock
+  # VERIFY: định dạng thật của lock_down trong /etc/wptt/vhost/.$domain.conf
+  case "${META_LOCKDOWN,,}" in
+    0 | off | no | false | disable | disabled) META_LOCKDOWN="" ;;
+  esac
 }
 
+PHP_TXT=""
 _wptt_fmt_php() {
   local raw="${1//[^0-9]/}"
   if [[ "${#raw}" -eq 2 ]]; then
-    printf '%s.%s' "${raw:0:1}" "${raw:1:1}"
+    PHP_TXT="${raw:0:1}.${raw:1:1}"
   elif [[ -n "$raw" ]]; then
-    printf '%s' "$raw"
+    PHP_TXT="$raw"
   else
-    printf '8.1'
+    PHP_TXT="8.1"
   fi
 }
 
-_wptt_has_ssl() {
+# ==============================================================================
+# 2. ENGINE THẨM ĐỊNH CHỨNG CHỈ SSL THỰC CHẤT (CA vs SELF-SIGNED vs EXPIRED)
+# ==============================================================================
+# Kết quả trả về qua biến toàn cục:
+#   SSL_STATE : valid | expiring | expired | self | none
+#   SSL_DAYS  : số ngày còn hạn (âm = đã quá hạn); rỗng = không xác định được
+SSL_STATE="none"
+SSL_DAYS=""
+CERT_PATH=""
+
+_wptt_find_cert_file() {
   local dom="$1"
+  CERT_PATH=""
   local vconf="/usr/local/lsws/conf/vhosts/$dom/$dom.conf"
   [[ ! -f "$vconf" ]] && vconf="/usr/local/lsws/conf/vhosts/$dom/$dom.conf.bkwptt"
-  [[ -s "/etc/letsencrypt/live/$dom/cert.pem" || -s "/usr/local/lsws/$dom/ssl/cert.crt" ]] && return 0
-  [[ -f "$vconf" ]] && grep -qE '^[[:space:]]*vhssl[[:space:]]*\{' "$vconf" 2>/dev/null && return 0
+
+  # Ưu tiên 1: Đọc chính xác đường dẫn certFile đang khai báo trong cấu hình OLS Vhost
+  if [[ -f "$vconf" ]]; then
+    local line="" v=""
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line#"${line%%[![:space:]]*}"}"
+      [[ "$line" == certFile[[:space:]]* ]] || continue
+      v="${line#certFile}"
+      v="${v#"${v%%[![:space:]]*}"}"
+      v="${v%"${v##*[![:space:]]}"}"
+      v="${v//$'\r'/}"
+      # Hỗ trợ biến $VH_ROOT hoặc $VH_NAME trong cấu hình OLS
+      v="${v//\$VH_ROOT/\/usr\/local\/lsws\/$dom}"
+      v="${v//\$VH_NAME/$dom}"
+      if [[ -s "$v" ]]; then
+        CERT_PATH="$v"
+        return 0
+      fi
+    done < "$vconf"
+  fi
+
+  # Ưu tiên 2: Các đường dẫn chứng chỉ tiêu chuẩn trên WPTangToc OLS / Let's Encrypt / acme.sh
+  local cand=""
+  for cand in \
+    "/etc/letsencrypt/live/$dom/fullchain.pem" \
+    "/etc/letsencrypt/live/$dom/cert.pem" \
+    "/usr/local/lsws/$dom/ssl/$dom.crt" \
+    "/usr/local/lsws/$dom/ssl/cert.crt" \
+    "/usr/local/lsws/$dom/ssl/fullchain.pem"; do
+    if [[ -s "$cand" ]]; then
+      CERT_PATH="$cand"
+      return 0
+    fi
+  done
   return 1
 }
 
-# Hàm in dòng trong Box khóa cứng viền phải ở cột 78 (Không bao giờ lệch viền)
-_wptt_box_line() {
-  local raw_str="$1"
-  local clean_str=""
-  if declare -F _wptt_strip_ansi >/dev/null 2>&1; then
-    _wptt_strip_ansi "$raw_str"
-    clean_str="$WPTT_CLEAN_STR"
-  else
-    clean_str=$(printf '%s' "$raw_str" | sed 's/\x1B\[[0-9;]*[a-zA-Z]//g')
+_wptt_audit_ssl() {
+  local dom="$1"
+  SSL_STATE="none"
+  SSL_DAYS=""
+
+  if ! _wptt_find_cert_file "$dom" || [[ -z "$CERT_PATH" ]]; then
+    return 0
   fi
-  local len=${#clean_str}
-  local pad=$((box_inner_width - len))
-  ((pad < 0)) && pad=0
-  local sp=""
-  printf -v sp '%*s' "$pad" ""
-  echo -e "${C_CYAN}│${C_RESET}${raw_str}${sp}${C_CYAN}│${C_RESET}"
+
+  # Không có binary openssl: chỉ đoán theo đường dẫn, KHÔNG bịa số ngày còn hạn
+  if ! command -v openssl >/dev/null 2>&1; then
+    if [[ "$CERT_PATH" == *"/letsencrypt/"* ]]; then
+      SSL_STATE="valid"
+    else
+      SSL_STATE="self"
+    fi
+    return 0
+  fi
+
+  local cert_info="" line="" subj="" iss="" end_str=""
+  cert_info="$(openssl x509 -in "$CERT_PATH" -noout -subject -issuer -enddate 2>/dev/null || true)"
+  if [[ -z "$cert_info" ]]; then
+    SSL_STATE="none"
+    return 0
+  fi
+
+  while IFS= read -r line; do
+    case "$line" in
+      subject=*) subj="${line#subject=}" ;;
+      issuer=*)  iss="${line#issuer=}" ;;
+      notAfter=*) end_str="${line#notAfter=}" ;;
+    esac
+  done <<< "$cert_info"
+
+  # Chuẩn hóa khoảng trắng để so sánh Subject và Issuer
+  subj="${subj#"${subj%%[![:space:]]*}"}"
+  iss="${iss#"${iss%%[![:space:]]*}"}"
+
+  local exp_ts=0
+  if [[ -n "$end_str" ]]; then
+    exp_ts="$(date -d "$end_str" +%s 2>/dev/null || echo 0)"
+  fi
+
+  if (( exp_ts > 0 )); then
+    SSL_DAYS=$(( (exp_ts - NOW_TS) / 86400 ))
+    if (( exp_ts <= NOW_TS )); then
+      SSL_STATE="expired"
+      return 0
+    fi
+  fi
+
+  # Subject trùng khớp hoàn toàn với Issuer (hoặc không có Issuer) -> Self-Signed
+  if [[ -z "$iss" || "$subj" == "$iss" ]]; then
+    SSL_STATE="self"
+    return 0
+  fi
+
+  # Chứng chỉ được ký bởi CA (Let's Encrypt, ZeroSSL, Cloudflare Origin CA, Sectigo...)
+  if (( exp_ts > 0 && SSL_DAYS <= 14 )); then
+    SSL_STATE="expiring"
+  else
+    SSL_STATE="valid"
+  fi
+  return 0
 }
 
-clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_domain:-Quản lý Domain} ➜ ${danh_sach_domain:-Danh sách toàn bộ Domain}${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+# ==============================================================================
+# 3. ENGINE DỰNG BẢNG KHÓA CỨNG VIỀN PHẢI 78 CỘT (0-SUBSHELL)
+# ==============================================================================
+# ENGINE-BEGIN
+
+# Đếm số cột HIỂN THỊ của một chuỗi đã chứa mã màu ANSI -> biến VIS_LEN.
+# Nguyên nhân lỗi lệch viền trước đây: biến màu (C_*) thường lưu dạng chữ "\033[1;36m"
+# (để dùng với echo -e) chứ không phải ký tự ESC thật, nên bộ lọc ESC không gỡ được,
+# các mã màu bị đếm như chữ thường -> khoảng đệm bị thiếu -> viền phải bị kéo lùi.
+# Hàm này chuẩn hóa mọi dạng (\033, \e, \E, \x1b và ESC thật) rồi mới gỡ.
+VIS_LEN=0
+_wptt_vis_len() {
+  local s="$1"
+  local esc=$'\033'
+  s="${s//\\033/$esc}"
+  s="${s//\\x1b/$esc}"
+  s="${s//\\x1B/$esc}"
+  s="${s//\\e\[/$esc[}"
+  s="${s//\\E\[/$esc[}"
+  local re=$'\033\\[[0-9;?]*[A-Za-z]'
+  while [[ "$s" =~ $re ]]; do
+    s="${s/"${BASH_REMATCH[0]}"/}"
+  done
+  VIS_LEN=${#s}
+}
+
+# _wptt_pad_cell "chữ_thuần" độ_rộng [l|r|c] "mã_màu" -> CELL_OUT (đúng độ_rộng cột hiển thị)
+CELL_OUT=""
+_wptt_pad_cell() {
+  local txt="$1" w="$2" align="${3:-l}" col="${4:-}"
+  local len=${#txt}
+  if (( len > w )); then
+    txt="${txt:0:w-1}…"
+    len=$w
+  fi
+  local pad=$((w - len))
+  local lp=0 rp=0 sl="" sr=""
+  case "$align" in
+    r) lp=$pad ;;
+    c) lp=$((pad / 2)); rp=$((pad - lp)) ;;
+    *) rp=$pad ;;
+  esac
+  (( lp > 0 )) && sl="${_SPACES:0:lp}"
+  (( rp > 0 )) && sr="${_SPACES:0:rp}"
+  if [[ -n "$col" ]]; then
+    CELL_OUT="${sl}${col}${txt}${C_RESET}${sr}"
+  else
+    CELL_OUT="${sl}${txt}${sr}"
+  fi
+}
+
+# Viền ngang
+_wptt_box_top() { echo -e "${C_CYAN}╭${_HR}╮${C_RESET}"; }
+_wptt_box_mid() { echo -e "${C_CYAN}├${_HR}┤${C_RESET}"; }
+_wptt_box_bot() { echo -e "${C_CYAN}╰${_HR}╯${C_RESET}"; }
+
+# Một dòng nội dung: tự đệm cho viền phải luôn nằm đúng cột
+_wptt_box_line() {
+  local raw="$1"
+  _wptt_vis_len "$raw"
+  local pad=$((box_inner_width - VIS_LEN))
+  ((pad < 0)) && pad=0
+  echo -e "${C_CYAN}│${C_RESET}${raw}${_SPACES:0:pad}${C_CYAN}│${C_RESET}"
+}
+
+# Một dòng căn giữa
+_wptt_box_center() {
+  local raw="$1"
+  _wptt_vis_len "$raw"
+  local total=$((box_inner_width - VIS_LEN))
+  ((total < 0)) && total=0
+  local lp=$((total / 2))
+  local rp=$((total - lp))
+  echo -e "${C_CYAN}│${C_RESET}${_SPACES:0:lp}${raw}${_SPACES:0:rp}${C_CYAN}│${C_RESET}"
+}
+
+# Ghi chú tự xuống dòng theo từ, có biểu tượng dẫn đầu và thụt lề đồng đều
+# _wptt_box_note "màu" "biểu_tượng " "nội dung"
+_wptt_box_note() {
+  local col="$1" lead="$2" text="$3"
+  local pad_lead="${_SPACES:0:${#lead}}"
+  local maxw=$((box_inner_width - 3 - ${#lead}))
+  local line="" word="" prefix="$lead"
+  local -a words=()
+  read -r -a words <<< "$text"
+  for word in "${words[@]}"; do
+    if [[ -z "$line" ]]; then
+      line="$word"
+    elif (( ${#line} + 1 + ${#word} <= maxw )); then
+      line+=" $word"
+    else
+      _wptt_box_line "  ${col}${prefix}${line}${C_RESET}"
+      prefix="$pad_lead"
+      line="$word"
+    fi
+  done
+  [[ -n "$line" ]] && _wptt_box_line "  ${col}${prefix}${line}${C_RESET}"
+}
+
+# Màu theo tên nhãn
+TAG_C=""
+_wptt_tag_color() {
+  case "$1" in
+    Chính | Lock) TAG_C="${C_YELLOW}" ;;
+    HSTS)         TAG_C="${C_CYAN}" ;;
+    *)            TAG_C="" ;;
+  esac
+}
+
+# Dồn các nhãn vào ô rộng $2 cột. Không bao giờ tràn: nhãn không vừa sẽ gộp thành "+N".
+# _wptt_pack_tags "Chính Lock HSTS" 16 -> TAGS_OUT (đã có màu, đã đệm đủ độ rộng)
+TAGS_OUT=""
+_wptt_pack_tags() {
+  local raw="$1" w="$2"
+  local -a tags=()
+  local i=0 n=0 total=0 show=0 more=0 used=0 add=0 pad=0 out=""
+  read -r -a tags <<< "$raw"
+  n=${#tags[@]}
+  TAGS_OUT=""
+  if (( n == 0 )); then
+    TAGS_OUT="${_SPACES:0:w}"
+    return 0
+  fi
+
+  for ((i = 0; i < n; i++)); do
+    (( total += ${#tags[i]} + (i > 0) ))
+  done
+
+  show=$n
+  if (( total > w )); then
+    # Chọn số nhãn tối đa nhưng còn chừa chỗ cho " +N"
+    show=0
+    used=0
+    for ((i = 0; i < n; i++)); do
+      add=$(( ${#tags[i]} + (i > 0) ))
+      (( used + add + 3 > w )) && break
+      used=$((used + add))
+      show=$((i + 1))
+    done
+    more=$((n - show))
+  fi
+
+  used=0
+  for ((i = 0; i < show; i++)); do
+    _wptt_tag_color "${tags[i]}"
+    if (( i > 0 )); then
+      out+=" "
+      used=$((used + 1))
+    fi
+    out+="${TAG_C}${tags[i]}${C_RESET}"
+    used=$((used + ${#tags[i]}))
+  done
+  if (( more > 0 )); then
+    if (( show > 0 )); then
+      out+=" "
+      used=$((used + 1))
+    fi
+    out+="${C_BOLD_WHITE}+${more}${C_RESET}"
+    used=$((used + ${#more} + 1))
+  fi
+  pad=$((w - used))
+  ((pad < 0)) && pad=0
+  TAGS_OUT="${out}${_SPACES:0:pad}"
+}
+
+# "Nhãn: số" - số khác 0 mới được tô màu
+STAT_OUT=""
+_wptt_stat() {
+  local lbl="$1" n="$2" col="$3"
+  if (( n > 0 )); then
+    STAT_OUT="${lbl} ${col}${n}${C_RESET}"
+  else
+    STAT_OUT="${lbl} ${n}"
+  fi
+}
+
+# ENGINE-END
+
+# ==============================================================================
+# 4. THU THẬP & THẨM ĐỊNH DỮ LIỆU TOÀN BỘ WEBSITE
+# ==============================================================================
+# Chế độ hiển thị: bảng (terminal >= 80 cột) hoặc danh sách thuần TSV (pipe/cron/terminal hẹp)
+_wptt_cols="${COLUMNS:-}"
+if [[ -z "$_wptt_cols" ]]; then
+  _wptt_cols="$(tput cols 2>/dev/null || true)"
+fi
+[[ "$_wptt_cols" =~ ^[0-9]+$ ]] || _wptt_cols=80
+PLAIN_MODE=0
+if [[ ! -t 1 ]] || (( _wptt_cols < box_inner_width + 2 )); then
+  PLAIN_MODE=1
+fi
+unset _wptt_cols
 
 valid_domains=()
 for filepath in /etc/wptt/vhost/.*.conf; do
@@ -108,69 +433,213 @@ done
 so_luong_website="${#valid_domains[@]}"
 if ((so_luong_website > 0)); then
   mapfile -t valid_domains < <(printf "%s\n" "${valid_domains[@]}" | sort -uV)
+  so_luong_website="${#valid_domains[@]}"
 fi
 
-default_php="$(_wptt_fmt_php "${php_version_default:-81}")"
+_wptt_fmt_php "${php_version_default:-81}"
+default_php="$PHP_TXT"
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}TỔNG QUAN: ĐANG CÓ ${C_YELLOW}${so_luong_website}${C_BOLD_WHITE} WEBSITE TRÊN HỆ THỐNG${C_RESET}"
-echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+# Mảng lưu kết quả đã thẩm định
+ROW_DOM=()
+ROW_PHP=()
+ROW_SSL_TXT=()
+ROW_SSL_COL=()
+ROW_SSL_STATE=()
+ROW_SSL_DAYS=()
+ROW_ST_TXT=()
+ROW_ST_COL=()
+ROW_TAGS=()
+ROW_LOCKED=()
+
+cnt_active=0
+cnt_locked=0
+cnt_ssl_ca=0
+cnt_ssl_self=0
+cnt_ssl_expiring=0
+cnt_ssl_expired=0
+cnt_ssl_none=0
+max_dom_len=0
+
+for ((idx = 0; idx < so_luong_website; idx++)); do
+  domain="${valid_domains[$idx]}"
+  ((${#domain} > max_dom_len)) && max_dom_len=${#domain}
+  _wptt_read_vhost_meta "/etc/wptt/vhost/.$domain.conf"
+
+  # 1. Phiên bản PHP
+  if [[ -n "$META_PHP" ]]; then
+    _wptt_fmt_php "$META_PHP"
+    php_ver="$PHP_TXT"
+  else
+    php_ver="$default_php"
+  fi
+
+  # 2. Trạng thái khóa
+  is_locked=0
+  if [[ -f "/usr/local/lsws/conf/vhosts/$domain/$domain.conf.bkwptt" && ! -f "/usr/local/lsws/conf/vhosts/$domain/$domain.conf" ]]; then
+    is_locked=1
+    ((cnt_locked++))
+    st_txt="Khóa"
+    st_col="${C_RED}"
+  else
+    ((cnt_active++))
+    st_txt="Online"
+    st_col="${C_GREEN}"
+  fi
+
+  # 3. Thẩm định SSL thực chất (CA vs Self-signed vs Expired)
+  _wptt_audit_ssl "$domain"
+  case "$SSL_STATE" in
+    valid)
+      ((cnt_ssl_ca++))
+      ssl_txt="● SSL CA"
+      [[ -n "$SSL_DAYS" ]] && (( SSL_DAYS > 0 && SSL_DAYS <= 999 )) && ssl_txt="● SSL CA (${SSL_DAYS}d)"
+      ssl_col="${C_GREEN}"
+      ;;
+    expiring)
+      ((cnt_ssl_expiring++))
+      ssl_txt="▲ Sắp hết (${SSL_DAYS}d)"
+      ssl_col="${C_YELLOW}"
+      ;;
+    self)
+      ((cnt_ssl_self++))
+      ssl_txt="▲ Tự ký (Self)"
+      ssl_col="${C_YELLOW}"
+      ;;
+    expired)
+      ((cnt_ssl_expired++))
+      if [[ -n "$SSL_DAYS" ]] && (( SSL_DAYS < 0 )); then
+        ssl_txt="✖ Hết hạn $(( -SSL_DAYS ))d"
+      else
+        ssl_txt="✖ Hết hạn"
+      fi
+      ssl_col="${C_RED}"
+      ;;
+    *)
+      ((cnt_ssl_none++))
+      ssl_txt="○ Chưa có SSL"
+      ssl_col="${C_RED}"
+      ;;
+  esac
+
+  # 4. Nhãn bảo mật (tên thuần, phối màu và cắt gọn lúc vẽ)
+  tags_raw=""
+  [[ "$domain" == "${Website_chinh:-}" ]] && tags_raw+="Chính "
+  [[ -n "$META_LOCKDOWN" ]] && tags_raw+="Lock "
+  [[ "$META_HSTS" == "1" ]] && tags_raw+="HSTS "
+  tags_raw="${tags_raw% }"
+
+  ROW_DOM[idx]="$domain"
+  ROW_PHP[idx]="$php_ver"
+  ROW_SSL_TXT[idx]="$ssl_txt"
+  ROW_SSL_COL[idx]="$ssl_col"
+  ROW_SSL_STATE[idx]="$SSL_STATE"
+  ROW_SSL_DAYS[idx]="$SSL_DAYS"
+  ROW_ST_TXT[idx]="$st_txt"
+  ROW_ST_COL[idx]="$st_col"
+  ROW_TAGS[idx]="$tags_raw"
+  ROW_LOCKED[idx]="$is_locked"
+done
+
+cnt_ssl_bad=$((cnt_ssl_expired + cnt_ssl_none))
+
+# ==============================================================================
+# 5A. CHẾ ĐỘ DANH SÁCH THUẦN (pipe / cron / terminal hẹp): domain<TAB>php<TAB>ssl<TAB>days<TAB>status<TAB>tags
+# ==============================================================================
+if (( PLAIN_MODE )); then
+  for ((idx = 0; idx < so_luong_website; idx++)); do
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "${ROW_DOM[idx]}" "${ROW_PHP[idx]}" "${ROW_SSL_STATE[idx]}" \
+      "${ROW_SSL_DAYS[idx]:--}" "${ROW_ST_TXT[idx]}" "${ROW_TAGS[idx]// /,}"
+  done
+  wptt_logs "INFO" "Xem list danh sách domain trên webserver"
+  [[ -t 1 ]] && wptt_quay_ve_menu "${1:-}" 0 "enter"
+  return 0 2>/dev/null || exit 0
+fi
+
+# ==============================================================================
+# 5B. HIỂN THỊ BẢNG DANH SÁCH CHUẨN ENTERPRISE
+# ==============================================================================
+# Bố cục cột (tổng đúng 78 cột nội dung):
+#   1 + STT + 1 + DOM + 1 + PHP + 1 + SSL + 1 + ST + 1 + TAG + 1 = 78
+COL_STT=$(( ${#so_luong_website} + 1 ))
+((COL_STT < 3)) && COL_STT=3
+COL_PHP=4
+COL_SSL=16
+COL_ST=7
+dom_cap=$((box_inner_width - 7 - COL_STT - COL_PHP - COL_SSL - COL_ST - 11))
+COL_DOM=$max_dom_len
+((COL_DOM > dom_cap)) && COL_DOM=$dom_cap
+((COL_DOM < 17)) && COL_DOM=17
+COL_TAG=$((box_inner_width - 7 - COL_STT - COL_DOM - COL_PHP - COL_SSL - COL_ST))
+
+clear
+_wptt_box_top
+_wptt_box_center "${C_YELLOW}${quan_ly_domain:-Quản lý Domain} ➜ ${danh_sach_domain:-Danh sách toàn bộ Domain}${C_RESET}"
+_wptt_box_bot
+echo
+
+_wptt_box_top
+_wptt_box_center "${C_BOLD_WHITE}TỔNG QUAN: ĐANG CÓ ${C_YELLOW}${so_luong_website}${C_BOLD_WHITE} WEBSITE TRÊN HỆ THỐNG${C_RESET}"
+_wptt_box_mid
 
 if ((so_luong_website > 0)); then
-  i=1
-  for domain in "${valid_domains[@]}"; do
-    _wptt_read_vhost_meta "/etc/wptt/vhost/.$domain.conf"
+  # Thanh tóm tắt sức khỏe hệ thống (luôn đủ mục để bố cục ổn định)
+  sep=" ${C_CYAN}│${C_RESET} "
+  _wptt_stat "Online" "$cnt_active" "${C_GREEN}";   s1="$STAT_OUT"
+  _wptt_stat "Khóa" "$cnt_locked" "${C_RED}";       s2="$STAT_OUT"
+  _wptt_stat "SSL CA" "$cnt_ssl_ca" "${C_GREEN}";   s3="$STAT_OUT"
+  _wptt_stat "Tự ký" "$cnt_ssl_self" "${C_YELLOW}"; s4="$STAT_OUT"
+  _wptt_stat "Sắp hết" "$cnt_ssl_expiring" "${C_YELLOW}"; s5="$STAT_OUT"
+  _wptt_stat "Lỗi SSL" "$cnt_ssl_bad" "${C_RED}";   s6="$STAT_OUT"
+  _wptt_box_line "  ${s1}${sep}${s2}${sep}${s3}${sep}${s4}${sep}${s5}${sep}${s6}"
+  _wptt_box_mid
 
-    # 1. Phiên bản PHP
-    if [[ -n "$META_PHP" ]]; then
-      php_ver="$(_wptt_fmt_php "$META_PHP")"
-    else
-      php_ver="$default_php"
-    fi
+  # Tiêu đề cột
+  _wptt_pad_cell "#" "$COL_STT" r "${C_CYAN}";                 h_stt="$CELL_OUT"
+  _wptt_pad_cell "Tên miền (Domain)" "$COL_DOM" l "${C_CYAN}"; h_dom="$CELL_OUT"
+  _wptt_pad_cell "PHP" "$COL_PHP" c "${C_CYAN}";               h_php="$CELL_OUT"
+  _wptt_pad_cell "Chứng chỉ SSL" "$COL_SSL" l "${C_CYAN}";     h_ssl="$CELL_OUT"
+  _wptt_pad_cell "Status" "$COL_ST" l "${C_CYAN}";             h_st="$CELL_OUT"
+  _wptt_pad_cell "Nhãn" "$COL_TAG" l "${C_CYAN}";              h_tag="$CELL_OUT"
+  _wptt_box_line " ${h_stt} ${h_dom} ${h_php} ${h_ssl} ${h_st} ${h_tag}"
+  _wptt_box_mid
 
-    # 2. Hệ thống Nhãn trạng thái (Chỉ dùng ký tự ASCII chuẩn 1-width để không bao giờ lệch cột)
-    tags="${C_CYAN}[PHP ${php_ver}]${C_RESET}"
+  # Dòng dữ liệu từng Website
+  for ((idx = 0; idx < so_luong_website; idx++)); do
+    _wptt_pad_cell "$((idx + 1)))" "$COL_STT" r "${C_CYAN}"; c_stt="$CELL_OUT"
 
-    if _wptt_has_ssl "$domain"; then
-      tags+=" ${C_GREEN}[SSL]${C_RESET}"
-    else
-      tags+=" ${C_RED}[No-SSL]${C_RESET}"
-    fi
+    dom_col="${C_BOLD_WHITE}"
+    (( ROW_LOCKED[idx] )) && dom_col="${C_YELLOW}"
+    _wptt_pad_cell "${ROW_DOM[$idx]}" "$COL_DOM" l "$dom_col"; c_dom="$CELL_OUT"
 
-    if [[ -f "/usr/local/lsws/conf/vhosts/$domain/$domain.conf.bkwptt" ]]; then
-      tags+=" ${C_RED}[Tạm khóa]${C_RESET}"
-    fi
+    _wptt_pad_cell "${ROW_PHP[$idx]}" "$COL_PHP" c "${C_CYAN}"; c_php="$CELL_OUT"
+    _wptt_pad_cell "${ROW_SSL_TXT[$idx]}" "$COL_SSL" l "${ROW_SSL_COL[$idx]}"; c_ssl="$CELL_OUT"
+    _wptt_pad_cell "${ROW_ST_TXT[$idx]}" "$COL_ST" l "${ROW_ST_COL[$idx]}"; c_st="$CELL_OUT"
+    _wptt_pack_tags "${ROW_TAGS[$idx]}" "$COL_TAG"; c_tag="$TAGS_OUT"
 
-    if [[ "$domain" == "${Website_chinh:-}" ]]; then
-      tags+=" ${C_YELLOW}[Website Chính]${C_RESET}"
-    fi
-
-    if [[ -n "$META_LOCKDOWN" ]]; then
-      tags+=" ${C_YELLOW}[LockDown]${C_RESET}"
-    fi
-
-    if [[ "$META_HSTS" == "1" ]]; then
-      tags+=" ${C_GREEN}[HSTS]${C_RESET}"
-    fi
-
-    # Cắt gọn nếu tên miền quá dài (> 30 ký tự)
-    disp_dom="$domain"
-    if (( ${#disp_dom} > 30 )); then
-      disp_dom="${disp_dom:0:27}..."
-    fi
-
-    printf -v stt_str '%3d)' "$i"
-    printf -v dom_padded '%-30s' "$disp_dom"
-
-    _wptt_box_line "  ${C_CYAN}${stt_str}${C_RESET} ${C_BOLD_WHITE}${dom_padded}${C_RESET} ${tags}"
-    ((i++))
+    _wptt_box_line " ${c_stt} ${c_dom} ${c_php} ${c_ssl} ${c_st} ${c_tag}"
   done
+
+  # Ghi chú ngắn gọn, chỉ hiện đúng loại cảnh báo đang tồn tại
+  if (( cnt_ssl_self + cnt_ssl_expiring + cnt_ssl_expired + cnt_ssl_none > 0 )); then
+    _wptt_box_mid
+    (( cnt_ssl_expired > 0 )) && _wptt_box_note "${C_RED}" "✖ " \
+      "Hết hạn: trình duyệt sẽ cảnh báo khách truy cập, cần cấp lại SSL ngay."
+    (( cnt_ssl_none > 0 )) && _wptt_box_note "${C_RED}" "○ " \
+      "Chưa có SSL: website đang chạy HTTP, nên cài Let's Encrypt."
+    (( cnt_ssl_expiring > 0 )) && _wptt_box_note "${C_YELLOW}" "▲ " \
+      "Sắp hết: nên gia hạn hoặc cài lại SSL trước ngày hết hạn."
+    (( cnt_ssl_self > 0 )) && _wptt_box_note "${C_YELLOW}" "▲ " \
+      "Tự ký (Self): SSL nội bộ chưa có CA quốc tế, chỉ xanh khi bật đám mây vàng Cloudflare (Full) hoặc cần cài lại Let's Encrypt."
+  fi
 else
-  center_text "${C_YELLOW}Hệ thống hiện chưa có website nào.${C_RESET}"
+  _wptt_box_center "${C_YELLOW}Hệ thống hiện chưa có website nào.${C_RESET}"
 fi
 
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+_wptt_box_bot
+echo
 
 wptt_logs "INFO" "Xem list danh sách domain trên webserver"
 
 wptt_quay_ve_menu "${1:-}" 0 "enter"
+
