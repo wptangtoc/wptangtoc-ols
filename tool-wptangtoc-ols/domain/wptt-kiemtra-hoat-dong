@@ -9,9 +9,10 @@ function huong_dan() {
   Tính năng Kiểm tra Hoạt động Website thời gian thực (Realtime Uptime & TTFB Monitor):
   * Theo dõi liên tục trạng thái Online/Offline, chẩn đoán DNS và độ trễ phản hồi (TTFB) của toàn bộ website.
   * Mỗi website cập nhật ngay khi quét xong, kèm biểu đồ lịch sử 10 lần quét gần nhất và % Uptime.
+  * Hỗ trợ Bộ lọc tức thời (chỉ xem web Lỗi/Offline, Chậm, Online...) và Sắp xếp gom nhóm nhanh.
   * Vẽ lại tại chỗ trên màn hình riêng (Alternate Screen), thoát ra Terminal vẫn sạch như cũ.
-  * Phím tắt: [q] thoát | [r] quét ngay | [s] đổi cách sắp xếp | [i] bật/tắt chú thích
-              [d] chế độ gọn | [Space] tạm dừng | [←][→] đổi trang. [Ctrl+C] cũng thoát an toàn.
+  * Phím tắt: [q] thoát | [r] quét ngay | [f] hoặc [0-5] lọc trạng thái | [s] đổi cách sắp xếp
+              [i] chú thích | [d] chế độ gọn | [Space] tạm dừng | [←][→] đổi trang.
 EOF
 }
 
@@ -37,7 +38,8 @@ HIST_LEN=10             # Số lần quét lưu trong biểu đồ lịch sử S
 MAX_SESSION_SEC=7200    # Chốt chặn an toàn: Tự thoát sau tối đa 2 giờ treo máy
 SPARK='▁▂▃▄▅▆▇█'
 SPIN=('-' '\' '|' '/')  # Ký tự ASCII chuẩn 100% mọi SSH Client (PuTTY/Bitvise/macOS)
-SORT_NAMES=("Tên" "Chậm" "Lỗi")
+SORT_NAMES=("Tên A-Z" "Lỗi↑" "Chậm↑" "Online↑")
+FILTER_NAMES=("Tất cả" "Sự cố" "Off/Lỗi" "Chậm" "Online" "Tạm khóa")
 
 # Bảo đảm charset UTF-8 bằng Pure Bash (0-subshell) để ${#var} đếm chuẩn ký tự Tiếng Việt
 _wptt_eff_cs="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
@@ -93,7 +95,6 @@ _wptt_init_secure_tmp() {
   umask 077
 
   for candidate in "/run/wptt" "/etc/wptt/tmp"; do
-    # Chặn đứng nếu đường dẫn bị gắn Symlink giả mạo
     [[ -L "$candidate" ]] && continue
     if [[ ! -d "$candidate" ]]; then
       /bin/mkdir -p -m 0700 "$candidate" 2>/dev/null || continue
@@ -447,9 +448,10 @@ done
 
 scan_no=0; scan_running=0; scan_done=0; ingested_n=0
 scan_t0=0; scan_dur=0; next_scan_at=0
-last_time=""; paused=0; sort_mode=0; order_dirty=0
+last_time=""; paused=0; sort_mode=0; filter_mode=0; order_dirty=0
 legend_on=1; page=0; spin_i=0; t_start=0
-term_rows=24; term_cols=80; legend_mode=2; per_page=$total_domains; pages=1
+term_rows=24; term_cols=80; legend_mode=2
+view_total=$total_domains; per_page=$total_domains; pages=1
 dense=0; ncols=1; rows_pp=$total_domains
 
 _wptt_init_secure_tmp
@@ -484,7 +486,7 @@ _start_scan() {
 }
 
 _ingest_ready() {
-  local i f st code tt tot tok
+  local i f st code tt tot tok changed=0
   for ((i = 0; i < total_domains; i++)); do
     ((SCAN_OF[i] == scan_no)) && continue
     f="$PROBE_TMP_DIR/res_${i}.txt"
@@ -514,7 +516,10 @@ _ingest_ready() {
     H_HIST[i]="$tok"
     SCAN_OF[i]=$scan_no
     ingested_n=$((ingested_n + 1))
+    changed=1
   done
+  # Nếu đang bật bộ lọc hoặc sắp xếp động, cập nhật danh sách ngay khi có kết quả mới
+  ((changed && (filter_mode > 0 || sort_mode > 0))) && order_dirty=1
 }
 
 _finish_scan() {
@@ -527,41 +532,103 @@ _finish_scan() {
   order_dirty=1
 }
 
-# Sắp xếp danh sách hoàn toàn trong RAM bằng Insertion Sort (0-subshell, không gọi sort/cut bên ngoài)
+# Kiểm tra website thứ $1 có khớp với bộ lọc hiện tại (filter_mode) hay không
+# 0: Tất cả | 1: Có sự cố (Offline + Lỗi + Chậm) | 2: Offline & Lỗi | 3: Chậm | 4: Online | 5: Tạm khóa
+_match_filter() {
+  local idx="$1" st="${R_STATUS[$1]}" tt="${R_TTFB[$1]}"
+  case "$filter_mode" in
+    0) return 0 ;;
+    1)
+      [[ "$st" == "offline" || "$st" == "http_err" || "$st" == "dns_err" ]] && return 0
+      [[ "$st" == "online" ]] && ((tt > SLOW_MS)) && return 0
+      return 1
+      ;;
+    2)
+      [[ "$st" == "offline" || "$st" == "http_err" || "$st" == "dns_err" ]] && return 0
+      return 1
+      ;;
+    3)
+      [[ "$st" == "online" ]] && ((tt > SLOW_MS)) && return 0
+      return 1
+      ;;
+    4)
+      [[ "$st" == "online" ]] && return 0
+      return 1
+      ;;
+    5)
+      [[ "$st" == "disabled" ]] && return 0
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+# Lọc và sắp xếp danh sách hoàn toàn trong RAM bằng Insertion Sort (0-subshell)
+# sort_mode:
+#   0: Tên (A -> Z)
+#   1: Lỗi & Offline lên đầu (Offline -> Lỗi HTTP -> Lỗi DNS -> Chậm -> Online -> Tạm khóa)
+#   2: Chậm nhất lên đầu (Theo TTFB giảm dần)
+#   3: Online lên đầu (Online nhanh -> Online chậm -> Lỗi -> Offline -> Tạm khóa)
 _build_order() {
-  local i j key cur_idx cur_key
+  local i j key cur_idx cur_key st tt
   local -a keys=()
   order_dirty=0
   ORDER=()
-  for ((i = 0; i < total_domains; i++)); do
-    ORDER[i]=$i
-  done
-  ((sort_mode == 0)) && return 0
 
   for ((i = 0; i < total_domains; i++)); do
-    if ((sort_mode == 1)); then
-      case "${R_STATUS[$i]}" in
-        offline) key=999999 ;;
-        http_err | dns_err) key=$((900000 + R_TTFB[i])) ;;
-        disabled | pending) key=-1 ;;
-        *) key="${R_TTFB[$i]}" ;;
-      esac
-    else
-      case "${R_STATUS[$i]}" in
-        offline) key=6 ;;
-        http_err) key=5 ;;
-        dns_err) key=4 ;;
-        online) ((R_TTFB[i] > SLOW_MS)) && key=3 || key=2 ;;
-        pending) key=1 ;;
-        *) key=0 ;;
-      esac
-      key=$((key * 1000000 + R_TTFB[i]))
+    if _match_filter "$i"; then
+      ORDER+=("$i")
     fi
+  done
+
+  view_total="${#ORDER[@]}"
+  ((sort_mode == 0 || view_total <= 1)) && return 0
+
+  for ((i = 0; i < total_domains; i++)); do
+    st="${R_STATUS[$i]}"
+    tt="${R_TTFB[$i]}"
+    case "$sort_mode" in
+      1) # Lỗi & Offline lên đầu
+        case "$st" in
+          offline) key=6 ;;
+          http_err) key=5 ;;
+          dns_err) key=4 ;;
+          online) ((tt > SLOW_MS)) && key=3 || key=2 ;;
+          pending) key=1 ;;
+          *) key=0 ;;
+        esac
+        key=$((key * 1000000 + tt))
+        ;;
+      2) # Chậm nhất lên đầu (TTFB cao -> thấp)
+        case "$st" in
+          offline) key=999999 ;;
+          http_err | dns_err) key=$((900000 + tt)) ;;
+          disabled | pending) key=-1 ;;
+          *) key="$tt" ;;
+        esac
+        ;;
+      3) # Online lên đầu (Online nhanh nhất đứng đầu bảng)
+        case "$st" in
+          online)
+            if ((tt <= SLOW_MS)); then
+              key=$((6000000 + (100000 - tt)))
+            else
+              key=$((5000000 + (100000 - tt)))
+            fi
+            ;;
+          dns_err) key=$((4000000 - tt)) ;;
+          http_err) key=$((3000000 - tt)) ;;
+          offline) key=2000000 ;;
+          pending) key=1000000 ;;
+          *) key=0 ;;
+        esac
+        ;;
+    esac
     keys[i]=$key
   done
 
-  # Sắp xếp giảm dần theo key, nếu bằng nhau thì giữ nguyên thứ tự index tăng dần
-  for ((i = 1; i < total_domains; i++)); do
+  # Sắp xếp giảm dần theo key, nếu bằng nhau giữ nguyên thứ tự gốc
+  for ((i = 1; i < view_total; i++)); do
     cur_idx=${ORDER[i]}
     cur_key=${keys[cur_idx]}
     j=$((i - 1))
@@ -577,7 +644,9 @@ _build_order() {
 # VẼ KHUNG GIAO DIỆN
 # ==============================================================================
 _layout() {
-  local full_need="$total_domains" overhead=12 dd=0 rows_avail ncols_max need_cols
+  local eff_domains="$view_total"
+  ((eff_domains < 1)) && eff_domains=1
+  local full_need="$eff_domains" overhead=12 dd=0 rows_avail ncols_max need_cols
   _term_size
   ((dense)) && dd=3
   ((full_need > 8)) && full_need=8
@@ -599,15 +668,17 @@ _layout() {
   ((ncols_max < 1)) && ncols_max=1
   ((ncols_max > MAX_COLS)) && ncols_max=$MAX_COLS
 
-  need_cols=$(((total_domains + rows_avail - 1) / rows_avail))
+  need_cols=$(((eff_domains + rows_avail - 1) / rows_avail))
   ncols=$need_cols
   ((ncols > ncols_max)) && ncols=$ncols_max
   ((ncols < 1)) && ncols=1
 
-  rows_pp=$(((total_domains + ncols - 1) / ncols))
+  rows_pp=$(((eff_domains + ncols - 1) / ncols))
   ((rows_pp > rows_avail)) && rows_pp=$rows_avail
+  ((rows_pp < 1)) && rows_pp=1
   per_page=$((rows_pp * ncols))
-  pages=$(((total_domains + per_page - 1) / per_page))
+  pages=$(((eff_domains + per_page - 1) / per_page))
+  ((pages < 1)) && pages=1
   ((page >= pages)) && page=$((pages - 1))
   ((page < 0)) && page=0
 
@@ -719,14 +790,13 @@ _render_colhead() {
 _render_legend_full() {
   _gap 1; _put "TTFB" 7 l "${U_BOLD}${U_CYN}"; _gap 1
   _seg "Thời gian chờ phản hồi đầu tiên: DNS + kết nối + SSL + PHP xử lý"; _flush_row
-  _gap 1; _put "Tổng" 7 l "${U_BOLD}${U_CYN}"; _gap 1
-  _seg "Tổng thời gian hoàn tất 1 yêu cầu (chỉ lấy header, không tải trang)"; _flush_row
   _gap 1; _put "Lịch sử" 7 l "${U_BOLD}${U_CYN}"; _gap 1
   _seg "10 lần quét gần nhất: "
   _seg "▁" "$U_GRN"; _seg " nhanh → "; _seg "█" "$U_RED"; _seg " chậm"; _sepv
   _seg "×" "$U_RED"; _seg " lỗi"; _sepv; _seg "–" "$U_DIM"; _seg " khóa"; _flush_row
-  _gap 1; _put "Uptime" 7 l "${U_BOLD}${U_CYN}"; _gap 1
-  _seg "% lần Online trên tổng số lần quét kể từ lúc mở màn hình này"; _flush_row
+  _gap 1; _put "Bộ lọc" 7 l "${U_BOLD}${U_CYN}"; _gap 1
+  _seg "[0]" "${U_BOLD}${U_YEL}"; _seg " Tất cả "; _seg "[1]" "${U_BOLD}${U_YEL}"; _seg " Sự cố "; _seg "[2]" "${U_BOLD}${U_YEL}"; _seg " Off/Lỗi "
+  _seg "[3]" "${U_BOLD}${U_YEL}"; _seg " Chậm "; _seg "[4]" "${U_BOLD}${U_YEL}"; _seg " Online "; _seg "[5]" "${U_BOLD}${U_YEL}"; _seg " Khóa"; _flush_row
   _gap 1; _put "Màu" 7 l "${U_BOLD}${U_CYN}"; _gap 1
   _seg "■" "$U_GRN"; _seg " xanh ≤${FAST_MS}ms nhanh"; _sepv
   _seg "■" "$U_YEL"; _seg " vàng ≤${SLOW_MS}ms ổn"; _sepv
@@ -737,10 +807,8 @@ _render_legend_full() {
 
 _render_legend_compact() {
   _gap 1
-  _seg "TTFB:" "${U_BOLD}${U_CYN}"; _seg " chờ phản hồi đầu tiên"; _sepv
-  _seg "Tổng:" "${U_BOLD}${U_CYN}"; _seg " cả yêu cầu"; _sepv
-  _seg "Màu:" "${U_BOLD}${U_CYN}"
-  _seg " ≤${FAST_MS}" "$U_GRN"; _seg " ≤${SLOW_MS}" "$U_YEL"; _seg " >${SLOW_MS}ms" "$U_RED"
+  _seg "Lọc nhanh:" "${U_BOLD}${U_CYN}"; _seg " [0]Tất cả [1]Sự cố [2]Off/Lỗi [3]Chậm [4]Online [5]Khóa"; _sepv
+  _seg "≤${FAST_MS}" "$U_GRN"; _seg " ≤${SLOW_MS}" "$U_YEL"; _seg " >${SLOW_MS}ms" "$U_RED"
   _flush_row
 }
 
@@ -805,7 +873,7 @@ _render() {
   _fmt_pct "$s_ok" "$s_tot"; _seg "$PCT_TXT" "${U_BOLD}${PCT_COL}"
   _flush_row
 
-  # --- Dòng trạng thái quét ---
+  # --- Dòng trạng thái quét + Chỉ báo Bộ lọc ---
   _now
   _gap 1
   if ((scan_running)); then
@@ -814,17 +882,22 @@ _render() {
     _seg "${ingested_n}/${total_domains}" "${U_BOLD}${U_WHT}"
   elif ((paused)); then
     _seg "‖ TẠM DỪNG" "${U_BOLD}${U_YEL}"
-    _seg " (nhấn Space để tiếp tục)" "$U_DIM"
+    _seg " (Space tiếp tục)" "$U_DIM"
   else
     remain=$((next_scan_at - NOW))
     ((remain < 0)) && remain=0
     _seg "✓ ${last_time}" "${U_BOLD}${U_GRN}"
-    _sepv; _seg "Quét lại sau " "$U_DIM"; _seg "${remain}s" "$U_WHT"
+    _sepv; _seg "Sau " "$U_DIM"; _seg "${remain}s" "$U_WHT"
     ((scan_dur > 0)) && { _sepv; _seg "Mất " "$U_DIM"; _seg "${scan_dur}s" "$U_WHT"; }
   fi
   _sepv; _seg "Lần " "$U_DIM"; _seg "#${scan_no}" "$U_WHT"
-  _fmt_dur $((NOW - t_start))
-  _sepv; _seg "Chạy " "$U_DIM"; _seg "$DUR_TXT" "$U_WHT"
+  if ((filter_mode > 0)); then
+    _sepv; _seg "Lọc: " "$U_DIM"
+    _seg "${FILTER_NAMES[$filter_mode]} (${view_total}/${total_domains})" "${U_BOLD}${U_YEL}"
+  else
+    _fmt_dur $((NOW - t_start))
+    _sepv; _seg "Chạy " "$U_DIM"; _seg "$DUR_TXT" "$U_WHT"
+  fi
   if ((pages > 1)); then
     pg_txt="Trang $((page + 1))/${pages} [←→]"
     _gap $((BOX_W - VLEN - ${#pg_txt} - 1))
@@ -842,19 +915,24 @@ _render() {
   ((!dense)) && _hline "├" "┤"
 
   # --- Danh sách website: xếp theo cột dọc, rows_pp dòng x ncols cột ---
-  base=$((page * per_page))
-  for ((r = 0; r < rows_pp; r++)); do
-    for ((c = 0; c < ncols; c++)); do
-      ((c > 0)) && _sepv
-      idx=$((base + c * rows_pp + r))
-      if ((idx < total_domains)); then
-        _render_row "${ORDER[$idx]}" $((idx + 1))
-      else
-        _gap "$CELL_W"
-      fi
-    done
+  if ((view_total == 0)); then
+    _put "Không có website nào thuộc bộ lọc [${FILTER_NAMES[$filter_mode]}]. Nhấn [0] hoặc [f] để xem tất cả." "$BOX_W" c "${U_YEL}"
     _flush_row
-  done
+  else
+    base=$((page * per_page))
+    for ((r = 0; r < rows_pp; r++)); do
+      for ((c = 0; c < ncols; c++)); do
+        ((c > 0)) && _sepv
+        idx=$((base + c * rows_pp + r))
+        if ((idx < view_total)); then
+          _render_row "${ORDER[$idx]}" $((idx + 1))
+        else
+          _gap "$CELL_W"
+        fi
+      done
+      _flush_row
+    done
+  fi
 
   _hline "├" "┤"
   case "$legend_mode" in
@@ -865,7 +943,8 @@ _render() {
   # --- Phím tắt ---
   _gap 1
   _key "q" "Thoát"; _gap 2
-  _key "r" "Quét lại"; _gap 2
+  _key "r" "Quét"; _gap 2
+  _key "f" "Lọc: ${FILTER_NAMES[$filter_mode]}"; _gap 2
   _key "s" "Xếp: ${SORT_NAMES[$sort_mode]}"; _gap 2
   _key "i" "Chú thích"; _gap 2
   _key "Space" "Dừng"; _gap 2
@@ -946,7 +1025,9 @@ while :; do
   case "$key" in
     q | Q | $'\003' | $'\004') break ;;
     r | R) ((!scan_running)) && next_scan_at=0 && paused=0 ;;
-    s | S) sort_mode=$(((sort_mode + 1) % 3)); order_dirty=1 ;;
+    s | S) sort_mode=$(((sort_mode + 1) % ${#SORT_NAMES[@]})); page=0; order_dirty=1 ;;
+    f | F) filter_mode=$(((filter_mode + 1) % ${#FILTER_NAMES[@]})); page=0; order_dirty=1 ;;
+    0 | 1 | 2 | 3 | 4 | 5) filter_mode="$key"; page=0; order_dirty=1 ;;
     i | I) legend_on=$((1 - legend_on)) ;;
     d | D) dense=$((1 - dense)) ;;
     n | N) page=$((page + 1)) ;;
