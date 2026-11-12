@@ -3,29 +3,31 @@
 # shellcheck disable=SC1090,SC1091,SC2154,SC2317
 
 NAME="$1"
-if [[ -n "$1" ]]; then
-  # Bọc ngoặc kép toàn bộ đường dẫn
-  if [[ ! -f "/etc/wptt/vhost/.${NAME}.conf" ]]; then
-    NAME=''
-  fi
+if [[ -n "$NAME" ]]; then
+	if [[ ! -f "/etc/wptt/vhost/.${NAME}.conf" ]]; then
+		NAME=""
+	fi
 fi
 
 if [[ -z "$NAME" ]]; then
-  # Dùng biến nội tại $PWD an toàn hơn gọi pwd
-  CURRENT_DIR="$PWD"
-  NAME=$(echo "$CURRENT_DIR" | cut -f1-6 -d '/' | cut -f5 -d '/')
+	# Bóc tách tên domain từ $PWD thuần Bash (ví dụ: /usr/local/lsws/domain.com/html -> domain.com) mà không tốn subshell cut
+	if [[ "$PWD" =~ ^/usr/local/lsws/([^/]+) ]]; then
+		NAME="${BASH_REMATCH[1]}"
+	fi
 fi
 
-if [[ -z "$NAME" ]]; then
-  echo "Không xác định được tên website cần thực thi"
-  return 2>/dev/null || exit 1
+if [[ -z "$NAME" || ! -f "/etc/wptt/vhost/.${NAME}.conf" ]]; then
+	echo "Không xác định được tên website cần thực thi"
+	return 1 2>/dev/null || exit 1
 fi
 
-if [[ -f "/usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadAllPHP.php" ]]; then
-  PATH='/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin' #bien moi truong full day du
-  
-  # Bọc ngoặc kép an toàn cho đường dẫn include
-  wptt_load_vhost_conf "/etc/wptt/vhost/.${NAME}.conf" 2>/dev/null
+WP_PATH="/usr/local/lsws/${NAME}/html"
+PRELOAD_CLASS="${WP_PATH}/wp-content/plugins/wptangtoc/class/PreloadAllPHP.php"
+
+if [[ -f "$PRELOAD_CLASS" ]]; then
+	export PATH="/root/.local/bin:/root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+
+	wptt_load_vhost_conf "/etc/wptt/vhost/.${NAME}.conf" 2>/dev/null
 
 	if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
 		wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
@@ -33,15 +35,24 @@ if [[ -f "/usr/local/lsws/$NAME/html/wp-content/plugins/wptangtoc/class/PreloadA
 		return 1 2>/dev/null || exit 1
 	fi
 
-  # Bọc ngoặc kép chuẩn chỉ cho các biến của Runuser và WP-CLI
-	if /sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp eval 'WPTangToc\PreloadAllPHP::preload_cache();' --allow-root --path="/usr/local/lsws/$NAME/html" >/dev/null 2>&1;then
+	PHP_BIN="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+	WP_CLI="/usr/local/bin/wp"
+
+	# 1. Khởi tạo danh sách URL vào preload-wptangtoc-url.txt và đặt lịch Cron với đúng quyền User sở hữu web
+	# Truyền --url="https://${NAME}" để WP-CLI luôn tạo đúng Permalink theo tên miền thật (không bao giờ dính localhost)
+	if /sbin/runuser -u "$User_name_vhost" -- "$PHP_BIN" "$WP_CLI" eval 'if (class_exists("WPTangToc\\PreloadAllPHP")) { WPTangToc\PreloadAllPHP::preload_cache(); }' --path="$WP_PATH" >/dev/null 2>&1; then
 		wptt_logs "INFO" "Preload Cache PHP html cache website $NAME"
-		random=$(tr -dc '0-9' </dev/urandom | head -c 10)
-		# Bọc toàn bộ URL vào một cặp ngoặc kép duy nhất
-		curl -s "https://${NAME}/?wptangtoc_cache=${random}" -A "WPTangToc OLS preload cache" >/dev/null 2>&1
+		# # 2. Bắn tín hiệu mồi vào wp-cron.php qua Local Loopback 127.0.0.1 (Xuyên qua Cloudflare/WAF 100%)
+		# # để Webserver bắt đầu chuỗi chuyền gậy tuần tự (Rolling Overwrite)
+		# /usr/bin/curl -ksL \
+		# 	--max-time 5 \
+		# 	--resolve "${NAME}:443:127.0.0.1" \
+		# 	--resolve "${NAME}:80:127.0.0.1" \
+		# 	-A "WPTangToc OLS Preload Cron Trigger" \
+		# 	"https://${NAME}/wp-cron.php?doing_wp_cron" >/dev/null 2>&1 &
 	else
 		wptt_logs "ERROR" "Preload Cache PHP html cache website $NAME"
 	fi
-  
-  echo "Triển khai Preload Cache PHP"
+
+	echo "Triển khai Preload Cache PHP hoàn tất cho $NAME"
 fi

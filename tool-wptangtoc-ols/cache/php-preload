@@ -1,24 +1,96 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
-NAME=$1
-FILE_TO_CHECK_URL="/usr/local/lsws/$NAME/html/wp-content/preload-wptangtoc-url.txt"
-if [[ -s $FILE_TO_CHECK_URL ]]; then #kiểm tra có tồn tại kích thước lớn không 0
-  MAX_IDLE_SECONDS=110               # hơn 1 phút
-  # Lấy thời gian sửa đổi cuối cùng của file (tính bằng giây kể từ Epoch)
-  LAST_MODIFIED_TIMESTAMP=$(stat -c %Y "$FILE_TO_CHECK_URL")
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Watchdog tự phục hồi (Auto-healing) dây chuyền PreloadAllPHP khi bị kẹt qua Local Loopback 127.0.0.1
 
-  # Lấy thời gian hiện tại (tính bằng giây kể từ Epoch)
-  CURRENT_TIMESTAMP=$(date +%s)
+set -Eeuo pipefail
 
-  # Tính toán khoảng thời gian (tính bằng giây) từ lần sửa đổi cuối cùng đến hiện tại
-  TIME_DIFF=$((CURRENT_TIMESTAMP - LAST_MODIFIED_TIMESTAMP))
-  if [ $TIME_DIFF -gt $MAX_IDLE_SECONDS ]; then
-    unset url_preload
-    url_preload=$(cat "$FILE_TO_CHECK_URL" | grep '^http' | head -1)
-    if [[ $url_preload ]]; then
-      # random=$(shuf -i 0-9 -n 10 -r | tr -d '\n')
-      random=$(tr -dc '0-9' </dev/urandom | head -c 10)
-      curl -ks "${url_preload}"?wptangtoc_cache="${random}" >/dev/null 2>&1
-    fi
-  fi
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null || true
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+NAME="${1:-}"
+if [[ -z "$NAME" || ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ || "$NAME" == -* || "$NAME" == *".."* ]]; then
+	exit 0
+fi
+
+doc_root="/usr/local/lsws/$NAME/html"
+preload_file="$doc_root/wp-content/preload-wptangtoc-url.txt"
+
+# 1. Thoát ngay (0ms) nếu không có file hàng đợi hoặc file rỗng (từ chối nếu là symlink chống Symlink Attack)
+if [[ ! -f "$preload_file" || -L "$preload_file" || ! -s "$preload_file" ]]; then
+	exit 0
+fi
+
+# 2. Kiểm tra thời gian file bị đứng im (Idle Time > 110 giây)
+max_idle_seconds=110
+last_modified_ts=$(/usr/bin/stat -c %Y -- "$preload_file" 2>/dev/null || printf '0')
+printf -v current_ts '%(%s)T' -1
+time_diff=$((current_ts - last_modified_ts))
+
+if ((time_diff <= max_idle_seconds)); then
+	exit 0
+fi
+
+# 3. Lấy URL hợp lệ đầu tiên ra VÀ cắt bỏ dòng đó khỏi file nguyên tử (Chống kẹt vĩnh viễn ở 1 URL lỗi - Poison Pill)
+url_preload=""
+tmp_file="${preload_file}.watchdog.$$"
+
+{
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		line="${line//$'\r'/}"
+		# Bỏ qua dòng trống
+		[[ -z "$line" ]] && continue
+
+		if [[ -z "$url_preload" && "$line" =~ ^https?:// ]]; then
+			url_preload="$line"
+			continue
+		fi
+		printf '%s\n' "$line"
+	done <"$preload_file"
+} >"$tmp_file"
+
+if [[ -s "$tmp_file" ]]; then
+	/bin/chown --reference="$preload_file" -- "$tmp_file" 2>/dev/null || true
+	/bin/chmod --reference="$preload_file" -- "$tmp_file" 2>/dev/null || true
+	/bin/mv -f -- "$tmp_file" "$preload_file"
+else
+	/bin/rm -f -- "$tmp_file" "$preload_file"
+fi
+
+# 4. Kích hoạt lại dây chuyền Preload qua Local Loopback 127.0.0.1 với đúng User-Agent 'WPTangToc-Preload/Desktop'
+if [[ -n "$url_preload" ]]; then
+	# Bóc tách tên miền từ URL bằng Bash Parameter Expansion (0-subshell)
+	url_no_proto="${url_preload#*://}"
+	url_host="${url_no_proto%%/*}"
+	url_host="${url_host%%:*}"
+
+	if [[ -n "$url_host" && "$url_host" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+		/usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/bin/curl -ksL \
+			--max-time 15 \
+			--connect-timeout 5 \
+			--http1.1 \
+			--compressed \
+			--resolve "${url_host}:443:127.0.0.1" \
+			--resolve "${url_host}:80:127.0.0.1" \
+			-H "Cache-Control: no-cache" \
+			-A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 WPTangToc-Preload/Desktop" \
+			"$url_preload" >/dev/null 2>&1 || true
+
+		# Nếu website có bật tách riêng Cache Mobile thì bắn bồi thêm bản Mobile
+		# if /bin/grep -q "'cache_mobile'[[:space:]]*=>[[:space:]]*true" "$doc_root/wp-content/plugins/wptangtoc/inc/ array config.php" 2>/dev/null; then
+		# 	/usr/bin/nice -n 19 /usr/bin/ionice -c3 /usr/bin/curl -ksL \
+		# 		--max-time 15 \
+		# 		--connect-timeout 5 \
+		# 		--http1.1 \
+		# 		--compressed \
+		# 		--resolve "${url_host}:443:127.0.0.1" \
+		# 		--resolve "${url_host}:80:127.0.0.1" \
+		# 		-H "Cache-Control: no-cache" \
+		# 		-A "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1 WPTangToc-Preload/Mobile" \
+		# 		"$url_preload" >/dev/null 2>&1 || true
+		# fi
+	fi
 fi
