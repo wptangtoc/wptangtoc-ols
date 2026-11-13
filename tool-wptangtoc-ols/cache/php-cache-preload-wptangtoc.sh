@@ -42,14 +42,6 @@ if [[ -f "$PRELOAD_CLASS" ]]; then
 	# Truyền --url="https://${NAME}" để WP-CLI luôn tạo đúng Permalink theo tên miền thật (không bao giờ dính localhost)
 	if /sbin/runuser -u "$User_name_vhost" -- "$PHP_BIN" "$WP_CLI" eval 'if (class_exists("WPTangToc\\PreloadAllPHP")) { WPTangToc\PreloadAllPHP::preload_cache(); }' --path="$WP_PATH" >/dev/null 2>&1; then
 		wptt_logs "INFO" "Preload Cache PHP html cache website $NAME"
-		# # 2. Bắn tín hiệu mồi vào wp-cron.php qua Local Loopback 127.0.0.1 (Xuyên qua Cloudflare/WAF 100%)
-		# # để Webserver bắt đầu chuỗi chuyền gậy tuần tự (Rolling Overwrite)
-		# /usr/bin/curl -ksL \
-		# 	--max-time 5 \
-		# 	--resolve "${NAME}:443:127.0.0.1" \
-		# 	--resolve "${NAME}:80:127.0.0.1" \
-		# 	-A "WPTangToc OLS Preload Cron Trigger" \
-		# 	"https://${NAME}/wp-cron.php?doing_wp_cron" >/dev/null 2>&1 &
 	else
 		wptt_logs "ERROR" "Preload Cache PHP html cache website $NAME"
 	fi

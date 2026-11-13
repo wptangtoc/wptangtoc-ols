@@ -2,7 +2,7 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Kích hoạt Rewrite Page Cache HTML & Pre-compressed Gzip (.html + .html.gz) cho OpenLiteSpeed
+# @description: Kích hoạt Rewrite Page Cache Pure .html.gz (Gzip-Only Cache) cho OpenLiteSpeed
 
 set -Eeuo pipefail
 
@@ -37,7 +37,6 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
 
-# Đảm bảo Locale UTF-8 để đếm độ dài ký tự tiếng Việt chính xác (0-subshell)
 _wptt_eff_cs="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
 case "${_wptt_eff_cs,,}" in
   *utf-8* | *utf8*) : ;;
@@ -51,7 +50,7 @@ case "${_wptt_eff_cs,,}" in
 esac
 unset _wptt_eff_cs
 
-printf '|Quản lý Cache => Thêm rewrite htaccess cache WPTangToc|\n'
+printf '|Quản lý Cache => Thêm rewrite htaccess cache WPTangToc (Pure .html.gz)|\n'
 
 MENU_ARG="${1:-}"
 NAME="${1:-}"
@@ -67,7 +66,6 @@ function lua_chon_NAME() {
   local box_inner_width="${box_inner_width:-78}"
   local filepath="" domain=""
 
-  # 1. Quét các domain có cài WordPress & đã kích hoạt plugin WPTangToc Cache (Cache.php)
   shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -86,7 +84,6 @@ function lua_chon_NAME() {
   done
   shopt -u nullglob
 
-  # 2. Kiểm tra nếu chưa có website nào thỏa mãn
   if [[ ${#selects[@]} -eq 0 ]]; then
     clear
     printf '\n%b❌ Lỗi: Không có website WordPress nào đã kích hoạt WPTangToc Cache (Cache.php) trên hệ thống.%b\n' "${C_RED:-}" "${C_RESET:-}"
@@ -96,10 +93,8 @@ function lua_chon_NAME() {
     exit 1
   fi
 
-  # 3. Sắp xếp mảng chuẩn tự nhiên
   mapfile -t selects < <(printf '%s\n' "${selects[@]}" | sort -uV)
 
-  # 4. Render bảng chọn chuẩn khung 78 cột (0-subshell character count)
   printf '%b╭──────────────────────────────────────────────────────────────────────────────╮%b\n' "${C_CYAN:-}" "${C_RESET:-}"
 
   if [[ -n "$action_desc" ]]; then
@@ -142,7 +137,6 @@ function lua_chon_NAME() {
   done
   printf '%b╰──────────────────────────────────────────────────────────────────────────────╯%b\n' "${C_CYAN:-}" "${C_RESET:-}"
 
-  # 5. Dòng nhắc lệnh hỗ trợ FZF
   local fzf_installed=false
   if command -v fzf &>/dev/null; then
     fzf_installed=true
@@ -155,12 +149,10 @@ function lua_chon_NAME() {
 
   local PROMPT_TEXT="${nhap_lua_chon_website_cua_ban:-Nhập lựa chọn website của bạn} (1-${#selects[@]})${prompt_quick_select} [0=${exit_thoat:-Thoát}]: "
 
-  # Xả sạch phím bấm thừa trong bộ đệm trước khi đọc
   if declare -F wptt_flush_stdin >/dev/null 2>&1; then
     wptt_flush_stdin
   fi
 
-  # 6. Động cơ nhận phím an toàn
   while true; do
     printf '%b%s%b' "${C_CYAN:-}" "$PROMPT_TEXT" "${C_RESET:-}"
 
@@ -234,7 +226,7 @@ function lua_chon_NAME() {
 }
 
 # ==============================================================================
-# LUỒNG THỰC THI CHÍNH (ATOMIC, IDEMPOTENT & OLS NATIVE GZIP-STATIC)
+# LUỒNG THỰC THI CHÍNH (KIẾN TRÚC PURE .HTML.GZ — GZIP-ONLY CACHE)
 # ==============================================================================
 if [[ -z "${NAME:-}" ]]; then
   lua_chon_NAME "Cache WPTangToc"
@@ -244,13 +236,12 @@ if [[ -z "${NAME:-}" || "$NAME" == "0" ]]; then
   exit 0
 fi
 
-# Validate tên miền nghiêm ngặt theo whitelist chống Path Traversal
 if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ || "$NAME" == -* || "$NAME" == *".."* ]]; then
   printf '%b❌ Lỗi: Tên miền không hợp lệ: %s%b\n' "${C_RED:-}" "$NAME" "${C_RESET:-}" >&2
   exit 1
 fi
 
-task_msg="Kích hoạt Rewrite Page Cache HTML (.html + .gz) cho $NAME"
+task_msg="Kích hoạt Rewrite Page Cache Pure .html.gz cho $NAME"
 if declare -F _runing >/dev/null 2>&1; then
   _runing "$task_msg"
 fi
@@ -272,11 +263,8 @@ fi
 tmp_dir=$(/bin/mktemp -d /etc/wptt/tmp/wptt-cache-XXXXXX)
 
 # ------------------------------------------------------------------------------
-# 1. CẬP NHẬT VHOST OPENLITESPEED NGUYÊN TỬ (TÁCH RIÊNG CONTEXT .HTML.GZ & .HTML)
-#    Vì OLS bỏ qua <FilesMatch> và ForceType trong .htaccess, bắt buộc phải cấu hình:
-#    - Context 1 (.html.gz): enableGzip 0, enableBr 0 (chống nén kép) + ép Header
-#      Content-Type: text/html; charset=UTF-8 và Content-Encoding: gzip.
-#    - Context 2 (.html): enableGzip 1 để OLS tự nén khi fallback.
+# 1. CẬP NHẬT VHOST OPENLITESPEED NGUYÊN TỬ (CHỈ DUY NHẤT 1 CONTEXT .HTML.GZ)
+#    x-wptangtoc-cache: HIT
 # ------------------------------------------------------------------------------
 vhost_backup="${tmp_dir}/vhost.conf.bak"
 vhost_tmp="${tmp_dir}/vhost.conf.tmp"
@@ -284,61 +272,35 @@ vhost_tmp="${tmp_dir}/vhost.conf.tmp"
 /bin/cp -a -- "$vhost_conf" "$vhost_backup"
 /bin/cp -a -- "$vhost_conf" "$vhost_tmp"
 
-# Xóa toàn bộ các mẫu context cache html cũ để đảm bảo tính lũy đẳng (Idempotent 100%)
 /bin/sed -i \
   -e '/^context exp:\^.\*(html)/,/^}$/d' \
   -e '/^context exp:\^.\*\\.(html|html\\.gz)\$/,/^}$/d' \
   -e '/^context exp:\^.\*\\.html\\.gz\$/,/^}$/d' \
+  -e '/^context exp:\^\/wp-content\/cache\/wptangtoc\/.\*\\.html\\.gz\$/,/^}$/d' \
   -e '/^context exp:\^.\*\\.html\$/,/^}$/d' \
   "$vhost_tmp"
 
 cat <<'EOF' >>"$vhost_tmp"
 
-context exp:^.*\.html\.gz$ {
+context exp:^/wp-content/cache/wptangtoc/.*\.html\.gz$ {
   location                $DOC_ROOT/$0
   allowBrowse             1
   enableGzip              0
   enableBr                0
   extraHeaders            <<<END_extraHeaders
-Content-Type: text/html; charset=UTF-8
-Content-Encoding: gzip
-Cache-Control: public, max-age=0, s-maxage=3600
-Vary: Accept-Encoding, Cookie
-x-wptangtoc-cache: HIT-GZIP
-X-XSS-Protection: 1; mode=block
-X-Frame-Options: SAMEORIGIN
-Referrer-Policy: strict-origin-when-cross-origin
-X-Content-Type-Options: nosniff
-X-Powered-By: WPTangTocOLS
-Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
-  END_extraHeaders
-
-  rewrite  {
-
-  }
-  addDefaultCharset       off
-
-  phpIniOverride  {
-
-  }
-}
-
-context exp:^.*\.html$ {
-  location                $DOC_ROOT/$0
-  allowBrowse             1
-  enableGzip              1
-  extraHeaders            <<<END_extraHeaders
-Content-Type: text/html; charset=UTF-8
-Cache-Control: public, max-age=0, s-maxage=3600
-Vary: Accept-Encoding, Cookie
-x-wptangtoc-cache: HIT
-X-XSS-Protection: 1; mode=block
-X-Frame-Options: SAMEORIGIN
-Referrer-Policy: strict-origin-when-cross-origin
-X-Content-Type-Options: nosniff
-X-Powered-By: WPTangTocOLS
-Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
-  END_extraHeaders
+unset Content-Type
+set Content-Type text/html; charset=UTF-8
+set Content-Encoding gzip
+set Cache-Control public, max-age=0, must-revalidate
+set Vary Accept-Encoding, Cookie
+set x-wptangtoc-cache HIT
+set X-XSS-Protection 1; mode=block
+set X-Frame-Options SAMEORIGIN
+set Referrer-Policy strict-origin-when-cross-origin
+set X-Content-Type-Options nosniff
+set X-Powered-By WPTangTocOLS
+set Permissions-Policy accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+END_extraHeaders
 
   rewrite  {
 
@@ -355,7 +317,6 @@ EOF
 /bin/chmod --reference="$vhost_conf" -- "$vhost_tmp" 2>/dev/null || true
 /bin/mv -T -- "$vhost_tmp" "$vhost_conf"
 
-# Validate cấu hình VHost với OpenLiteSpeed; nếu lỗi thì Rollback ngay lập tức
 if [[ -x /usr/local/lsws/bin/openlitespeed ]]; then
   if ! /usr/local/lsws/bin/openlitespeed -t >/dev/null 2>&1; then
     /bin/cp -a -- "$vhost_backup" "$vhost_conf"
@@ -368,7 +329,7 @@ if [[ -x /usr/local/lsws/bin/openlitespeed ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 2. CẬP NHẬT .HTACCESS NGUYÊN TỬ (CHUẨN HÓA REWRITE CHO OLS, KHÔNG DƯ SLASH //)
+# 2. CẬP NHẬT .HTACCESS NGUYÊN TỬ (CHỈ REWRITE DUY NHẤT BẢN TĨNH INDEX.HTML.GZ)
 # ------------------------------------------------------------------------------
 if [[ ! -f "$htaccess_file" ]]; then
   /bin/touch -- "$htaccess_file"
@@ -379,7 +340,6 @@ fi
 htaccess_tmp="${tmp_dir}/htaccess.tmp"
 /bin/cp -a -- "$htaccess_file" "$htaccess_tmp"
 
-# Xóa khối #begin-cache-wptangtoc cũ nếu có
 /bin/sed -i -e '/^#begin-cache-wptangtoc/,/^#end-cache-wptangtoc$/d' "$htaccess_tmp"
 
 if [[ ! -f "$doc_root/wp-content/plugins/wptangtoc/class/CSSAllLazy.php" && ! -f "$doc_root/wp-content/plugins/wptangtoc/class/CSSAllLazyZ.php" ]]; then
@@ -390,28 +350,17 @@ if [[ ! -f "$doc_root/wp-content/plugins/wptangtoc/class/CSSAllLazy.php" && ! -f
 RewriteEngine On
 RewriteBase /
 
-# 1. Phục vụ trực tiếp bản nén tĩnh .html.gz (0% CPU) khi trình duyệt hỗ trợ Gzip
-RewriteCond %{HTTPS} on [OR]
-RewriteCond %{HTTP:X-Forwarded-Proto} https
-RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
-RewriteCond %{HTTP_USER_AGENT} !WPTangToc-Preload [NC]
-RewriteCond %{QUERY_STRING} ^(|(utm_[a-z0-9_]+|fbclid|gclid|gad_[a-z0-9_]+|gbraid|wbraid|ttclid|twclid|msclkid|mc_[a-z]+|zarsrc|srsltid|ref|_ga|_gid|_gl)=[^&]*(&|$))*$ [NC]
-RewriteCond %{HTTP:Cookie} !(wordpress_logged_in_|wp-postpass_|comment_author_|wordpress_no_cache|woocommerce_items_in_cart|edd_items_in_cart|fp_logged_in_roles|wptt_logged_in_roles|aelia_cs_selected_currency|wmc_current_currency) [NC]
+# Phục vụ trực tiếp bản nén tĩnh .html.gz (0% CPU, HIT, Pure .html.gz Architecture)
+RewriteCond %{REQUEST_METHOD} ^(?:GET|HEAD)$
 RewriteCond %{HTTP:Accept-Encoding} gzip [NC]
-RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json)|wc-api|cart|gio-hang|checkout|thanh-toan|my-account|tai-khoan|feed)(/|$) [NC]
-RewriteCond $doc_root/wp-content/cache/wptangtoc/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz -f
-RewriteRule ^ /wp-content/cache/wptangtoc/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz [L]
-
-# 2. Fallback phục vụ bản .html tiêu chuẩn (khi trình duyệt không gửi Accept-Encoding: gzip)
-RewriteCond %{HTTPS} on [OR]
-RewriteCond %{HTTP:X-Forwarded-Proto} https
-RewriteCond %{REQUEST_METHOD} ^(GET|HEAD)$
-RewriteCond %{HTTP_USER_AGENT} !WPTangToc-Preload [NC]
-RewriteCond %{QUERY_STRING} ^(|(utm_[a-z0-9_]+|fbclid|gclid|gad_[a-z0-9_]+|gbraid|wbraid|ttclid|twclid|msclkid|mc_[a-z]+|zarsrc|srsltid|ref|_ga|_gid|_gl)=[^&]*(&|$))*$ [NC]
-RewriteCond %{HTTP:Cookie} !(wordpress_logged_in_|wp-postpass_|comment_author_|wordpress_no_cache|woocommerce_items_in_cart|edd_items_in_cart|fp_logged_in_roles|wptt_logged_in_roles|aelia_cs_selected_currency|wmc_current_currency) [NC]
-RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json)|wc-api|cart|gio-hang|checkout|thanh-toan|my-account|tai-khoan|feed)(/|$) [NC]
-RewriteCond $doc_root/wp-content/cache/wptangtoc/%{HTTP_HOST}%{REQUEST_URI}/index.html -f
-RewriteRule ^ /wp-content/cache/wptangtoc/%{HTTP_HOST}%{REQUEST_URI}/index.html [L]
+RewriteCond %{REQUEST_URI} !\.(?:css|js|jpe?g|png|gif|webp|avif|svg|ico|woff2?|ttf|eot|mp4|webm|pdf|xml|txt|php|xsl|json|map)$ [NC]
+RewriteCond %{REQUEST_URI} !(?:^|/)(?:wp-(?:admin|login|register|comments-post|cron|json)|login|wc-api|cart|gio-hang|checkout|thanh-toan|account|my-account|tai-khoan|feed)(?:/|$) [NC]
+RewriteCond %{HTTP_USER_AGENT} !(?:WPTangToc-Preload|WPTangToc-Relay) [NC]
+RewriteCond %{HTTP:X-WPTangToc-Preload} ^$ [NC]
+RewriteCond %{QUERY_STRING} ^(?:|(?:age-verified|ao_noptimize|usqp|cn-reloaded|sscid|ef_id|s_kwcid|_bta_tid|_bta_c|dm_i|fb_action_ids|fb_action_types|fb_source|fbclid|utm_[a-z0-9_]+|_ga|_gid|_gl|gclid|gad_[a-z0-9_]+|gbraid|wbraid|ttclid|twclid|campaignid|adgroupid|adid|gclsrc|gdfms|gdftrk|gdffi|_ke|trk_[a-z0-9_]+|mc_[a-z]+|mkwid|pcrid|mtm_[a-z0-9_]+|msclkid|epik|pp|pk_[a-z0-9_]+|redirect_log_mongo_id|redirect_mongo_id|sb_referer_host|ref|zarsrc|srsltid)=[^&]*(?:&|$))*$ [NC]
+RewriteCond %{HTTP:Cookie} !(?:wordpress_logged_in_|wp-postpass_|comment_author_|wordpress_no_cache|woocommerce_items_in_cart|edd_items_in_cart|fp_logged_in_roles|wptt_logged_in_roles|aelia_cs_selected_currency|wmc_current_currency) [NC]
+RewriteCond $doc_root/wp-content/cache/wptangtoc/%{HTTP_HOST}/\$1/index.html.gz -f
+RewriteRule ^(.*?)/?$ /wp-content/cache/wptangtoc/%{HTTP_HOST}/\$1/index.html.gz [L]
 </IfModule>
 #end-cache-wptangtoc
 EOF
@@ -421,6 +370,15 @@ EOF
   /bin/mv -T -- "$htaccess_new" "$htaccess_file"
 else
   /bin/mv -T -- "$htaccess_tmp" "$htaccess_file"
+fi
+
+# Dọn dẹp các file index*.html thô cũ, file .tmp mồ côi và thư mục lặp tên miền (nếu có)
+cache_domain_dir="$doc_root/wp-content/cache/wptangtoc"
+if [[ -d "$cache_domain_dir" ]]; then
+  /usr/bin/find "$cache_domain_dir" -type f \( -name 'index*.html' -o -name '*.html.gz.tmp.*' \) -delete 2>/dev/null || true
+  if [[ -d "$cache_domain_dir/$NAME/$NAME" ]]; then
+    /bin/rm -rf -- "$cache_domain_dir/$NAME/$NAME" 2>/dev/null || true
+  fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -450,5 +408,5 @@ fi
 if declare -F _rundone >/dev/null 2>&1; then
   _rundone "$task_msg"
 else
-  printf 'Kích hoạt hoàn tất page cache html cho %s\n' "$NAME"
+  printf 'Kích hoạt hoàn tất page cache Pure .html.gz cho %s\n' "$NAME"
 fi
