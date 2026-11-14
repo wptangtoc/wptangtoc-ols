@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.4.0.9
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến tính năng xóa cache:** Tối ưu hóa cơ chế và tốc độ xử lý khi xóa bộ nhớ đệm (cache), giúp làm sạch dữ liệu nhanh chóng, giải phóng tài nguyên hiệu quả và đảm bảo website luôn hiển thị nội dung mới nhất cho người dùng.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.8
 
 🛠️ **Tối ưu hệ thống**
