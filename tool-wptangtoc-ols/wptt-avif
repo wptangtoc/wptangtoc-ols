@@ -1,82 +1,337 @@
 #!/bin/bash
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Thiết lập phân phối ảnh AVIF tự động ở tầng Native OpenLiteSpeed Vhost (Idempotent & Atomic)
 
-. /etc/wptt/echo-color
+function huong_dan() {
+  cat << 'EOF'
+  Tính năng Thiết lập phân phối ảnh AVIF tự động (Native OpenLiteSpeed Rewrite):
+  * Tự động kiểm tra trình duyệt của khách truy cập có hỗ trợ định dạng ảnh AVIF hay không (qua Header Accept).
+  * Nếu trình duyệt hỗ trợ và trên máy chủ đã có sẵn bản nén .avif (hỗ trợ cả 2 chuẩn đặt tên:
+    ten-anh.jpg.avif và ten-anh.avif), OpenLiteSpeed sẽ tự động trả về file ảnh AVIF siêu nhẹ
+    mà không cần đổi URL ảnh trong bài viết.
+  * Tự động gắn Header "Vary: Accept" chuẩn xác để tương thích 100% với Cloudflare và CDN.
+EOF
+}
+
+# Nạp thư viện lõi và ngôn ngữ
 . /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
-NAME=$1
-if [[ $NAME = "98" ]];then
-NAME=""
+# Quản lý dọn dẹp file tạm an toàn (Zero-leftover)
+tmp_dir=""
+_wptt_avif_cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${tmp_dir:-}" && -d "$tmp_dir" ]]; then
+    case "$tmp_dir" in
+      /etc/wptt/tmp/wptt_avif_?*) /bin/rm -rf -- "${tmp_dir:?}" 2>/dev/null || true ;;
+    esac
+  fi
+  exit "$rc"
+}
+trap _wptt_avif_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+# ==============================================================================
+# 1. ĐẢM BẢO OPENLITESPEED HỖ TRỢ MIME-TYPE image/avif (IDEMPOTENT)
+# ==============================================================================
+_wptt_ensure_avif_mime() {
+  local mime_file="/usr/local/lsws/conf/mime.properties"
+  [[ -f "$mime_file" ]] || return 0
+
+  if ! grep -qE '^[[:space:]]*avif[[:space:]]*=' "$mime_file" 2>/dev/null; then
+    local stage_mime="/usr/local/lsws/conf/.mime.properties.wptt_${BASHPID:-$$}"
+    if /bin/cp -fp -- "$mime_file" "$stage_mime" 2>/dev/null; then
+      printf '\navif = image/avif\n' >> "$stage_mime"
+      /bin/mv -fT -- "$stage_mime" "$mime_file" 2>/dev/null || /bin/rm -f -- "$stage_mime" 2>/dev/null
+      return 0
+    fi
+  fi
+  return 0
+}
+
+# ==============================================================================
+# 2. HÀM CẤU HÌNH PHÂN PHỐI AVIF CHO 1 DOMAIN (ATOMIC & IDEMPOTENT)
+# ==============================================================================
+# Mã trả về:
+#   0 : Đã kích hoạt mới hoặc cập nhật lại cấu hình AVIF thành công
+#   2 : Đã được cấu hình chuẩn từ trước (Idempotent No-op, không cần reload OLS)
+#   1 : Lỗi cấu hình hoặc thiếu file Vhost
+_wptt_enable_avif_domain() {
+  local dom="$1"
+  local vhost_dir="/usr/local/lsws/conf/vhosts/$dom"
+  local vhost_conf="$vhost_dir/$dom.conf"
+  local uploads_dir="/usr/local/lsws/$dom/html/wp-content/uploads"
+
+  # Kiểm tra tính hợp lệ của tên miền (chống Path Traversal / Injection)
+  if [[ -z "$dom" || ! "$dom" =~ ^[a-zA-Z0-9._-]+$ || "$dom" == -* || "$dom" == *..* ]]; then
+    return 1
+  fi
+  [[ -f "$vhost_conf" ]] || return 1
+
+  # Đảm bảo thư mục uploads tồn tại và chuẩn quyền
+  if [[ ! -d "$uploads_dir" ]]; then
+    wptt_load_vhost_conf "$dom" 2>/dev/null || true
+    /bin/mkdir -p "$uploads_dir" 2>/dev/null || true
+    if [[ -n "${User_name_vhost:-}" ]]; then
+      /bin/chown "$User_name_vhost:$User_name_vhost" "$uploads_dir" 2>/dev/null || true
+    fi
+  fi
+
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || true
+  if [[ -z "${tmp_dir:-}" || ! -d "$tmp_dir" ]]; then
+    tmp_dir="$(mktemp -d -p /etc/wptt/tmp "wptt_avif_XXXXXX" 2>/dev/null || true)"
+  fi
+  [[ -n "$tmp_dir" && -d "$tmp_dir" ]] || return 1
+
+  local candidate_conf="$tmp_dir/${dom}.conf"
+  local atomic_stage="$vhost_dir/.${dom}.conf.wptt_avif_${BASHPID:-$$}"
+
+  # Dùng AWK để xử lý Lũy đẳng (Idempotent):
+  # 1. Xóa sạch khối WPTT_AVIF_DELIVERY cũ (nếu có) VÀ dọn luôn khối context /wp-content/uploads/
+  #    bị lỗi cú pháp do phiên bản cũ tạo ra (có chứa chuỗi <IfModule mod_rewrite.c> và image/avif).
+  # 2. Sinh khối context /wp-content/uploads/ chuẩn Native OpenLiteSpeed ở cuối file.
+  if ! awk -v dom="$dom" '
+    BEGIN {
+      skip_marker = 0
+      in_legacy_ctx = 0
+      legacy_buf = ""
+      hrs_open = "\074\074\074END_extraHeaders"
+      rules_open = "\074\074\074END_rules"
+    }
+
+    # Bỏ qua vùng cấu hình AVIF đã được quản lý bởi marker
+    /^# BEGIN WPTT_AVIF_DELIVERY$/ { skip_marker = 1; next }
+    /^# END WPTT_AVIF_DELIVERY$/   { skip_marker = 0; next }
+    skip_marker { next }
+
+    # Phát hiện và tự động dọn dẹp khối context /wp-content/uploads/ cũ chưa có marker
+    !in_legacy_ctx && /^[ \t]*context[ \t]+\/wp-content\/uploads\/?[ \t]*\{[ \t]*$/ {
+      in_legacy_ctx = 1
+      legacy_depth = 1
+      legacy_buf = $0 "\n"
+      next
+    }
+    in_legacy_ctx {
+      legacy_buf = legacy_buf $0 "\n"
+      line_tmp = $0
+      gsub(/[^{]/, "", line_tmp); open_cnt = length(line_tmp)
+      line_tmp = $0
+      gsub(/[^}]/, "", line_tmp); close_cnt = length(line_tmp)
+      legacy_depth += (open_cnt - close_cnt)
+
+      if (legacy_depth <= 0) {
+        in_legacy_ctx = 0
+        # Nếu khối context này là khối AVIF cũ (chứa image/avif), ta bỏ qua để thay bằng bản chuẩn mới
+        if (index(legacy_buf, "image/avif") > 0) {
+          legacy_buf = ""
+          next
+        }
+        # Nếu là context /wp-content/uploads/ của tính năng khác, giữ nguyên
+        printf "%s", legacy_buf
+        legacy_buf = ""
+      }
+      next
+    }
+
+    { lines[++n] = $0 }
+
+    END {
+      while (n > 0 && lines[n] ~ /^[ \t]*$/) n--
+      for (i = 1; i <= n; i++) print lines[i]
+
+      print ""
+      print "# BEGIN WPTT_AVIF_DELIVERY"
+      print "context /wp-content/uploads/ {"
+      print "  location                /usr/local/lsws/" dom "/html/wp-content/uploads/"
+      print "  allowBrowse             1"
+      print "  addDefaultCharset       off"
+      print "  extraHeaders            " hrs_open
+      print "Vary: Accept"
+      print "  END_extraHeaders"
+      print "  rewrite  {"
+      print "    enable                1"
+      print "    inherit               1"
+      print "    rules                 " rules_open
+      print "# 1. Hỗ trợ chuẩn nối đuôi: image.jpg.avif (LiteSpeed Cache, ShortPixel, Converter for Media...)"
+      print "RewriteCond %{HTTP_ACCEPT} image/avif"
+      print "RewriteCond %{REQUEST_FILENAME} (?i)\\.(jpe?g|png|webp)$"
+      print "RewriteCond %{REQUEST_FILENAME}.avif -f"
+      print "RewriteRule ^(.*)\\.(jpe?g|png|webp)$ /wp-content/uploads/$1.$2.avif [T=image/avif,E=EXISTING:1,L]"
+      print ""
+      print "# 2. Hỗ trợ chuẩn thay đuôi: image.avif (Imagify, CLI convert...)"
+      print "RewriteCond %{HTTP_ACCEPT} image/avif"
+      print "RewriteCond %{REQUEST_FILENAME} (?i)^(.*)\\.(jpe?g|png|webp)$"
+      print "RewriteCond %1.avif -f"
+      print "RewriteRule ^(.*)\\.(jpe?g|png|webp)$ /wp-content/uploads/$1.avif [T=image/avif,E=EXISTING:1,L]"
+      print "    END_rules"
+      print "  }"
+      print "}"
+      print "# END WPTT_AVIF_DELIVERY"
+    }
+  ' "$vhost_conf" > "$candidate_conf" 2>/dev/null; then
+    return 1
+  fi
+
+  [[ -s "$candidate_conf" ]] || return 1
+
+  # Kiểm tra Lũy đẳng: Nếu nội dung file mới giống hệt file Vhost hiện tại -> Báo đã kích hoạt sẵn (Mã 2)
+  if cmp -s "$vhost_conf" "$candidate_conf" 2>/dev/null; then
+    return 2
+  fi
+
+  # Xác định group chuẩn của OpenLiteSpeed theo hệ điều hành (Ubuntu/Debian dùng nogroup, RHEL dùng nobody)
+  local ls_group="nobody"
+  if grep -qiE 'ubuntu|debian' /etc/os-release 2>/dev/null; then
+    ls_group="nogroup"
+  fi
+
+  # Backup bản cũ và thực hiện Atomic Swap (mv -fT) trên cùng filesystem
+  /bin/cp -fp -- "$vhost_conf" "${vhost_conf}.wptt_avif.bak" 2>/dev/null || true
+  if ! /bin/cp -fp -- "$candidate_conf" "$atomic_stage" 2>/dev/null; then
+    /bin/rm -f -- "$atomic_stage" 2>/dev/null || true
+    return 1
+  fi
+
+  /bin/chown "lsadm:${ls_group}" "$atomic_stage" 2>/dev/null || true
+  /bin/chmod 0750 "$atomic_stage" 2>/dev/null || true
+  if command -v restorecon >/dev/null 2>/dev/null; then
+    restorecon -F "$atomic_stage" >/dev/null 2>&1 || true
+  fi
+
+  if ! /bin/mv -fT -- "$atomic_stage" "$vhost_conf" 2>/dev/null; then
+    /bin/rm -f -- "$atomic_stage" 2>/dev/null || true
+    return 1
+  fi
+
+  /bin/chown -hR "lsadm:${ls_group}" "$vhost_dir" 2>/dev/null || true
+  /bin/chmod 0750 "$vhost_dir" "$vhost_conf" 2>/dev/null || true
+  return 0
+}
+
+# ==============================================================================
+# 3. LUỒNG ĐIỀU KHIỂN & GIAO DIỆN NGƯỜI DÙNG
+# ==============================================================================
+NAME="${1:-}"
+if [[ "$NAME" == "98" ]]; then
+  NAME=""
 fi
 
 if [[ -z "$NAME" ]]; then
+  clear
+  echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}TỐI ƯU HÌNH ẢNH ➜ THIẾT LẬP PHÂN PHỐI ẢNH AVIF${C_RESET}"
+  echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  if [[ -f /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress ]]; then
+    . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
+  else
     . /etc/wptt/tenmien
-    echo ""
-    echo ""
-	echo "Lựa chọn website muốn chuyển phân phối ảnh avif:"
-    echo ""
-    lua_chon_NAME
+  fi
+  lua_chon_NAME "Thiết lập phân phối ảnh AVIF"
 fi
 
-if [[ $NAME = "0" || -z "$NAME" ]];then
-exit
+if [[ "$NAME" == "0" || -z "$NAME" ]]; then
+  if declare -F wptt_quay_ve_menu >/dev/null 2>&1; then
+    wptt_quay_ve_menu "${1:-}" 1
+  fi
+  exit 0
 fi
 
+# Đảm bảo MIME-type image/avif đã có trên máy chủ
+_wptt_ensure_avif_mime
+
+# --- Trường hợp 1: Chạy hàng loạt cho Tất cả website WordPress ---
+if [[ "$NAME" == "Tất cả website" ]]; then
+  wp_domains=()
+  for filepath in /etc/wptt/vhost/.*.conf; do
+    [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+    dom="${filepath##*/}"
+    dom="${dom%.conf}"
+    dom="${dom#.}"
+    if [[ "$dom" == ?*.?* && -f "/usr/local/lsws/$dom/html/wp-load.php" ]]; then
+      wp_domains+=("$dom")
+    fi
+  done
+
+  tong_so_web="${#wp_domains[@]}"
+  if ((tong_so_web == 0)); then
+    echoDo "Hệ thống hiện không có website WordPress nào để thiết lập AVIF!"
+    wptt_quay_ve_menu "${1:-}" 1 "enter"
+  fi
+
+  mapfile -t wp_domains < <(printf "%s\n" "${wp_domains[@]}" | sort -uV)
+  tong_so_web="${#wp_domains[@]}"
+
+  print_border_top
+  center_text "${C_YELLOW}THIẾT LẬP PHÂN PHỐI ẢNH AVIF HÀNG LOẠT${C_RESET}"
+  print_border_mid
+  left_text "▪ Tổng số   : ${C_GREEN}$tong_so_web website WordPress${C_RESET}" 2
+  left_text "▪ Nhiệm vụ  : ${C_GREEN}Kích hoạt phân phối ảnh AVIF (Native OLS)${C_RESET}" 2
+  print_border_bot
+
+  any_modified=0
+  tien_do=1
+  for dom in "${wp_domains[@]}"; do
+    TASK_BATCH="[ $tien_do / $tong_so_web ] Thiết lập phân phối ảnh AVIF"
+    _runing "$TASK_BATCH" "$dom"
+    _wptt_enable_avif_domain "$dom"
+    rc=$?
+    if ((rc == 0)); then
+      any_modified=1
+      _rundone "$TASK_BATCH" "$dom"
+    elif ((rc == 2)); then
+      _rundone "$TASK_BATCH" "$dom (Đã bật sẵn)"
+    else
+      _runloi "$TASK_BATCH" "$dom"
+    fi
+    ((tien_do++))
+  done
+
+  if ((any_modified == 1)); then
+    wptt_smart_reload_lsws >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+  fi
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Thiết lập phân phối ảnh AVIF cho toàn bộ website"
+  wptt_quay_ve_menu "${1:-}" 0 "enter"
+fi
+
+# --- Trường hợp 2: Chạy cho 1 Website cụ thể ---
 path="/etc/wptt/vhost/.$NAME.conf"
 if [[ ! -f "$path" ]]; then
-    clear
-    echoDo "Domain khong ton tai tren VPS."
-    exit
+  clear
+  echoDo "${ten_mien_nay_khong_ton_tai_tren_he_thong:-Tên miền này không tồn tại trên hệ thống!}"
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
-
 
 pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
 if [[ ! -f "$pathcheckwp" ]]; then
   clear
-  echoDo "He thong xac nhan ban chua kich hoat su dung WordPress"
-  sleep 3
-  exit
+  echoDo "${he_thong_xac_nhan_ban_khong_su_ma_nguon:-Hệ thống xác nhận website này không sử dụng mã nguồn WordPress!}"
+  sleep 2
+  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-check_webp=$(cat /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf | grep 'avif')
+TASK_SINGLE="Thiết lập phân phối ảnh AVIF"
+_runing "$TASK_SINGLE" "$NAME"
 
-if [[ $check_webp ]];then
-echo 'trước đó đã kích hoạt phân phối avif'
-exit
-fi
+_wptt_enable_avif_domain "$NAME"
+rc=$?
 
-_runing "thiết lập phân phối ảnh avif"
-echo "
-context /wp-content/uploads/ {
-  location                /usr/local/lsws/$NAME/html/wp-content/uploads/
-  allowBrowse             1
-
-  rewrite  {
-    enable                1
-    inherit               1
-<IfModule mod_rewrite.c>
-  RewriteEngine On
-  RewriteCond %{HTTP_ACCEPT} image/avif
-  RewriteCond %{REQUEST_FILENAME} (?i)(.*)(\.jpe?g|\.png|\.webp)$
-  RewriteCond %1\.avif -f
-  RewriteRule (?i)(.*)(\.jpe?g|\.png|\.webp)$ %1\.avif [T=image/avif,E=EXISTING:1,L]
-</IfModule>
-  }
-  addDefaultCharset       off
-
-  phpIniOverride  {
-
-  }
-}
-" >> /usr/local/lsws/conf/vhosts/"$NAME"/"$NAME".conf
-
-if grep -q -i "ubuntu" /etc/os-release 2>/dev/null; then
-	tuong_thich_nhom_litespeed="nogroup"
+if ((rc == 0)); then
+  wptt_smart_reload_lsws >/dev/null 2>&1 || /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1 || true
+  _rundone "$TASK_SINGLE" "$NAME"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Đã kích hoạt phân phối ảnh AVIF cho $NAME"
+elif ((rc == 2)); then
+  _rundone "$TASK_SINGLE" "$NAME (Đã kích hoạt chuẩn từ trước)"
+  echoXanhLa "\n  ℹ Website $NAME đã được thiết lập phân phối ảnh AVIF chuẩn xác trước đó (Không cần ghi lại Vhost)."
 else
-	tuong_thich_nhom_litespeed="nobody"
+  _runloi "$TASK_SINGLE" "$NAME"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Lỗi khi thiết lập phân phối ảnh AVIF cho $NAME"
 fi
 
-chown -hR lsadm:"$tuong_thich_nhom_litespeed" /usr/local/lsws/conf/vhosts/"$NAME"
-chmod -R 750 /usr/local/lsws/conf/vhosts/"$NAME"
-wptt_smart_reload_lsws >/dev/null 2>&1
-_rundone "thiết lập phân phối ảnh avif"
-
+wptt_quay_ve_menu "${1:-}" 0 "enter"
