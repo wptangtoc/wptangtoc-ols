@@ -202,7 +202,27 @@ Tóm lại: WPTangToc OLS tích hợp tính năng hạ cấp plugin giúp bạn 
 - **Tệp nguồn:** `/etc/wptt/wordpress/kiem-tra-version-wp`
 
 ```text
-Kiểm tra phiên bản php mã nguồn Core WordPress
+🔍 TÍNH NĂNG: KIỂM TRA PHIÊN BẢN WORDPRESS (CORE, PLUGINS, THEMES)
+Thay vì phải đăng nhập vào trang quản trị (wp-admin) rườm rà và chờ đợi 
+tải trang, công cụ này sẽ giao tiếp trực tiếp với hệ sinh thái WordPress 
+thông qua WP-CLI để xuất báo cáo toàn diện chỉ trong vài giây.
+
+🚀 NHỮNG GÌ CÔNG CỤ NÀY SẼ BÁO CÁO?
+ ➜ WordPress Core: Kiểm tra chính xác phiên bản mã nguồn nền tảng.
+ ➜ Danh sách Plugins: Liệt kê toàn bộ Plugin đang có trên website, hiển thị 
+    rõ phiên bản đang dùng và BÁO CÁO PHIÊN BẢN MỚI (nếu có bản cập nhật).
+ ➜ Danh sách Themes: Hiển thị chi tiết các giao diện (Themes) đang cài đặt 
+    và tình trạng cập nhật của chúng.
+
+🛡️ TẠI SAO TÍNH NĂNG NÀY RẤT QUAN TRỌNG?
+ - Rà soát bảo mật: Plugin/Theme cũ, không được cập nhật là nguyên nhân 
+   số 1 (chiếm 90%) khiến website bị dính mã độc. Bảng báo cáo này giúp 
+   bạn "nhìn thấu" ngay lập tức thành phần nào đang lỗi thời.
+ - Siêu tốc & Tiện lợi: Chạy hoàn toàn dưới nền dòng lệnh, không tiêu tốn 
+   tài nguyên Web Server. Giúp bạn kiểm tra nhanh trước khi quyết định 
+   có nên bấm nút "Cập nhật tất cả" hay không.
+ - Chuẩn quyền (Isolated): Tự động nhận diện phiên bản PHP riêng biệt của 
+   từng website để thực thi lệnh an toàn.
 ```
 
 ---
@@ -234,9 +254,32 @@ Tóm lại: Tính năng quản lý cập nhật của WordPress là một công 
 - **Tệp nguồn:** `/etc/wptt/wordpress/thay-url-option`
 
 ```text
-Cập nhật Url home và siteurl cho mã nguồn Wordpress
-tính năng này rất hữu ích: một số anh em giả lập localhost không thay đổi url lại.
-tính năng này sẽ giúp update cập nhật lại home url và siteurl
+🌐 TÍNH NĂNG: CẬP NHẬT HOME URL & SITE URL CHO WORDPRESS
+Trong WordPress, "Home URL" (địa chỉ trang chủ) và "Site URL" (địa chỉ 
+cài đặt mã nguồn) là hai thông số sống còn quyết định việc website có 
+hiển thị đúng giao diện và truy cập được hay không. 
+
+Tính năng này giúp bạn tự động chuẩn hóa và cập nhật lại chính xác 
+địa chỉ tên miền vào cơ sở dữ liệu của WordPress chỉ trong 1 giây.
+
+🚀 KHI NÀO BẠN CẦN DÙNG TÍNH NĂNG NÀY?
+ ➜ Clone/Chuyển nhà website: Khi bạn chuyển dữ liệu từ Localhost 
+    (máy tính cá nhân) lên Server thực tế, hoặc nhân bản từ tên miền cũ 
+    sang tên miền mới, bạn bắt buộc phải cập nhật lại URL để web không 
+    bị vỡ giao diện hoặc chuyển hướng (redirect) nhầm về web cũ.
+ ➜ Lỗi "Too many redirects": Khi website bị lỗi vòng lặp chuyển hướng, 
+    thường do thiết lập sai URL trong database. Công cụ này sẽ "nắn" lại.
+ ➜ Kích hoạt SSL (HTTPS): Sau khi cài chứng chỉ SSL, bạn cần đổi 
+    toàn bộ URL từ HTTP sang HTTPS để có ổ khóa xanh.
+
+🧠 SỰ THÔNG MINH CỦA CÔNG CỤ (SMART DETECTION):
+ - Tự động nhận diện HTTPS: Hệ thống tự kiểm tra xem chứng chỉ SSL 
+   (Let's Encrypt, ZeroSSL...) của bạn còn hạn không, nếu có sẽ tự 
+   động thiết lập URL là `https://`, ngược lại dùng `http://`.
+ - Giữ nguyên cấu trúc WWW: Nếu website cũ đang chạy `www.domain.com`, 
+   hệ thống sẽ tôn trọng tùy chọn này và cập nhật URL có chứa `www`.
+ - Tự động xóa Object Cache ngay sau khi cập nhật (Valkey/Redis) để 
+   thay đổi có hiệu lực ngay lập tức.
 ```
 
 ---
@@ -493,10 +536,28 @@ Mục đích chính:
 - **Tệp nguồn:** `/etc/wptt/wordpress/query-truyvan`
 
 ```text
-Tính năng giúp thay thế dữ liệu cũ và cập nhật dữ liệu mới.
-tính năng này hữu ích: ví dụ website bạn muốn cập nhất số điện thoại thay vì bạn phải vào từng bài viết để cập nhật thì sẽ rất tốn thời gian đặc biệt trường hợp bạn có rất nhiều bài thì cácách vào từng bài cập nhật là điều không thể.
-Tính năng này rất hữu ích: bạn cập nhật dữ liệu cũ ví dụ là số điện thoại cũ và rồi nhập số điện thoại mới dữ liệu mới.
-phần mềm sẽ thay thế cơ sở dữ liệu trong database
+💡 TÍNH NĂNG: TRUY VẤN VÀ THAY THẾ DỮ LIỆU HÀNG LOẠT (SEARCH & REPLACE)
+Đây là công cụ cực kỳ mạnh mẽ giúp bạn tự động tìm kiếm và thay thế dữ
+liệu trực tiếp bên trong cơ sở dữ liệu (Database) của WordPress.
+
+🎯 TẠI SAO TÍNH NĂNG NÀY LẠI ĐÁNG GIÁ?
+Hãy tưởng tượng bạn cần đổi một số điện thoại, email hay tên thương hiệu 
+đang nằm rải rác ở hàng trăm, hàng ngàn bài viết và trang sản phẩm. 
+Việc mở từng bài ra để sửa thủ công là "nhiệm vụ bất khả thi" và rất dễ 
+sai sót. Công cụ này sẽ thay bạn làm điều đó chỉ trong vài giây, quét 
+sâu vào database và thay thế chính xác tuyệt đối.
+
+🚀 CÁC ỨNG DỤNG THỰC TẾ TUYỆT VỜI:
+ ➜ Đổi thông tin liên hệ: Thay số điện thoại, email, địa chỉ cũ thành mới.
+ ➜ Cập nhật thương hiệu: Đổi tên công ty, tên sản phẩm trên toàn bộ web.
+ ➜ Đổi tên miền: Chuyển toàn bộ link từ domain cũ sang domain mới, 
+    hoặc cập nhật hàng loạt link từ http sang https.
+ ➜ Sửa lỗi chính tả hàng loạt hoặc thay thế mã shortcode cũ.
+
+🛡️ AN TOÀN TUYỆT ĐỐI (DRY RUN):
+Hệ thống được thiết kế thông minh: luôn quét và "Chạy thử" trước để báo 
+cáo có bao nhiêu kết quả được tìm thấy. Chỉ khi bạn xác nhận "Đồng ý", 
+dữ liệu mới thực sự được thay thế. Không lo thao tác nhầm!
 ```
 
 ---
@@ -539,9 +600,80 @@ Tính năng xóa transient trong WordPress là một công cụ hữu ích để
 - **Tệp nguồn:** `/etc/wptt/wordpress/thay-doi-tien-to`
 
 ```text
-Đây là tính năng thay đổi tiền tố database
-mặc định WordPress sử dụng tiền tố wp_
-tính năng này sẽ thay đổi tiền tố đó sẽ giúp nâng cao bảo mật cho WordPress hơn
+THAY ĐỔI TIỀN TỐ DATABASE WORDPRESS (DATABASE PREFIX)
+
+WordPress mặc định sử dụng tiền tố bảng Database là wp_.
+Tính năng này cho phép tự động thay đổi tiền tố mặc định thành
+một chuỗi ngẫu nhiên riêng biệt, giúp tăng cường bảo mật cho website.
+
+Việc thay đổi tiền tố giúp giảm khả năng các công cụ khai thác tự động
+dựa trên cấu trúc Database mặc định của WordPress.
+
+TÍNH NĂNG NỔI BẬT:
+* Tự động tạo tiền tố ngẫu nhiên:
+  Hệ thống sinh tiền tố mới gồm các ký tự chữ thường và số,
+  hạn chế sử dụng tiền tố mặc định wp_.
+
+* Tự động đổi tên bảng Database:
+  Chuyển đổi các bảng WordPress từ tiền tố cũ sang tiền tố mới
+  mà không cần thao tác thủ công trên MariaDB/MySQL.
+
+* Cập nhật dữ liệu WordPress:
+  Tự động điều chỉnh các khóa option_name và meta_key liên quan
+  đến tiền tố cũ trong các bảng Options và Usermeta.
+
+* Cập nhật cấu hình WordPress:
+  Tự động sửa biến $table_prefix trong wp-config.php
+  để WordPress tiếp tục nhận diện đúng các bảng Database.
+
+* Tự động làm sạch Cache:
+  Hỗ trợ xóa OPcache, Object Cache
+  nhằm hạn chế sử dụng dữ liệu cấu hình cũ sau khi thay đổi.
+
+* Xác thực kết quả:
+  Hệ thống kiểm tra lại tiền tố Database sau khi thực hiện,
+  giúp phát hiện trường hợp thay đổi chưa thành công.
+
+* Bảo vệ cấu hình:
+  Kiểm tra wp-config.php có phải Symlink hay không
+  để hạn chế nguy cơ ghi đè tệp tin ngoài ý muốn.
+
+LỢI ÍCH KHI SỬ DỤNG:
+* Hạn chế việc sử dụng tiền tố Database mặc định wp_.
+* Giảm khả năng bị khai thác bởi các công cụ tấn công tự động
+  nhắm vào cấu trúc Database WordPress phổ biến.
+* Tăng tính riêng biệt trong cấu trúc Database của từng website.
+* Tự động hóa quá trình thay đổi tiền tố, giảm thao tác thủ công.
+* Hạn chế lỗi cấu hình nhờ tự động cập nhật wp-config.php.
+* Phù hợp với website WordPress đơn lẻ cần tăng cường bảo mật.
+
+CÁCH SỬ DỤNG:
+1. Chọn website WordPress cần thay đổi tiền tố Database.
+2. Hệ thống kiểm tra website và cấu hình PHP hiện tại.
+3. Kiểm tra tiền tố Database đang sử dụng.
+4. Xác nhận thay đổi tiền tố cũ sang tiền tố ngẫu nhiên mới.
+5. Chờ hệ thống đổi tên bảng, cập nhật cấu hình và làm sạch Cache.
+6. Kiểm tra lại website sau khi hoàn tất.
+
+⚠️ LƯU Ý QUAN TRỌNG
+* BẮT BUỘC sao lưu Database và mã nguồn trước khi thực hiện.
+* Không nên thực hiện trên website đang có lưu lượng truy cập cao
+  nếu chưa có kế hoạch bảo trì phù hợp.
+* Nếu quá trình đổi tên bảng hoặc cập nhật cấu hình bị gián đoạn,
+  website có thể gặp lỗi kết nối Database hoặc lỗi hiển thị.
+* Hãy kiểm tra website sau khi hoàn tất, bao gồm trang chủ,
+  trang quản trị WordPress, bài viết và các Plugin quan trọng.
+* Tính năng hiện không hỗ trợ WordPress Multisite.
+* Tính năng sẽ từ chối thực hiện nếu phát hiện wp-config.php là Symlink.
+* Việc thay đổi tiền tố Database KHÔNG thay thế các biện pháp bảo mật
+  quan trọng như cập nhật WordPress, Plugin, Theme và sử dụng mật khẩu mạnh.
+* Tiền tố Database không phải cơ chế bảo mật tuyệt đối.
+  Đây chỉ là một lớp tăng cường bảo mật bổ sung.
+
+Khuyến nghị:
+Hãy sao lưu đầy đủ trước khi thay đổi tiền tố Database.
+Chỉ thực hiện khi bạn hiểu rõ thao tác và có khả năng khôi phục
+website nếu xảy ra sự cố.
 ```
 
 ---
@@ -553,7 +685,27 @@ tính năng này sẽ thay đổi tiền tố đó sẽ giúp nâng cao bảo m�
 - **Tệp nguồn:** `/etc/wptt/wordpress/unix-stocket-wpconfig`
 
 ```text
-Thiết lập kết nối unix socket cho mã nguồn WordPress
+⚡ TÍNH NĂNG: TỐI ƯU KẾT NỐI DATABASE BẰNG UNIX SOCKET
+Mặc định, WordPress kết nối với cơ sở dữ liệu (MariaDB/MySQL) thông qua
+giao thức mạng TCP/IP (localhost hoặc 127.0.0.1). Dù nằm trên cùng một 
+máy chủ, dữ liệu vẫn phải "đi vòng" qua nhiều lớp xử lý mạng, gây lãng 
+phí tài nguyên và độ trễ.
+
+Tính năng này sẽ cấu hình lại wp-config.php để WordPress giao tiếp 
+trực tiếp với MariaDB thông qua Unix Socket (kết nối nội bộ qua file).
+
+🚀 TẠI SAO BẠN NÊN DÙNG TÍNH NĂNG NÀY?
+ ➜ Giảm độ trễ (Latency): Bỏ qua toàn bộ overhead của TCP/IP, giúp các 
+    truy vấn database phản hồi gần như tức thì.
+ ➜ Tiết kiệm CPU: Giảm tải đáng kể cho máy chủ khi phải xử lý hàng nghìn 
+    truy vấn cùng lúc (rất tốt cho WooCommerce, website tin tức lớn).
+ ➜ Bảo mật hơn: Giới hạn kết nối hoàn toàn ở cấp độ hệ điều hành.
+
+⚙️ TÍNH NĂNG NÀY HOẠT ĐỘNG RA SAO?
+ - Tự động dò tìm chính xác file Socket (hỗ trợ cả Ubuntu & AlmaLinux).
+ - Hỗ trợ thao tác 1 click cho "Tất cả website" đang chạy trên hệ thống.
+ - Xử lý thông minh: Tự động tương thích và mở khóa/khóa file an toàn 
+   nếu website của bạn đang được bật chế độ khóa bảo vệ (chattr).
 ```
 
 ---
@@ -783,7 +935,127 @@ Tính năng xem danh sách toàn bộ domain và kiểm toán nhanh cấu hình 
 - **Tệp nguồn:** `/etc/wptt/domain/wptt-alias-domain`
 
 ```text
-Alias domain [hay còn gọi là Parked Domain, Tên miền bí danh] là một tên miền bổ sung được sử dụng để trỏ về một tên miền chính [domain chính]. Khi người dùng truy cập vào Parked domain, họ sẽ tự động được chuyển hướng đến tên miền chính. Nói một cách đơn giản: Tên miền chính: Giống như địa chỉ nhà chính của bạn.
+THIẾT LẬP PARKED DOMAIN / ALIAS DOMAIN (TÊN MIỀN BÍ DANH)
+
+Alias Domain (Parked Domain) là tên miền phụ được gán vào một
+website đã tồn tại trên hệ thống. Nhiều tên miền có thể cùng
+truy cập một website và sử dụng chung mã nguồn, dữ liệu,
+Database WordPress của tên miền chính.
+
+Ví dụ:
+➜ Website gốc : wptangtoc.com
+➜ Alias Domain: wptangtoc.vn
+➜ Alias Domain: wptangtoc.net
+➜ Alias Domain: 123.wptangtoc.com
+
+Khi thiết lập thành công, cả 4 tên miền đều truy cập vào cùng
+một website WordPress của wptangtoc.com.
+
+1. CHỨC NĂNG CỦA ALIAS DOMAIN
+➜ Gán thêm tên miền vào một website WordPress đang hoạt động.
+➜ Sử dụng chung Document Root, mã nguồn và Database của website gốc.
+➜ Quản lý nhiều tên miền trên cùng một Virtual Host OpenLiteSpeed.
+➜ Tự động cập nhật cấu hình vhAliases của Virtual Host.
+➜ Tự động đồng bộ Domain Mapping trên Listener HTTP và HTTPS.
+➜ Hỗ trợ kiểm tra xung đột tên miền Alias trên toàn bộ Server.
+➜ Hỗ trợ cấp mới hoặc mở rộng chứng chỉ SSL Let's Encrypt.
+➜ Tự động phát hiện DNS IPv4, IPv6 và tên miền www.
+➜ Giữ lại danh sách Alias cũ khi bổ sung tên miền mới.
+➜ Tự động loại bỏ Alias trùng lặp trong cấu hình.
+
+2. CHUẨN BỊ DNS TRƯỚC KHI THIẾT LẬP
+Trước khi thêm Alias Domain, hãy đăng nhập trang quản lý DNS
+của nhà cung cấp tên miền và cấu hình bản ghi trỏ về VPS.
+
+Ví dụ với Alias Domain: wptangtoc.vn
+
+Bản ghi A:
+➜ Host: @
+➜ Value: IP IPv4 của VPS
+
+Bản ghi A cho www (nếu muốn sử dụng):
+➜ Host: www
+➜ Value: IP IPv4 của VPS
+
+LƯU Ý:
+➜ DNS cần được cập nhật và phân giải về đúng IP máy chủ.
+➜ Nếu sử dụng IPv6, bản ghi AAAA phải trỏ đúng IPv6 của VPS.
+➜ Nếu IPv6 đang trỏ sai máy chủ, hãy chỉnh sửa hoặc xóa AAAA.
+➜ Có thể cần chờ DNS cập nhật sau khi thay đổi bản ghi.
+➜ Không bật Proxy/CDN nếu chưa hiểu rõ cách xác thực SSL
+  và cấu hình DNS tương ứng.
+
+3. QUY TRÌNH THIẾT LẬP ALIAS DOMAIN
+Bước 1:
+➜ Chọn website gốc muốn gán thêm tên miền Alias.
+
+Bước 2:
+➜ Nhập tên miền Alias mới, ví dụ: wptangtoc.vn
+
+Bước 3:
+➜ Hệ thống kiểm tra định dạng tên miền.
+➜ Kiểm tra tên miền có bị trùng với website độc lập hay không.
+➜ Kiểm tra Alias có đang được Virtual Host khác sử dụng hay không.
+
+Bước 4:
+➜ Nếu website gốc đã có SSL Let's Encrypt, hệ thống sẽ hỏi
+  người dùng có muốn cấp hoặc mở rộng SSL cho Alias không.
+
+Bước 5:
+➜ Hệ thống cập nhật cấu hình Virtual Host và Listener.
+➜ Tự động reload OpenLiteSpeed để áp dụng cấu hình.
+
+Bước 6:
+➜ Nếu DNS đã trỏ đúng, hệ thống tiến hành mở rộng SSL.
+➜ Nếu DNS chưa trỏ đúng, Alias vẫn được cấu hình nhưng SSL
+  sẽ được bỏ qua để người dùng thiết lập DNS sau.
+
+4. CẤU HÌNH SSL LET'S ENCRYPT
+Hệ thống hỗ trợ mở rộng chứng chỉ SSL cho Alias Domain.
+
+➜ Giữ lại các tên miền SAN đang có trong chứng chỉ hiện tại.
+➜ Bổ sung tên miền Alias mới vào chứng chỉ.
+➜ Tự động kiểm tra DNS IPv4 và IPv6 trước khi cấp SSL.
+➜ Kiểm tra riêng bản ghi www của Alias Domain.
+➜ Nếu www đã trỏ đúng VPS, có thể đưa www vào chứng chỉ.
+➜ Sử dụng cert-name theo tên miền gốc để hạn chế phát sinh
+  nhánh chứng chỉ trùng lặp như -0001.
+
+LƯU Ý:
+SSL chỉ được cấp khi điều kiện xác thực DNS phù hợp.
+Nếu DNS chưa chính xác, hãy xử lý DNS rồi thực hiện cấp SSL
+sau. Không nên cố cấp chứng chỉ khi tên miền đang trỏ sai VPS.
+
+5. NHỮNG ĐIỀU CẦN BIẾT
+⚠️ Alias Domain không tạo ra một website WordPress độc lập.
+
+➜ Các Alias dùng chung mã nguồn và Database với website gốc.
+➜ Nội dung, tài khoản, plugin, theme và cấu hình WordPress
+  đều thuộc cùng một website.
+➜ Nếu muốn tạo website riêng biệt, hãy sử dụng chức năng
+  thêm website mới thay vì Alias Domain.
+➜ Một tên miền không thể đồng thời làm Alias cho nhiều
+  Virtual Host trên cùng hệ thống.
+➜ Nếu Alias đang tồn tại dưới dạng website độc lập, cần xử lý
+  website đó trước khi gán làm Alias.
+➜ Việc thêm Alias không tự động thay đổi URL chính trong
+  WordPress Database.
+➜ Nếu muốn Alias chuyển hướng về tên miền chính, cần cấu hình
+  Redirect/Canonical URL riêng phù hợp với nhu cầu SEO.
+
+6. KIỂM TRA SAU KHI THIẾT LẬP
+Sau khi hoàn tất, hãy kiểm tra:
+
+➜ Alias Domain đã phân giải DNS về đúng VPS.
+➜ Website có truy cập được qua Alias Domain hay không.
+➜ HTTPS có hoạt động và chứng chỉ SSL hợp lệ hay không.
+➜ Bản ghi www có hoạt động nếu đã cấu hình.
+➜ Nội dung website có hiển thị đúng như tên miền gốc.
+➜ Không có lỗi redirect vòng lặp hoặc lỗi Mixed Content.
+
+MẸO:
+Nếu Alias truy cập được nhưng SSL chưa hoạt động, hãy kiểm tra
+DNS A/AAAA, trạng thái chứng chỉ và thực hiện cấp SSL lại.
 ```
 
 ---
@@ -795,7 +1067,108 @@ Alias domain [hay còn gọi là Parked Domain, Tên miền bí danh] là một 
 - **Tệp nguồn:** `/etc/wptt/domain/wptt-xoa-alias-domain`
 
 ```text
-Xoá thiết lập domain alias đã thiết lập trước đó
+XÓA TÊN MIỀN PHỤ (PARKED DOMAIN / ALIAS DOMAIN)
+
+Chức năng này cho phép gỡ bỏ một tên miền Alias đã được
+thiết lập trước đó khỏi website WordPress trên OpenLiteSpeed.
+
+Alias Domain là tên miền bổ sung sử dụng chung mã nguồn,
+Document Root và Database với website gốc.
+
+Ví dụ:
+➜ Website gốc : wptangtoc.com
+➜ Alias 1      : wptangtoc.vn
+➜ Alias 2      : wptangtoc.net
+
+Khi xóa Alias wptangtoc.vn, tên miền này sẽ được gỡ khỏi
+cấu hình Virtual Host và Listener của OpenLiteSpeed.
+Website gốc và Alias còn lại vẫn được giữ nguyên.
+
+1. CHỨC NĂNG CHÍNH
+
+➜ Hiển thị danh sách Alias Domain đang được cấu hình.
+➜ Cho phép chọn chính xác Alias cần xóa theo số thứ tự.
+➜ Yêu cầu xác nhận trước khi thực hiện thao tác.
+➜ Gỡ Alias khỏi cấu hình Virtual Host của website gốc.
+➜ Cập nhật lại Domain Mapping trên Listener máy chủ.
+➜ Tự động xử lý cấu hình khi xóa Alias cuối cùng.
+➜ Giữ nguyên các Alias khác chưa được chọn xóa.
+➜ Kiểm tra cú pháp cấu hình OpenLiteSpeed trước khi reload.
+➜ Tự động sao lưu cấu hình trước khi chỉnh sửa.
+➜ Tự động hoàn nguyên cấu hình nếu kiểm tra hoặc reload thất bại.
+➜ Ghi nhật ký thao tác để hỗ trợ quản trị và xử lý sự cố.
+
+2. QUY TRÌNH XÓA ALIAS DOMAIN
+
+Bước 1:
+➜ Chọn website gốc muốn quản lý Alias Domain.
+
+Bước 2:
+➜ Hệ thống hiển thị danh sách Alias đang được thiết lập.
+
+Bước 3:
+➜ Nhập số thứ tự Alias muốn xóa.
+➜ Nhập 0 để thoát hoặc hủy thao tác.
+
+Bước 4:
+➜ Kiểm tra lại tên miền Alias và website gốc.
+➜ Xác nhận đồng ý xóa Alias.
+
+Bước 5:
+➜ Hệ thống sao lưu cấu hình hiện tại.
+➜ Cập nhật cấu hình Virtual Host và Listener.
+➜ Kiểm tra cú pháp bằng OpenLiteSpeed.
+
+Bước 6:
+➜ Nếu cấu hình hợp lệ, hệ thống reload OpenLiteSpeed.
+➜ Nếu phát sinh lỗi, hệ thống sẽ cố gắng hoàn nguyên cấu hình
+  trước đó để hạn chế ảnh hưởng đến các website đang hoạt động.
+
+3. LƯU Ý QUAN TRỌNG TRƯỚC KHI XÓA
+
+⚠️ Xóa Alias không đồng nghĩa với xóa website WordPress.
+
+➜ Chỉ gỡ tên miền Alias khỏi cấu hình máy chủ.
+➜ Không xóa mã nguồn WordPress của website gốc.
+➜ Không xóa Database WordPress.
+➜ Không xóa dữ liệu, bài viết, tài khoản hoặc Media.
+➜ Không xóa website gốc.
+➜ Không chủ động xóa chứng chỉ SSL Let's Encrypt hiện có.
+➜ Các Alias khác của website gốc vẫn được giữ lại.
+
+LƯU Ý:
+Sau khi xóa Alias, tên miền đó sẽ không còn được ánh xạ
+đến website gốc thông qua cấu hình OpenLiteSpeed đã cập nhật.
+
+Nếu DNS vẫn trỏ về VPS, tên miền có thể không còn hiển thị
+website này hoặc có thể được phục vụ bởi cấu hình khác
+tùy thuộc vào cấu hình máy chủ.
+
+4. TRƯỜNG HỢP XÓA ALIAS CUỐI CÙNG
+
+Nếu website chỉ có một Alias Domain:
+
+➜ Hệ thống gỡ dòng vhAliases khỏi Virtual Host.
+➜ Domain Mapping được đưa về trạng thái chỉ sử dụng
+  tên miền gốc.
+➜ Website gốc tiếp tục hoạt động bình thường nếu cấu hình
+  còn lại hợp lệ.
+
+Nếu website còn nhiều Alias:
+
+➜ Chỉ Alias được chọn mới bị loại bỏ.
+➜ Danh sách Alias còn lại được cập nhật.
+➜ Không chủ động thay đổi các Alias khác.
+
+5. KHUYẾN NGHỊ SAU KHI XÓA
+➜ Kiểm tra website gốc vẫn truy cập bình thường.
+➜ Kiểm tra các Alias còn lại vẫn hoạt động.
+➜ Nếu không còn sử dụng tên miền đã xóa, hãy cân nhắc
+  cập nhật hoặc xóa bản ghi DNS tương ứng tại nhà cung cấp.
+➜ Nếu Alias được sử dụng trong chiến dịch SEO hoặc quảng cáo,
+  hãy kiểm tra các liên kết và cấu hình Redirect liên quan.
+➜ Nếu cần sử dụng lại Alias, có thể thiết lập lại sau khi
+  đảm bảo tên miền không bị xung đột với website khác.
 ```
 
 ---
@@ -894,10 +1267,26 @@ Ví dụ: bạn có website A.com bạn sử dụng tính năng này để khở
 - **Tệp nguồn:** `/etc/wptt/domain/wptt-bat-tat-domain`
 
 ```text
-Đây là tính năng giúp tạm khoá website
-Tính năng bật và tắt này là tính năng tạm khoá website, không xoá mã nguồn bất kỳ thứ gì.
-chỉ đơn giản nó sẽ tạm ngừng hoạt động website hoặc bật lại nếu đã thiết lập tạm ngừng trước đó.
-Đóng băng mã nguồn bằng chmod 000 & chown root.
+🔒 TÍNH NĂNG: TẠM KHÓA / KÍCH HOẠT LẠI WEBSITE
+Đây là công cụ giúp bạn ngay lập tức NGỪNG HOẠT ĐỘNG hoặc MỞ LẠI một 
+website (hoặc toàn bộ website trên máy chủ) chỉ với một thao tác. 
+
+🛡️ AN TOÀN TUYỆT ĐỐI - KHÔNG XÓA DỮ LIỆU:
+Tính năng này KHÔNG xóa bất kỳ file mã nguồn hay cơ sở dữ liệu nào của bạn. 
+Khi bạn chọn "Tạm khóa", hệ thống sẽ thực hiện các bước bảo mật cấp cao:
+ ➜ Đóng băng mã nguồn: Thu hồi quyền của User, chuyển sở hữu về cho 
+    `root` và đưa quyền truy cập về `000` (Không đọc - Không ghi - Không chạy).
+ ➜ Ngắt kết nối Server: Ẩn cấu hình VHost khỏi OpenLiteSpeed, khiến 
+    website lập tức báo lỗi ngắt kết nối (hoặc không tìm thấy) trên trình duyệt.
+ ➜ Tiêu diệt tiến trình: Bắt buộc dừng mọi luồng xử lý ngầm (PHP) của 
+    website đó để giải phóng hoàn toàn tài nguyên CPU/RAM (pkill).
+ ➜ Dọn dẹp bộ nhớ đệm: Xóa sạch LSCache để đảm bảo không bị rò rỉ dữ liệu cũ.
+
+🚀 ỨNG DỤNG THỰC TẾ:
+ - Khi website bị tấn công (DDoS, Malware) và bạn cần cách ly gấp.
+ - Khi bạn muốn tạm đóng cửa website chưa dùng đến để tiết kiệm RAM/CPU 
+   cho các website khác trên máy chủ.
+ - Khóa nhanh hàng loạt website khi bàn giao hoặc bảo trì Server.
 ```
 
 ---
@@ -1225,10 +1614,27 @@ Tính năng này giúp người dùng WPTangToc OLS quản lý các khía cạnh
 - **Tệp nguồn:** `/etc/wptt/db/wptt-them-database`
 
 ```text
-Tính năng Thêm database [hay Thêm cơ sở dữ liệu] là quá trình tạo ra một kho chứa dữ liệu mới, rỗng và riêng biệt trên máy chủ cơ sở dữ liệu [MariaDB]. Kho chứa này sau đó sẽ được sử dụng để lưu trữ các bảng [tables], dữ liệu.
+🗄️ TÍNH NĂNG: KHỞI TẠO CƠ SỞ DỮ LIỆU (ADD DATABASE)
+Đây là công cụ giúp bạn tạo mới hoàn toàn một cơ sở dữ liệu (Database), 
+đi kèm với một User độc lập và Mật khẩu siêu bảo mật (36 ký tự ngẫu nhiên) 
+dành riêng cho một website cụ thể.
 
-Mục Đích Chính
-* Thêm database ngoài biên chế.
+🚀 TÍNH NĂNG NỔI BẬT (SMART DETECTION):
+Hệ thống được trang bị "Trạm Kiểm Lâm" thông minh tự động quét và phân 
+loại Database khi khởi tạo:
+
+ ➜ Cấp "Biên Chế" (Primary DB): Nếu website của bạn hoàn toàn trắng 
+    Database, hoặc DB cũ bị lỗi/xóa mất ("DB Ma"), hệ thống sẽ gán DB 
+    mới này làm Database chính thức cho website, mã hóa và lưu trữ tự 
+    động vào tệp cấu hình hệ thống.
+ ➜ Chế độ "Mồ Côi" (Standby DB): Nếu website đã có sẵn một DB chính 
+    đang hoạt động ổn định, hệ thống sẽ bảo vệ DB cũ. DB mới tạo ra 
+    sẽ đóng vai trò dự phòng (Standby) phục vụ cho việc clone web, 
+    test staging hoặc Import dữ liệu tạm thời.
+
+🛡️ BẢO MẬT TUYỆT ĐỐI: 
+Cũng như mọi thao tác Database khác trên WPTangToc, luồng khởi tạo 
+này được bảo vệ hoàn toàn khỏi Local SQL Injection và tiến trình lộ pass.
 ```
 
 ---
@@ -1262,9 +1668,26 @@ Lưu ý quan trọng: LUÔN LUÔN SAO LƯU [BACKUP] TRƯỚC KHI XÓA: Hãy ch�
 - **Tệp nguồn:** `/etc/wptt/db/wptt-thongtin-db`
 
 ```text
-Xem tổng quan: Giúp bạn nhanh chóng biết được có bao nhiêu database đang tồn tại trên server.
+📊 TÍNH NĂNG: XEM DANH SÁCH & KIỂM TRA BIÊN CHẾ DATABASE
+Thay vì phải đăng nhập phpMyAdmin hay gõ lệnh SQL thủ công rườm rà, 
+tính năng này sẽ quét và cung cấp cho bạn bức tranh toàn cảnh về mọi 
+Cơ sở dữ liệu (Database) đang tồn tại trên máy chủ MariaDB.
 
-Hỗ trợ quản lý: Là bước đầu tiên cho các tác vụ quản lý khác như sao lưu, tối ưu, hoặc kiểm tra dung lượng [tuy nhiên, các tác vụ này có thể là các tính năng riêng biệt].
+🚀 TÍNH NĂNG NỔI BẬT (SMART MAPPING):
+ ➜ Tự động "Chỉ mặt đặt tên": Hệ thống sẽ rà soát chéo cấu hình Vhost 
+    của toàn bộ website để báo cáo chính xác Database nào đang phục vụ 
+    (thuộc biên chế) cho Website nào. Tránh tình trạng "nhìn tên DB 
+    nhưng không biết của web nào".
+ ➜ Phát hiện "Database Mồ Côi": Tự động phân lập các Database tự do, 
+    bị bỏ quên hoặc không được gắn với bất kỳ website nào. Rất hữu ích 
+    để dọn dẹp rác, giải phóng dung lượng ổ cứng mà không sợ xóa nhầm.
+ ➜ Lọc nhiễu thông minh: Tự động ẩn các Database hệ thống (information_schema, 
+    mysql, sys...) để bảng báo cáo sạch sẽ và tập trung vào dữ liệu của bạn.
+
+🛡️ BẢO MẬT KẾT NỐI (SECURE CONNECTION):
+Giao tiếp với MariaDB thông qua tệp cấu hình tạm thời (Temporary Config File) 
+được mã hóa, đảm bảo an toàn tuyệt đối, không rò rỉ mật khẩu Root ra 
+danh sách tiến trình máy chủ.
 ```
 
 ---
@@ -1503,7 +1926,27 @@ Lưu ý: Luôn nhớ sao lưu dữ liệu trước khi thực hiện các thao t
 - **Tệp nguồn:** `/etc/wptt/db/cli-mysql-thuc-thi`
 
 ```text
-MySQL CLI [còn gọi là MySQL Monitor] là một công cụ giao diện dòng lệnh cho phép bạn tương tác trực tiếp với máy chủ MySQL. Bạn có thể thực hiện mọi tác vụ từ tạo cơ sở dữ liệu, quản lý bảng, đến truy vấn dữ liệu phức tạp.
+💡 TÍNH NĂNG: GIAO DIỆN DÒNG LỆNH MYSQL CLI (COMMAND LINE)
+Đây là công cụ cấp cao dành cho quản trị viên, cho phép bạn tương tác 
+trực tiếp với hệ quản trị cơ sở dữ liệu MariaDB/MySQL thông qua dòng lệnh.
+
+🚀 ĐIỂM NỔI BẬT CỦA CÔNG CỤ NÀY:
+ ➜ Đăng nhập 1-Click: Tự động kết nối vào database của bất kỳ website nào 
+    hoặc quyền Root (Tối cao) mà KHÔNG cần phải nhớ hay nhập mật khẩu.
+ ➜ Bảo mật tuyệt đối: Script sử dụng cơ chế tệp tin cấu hình tạm thời 
+    (Temporary Config File) kết hợp mã hóa, đảm bảo mật khẩu không bao 
+    giờ bị rò rỉ ra danh sách tiến trình (Process List) của máy chủ.
+ ➜ Tích hợp hệ thống khiên chắn chống Local SQL Injection đa lớp.
+ ➜ Hỗ trợ tìm kiếm nhanh website thông minh bằng FZF.
+
+🛠️ ỨNG DỤNG THỰC TẾ:
+ - Thực thi các câu lệnh SQL phức tạp trực tiếp (SELECT, UPDATE, DELETE).
+ - Kiểm tra các tiến trình đang chạy gây nghẽn cổ chai (SHOW PROCESSLIST).
+ - Dành cho người dùng nâng cao muốn kiểm soát database 100%.
+
+⚠️ LƯU Ý: 
+Thao tác trực tiếp bằng SQL rất mạnh mẽ nhưng cũng đi kèm rủi ro. 
+Hãy chắc chắn về câu lệnh của bạn trước khi nhấn Enter để tránh mất dữ liệu!
 ```
 
 ---
@@ -1581,13 +2024,29 @@ Hỗ trợ sao lưu tại local máy chủ và đám mây drive.
 - **Tệp nguồn:** `/etc/wptt/backup-restore/wptt-khoiphuc`
 
 ```text
-Tính năng khôi phục website
+🔄 TÍNH NĂNG: KHÔI PHỤC WEBSITE (ATOMIC RESTORE)
+Nếu website gặp sự cố (mất dữ liệu, cập nhật lỗi, hoặc bị tấn công), 
+công cụ này chính là "cỗ máy thời gian" đưa website của bạn quay về 
+trạng thái hoạt động hoàn hảo nhất một cách an toàn tuyệt đối.
 
-Nói một cách đơn giản, nếu website của bạn gặp sự cố [mất dữ liệu, bị lỗi, bị tấn công], tính năng này giống như việc bạn sử dụng một cỗ máy thời gian để quay ngược website về một thời điểm mà nó còn hoạt động tốt, dựa trên bản sao lưu bạn đã có.
+🚀 CÔNG NGHỆ KHÔI PHỤC ĐỘT PHÁ TỪ WPTANGTOC:
+ ➜ Không gián đoạn (Atomic Swap): Thay vì xóa web đi giải nén lại rủi ro cao, 
+    hệ thống xử lý mã nguồn/database ở "không gian tạm". Chỉ khi 
+    thành công 100%, hệ thống mới tráo đổi (Swap) trong chớp mắt. 
+    Nếu file backup bị lỗi giữa chừng -> Website cũ vẫn được giữ nguyên!
+ ➜ Khiên chống hỏng dữ liệu (Anti-Corrupt): Tự động quét kiểm tra cấu trúc 
+    file nén (.tar.zst, .zip...) và file SQL trước khi khôi phục. 
+ ➜ Thông minh & Tự động: Tự động kết nối lại wp-config, sửa lỗi phân quyền 
+    (chmod/chown) chuẩn xác, bật/tắt chế độ bảo trì và dọn dẹp LSCache 
+    ngay khi hoàn tất.
+ ➜ Tốc độ tối đa: Hỗ trợ bung nén đa luồng thế hệ mới với ZSTD và PIGZ.
 
-Khôi phục website là quá trình sửa chữa, phục hồi hoặc đưa trở lại trạng thái hoạt động bình thường cho các chức năng cụ thể của một trang web đã bị lỗi, bị mất hoặc không hoạt động đúng cách. Điều này đảm bảo rằng người dùng có thể tiếp tục tương tác và sử dụng đầy đủ các tiện ích mà website đó cung cấp.
+📦 ĐỊNH DẠNG HỖ TRỢ BẢN SAO LƯU:
+ - Mã nguồn: .zip, .tar.gz, .tar.zst (Khuyên dùng)
+ - Database : .sql, .sql.gz, .sql.zst (Khuyên dùng)
 
-Khôi phục từ bản sao lưu [Backup]: Nếu bạn thường xuyên sao lưu website, bạn có thể khôi phục toàn bộ website hoặc các thành phần cụ thể về một thời điểm trước khi lỗi xảy ra.
+⚠️ LƯU Ý: Tiến trình khôi phục được bảo vệ chống đụng độ (Process Lock). 
+Vui lòng không đóng cửa sổ Terminal/SSH trong suốt quá trình chạy!
 ```
 
 ---
