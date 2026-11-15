@@ -160,11 +160,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-# WPTangToc OLS 8.3.3
-
-🚀 **Tính năng mới**
-- **Bảo mật SSH chống lượng tử tiên tiến:** Tích hợp cơ chế mã hóa SSH kháng lượng tử, giúp bảo vệ tuyệt đối các kết nối quản trị từ xa trước nguy cơ tấn công và giải mã bằng công nghệ lượng tử trong tương lai, nâng cao tối đa lớp phòng thủ an ninh mạng cho máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
