@@ -1,3 +1,11 @@
+# WPTangToc OLS 8.4.1
+
+🐛 **Sửa lỗi**
+- **Khắc phục sự cố vận hành:** Xử lý triệt để các lỗi phát sinh trong quá trình quản trị và thực thi tác vụ trên hệ thống, nâng cao độ ổn định và đảm bảo máy chủ hoạt động liên tục, mượt mà.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 # WPTangToc OLS 8.4.0.9
 
 🛠️ **Tối ưu hệ thống**
