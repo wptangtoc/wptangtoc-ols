@@ -1781,29 +1781,23 @@ Sao lưu (Backup) là quá trình đóng gói toàn bộ dữ liệu của websi
 - **Tệp nguồn:** `/etc/wptt/backup-restore/wptt-khoiphuc`
 
 ```text
-🔄 TÍNH NĂNG: KHÔI PHỤC WEBSITE (ATOMIC RESTORE)
-Nếu website gặp sự cố (mất dữ liệu, cập nhật lỗi, hoặc bị tấn công), 
-công cụ này chính là "cỗ máy thời gian" đưa website của bạn quay về 
-trạng thái hoạt động hoàn hảo nhất một cách an toàn tuyệt đối.
+⏪ TÍNH NĂNG: KHÔI PHỤC WEBSITE (ATOMIC RESTORE)
 
-🚀 CÔNG NGHỆ KHÔI PHỤC ĐỘT PHÁ TỪ WPTANGTOC:
- ➜ Không gián đoạn (Atomic Swap): Thay vì xóa web đi giải nén lại rủi ro cao, 
-    hệ thống xử lý mã nguồn/database ở "không gian tạm". Chỉ khi 
-    thành công 100%, hệ thống mới tráo đổi (Swap) trong chớp mắt. 
-    Nếu file backup bị lỗi giữa chừng -> Website cũ vẫn được giữ nguyên!
- ➜ Khiên chống hỏng dữ liệu (Anti-Corrupt): Tự động quét kiểm tra cấu trúc 
-    file nén (.tar.zst, .zip...) và file SQL trước khi khôi phục. 
- ➜ Thông minh & Tự động: Tự động kết nối lại wp-config, sửa lỗi phân quyền 
-    (chmod/chown) chuẩn xác, bật/tắt chế độ bảo trì và dọn dẹp LSCache 
-    ngay khi hoàn tất.
- ➜ Tốc độ tối đa: Hỗ trợ bung nén đa luồng thế hệ mới với ZSTD và PIGZ.
+Nếu website của bạn bất ngờ gặp sự cố (Bị Hacker tấn công, cập nhật Plugin/Theme gây vỡ giao diện, hoặc lỡ tay xóa nhầm dữ liệu), công cụ này đóng vai trò như một "Cỗ máy thời gian" giúp bạn đưa toàn bộ hệ thống quay về trạng thái hoạt động hoàn hảo nhất một cách an toàn tuyệt đối.
 
-📦 ĐỊNH DẠNG HỖ TRỢ BẢN SAO LƯU:
- - Mã nguồn: .zip, .tar.gz, .tar.zst (Khuyên dùng)
- - Database : .sql, .sql.gz, .sql.zst (Khuyên dùng)
+🚀 CÔNG NGHỆ KHÔI PHỤC ĐỘT PHÁ (ATOMIC SWAP):
+ ➜ Không gián đoạn (Zero-Risk Swap): Thay vì xóa mã nguồn cũ đi rồi mới giải nén bản Backup (rất rủi ro nếu file Backup bị lỗi giữa chừng), hệ thống sẽ âm thầm bung nén vào một "Không gian tạm". Chỉ khi xác nhận thành công 100%, hệ thống mới tráo đổi (Swap) trong chớp mắt. Nếu bản Backup bị hỏng, website cũ của bạn vẫn được giữ nguyên vẹn!
+ ➜ Khiên chống hỏng dữ liệu (Anti-Corrupt): Tự động quét và kiểm tra cấu trúc toàn vẹn của file nén mã nguồn và file SQL trước khi cho phép tiến trình khôi phục bắt đầu.
+ ➜ Tốc độ tối đa (Multi-thread): Hỗ trợ công nghệ giải nén đa luồng thế hệ mới tận dụng toàn bộ nhân CPU với ZSTD và PIGZ, giúp rút ngắn thời gian bung nén các website dung lượng khủng.
+ ➜ Tự động hóa 100%: Tự động nối lại kết nối Database (`wp-config`), căn chỉnh chuẩn xác phân quyền tệp tin (chmod/chown) cho OpenLiteSpeed, tự động bật/tắt chế độ bảo trì và dọn sạch LSCache ngay sau khi hoàn tất.
 
-⚠️ LƯU Ý: Tiến trình khôi phục được bảo vệ chống đụng độ (Process Lock). 
-Vui lòng không đóng cửa sổ Terminal/SSH trong suốt quá trình chạy!
+📦 ĐỊNH DẠNG SAO LƯU ĐƯỢC HỖ TRỢ:
+ - Mã nguồn       : `.zip`, `.tar.gz`, `.tar.zst` (Khuyên dùng)
+ - Cơ sở dữ liệu  : `.sql`, `.sql.gz`, `.sql.zst` (Khuyên dùng)
+
+⚠️ LƯU Ý QUAN TRỌNG:
+ - Toàn bộ tiến trình khôi phục được bảo vệ nghiêm ngặt bằng cơ chế Khóa tiến trình (Process Lock) để chống đụng độ. 
+ - Vui lòng KHÔNG đóng cửa sổ Terminal/SSH hoặc nhấn tắt đột ngột trong suốt quá trình chạy để tránh làm đứt gãy luồng khôi phục Cơ sở dữ liệu!
 ```
 
 ---
@@ -2009,18 +2003,25 @@ Lưu ý quan trọng: Việc xóa thủ công cần cẩn trọng để tránh v
 - **Tệp nguồn:** `/etc/wptt/backup-restore/wptt-saoluu-luy-tien-tung-phan`
 
 ```text
-Tính năng sao lưu website [website backup] là quá trình tạo ra các bản sao của toàn bộ dữ liệu website của bạn và lưu trữ chúng ở một nơi an toàn.
+💾 TÍNH NĂNG: SAO LƯU WEBSITE LŨY TIẾN (INCREMENTAL BACKUP)
 
-Sao lưu luỹ tiến từng phần là kỹ thuật backup mục đích chính của nó là giảm chi phí lưu trữ giảm dung lượng ổ cứng.
+Sao lưu website là việc đóng gói và cất giữ toàn bộ dữ liệu của bạn để phòng ngừa rủi ro. Tuy nhiên, với các website WordPress lâu năm có dung lượng lớn (Ví dụ: 10GB - chủ yếu là hình ảnh), nếu mỗi ngày bạn backup 1 bản Full, bạn sẽ tốn 300GB ổ cứng chỉ trong 1 tháng.
 
-Nguyên lý hoạt động bình thường: giả sử mã nguồn của bạn 1GB khi nén thành 1 file zip để backup bạn sẽ tạo ra được 1 file zip nặng 1GB
-Nếu bạn backup liên tục trong 30 ngày thì suy ra bạn phải tốn 30GB dung lượng ổ cứng
+Sao lưu lũy tiến (Incremental Backup) là công nghệ sinh ra để giải bài toán đó. Nó giúp bạn tiết kiệm đến 90% dung lượng lưu trữ (và tiết kiệm cả băng thông mạng khi upload lên Cloud).
 
-Còn với kỹ thuật backup luỹ tiến từng phần: nó sẽ backup full 1 bản riêng phần ảnh [ví dụ nặng 900MB] là 1 file zip riêng loại trừ thư mục uploads hiện hữu.
-Và sau đó nó sẽ sao lưu phần 2: sao lưu mã nguồn và loại bỏ toàn bộ file backup ảnh ở phần full ảnh trên chỉ lưu thêm thư mục ảnh hiện hữu: wp-content/uploads/2025/05 thì chỉ tốn 100MB
+🚀 NGUYÊN LÝ HOẠT ĐỘNG THÔNG MINH (CHỈ WORDPRESS):
+Hệ thống sẽ bóc tách cấu trúc website WordPress thành 3 phần riêng biệt thay vì gộp chung vào 1 file zip khổng lồ:
+ ➜ Phần 1: Database (Dữ liệu chữ) - Luôn được sao lưu mới hoàn toàn mỗi lần chạy vì dung lượng rất nhỏ.
+ ➜ Phần 2: Core (Mã nguồn & Plugin) - Chỉ nặng khoảng vài chục đến vài trăm MB, luôn được sao lưu mới.
+ ➜ Phần 3: Hình ảnh (Uploads) - Đây là phần nặng nhất.
+     + Đầu mỗi tháng, hệ thống sẽ chốt hạ 1 file zip chứa TOÀN BỘ hình ảnh từ trước đến nay.
+     + Những ngày tiếp theo trong tháng, khi bạn chạy tính năng này, hệ thống CHỈ ZIP thêm thư mục hình ảnh của tháng hiện tại (rất nhẹ, vài MB) rồi nối đè (Merge) vào file Core.
 
-Thay vì phải tốn 30GB backup thì nhờ kỹ thuật này bạn chỉ tốn 3.9GB tiết kiệm được: 30-3.9 = 26.1GB giảm được 87% dung lượng.
-Kỹ thuật này rất hữu ích với mã nguồn có dung lượng lớn.
+💡 KẾT QUẢ VƯỢT TRỘI:
+Nhờ kỹ thuật này, thay vì mỗi ngày tạo ra 1 file 10GB (30 ngày = 300GB), bạn chỉ cần lưu 1 file gốc 9GB vào đầu tháng, và 29 ngày tiếp theo mỗi ngày tạo ra 1 file vài chục MB. Tổng dung lượng lưu trữ 30 ngày giảm từ 300GB xuống chỉ còn khoảng 11GB.
+
+⚠️ YÊU CẦU BẮT BUỘC:
+Để tính năng này hoạt động, website WordPress của bạn PHẢI BẬT tính năng sắp xếp ảnh theo Tháng và Năm (WP-Admin -> Settings -> Media -> Tích chọn "Organize my uploads into month- and year-based folders").
 ```
 
 ---
@@ -2032,11 +2033,21 @@ Kỹ thuật này rất hữu ích với mã nguồn có dung lượng lớn.
 - **Tệp nguồn:** `/etc/wptt/backup-restore/wptt-khoiphuc-luy-tien-tung-phan`
 
 ```text
-Tính năng khôi phục website luỹ tiến từng phần
+🔄 TÍNH NĂNG: KHÔI PHỤC WEBSITE (ATOMIC RESTORE - LŨY TIẾN)
 
-Khôi phục website là quá trình sửa chữa, phục hồi hoặc đưa trở lại trạng thái hoạt động bình thường cho các chức năng cụ thể của một trang web đã bị lỗi, bị mất hoặc không hoạt động đúng cách. Điều này đảm bảo rằng người dùng có thể tiếp tục tương tác và sử dụng đầy đủ các tiện ích mà website đó cung cấp.
+Nếu website của bạn sử dụng tính năng "Sao lưu Lũy tiến" (Incremental Backup), hệ thống sẽ tách rời mã nguồn lõi (Core) và thư mục hình ảnh (Uploads) thành các file riêng biệt nhằm tiết kiệm tối đa dung lượng ổ cứng.
 
-Khôi phục từ bản sao lưu [Backup] sao lưu luỹ tiến trong wptangtoc ols: Nếu bạn thường xuyên sao lưu website, bạn có thể khôi phục toàn bộ website hoặc các thành phần cụ thể về một thời điểm trước khi lỗi xảy ra.
+Công cụ này được thiết kế để tự động "lắp ráp" các mảnh ghép lũy tiến đó lại với nhau và khôi phục website của bạn về trạng thái hoàn hảo nhất một cách an toàn tuyệt đối.
+
+🚀 CÔNG NGHỆ KHÔI PHỤC ĐỘT PHÁ (ATOMIC SWAP):
+ ➜ Khôi phục tĩnh lặng (Zero-Downtime Swap): Thay vì xóa mã nguồn cũ đi rồi mới giải nén bản Backup (rất rủi ro nếu file bị hỏng giữa chừng), hệ thống sẽ âm thầm bung nén Core + Uploads vào một "Không gian tạm". Chỉ khi xác nhận ghép nối thành công 100%, hệ thống mới tráo đổi (Swap) trong chớp mắt. Nếu bản Backup bị lỗi, website cũ của bạn vẫn được giữ nguyên!
+ ➜ Gắn kết Cơ sở dữ liệu: Tự động Import (nhập) Database thông qua tệp cấu hình mã hóa. Đồng thời tự động cập nhật file `wp-config.php` để kết nối mã nguồn với Database mà không cần bạn phải cấu hình tay.
+ ➜ Tốc độ tối đa (Multi-thread): Hỗ trợ công nghệ bung nén đa luồng thế hệ mới tận dụng tối đa nhân CPU với ZSTD và PIGZ, giúp rút ngắn thời gian xử lý các website có dữ liệu khổng lồ.
+ ➜ Dọn dẹp & Phân quyền: Tự động căn chỉnh chuẩn xác phân quyền tệp tin (chmod/chown), tháo gỡ chế độ bảo trì (Maintenance Mode) và dọn sạch LSCache ngay sau khi hoàn tất.
+
+⚠️ LƯU Ý QUAN TRỌNG KHI VẬN HÀNH:
+ - Toàn bộ tiến trình khôi phục được bảo vệ nghiêm ngặt bằng cơ chế Khóa tiến trình (Process Lock) để chống đụng độ. 
+ - Vui lòng KHÔNG đóng cửa sổ Terminal/SSH hoặc nhấn tắt đột ngột (Ctrl+C) trong suốt quá trình chạy để tránh làm đứt gãy luồng khôi phục dữ liệu!
 ```
 
 ---
@@ -5238,19 +5249,23 @@ Tính năng này làm cho việc quản trị cơ sở dữ liệu trên máy ch
 - **Tệp nguồn:** `/etc/wptt/phpmyadmin/wptt-mo-phpmyadmin`
 
 ```text
-Tính năng Kích hoạt phpMyAdmin thường có nghĩa là truy cập và sử dụng công cụ phpMyAdmin, một ứng dụng web phổ biến để quản lý cơ sở dữ liệu MySQL hoặc MariaDB trực tiếp thông qua giao diện đồ họa trên trình duyệt.
+🗄️ TÍNH NĂNG: KÍCH HOẠT PHPMYADMIN
 
-Nói một cách đơn giản, đây là cách bạn mở một cánh cửa có giao diện thân thiện để làm việc với database của website mình, thay vì phải dùng các dòng lệnh phức tạp.
+phpMyAdmin là công cụ quản trị Cơ sở dữ liệu (Database) qua giao diện Web phổ biến nhất thế giới. Nó cho phép bạn dễ dàng xem, chỉnh sửa, truy vấn SQL, Import/Export dữ liệu thay vì phải thao tác qua các dòng lệnh khô khan.
 
-Mục Đích Chính [Chức năng của phpMyAdmin]
-* Quản lý cơ sở dữ liệu [Database]: Tạo, xóa, sửa đổi database.
-* Quản lý bảng [Table]: Tạo, sửa, xóa bảng quản lý cột, chỉ mục [index].
-* Thao tác dữ liệu: Xem, tìm kiếm, thêm, sửa, xóa các hàng dữ liệu trong bảng.
-* Thực thi lệnh SQL: Cho phép bạn chạy các truy vấn SQL tùy chỉnh.
-* Import/Export dữ liệu: Nhập dữ liệu từ file [SQL, CSV] vào database hoặc xuất database/bảng ra các định dạng khác nhau [quan trọng cho việc sao lưu và di chuyển].
-* Quản lý người dùng database: Tạo và quản lý quyền của người dùng truy cập database [nếu có đủ quyền].
+Do tính chất nhạy cảm (nắm giữ toàn bộ dữ liệu website), WPTangToc OLS đã tái thiết kế lại toàn bộ quy trình cài đặt phpMyAdmin để biến nó thành một "Pháo đài bất khả xâm phạm" chuẩn Enterprise.
 
-Sau khi kích hoạt [truy cập], bạn có thể bắt đầu quản lý cơ sở dữ liệu của website một cách trực quan.
+🚀 CƠ CHẾ BẢO MẬT ĐỘT PHÁ (ZERO TRUST ARCHITECTURE):
+ ➜ Xác thực chống giả mạo (GPG Verification): Không tải file mù quáng. Hệ thống sẽ đối chiếu Chữ ký điện tử (GPG) của gói cài đặt với Public Key gốc của đội ngũ phpMyAdmin. Nếu phát hiện file bị tiêm nhiễm mã độc trên đường truyền, tiến trình sẽ bị hủy ngay lập tức.
+ ➜ Bảo mật Kép (Double Layer Auth): 
+    - Lớp 1 (HTTP Basic Auth): Khiên chặn Bot và Scanner ở tầng Web Server. Tài khoản và Mật khẩu (36 ký tự) được sinh ngẫu nhiên, mã hóa AES-256 và lưu sâu trong hệ thống.
+    - Lớp 2 (Database Auth): Đăng nhập bằng tài khoản Database gốc của từng website.
+ ➜ Cô lập môi trường (Strict Sandboxing): Tự động tiêm cấu hình `open_basedir` vào OpenLiteSpeed để nhốt chặt phpMyAdmin. Ngay cả khi phpMyAdmin bị khai thác lỗ hổng (Zero-day), Hacker cũng không thể đọc trộm các file nhạy cảm khác trên máy chủ (như wp-config.php hay /etc/passwd).
+ ➜ Tự động thích ứng Tường lửa: Tự động đàm phán và tạo ngoại lệ (Whitelist) với tường lửa 8G Firewall để bạn thao tác mượt mà không bị chặn nhầm.
+
+⚠️ KHUYẾN NGHỊ VẬN HÀNH QUAN TRỌNG:
+Để đảm bảo an toàn tuyệt đối, hệ thống chỉ cài đặt phpMyAdmin lên Website Chính (Primary Website). 
+Sau khi hoàn tất công việc (như Import/Export hoặc sửa lỗi Data), bạn HÃY QUAY LẠI MENU VÀ TẮT PHPMYADMIN. Khi nào cần sử dụng mới bật lại. Đây là nguyên tắc bảo mật!
 ```
 
 ---
@@ -5584,18 +5599,24 @@ Tuy nhiên, đây là một công cụ hữu ích để quản lý website một
 - **Tệp nguồn:** `/etc/wptt/trinh-quan-ly-files/kich-hoat-quan-ly-files`
 
 ```text
-Tính năng Kích hoạt File Manager [Trình quản lý tệp/tập tin] thường có nghĩa là truy cập và sử dụng một công cụ dựa trên giao diện web, cho phép bạn quản lý trực tiếp các tệp tin và thư mục của website trên máy chủ, tương tự như Windows Explorer trên máy tính của bạn.
+🗂️ TÍNH NĂNG: BẬT FILE MANAGER (TRÌNH QUẢN LÝ TỆP TIN TRÊN WEB)
 
-Nói một cách đơn giản, đây là công cụ giúp bạn xem, tải lên, tải xuống, tạo mới, xóa, đổi tên, sửa đổi tệp tin, và thay đổi quyền truy cập [permissions] cho các tệp và thư mục của website ngay trong trình duyệt web mà không cần dùng phần mềm FTP riêng.
+Tính năng này sẽ tải và nhúng một ứng dụng quản lý tệp tin (File Manager) có giao diện đồ họa trực quan (như Windows Explorer) thẳng vào website của bạn. Từ đó, bạn có thể dễ dàng quản lý mã nguồn thông qua trình duyệt web mà không cần cài đặt các phần mềm FTP rườm rà như FileZilla hay WinSCP.
 
-Mục Đích Chính
-* Quản lý tệp tin dễ dàng: Cung cấp giao diện đồ họa trực quan để thao tác với file và thư mục trên server.
-* Chỉnh sửa nhanh: Cho phép xem và sửa nhanh các tệp văn bản [HTML, CSS, PHP, file cấu hình] trực tiếp.
-* Tải lên/Tải xuống: Dễ dàng đưa file website mới lên server hoặc tải về các file hiện có, backup.
-* Quản lý quyền: Thay đổi quyền đọc/ghi/thực thi cho file và thư mục, rất quan trọng để website hoạt động đúng.
-* Nén/Giải nén: Hỗ trợ tạo file nén [zip] hoặc giải nén các file đã tải lên.
+🚀 NHỮNG GÌ BẠN CÓ THỂ LÀM:
+ ➜ Chỉnh sửa nóng: Mở và sửa trực tiếp mã nguồn (HTML, CSS, PHP, wp-config.php...) cực kỳ nhanh chóng.
+ ➜ Quản lý quyền hạn (Permissions): Dễ dàng thay đổi quyền đọc/ghi (Chmod) cho từng file hoặc thư mục cụ thể.
+ ➜ Upload / Download: Kéo thả tải lên hàng loạt ảnh, nén (Zip) hoặc giải nén (Unzip) mã nguồn siêu tốc.
 
-Sau khi kích hoạt bạn có thể thực hiện các thao tác quản lý tệp tin cho website của mình một cách thuận tiện.
+🛡️ KIẾN TRÚC BẢO MẬT KÉP (ZERO TRUST & DOUBLE LAYER AUTH):
+Bởi vì File Manager có quyền can thiệp rất sâu vào mã nguồn, hệ thống WPTangToc đã thiết lập những tiêu chuẩn bảo mật khắt khe nhất:
+ 1. Tải ứng dụng an toàn: Tự động tải mã nguồn File Manager từ máy chủ WPTangToc và xác thực tính toàn vẹn thông qua Chữ ký điện tử (GPG Signature). Nếu phát hiện file bị nhiễm mã độc trên đường truyền, hệ thống sẽ chặn đứng quá trình cài đặt.
+ 2. Bảo mật 2 lớp độc lập: 
+    - Lớp 1 (HTTP Basic Auth): Được bảo vệ bởi chính lõi của máy chủ Web OpenLiteSpeed. Chặn đứng mọi sự nhòm ngó (Scan Bot) từ bên ngoài.
+    - Lớp 2 (App Auth): Lớp đăng nhập riêng của ứng dụng File Manager. Toàn bộ thông tin tài khoản đều được tạo bằng chuỗi ngẫu nhiên dài 36-48 ký tự, không bao giờ trùng lặp và được lưu trữ mã hóa an toàn (AES-256).
+
+⚠️ KHUYẾN NGHỊ:
+Sau khi hoàn tất công việc (như sửa code, up file), bạn NÊN quay lại Menu và TẮT (Xóa) File Manager đi. Khi nào cần dùng lại thì Bật lên. Đây là nguyên tắc bảo mật!
 ```
 
 ---
@@ -5647,7 +5668,19 @@ Mục Đích Chính
 - **Tệp nguồn:** `/etc/wptt/trinh-quan-ly-files/xem-lai-thong-tin-quan-ly-files`
 
 ```text
-Tính năng Xem lại tài khoản đăng nhập File Manager hệ thống của bạn đã thiết lập
+📂 TÍNH NĂNG: XEM THÔNG TIN ĐĂNG NHẬP FILE MANAGER
+
+Nếu bạn đã kích hoạt tính năng File Manager (Quản lý File trên nền Web) cho một website cụ thể nhưng không nhớ thông tin đăng nhập, công cụ này sẽ giúp bạn trích xuất và hiển thị lại toàn bộ tài khoản và mật khẩu một cách bảo mật.
+
+🚀 TÍNH NĂNG NỔI BẬT:
+ ➜ Giám sát Đồng bộ (Data Integrity): Hệ thống không chỉ đơn thuần đọc file cấu hình, mà còn thực hiện kiểm tra chéo (Cross-check) giữa tệp lưu trữ gốc (`.user-giatuan.json`) và biến môi trường ảo của hệ thống (AES Decryption). Nếu dữ liệu bị hỏng hoặc không đồng bộ (do lỡ tay sửa xóa file), hệ thống sẽ cảnh báo bạn cài đặt lại ngay lập tức.
+ ➜ Nhận diện HTTPS: Tự động kiểm tra trạng thái chứng chỉ SSL (Let's Encrypt) của website để xuất ra đường dẫn truy cập chuẩn xác là `https://` hay `http://`.
+ ➜ Hiển thị Đa lớp Bảo mật: Bóc tách rõ ràng 2 lớp đăng nhập cho bạn dễ hiểu:
+    - Lớp 1 (HTTP Basic Auth): Lớp khiên bảo vệ ở cấp độ Máy chủ Web (Web Server).
+    - Lớp 2 (Application Auth): Lớp đăng nhập chính của ứng dụng File Manager.
+
+⚠️ LƯU Ý BẢO MẬT:
+Tất cả Mật khẩu và ID được hiển thị đều đã được giải mã (Decrypted) từ thuật toán AES của WPTangToc. Vui lòng tuyệt đối không chia sẻ màn hình lúc đang sử dụng lệnh này!
 ```
 
 ---
