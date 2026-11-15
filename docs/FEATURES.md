@@ -1677,15 +1677,11 @@ Quy trình Rebuild chỉ can thiệp vào "Động cơ" (Phần mềm MariaDB), 
 
 ```text
 💡 TÍNH NĂNG: GIAO DIỆN DÒNG LỆNH MYSQL CLI (COMMAND LINE)
-Đây là công cụ cấp cao dành cho quản trị viên, cho phép bạn tương tác 
-trực tiếp với hệ quản trị cơ sở dữ liệu MariaDB/MySQL thông qua dòng lệnh.
+Đây là công cụ cấp cao dành cho quản trị viên, cho phép bạn tương tác trực tiếp với hệ quản trị cơ sở dữ liệu MariaDB/MySQL thông qua dòng lệnh.
 
 🚀 ĐIỂM NỔI BẬT CỦA CÔNG CỤ NÀY:
- ➜ Đăng nhập 1-Click: Tự động kết nối vào database của bất kỳ website nào 
-    hoặc quyền Root (Tối cao) mà KHÔNG cần phải nhớ hay nhập mật khẩu.
- ➜ Bảo mật tuyệt đối: Script sử dụng cơ chế tệp tin cấu hình tạm thời 
-    (Temporary Config File) kết hợp mã hóa, đảm bảo mật khẩu không bao 
-    giờ bị rò rỉ ra danh sách tiến trình (Process List) của máy chủ.
+ ➜ Đăng nhập 1-Click: Tự động kết nối vào database của bất kỳ website nào hoặc quyền Root (Tối cao) mà KHÔNG cần phải nhớ hay nhập mật khẩu.
+ ➜ Bảo mật tuyệt đối: Script sử dụng cơ chế tệp tin cấu hình tạm thời (Temporary Config File) kết hợp mã hóa, đảm bảo mật khẩu không bao giờ bị rò rỉ ra danh sách tiến trình (Process List) của máy chủ.
  ➜ Tích hợp hệ thống khiên chắn chống Local SQL Injection đa lớp.
  ➜ Hỗ trợ tìm kiếm nhanh website thông minh bằng FZF.
 
@@ -5939,9 +5935,6 @@ Khi bạn đã thử nghiệm xong và không còn nhu cầu sử dụng, tính 
  - Xóa bỏ toàn bộ mã nguồn WordPress (File & Folder) trong thư mục gốc.
  - Xóa Database (Cơ sở dữ liệu) và User Database tương ứng.
  - Gỡ bỏ cấu hình Virtual Host khỏi OpenLiteSpeed và thu hồi chứng chỉ SSL.
-
-🛑 CẢNH BÁO MẤT DỮ LIỆU:
-Thao tác này là KHÔNG THỂ PHỤC HỒI. Hãy đảm bảo bạn đã tải xuống (Download) các đoạn Code, Theme, hoặc Plugin do bạn tự viết trước khi bấm nút Xóa.
 ```
 
 ---
