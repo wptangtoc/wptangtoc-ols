@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Engine Render & Điều hướng Menu Trung tâm (WCAG AAA Live Highlight + Native Cursor)
+# @description: Engine Render & Điều hướng Menu Trung tâm (WCAG AAA + Zero-Infinite-Loop Enterprise)
 # @since: 2026
 
 # ==============================================================================
@@ -58,6 +58,10 @@ stty iutf8 2>/dev/null || true
 shopt -s extglob
 PS3=""
 
+# Cấu hình cầu chì chống treo / chống lặp vô tận
+WPTT_MENU_IDLE_SEC="${WPTT_MENU_IDLE_SEC:-3600}"   # Tự thoát nếu treo Menu không thao tác quá 1 giờ
+WPTT_MAX_MENU_LOOPS="${WPTT_MAX_MENU_LOOPS:-500}"  # Chốt chặn số vòng lặp tối đa trong 1 phiên
+
 # ==============================================================================
 # 2. XÁC ĐỊNH ROUTE ĐIỀU HƯỚNG & NHẬN DIỆN MENU CHÍNH / MENU CON
 # ==============================================================================
@@ -90,7 +94,7 @@ _get_cli_menu_num() {
 }
 
 # ==============================================================================
-# 3. BẪY TÍN HIỆU & DỌN DẸP TÀI NGUYÊN TẠM TRÊN RAM (/dev/shm)
+# 3. BẪY TÍN HIỆU AN TOÀN (PHÂN BIỆT CTRL+C VỚI ĐỨT KẾT NỐI SSH / SIGHUP)
 # ==============================================================================
 SUB_IDX_FILE=""
 WPTT_SUB_FIFO=""
@@ -105,10 +109,21 @@ _wptt_cleanup_sub_search() {
   WPTT_SUB_AWK=""
 }
 
+# Khi rớt mạng SSH (SIGHUP) hoặc bị kill (SIGTERM): Thoát dứt điểm, KHÔNG gọi bash --login
+_wptt_menu_hangup() {
+  trap - SIGINT SIGTERM SIGQUIT SIGHUP EXIT
+  _wptt_cleanup_sub_search
+  exit 129
+}
+
+# Khi người dùng chủ động nhấn Ctrl+C (SIGINT): Kiểm tra TTY thật còn sống mới mở bash
 _wptt_menu_ctrl_c() {
-  trap - SIGINT SIGTERM SIGQUIT EXIT
+  trap - SIGINT SIGTERM SIGQUIT SIGHUP EXIT
   _wptt_cleanup_sub_search
   if [[ ! -t 0 || ! -t 1 || "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    exit 130
+  fi
+  if ! { : >/dev/tty; } 2>/dev/null; then
     exit 130
   fi
   stty sane 2>/dev/null || true
@@ -119,7 +134,8 @@ _wptt_menu_ctrl_c() {
   exec bash --login
 }
 trap '_wptt_cleanup_sub_search' EXIT
-trap '_wptt_menu_ctrl_c' SIGINT SIGTERM SIGQUIT
+trap '_wptt_menu_hangup' SIGHUP SIGTERM SIGQUIT
+trap '_wptt_menu_ctrl_c' SIGINT
 
 # ==============================================================================
 # 4. ENGINE VẼ GIAO DIỆN & BẢNG MÀU CHUẨN WCAG 2.1 AAA (100% NATIVE BASH - 0 SUBSHELL)
@@ -135,9 +151,6 @@ declare -a WPTT_ITEM_NORM=()
 declare -a WPTT_ITEM_HL=()
 declare -a WPTT_ITEM_LABEL=()
 
-# ------------------------------------------------------------------------------
-# BẢNG MÀU TƯƠNG PHẢN CAO (WCAG 2.1 LEVEL AAA PASS - CONTRAST RATIO >= 11.8:1)
-# ------------------------------------------------------------------------------
 WPTT_HL_THEME="${WPTT_HL_THEME:-navy}"
 
 case "$WPTT_HL_THEME" in
@@ -240,9 +253,6 @@ print_row() {
   ((WPTT_RENDER_LINE++))
 }
 
-# ==============================================================================
-# HÀM IN DÒNG FULL (DÙNG CHO CÁC MENU PHÂN NHÓM 1 CỘT - 0 SUBSHELL)
-# ==============================================================================
 print_full_row() {
   local index="$1"
   local text="$2"
@@ -370,7 +380,7 @@ _wptt_update_live_prompt() {
 
   local out_seq=""
 
-  # 1. Trả lại màu bình thường cho mục cũ (nếu thay đổi số)
+  # 1. Trả lại màu bình thường cho mục cũ
   if ((prev_hl > 0 && prev_hl != new_hl)); then
     local old_line="${WPTT_ITEM_LINE[prev_hl]:-}"
     local old_col="${WPTT_ITEM_COL[prev_hl]:-}"
@@ -392,7 +402,7 @@ _wptt_update_live_prompt() {
     fi
   fi
 
-  # 3. Dựng ô Input [11    ] sạch sẽ (không dùng ký tự nhấp nháy giả) và đặt Con trỏ gốc của Terminal vào đúng vị trí
+  # 3. Dựng ô Input [11    ] sạch sẽ và đặt Con trỏ gốc của Terminal vào đúng vị trí
   local disp_buf="$buf"
   ((${#disp_buf} > 6)) && disp_buf="${disp_buf:0:6}"
   local len_b=${#disp_buf}
@@ -406,14 +416,13 @@ _wptt_update_live_prompt() {
   local right_border_col=$(( ${#MARGIN} + 80 ))
   local input_cursor_col=$(( ${#MARGIN} + 26 + len_b ))
 
-  # Xóa dòng hiện tại -> In viền trái + Nội dung -> Nhảy cứng tới cột 80 in viền phải │
   out_seq+=$'\033[2K\033['"${left_border_col}G${C_CYAN}│${C_RESET}  ${C_AAA_GREEN}>>${C_RESET} ${C_AAA_WHITE}Lựa chọn của bạn:${C_RESET} ${box_color}[${C_AAA_YELLOW}${box_val}${box_color}]${C_RESET} ${status_text}"$'\033['"${right_border_col}G${C_CYAN}│${C_RESET}"
-
-  # Đặt con trỏ gốc của Terminal (Native Hardware Cursor) vào ngay sau chữ số vừa gõ
   out_seq+=$'\033['"${input_cursor_col}G"$'\033[?25h'
 
-  printf '%b' "$out_seq"
+  # Nếu ghi ra TTY thất bại (đứt kết nối EIO), báo lỗi để thoát vòng lặp ngay
+  printf '%b' "$out_seq" 2>/dev/null || return 1
   WPTT_ACTIVE_HL=$new_hl
+  return 0
 }
 
 _wptt_read_interactive_choice() {
@@ -423,31 +432,32 @@ _wptt_read_interactive_choice() {
 
   # Nếu không phải TTY tương tác thật (VD: chạy trong BATS test / Pipe), dùng read chuẩn
   if [[ ! -t 0 || ! -t 1 || -n "${BATS_TEST_FILENAME:-}" || "${CI:-}" == "true" ]]; then
-    if ! IFS= read -r choice; then
+    if ! IFS= read -r -t "$WPTT_MENU_IDLE_SEC" choice; then
       return 1
     fi
     return 0
   fi
 
-  # Vẽ ô nhập liệu trống ban đầu với con trỏ gốc của Terminal
-  _wptt_update_live_prompt "" "$prompt_line" 0
+  # Vẽ ô nhập liệu trống ban đầu; nếu lỗi ghi TTY thì thoát ngay
+  _wptt_update_live_prompt "" "$prompt_line" 0 || return 1
 
   local char="" rest="" key_guard=0
-  while ((++key_guard < 10000)); do
-    if ! IFS= read -rsn1 char; then
+  while ((++key_guard < 4096)); do
+    # Có Idle Timeout (mặc định 3600s): nếu treo máy bỏ quên hoặc mất TTY sẽ tự trả về != 0 và thoát
+    if ! IFS= read -rsn1 -t "$WPTT_MENU_IDLE_SEC" char; then
       return 1
     fi
 
     # 1. Phím Enter (Kết thúc nhập)
     if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
-      break
+      return 0
     fi
 
     # 2. Phím Backspace / Delete
     if [[ "$char" == $'\x7f' || "$char" == $'\x08' || "$char" == $'\b' ]]; then
       if [[ -n "$choice" ]]; then
         choice="${choice%?}"
-        _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+        _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
       fi
       continue
     fi
@@ -464,22 +474,22 @@ _wptt_read_interactive_choice() {
       rest=""
       IFS= read -rsn2 -t 0.03 rest 2>/dev/null || true
       case "$rest" in
-        '[B' | '[C') # Mũi tên Xuống / Phải -> Tăng số lựa chọn
+        '[B' | '[C')
           local next_n=$((WPTT_ACTIVE_HL + 1))
           ((next_n > total_valid_opts)) && next_n=1
           choice="$next_n"
-          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
           ;;
-        '[A' | '[D') # Mũi tên Lên / Trái -> Giảm số lựa chọn
+        '[A' | '[D')
           local prev_n=$((WPTT_ACTIVE_HL - 1))
           ((prev_n < 1)) && prev_n=$total_valid_opts
           choice="$prev_n"
-          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
           ;;
-        '') # Nhấn ESC đơn -> Xóa nhanh ô đang gõ
+        '')
           if [[ -n "$choice" ]]; then
             choice=""
-            _wptt_update_live_prompt "" "$prompt_line" "$WPTT_ACTIVE_HL"
+            _wptt_update_live_prompt "" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
           fi
           ;;
       esac
@@ -489,11 +499,12 @@ _wptt_read_interactive_choice() {
     # 5. Ký tự in được thông thường (Số hoặc chữ lệnh CLI)
     if (( ${#choice} < 32 )) && [[ "$char" =~ [[:print:]] ]]; then
       choice+="$char"
-      _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+      _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
     fi
   done
 
-  return 0
+  # Chốt chặn: nếu vượt quá 4096 ký tự trong 1 lần nhập (kẹt phím / flood I/O) -> Báo lỗi thoát
+  return 1
 }
 
 # ==============================================================================
@@ -940,14 +951,22 @@ done
 total_valid_opts=${#valid_indices[@]}
 
 # ==============================================================================
-# 6. VÒNG LẶP DASHBOARD CHÍNH
+# 6. VÒNG LẶP DASHBOARD CHÍNH (HARD-CAPPED LOOP & TTY GUARD)
 # ==============================================================================
-while true; do
+_wptt_menu_loop_guard=0
+
+while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
+
+  # Nếu đang chạy tương tác mà TTY bị đóng (rớt SSH), lập tức dừng vòng lặp
+  if [[ -z "${BATS_TEST_FILENAME:-}" && "${CI:-}" != "true" ]]; then
+    if [[ ! -t 0 && ! -t 1 ]]; then
+      break
+    fi
+  fi
 
   if [[ -t 0 ]]; then stty -echo 2>/dev/null; fi
   calc_margin
 
-  # Reset bộ đếm tọa độ dòng trước mỗi lần vẽ bảng Menu
   WPTT_RENDER_LINE=0
   WPTT_ITEM_LINE=()
   WPTT_ITEM_COL=()
@@ -1041,7 +1060,6 @@ while true; do
   elif [[ "$choice" == "00" ]]; then
     if ((IS_MAIN_MENU == 1)); then
       _wptt_cleanup_sub_search
-      /etc/wptt/search-wptangtoc
       if [[ -f /etc/wptt/search-wptangtoc ]]; then
         chmod +x /etc/wptt/search-wptangtoc 2>/dev/null || true
         exec /etc/wptt/search-wptangtoc
@@ -1111,7 +1129,7 @@ while true; do
       echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
       echo -en "\n${C_AAA_GREEN}➜ Nhấn [Enter] để quay lại Menu...${C_RESET}"
-      read -r _ || exit 0
+      read -r -t "$WPTT_MENU_IDLE_SEC" _ || exit 0
     else
       err_msg="[!] Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến ${total_valid_opts}."
       len_err=${#err_msg}
