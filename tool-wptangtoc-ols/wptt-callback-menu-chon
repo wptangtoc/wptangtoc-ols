@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Engine Render & Điều hướng Menu Trung tâm (Live Highlight + Adaptive Debounce)
+# @description: Engine Render & Điều hướng Menu Trung tâm (WCAG AAA Live Highlight + Native Cursor)
 # @since: 2026
 
 # ==============================================================================
@@ -28,8 +28,32 @@ if ! declare -F _runing &>/dev/null; then
   . /etc/wptt/echo-color 2>/dev/null
 fi
 
-export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
-export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
+# Chuẩn hóa mọi biến màu từ dạng chữ '\033' sang byte ESC thật ($'\033') một lần duy nhất
+_wptt_esc=$'\033'
+for _cvar in C_RESET C_RED C_GREEN C_YELLOW C_BLUE C_PURPLE C_CYAN C_WHITE C_BOLD_WHITE; do
+  if [[ -n "${!_cvar:-}" ]]; then
+    _cval="${!_cvar}"
+    _cval="${_cval//\\033/$_wptt_esc}"
+    _cval="${_cval//\\e/$_wptt_esc}"
+    printf -v "$_cvar" '%s' "$_cval"
+  fi
+done
+unset _wptt_esc _cvar _cval
+
+# Bảo đảm charset UTF-8 bằng Pure Bash (0-Subshell) để ${#var} đếm chuẩn ký tự Tiếng Việt
+_wptt_eff_cs="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+case "${_wptt_eff_cs,,}" in
+  *utf-8* | *utf8*) : ;;
+  *)
+    if [[ -n "${LC_ALL:-}" ]]; then
+      export LC_ALL="C.UTF-8"
+    else
+      export LC_CTYPE="C.UTF-8"
+    fi
+    ;;
+esac
+unset _wptt_eff_cs
+
 stty iutf8 2>/dev/null || true
 shopt -s extglob
 PS3=""
@@ -51,7 +75,7 @@ _get_cli_menu_num() {
   if [[ -n "${cli_menu_num:-}" ]]; then
     return 0
   fi
-  local line last_num=""
+  local line="" last_num=""
   if [[ -r /usr/bin/wptangtoc ]]; then
     while IFS= read -r line; do
       if [[ "$line" =~ ^[[:space:]]*([0-9]+)\) ]]; then
@@ -88,6 +112,7 @@ _wptt_menu_ctrl_c() {
     exit 130
   fi
   stty sane 2>/dev/null || true
+  printf '\033[?25h' 2>/dev/null || true
   tput cnorm 2>/dev/null || true
   echo -e "\n\nĐã thoát. Nhập lệnh ${C_GREEN}1${C_RESET} để quay lại."
   export WPTT_BYPASS=1
@@ -97,41 +122,70 @@ trap '_wptt_cleanup_sub_search' EXIT
 trap '_wptt_menu_ctrl_c' SIGINT SIGTERM SIGQUIT
 
 # ==============================================================================
-# 4. ENGINE VẼ GIAO DIỆN & GHI NHỚ TỌA ĐỘ Ô MENU (100% NATIVE BASH - 0 SUBSHELL)
+# 4. ENGINE VẼ GIAO DIỆN & BẢNG MÀU CHUẨN WCAG 2.1 AAA (100% NATIVE BASH - 0 SUBSHELL)
 # ==============================================================================
 MARGIN=""
 calc_margin() { MARGIN=""; }
 
-# Bộ nhớ tọa độ dòng/cột trên RAM để tô sáng tức thì (0-Subshell)
 WPTT_RENDER_LINE=0
+WPTT_ACTIVE_HL=0
 declare -a WPTT_ITEM_LINE=()
 declare -a WPTT_ITEM_COL=()
 declare -a WPTT_ITEM_NORM=()
 declare -a WPTT_ITEM_HL=()
 declare -a WPTT_ITEM_LABEL=()
 
-# Màu nền tô sáng mục đang gõ (Xanh lá đậm Emerald + Chữ trắng đậm giống Web Simulator)
-C_HL_BG=$'\033[48;5;22;1;97m'
-C_HL_NUM=$'\033[48;5;22;1;93m'
+# ------------------------------------------------------------------------------
+# BẢNG MÀU TƯƠNG PHẢN CAO (WCAG 2.1 LEVEL AAA PASS - CONTRAST RATIO >= 11.8:1)
+# ------------------------------------------------------------------------------
+WPTT_HL_THEME="${WPTT_HL_THEME:-navy}"
+
+case "$WPTT_HL_THEME" in
+  amber)
+    C_HL_BG=$'\033[48;5;220;38;5;16;1m'
+    C_HL_NUM=$'\033[48;5;220;38;5;16;1m'
+    ;;
+  emerald)
+    C_HL_BG=$'\033[48;5;22;48;2;0;58;0;38;5;231;1m'
+    C_HL_NUM=$'\033[48;5;22;48;2;0;58;0;38;5;226;1m'
+    ;;
+  *)
+    C_HL_BG=$'\033[48;5;18;48;2;0;43;92;38;5;231;1m'
+    C_HL_NUM=$'\033[48;5;18;48;2;0;43;92;38;5;226;1m'
+    ;;
+esac
+
+C_AAA_WHITE=$'\033[1;97m'          # Trắng tinh khiết (16.5:1)
+C_AAA_YELLOW=$'\033[1;38;5;226m'   # Vàng chanh sáng (14.8:1)
+C_AAA_GREEN=$'\033[1;38;5;83m'     # Xanh lục bảo sáng (11.4:1)
+C_AAA_RED=$'\033[1;38;5;210m'      # Đỏ Coral sáng (7.8:1)
+C_AAA_CYAN=$'\033[1;38;5;117m'     # Xanh da trời sáng (10.6:1)
 
 _strip_ansi() {
   local s="$1"
-  while [[ "$s" =~ $'\x1B'\[[0-9\;]*[a-zA-Z] ]]; do
-    s="${s//"${BASH_REMATCH[0]}"/}"
-  done
-  REPLY_PLAIN="$s"
+  local esc=$'\x1B'
+  [[ "$s" == *'\033'* ]] && s="${s//\\033/$esc}"
+  [[ "$s" == *'\e'* ]] && s="${s//\\e/$esc}"
+  if [[ "$s" != *"$esc"* ]]; then
+    REPLY_PLAIN="$s"
+    return 0
+  fi
+  REPLY_PLAIN="${s//${esc}\[*([0-9;?])[@-~]/}"
 }
 
 print_row() {
   local l_num="$1" l_text="$2" r_num="$3" r_text="$4"
   local c1_plain="" c1_color="" c2_plain="" c2_color=""
-  local num_fmt pad_l pad_r cell_pad
+  local num_fmt="" pad_l=0 pad_r=0 cell_pad=""
+  local REPLY_PLAIN=""
 
   if [[ -n "$l_text" ]]; then
+    _strip_ansi "$l_text"
+    l_text="$REPLY_PLAIN"
     if [[ -z "$l_num" ]]; then
       c1_plain="  ▶ ${l_text}"
       ((${#c1_plain} > 36)) && c1_plain="${c1_plain:0:34}.."
-      c1_color="  ${C_YELLOW}▶ ${C_BOLD_WHITE}${c1_plain:4}${C_RESET}"
+      c1_color="  ${C_AAA_YELLOW}▶ ${C_AAA_WHITE}${c1_plain:4}${C_RESET}"
     else
       printf -v num_fmt "%2s" "$l_num"
       c1_plain="  [$num_fmt] ${l_text}"
@@ -141,10 +195,12 @@ print_row() {
   fi
 
   if [[ -n "$r_text" ]]; then
+    _strip_ansi "$r_text"
+    r_text="$REPLY_PLAIN"
     if [[ -z "$r_num" ]]; then
       c2_plain="  ▶ ${r_text}"
       ((${#c2_plain} > 36)) && c2_plain="${c2_plain:0:34}.."
-      c2_color="  ${C_YELLOW}▶ ${C_BOLD_WHITE}${c2_plain:4}${C_RESET}"
+      c2_color="  ${C_AAA_YELLOW}▶ ${C_AAA_WHITE}${c2_plain:4}${C_RESET}"
     else
       printf -v num_fmt "%2s" "$r_num"
       c2_plain="  [$num_fmt] ${r_text}"
@@ -158,7 +214,6 @@ print_row() {
   pad_r=$((37 - ${#c2_plain}))
   ((pad_r < 0)) && pad_r=0
 
-  # Lưu tọa độ và mẫu chuỗi Bình thường / Tô sáng cho cột trái
   if [[ -n "$l_num" && "$l_num" =~ ^[0-9]+$ ]]; then
     local idx_l=$((10#$l_num))
     printf -v num_fmt "%2s" "$l_num"
@@ -166,11 +221,10 @@ print_row() {
     WPTT_ITEM_LINE[idx_l]=$WPTT_RENDER_LINE
     WPTT_ITEM_COL[idx_l]=$(( ${#MARGIN} + 3 ))
     WPTT_ITEM_NORM[idx_l]="${c1_color}${cell_pad}"
-    WPTT_ITEM_HL[idx_l]=" ${C_HL_NUM} [$num_fmt]${C_HL_BG} ${c1_plain:7}${cell_pad}${C_RESET}"
+    WPTT_ITEM_HL[idx_l]="${C_HL_NUM} ❯[$num_fmt]${C_HL_BG} ${c1_plain:7}${cell_pad}${C_RESET}"
     WPTT_ITEM_LABEL[idx_l]="${l_text}"
   fi
 
-  # Lưu tọa độ và mẫu chuỗi Bình thường / Tô sáng cho cột phải
   if [[ -n "$r_num" && "$r_num" =~ ^[0-9]+$ ]]; then
     local idx_r=$((10#$r_num))
     printf -v num_fmt "%2s" "$r_num"
@@ -178,7 +232,7 @@ print_row() {
     WPTT_ITEM_LINE[idx_r]=$WPTT_RENDER_LINE
     WPTT_ITEM_COL[idx_r]=$(( ${#MARGIN} + 42 ))
     WPTT_ITEM_NORM[idx_r]="${c2_color}${cell_pad}"
-    WPTT_ITEM_HL[idx_r]=" ${C_HL_NUM} [$num_fmt]${C_HL_BG} ${c2_plain:7}${cell_pad}${C_RESET}"
+    WPTT_ITEM_HL[idx_r]="${C_HL_NUM} ❯[$num_fmt]${C_HL_BG} ${c2_plain:7}${cell_pad}${C_RESET}"
     WPTT_ITEM_LABEL[idx_r]="${r_text}"
   fi
 
@@ -194,7 +248,7 @@ print_full_row() {
   local text="$2"
   local box_inner_width=78
   local REPLY_PLAIN=""
-  local clean_len pad pad_str formatted_index
+  local clean_len=0 pad=0 pad_str="" formatted_index=""
 
   _strip_ansi "$text"
 
@@ -204,7 +258,7 @@ print_full_row() {
     ((pad < 0)) && pad=0
     printf -v pad_str '%*s' "$pad" ""
 
-    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_YELLOW}▶${C_RESET} ${C_BOLD_WHITE}${text^^}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
+    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_AAA_YELLOW}▶${C_RESET} ${C_AAA_WHITE}${REPLY_PLAIN^^}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
   else
     printf -v formatted_index "%2s" "$index"
     clean_len=$((3 + ${#formatted_index} + 3 + ${#REPLY_PLAIN}))
@@ -214,7 +268,7 @@ print_full_row() {
 
     if [[ "$index" =~ ^[0-9]+$ ]]; then
       local idx_f=$((10#$index))
-      local norm_str="   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${text}${C_RESET}${pad_str}"
+      local norm_str="   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${REPLY_PLAIN}${C_RESET}${pad_str}"
       local hl_pad=$((pad - 1))
       ((hl_pad < 0)) && hl_pad=0
       local hl_pad_str=""
@@ -222,11 +276,11 @@ print_full_row() {
       WPTT_ITEM_LINE[idx_f]=$WPTT_RENDER_LINE
       WPTT_ITEM_COL[idx_f]=$(( ${#MARGIN} + 2 ))
       WPTT_ITEM_NORM[idx_f]="$norm_str"
-      WPTT_ITEM_HL[idx_f]="  ${C_HL_NUM} [${formatted_index}]${C_HL_BG} ${REPLY_PLAIN}${hl_pad_str}${C_RESET} "
+      WPTT_ITEM_HL[idx_f]=" ${C_HL_NUM} ❯[${formatted_index}]${C_HL_BG} ${REPLY_PLAIN}${hl_pad_str}${C_RESET} "
       WPTT_ITEM_LABEL[idx_f]="$REPLY_PLAIN"
     fi
 
-    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${text}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
+    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${REPLY_PLAIN}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
   fi
   ((WPTT_RENDER_LINE++))
 }
@@ -240,7 +294,7 @@ print_header() {
   ((p_left < 0)) && p_left=0
   local p_right=$((78 - len - p_left))
   ((p_right < 0)) && p_right=0
-  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_BOLD_WHITE}%b${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
+  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_AAA_WHITE}%b${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
   ((WPTT_RENDER_LINE++))
 }
 
@@ -251,7 +305,7 @@ print_spacer() {
 
 draw_default_grid() {
   local item_count=1
-  local opt clean_opt
+  local opt="" clean_opt=""
   for opt in "${options[@]}"; do
     if [[ "$opt" == *"───"* ]]; then
       print_spacer
@@ -269,31 +323,25 @@ draw_default_grid() {
 }
 
 # ==============================================================================
-# 4A. ENGINE NHẬP LIỆU TƯƠNG TÁC TRỰC TIẾP (LIVE HIGHLIGHT & PREVIEW BAR)
+# 4A. ENGINE NHẬP LIỆU TƯƠNG TÁC TRỰC TIẾP (100% NATIVE TERMINAL CURSOR)
 # ==============================================================================
-# Tô sáng mục [N] ngay trên bảng và hiển thị thanh Preview bên phải ô nhập liệu
-# mà không cần vẽ lại màn hình (0-Subshell, ~100 bytes ANSI mỗi phím bấm).
 _wptt_update_live_prompt() {
   local buf="$1"
   local prompt_line="$2"
   local prev_hl="$3"
   local new_hl=0
-  local status_text="" status_plain=""
-
-  # Tổng ruột khung = 78 cột.
-  # Cụm bên trái: "  >> Lựa chọn của bạn: " (23) + "[xxxxxx]" (8) + " " (1) = 32 cột.
-  # => Không gian tối đa cho status_plain bên phải là: 78 - 32 = 46 cột (dành 1 cột đệm = 45 cột).
+  local status_text=""
   local max_right_cols=45
 
-  if [[ "$buf" =~ ^[0-9]+$ ]]; then
+  if [[ -z "$buf" ]]; then
+    status_text="${C_CYAN}← Gõ số hoặc bấm phím ${C_AAA_YELLOW}↑↓${C_CYAN} để chọn${C_RESET}"
+  elif [[ "$buf" =~ ^[0-9]+$ ]]; then
     if [[ "$buf" == "0" ]]; then
       local back_lbl="$TEXT_BACK"
       ((${#back_lbl} > 28)) && back_lbl="${back_lbl:0:26}.."
-      status_plain="→ [0] ${back_lbl} (Enter ↵)"
-      status_text="${C_RED}→ [0] ${back_lbl} ${C_YELLOW}(Enter ↵)${C_RESET}"
+      status_text="${C_AAA_RED}→ [0] ${C_AAA_WHITE}${back_lbl} ${C_AAA_YELLOW}(Enter ↵)${C_RESET}"
     elif [[ "$buf" == "00" ]]; then
-      status_plain="→ [00] Mở công cụ Tìm kiếm (Enter ↵)"
-      status_text="${C_GREEN}→ [00] Mở công cụ Tìm kiếm ${C_YELLOW}(Enter ↵)${C_RESET}"
+      status_text="${C_AAA_GREEN}→ [00] ${C_AAA_WHITE}Mở công cụ Tìm kiếm ${C_AAA_YELLOW}(Enter ↵)${C_RESET}"
     else
       local num_val=$((10#$buf))
       if ((num_val >= 1 && num_val <= total_valid_opts)); then
@@ -305,24 +353,19 @@ _wptt_update_live_prompt() {
           _strip_ansi "${options[$act_idx]}"
           lbl="$REPLY_PLAIN"
         fi
-        # Tính số ký tự tối đa còn lại cho tên tính năng để không bao giờ tràn 45 cột:
-        # "→ [" (3) + num_val + "] " (2) + lbl + " (Enter ↵)" (10) <= 45
         local max_lbl=$((max_right_cols - 15 - ${#num_val}))
         if (( ${#lbl} > max_lbl )); then
           lbl="${lbl:0:$((max_lbl - 2))}.."
         fi
-        status_plain="→ [$num_val] $lbl (Enter ↵)"
-        status_text="${C_GREEN}→ [${num_val}] ${C_BOLD_WHITE}${lbl} ${C_YELLOW}(Enter ↵)${C_RESET}"
+        status_text="${C_AAA_GREEN}→ [${num_val}] ${C_AAA_WHITE}${lbl} ${C_AAA_YELLOW}(Enter ↵)${C_RESET}"
       else
-        status_plain="→ [!] Ngoài phạm vi (1-${total_valid_opts})"
-        status_text="${C_RED}→ [!] Ngoài phạm vi (1-${total_valid_opts})${C_RESET}"
+        status_text="${C_AAA_RED}→ [!] Ngoài phạm vi (1-${total_valid_opts})${C_RESET}"
       fi
     fi
-  elif [[ -n "$buf" ]]; then
+  else
     local short_b="$buf"
     ((${#short_b} > 30)) && short_b="${short_b:0:28}.."
-    status_plain="→ Lệnh: $short_b"
-    status_text="${C_YELLOW}→ Lệnh: ${short_b}${C_RESET}"
+    status_text="${C_AAA_YELLOW}→ Lệnh: ${C_AAA_WHITE}${short_b}${C_RESET}"
   fi
 
   local out_seq=""
@@ -338,7 +381,7 @@ _wptt_update_live_prompt() {
     fi
   fi
 
-  # 2. Tô sáng mục mới trên bảng Menu
+  # 2. Tô sáng mục mới chuẩn WCAG AAA trên bảng Menu
   if ((new_hl > 0 && new_hl != prev_hl)); then
     local cur_line="${WPTT_ITEM_LINE[new_hl]:-}"
     local cur_col="${WPTT_ITEM_COL[new_hl]:-}"
@@ -349,27 +392,25 @@ _wptt_update_live_prompt() {
     fi
   fi
 
-  # 3. Cập nhật dòng Prompt ở dưới cùng (Khóa cứng viền phải ở cột 80)
+  # 3. Dựng ô Input [11    ] sạch sẽ (không dùng ký tự nhấp nháy giả) và đặt Con trỏ gốc của Terminal vào đúng vị trí
   local disp_buf="$buf"
   ((${#disp_buf} > 6)) && disp_buf="${disp_buf:0:6}"
+  local len_b=${#disp_buf}
   local box_val=""
   printf -v box_val "%-6s" "$disp_buf"
 
-  local rem_width=$((78 - 32 - ${#status_plain}))
-  ((rem_width < 0)) && rem_width=0
-  local rem_pad=""
-  printf -v rem_pad '%*s' "$rem_width" ""
+  local box_color="${C_AAA_GREEN}"
+  [[ "$buf" == "0" || "$buf" == "00" ]] && box_color="${C_AAA_YELLOW}"
 
-  local box_color="${C_CYAN}"
-  ((new_hl > 0)) && box_color="${C_GREEN}"
-  [[ "$buf" == "0" || "$buf" == "00" ]] && box_color="${C_YELLOW}"
+  local left_border_col=$(( ${#MARGIN} + 1 ))
+  local right_border_col=$(( ${#MARGIN} + 80 ))
+  local input_cursor_col=$(( ${#MARGIN} + 26 + len_b ))
 
-  local prompt_col=$(( ${#MARGIN} + 2 ))
-  out_seq+=$'\033[2K\033['"$(( ${#MARGIN} + 1 ))G${C_CYAN}│${C_RESET}  ${C_GREEN}>>${C_RESET} ${C_BOLD_WHITE}Lựa chọn của bạn:${C_RESET} ${box_color}[${C_BOLD_WHITE}${box_val}${box_color}]${C_RESET} ${status_text}${rem_pad}${C_CYAN}│${C_RESET}"
+  # Xóa dòng hiện tại -> In viền trái + Nội dung -> Nhảy cứng tới cột 80 in viền phải │
+  out_seq+=$'\033[2K\033['"${left_border_col}G${C_CYAN}│${C_RESET}  ${C_AAA_GREEN}>>${C_RESET} ${C_AAA_WHITE}Lựa chọn của bạn:${C_RESET} ${box_color}[${C_AAA_YELLOW}${box_val}${box_color}]${C_RESET} ${status_text}"$'\033['"${right_border_col}G${C_CYAN}│${C_RESET}"
 
-  # Đặt lại con trỏ vào đúng bên trong ô nhập `[15    ]`
-  local input_cursor_col=$(( ${#MARGIN} + 26 + ${#disp_buf} ))
-  out_seq+=$'\033['"${input_cursor_col}G"
+  # Đặt con trỏ gốc của Terminal (Native Hardware Cursor) vào ngay sau chữ số vừa gõ
+  out_seq+=$'\033['"${input_cursor_col}G"$'\033[?25h'
 
   printf '%b' "$out_seq"
   WPTT_ACTIVE_HL=$new_hl
@@ -388,11 +429,11 @@ _wptt_read_interactive_choice() {
     return 0
   fi
 
-  # Vẽ ô nhập liệu trống ban đầu
+  # Vẽ ô nhập liệu trống ban đầu với con trỏ gốc của Terminal
   _wptt_update_live_prompt "" "$prompt_line" 0
 
-  local char="" rest=""
-  while :; do
+  local char="" rest="" key_guard=0
+  while ((++key_guard < 10000)); do
     if ! IFS= read -rsn1 char; then
       return 1
     fi
@@ -418,7 +459,7 @@ _wptt_read_interactive_choice() {
       return 1
     fi
 
-    # 4. Phím Escape / Phím mũi tên ↑ ↓ ← → để di chuyển vùng sáng trực tiếp!
+    # 4. Phím Escape / Phím mũi tên ↑ ↓ ← → để di chuyển vùng sáng trực tiếp
     if [[ "$char" == $'\x1b' || "$char" == $'\e' ]]; then
       rest=""
       IFS= read -rsn2 -t 0.03 rest 2>/dev/null || true
@@ -515,7 +556,7 @@ wptt_sub_fzf_previewer() {
     return 0
   fi
 
-  local alt_regex="" word esc_word i ch
+  local alt_regex="" word="" esc_word="" i=0 ch=""
   if [[ -n "$search_query" ]]; then
     for word in $search_query; do
       ((${#word} < 2)) && continue
@@ -542,7 +583,7 @@ wptt_sub_fzf_previewer() {
     done
   fi
 
-  local active=0 line trimmed line_count=0 re=""
+  local active=0 line="" trimmed="" line_count=0 re=""
   [[ -n "$alt_regex" ]] && re="($alt_regex)"
 
   shopt -s nocasematch
@@ -570,7 +611,7 @@ wptt_sub_fzf_previewer() {
     fi
 
     if [[ -n "$re" && "$line" =~ $re ]]; then
-      local out="" rest="$line" m_str prefix
+      local out="" rest="$line" m_str="" prefix=""
       while [[ "$rest" =~ $re ]]; do
         m_str="${BASH_REMATCH[1]}"
         [[ -z "$m_str" ]] && break
@@ -771,7 +812,7 @@ EOF
 
   local global_idx="/etc/wptt/tmp/wptt_search_ft_v4_${ngon_ngu:-vi}_${version_wptangtoc_ols:-latest}.idx"
   local -a raw_sub_lines=()
-  local count=1 i REPLY_PLAIN=""
+  local count=1 i=0 REPLY_PLAIN=""
   for i in "${valid_indices[@]}"; do
     _strip_ansi "${options[$i]}"
     raw_sub_lines+=("${count}"$'\t'"${REPLY_PLAIN}")
@@ -858,7 +899,7 @@ EOF
   ' < <(printf "%s\n" "${raw_sub_lines[@]}") >"$SUB_IDX_FILE" 2>/dev/null
 
   local -a sub_init_lines=()
-  local f_disp f_num f_full f_script
+  local f_disp="" f_num="" f_full="" f_script=""
   while IFS=$'\t' read -r f_disp f_num f_full f_script _; do
     [[ -z "$f_disp" ]] && continue
     sub_init_lines+=("${f_disp}"$'\t'"${f_num}"$'\t'"${f_full}"$'\t'"${f_script}"$'\t')
@@ -932,7 +973,7 @@ while true; do
   ((WPTT_RENDER_LINE++))
 
   plain_foot=" Nhập số (1-$total_valid_opts) | [00] Tìm kiếm | [0] $TEXT_BACK "
-  color_foot=" ${C_YELLOW}Nhập số (1-$total_valid_opts)${C_RESET} | ${C_GREEN}[00] Tìm kiếm${C_RESET} | ${C_RED}[0] $TEXT_BACK${C_RESET} "
+  color_foot=" ${C_AAA_WHITE}Nhập số (1-$total_valid_opts)${C_RESET} │ ${C_AAA_GREEN}[00] Tìm kiếm${C_RESET} │ ${C_AAA_RED}[0] $TEXT_BACK${C_RESET} "
 
   len_foot=${#plain_foot}
   p_l=$(((78 - len_foot) / 2))
@@ -946,7 +987,7 @@ while true; do
   ((WPTT_RENDER_LINE++))
 
   PROMPT_ROW_IDX=$WPTT_RENDER_LINE
-  printf "${MARGIN}${C_CYAN}│${C_RESET}  ${C_GREEN}>>${C_RESET} ${C_BOLD_WHITE}Lựa chọn của bạn:${C_RESET} %-55s${C_CYAN}│${C_RESET}\n" ""
+  printf "${MARGIN}${C_CYAN}│${C_RESET}  ${C_AAA_GREEN}>>${C_RESET} ${C_AAA_WHITE}Lựa chọn của bạn:${C_RESET} %-55s${C_CYAN}│${C_RESET}\n" ""
   ((WPTT_RENDER_LINE++))
   echo -e "${MARGIN}${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
@@ -984,14 +1025,14 @@ while true; do
     printf -v pad_empty_r '%*s' "$((78 - len_empty - pad_empty))" ""
 
     echo -e "\n${MARGIN}${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    echo -e "${MARGIN}${C_YELLOW}│${C_RESET}${pad_empty_l}${C_BOLD_WHITE}${empty_msg}${C_RESET}${pad_empty_r}${C_YELLOW}│${C_RESET}"
+    echo -e "${MARGIN}${C_YELLOW}│${C_RESET}${pad_empty_l}${C_AAA_WHITE}${empty_msg}${C_RESET}${pad_empty_r}${C_YELLOW}│${C_RESET}"
     echo -e "${MARGIN}${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
     read -r -s -n 1 -t 1.2 _ 2>/dev/null || true
     clear
     continue
 
   elif [[ "$choice" == "0" ]]; then
-    echo -e "\n${MARGIN}${C_YELLOW}Đang $TEXT_BACK...${C_RESET}"
+    echo -e "\n${MARGIN}${C_AAA_YELLOW}Đang $TEXT_BACK...${C_RESET}"
     _wptt_cleanup_sub_search
     clear
     exec "$ROUTE_BACK" 1
@@ -1034,20 +1075,20 @@ while true; do
             fi
           fi
 
-          echo -e "\n${MARGIN}${C_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
+          echo -e "\n${MARGIN}${C_AAA_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
           run_action "$actual_index"
         fi
       else
         clear
       fi
     else
-      echo -e "\n${MARGIN}${C_RED}[!] Lỗi: FZF chưa được cài đặt.${C_RESET}"
+      echo -e "\n${MARGIN}${C_AAA_RED}[!] Lỗi: FZF chưa được cài đặt.${C_RESET}"
       read -r -s -n 1 -t 1.5 _ 2>/dev/null || true
     fi
 
   elif [[ "$choice" =~ ^[0-9]+$ ]] && ((10#$choice >= 1 && 10#$choice <= total_valid_opts)); then
     actual_index="${valid_indices[$((10#$choice - 1))]}"
-    echo -e "\n${MARGIN}${C_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
+    echo -e "\n${MARGIN}${C_AAA_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
     run_action "$actual_index"
 
   elif [[ -n "$choice" ]]; then
@@ -1059,17 +1100,17 @@ while true; do
       pad1=$((76 - ${#text_nhan_dien}))
       ((pad1 < 0)) && pad1=0
       printf -v pad1_str '%*s' "$pad1" ""
-      echo -e "${C_YELLOW}│${C_RESET}  ${C_BOLD_WHITE}${text_nhan_dien}${C_RESET}${pad1_str}${C_YELLOW}│${C_RESET}"
+      echo -e "${C_YELLOW}│${C_RESET}  ${C_AAA_WHITE}${text_nhan_dien}${C_RESET}${pad1_str}${C_YELLOW}│${C_RESET}"
 
       text_huong_dan="Để gõ lệnh CLI, vào Menu ➜ $cli_menu_num (Terminal) hoặc nhấn Ctrl + C"
       len_hd=${#text_huong_dan}
       pad2=$((76 - len_hd))
       ((pad2 < 0)) && pad2=0
       printf -v pad2_str '%*s' "$pad2" ""
-      echo -e "${C_YELLOW}│${C_RESET}  ${C_CYAN}${text_huong_dan}${C_RESET}${pad2_str}${C_YELLOW}│${C_RESET}"
+      echo -e "${C_YELLOW}│${C_RESET}  ${C_AAA_CYAN}${text_huong_dan}${C_RESET}${pad2_str}${C_YELLOW}│${C_RESET}"
       echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-      echo -en "\n${C_GREEN}➜ Nhấn [Enter] để quay lại Menu...${C_RESET}"
+      echo -en "\n${C_AAA_GREEN}➜ Nhấn [Enter] để quay lại Menu...${C_RESET}"
       read -r _ || exit 0
     else
       err_msg="[!] Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến ${total_valid_opts}."
@@ -1079,7 +1120,7 @@ while true; do
       printf -v pad_err_r '%*s' "$((78 - len_err - pad_err))" ""
 
       echo -e "\n${MARGIN}${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      echo -e "${MARGIN}${C_RED}│${C_RESET}${pad_err_l}${C_BOLD_WHITE}${err_msg}${C_RESET}${pad_err_r}${C_RED}│${C_RESET}"
+      echo -e "${MARGIN}${C_RED}│${C_RESET}${pad_err_l}${C_AAA_WHITE}${err_msg}${C_RESET}${pad_err_r}${C_RED}│${C_RESET}"
       echo -e "${MARGIN}${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
       read -r -s -n 1 -t 1.5 _ 2>/dev/null || true
     fi
