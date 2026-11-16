@@ -1,7 +1,7 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Engine Render & Điều hướng Menu Trung tâm (WCAG AAA + Zero-Infinite-Loop Enterprise)
+# @description: Engine Render & Điều hướng Menu Trung tâm
 # @since: 2026
 
 # ==============================================================================
@@ -109,14 +109,12 @@ _wptt_cleanup_sub_search() {
   WPTT_SUB_AWK=""
 }
 
-# Khi rớt mạng SSH (SIGHUP) hoặc bị kill (SIGTERM): Thoát dứt điểm, KHÔNG gọi bash --login
 _wptt_menu_hangup() {
   trap - SIGINT SIGTERM SIGQUIT SIGHUP EXIT
   _wptt_cleanup_sub_search
   exit 129
 }
 
-# Khi người dùng chủ động nhấn Ctrl+C (SIGINT): Kiểm tra TTY thật còn sống mới mở bash
 _wptt_menu_ctrl_c() {
   trap - SIGINT SIGTERM SIGQUIT SIGHUP EXIT
   _wptt_cleanup_sub_search
@@ -138,15 +136,18 @@ trap '_wptt_menu_hangup' SIGHUP SIGTERM SIGQUIT
 trap '_wptt_menu_ctrl_c' SIGINT
 
 # ==============================================================================
-# 4. ENGINE VẼ GIAO DIỆN & BẢNG MÀU CHUẨN WCAG 2.1 AAA (100% NATIVE BASH - 0 SUBSHELL)
+# 4. ENGINE VẼ GIAO DIỆN & BẢN ĐỒ TỌA ĐỘ 2 CHIỀU (100% NATIVE BASH - 0 SUBSHELL)
 # ==============================================================================
 MARGIN=""
 calc_margin() { MARGIN=""; }
 
 WPTT_RENDER_LINE=0
 WPTT_ACTIVE_HL=0
+WPTT_HAS_TWO_COLS=0
 declare -a WPTT_ITEM_LINE=()
 declare -a WPTT_ITEM_COL=()
+declare -a WPTT_ITEM_SIDE=()
+declare -a WPTT_ITEM_PEER=()
 declare -a WPTT_ITEM_NORM=()
 declare -a WPTT_ITEM_HL=()
 declare -a WPTT_ITEM_LABEL=()
@@ -190,6 +191,7 @@ print_row() {
   local l_num="$1" l_text="$2" r_num="$3" r_text="$4"
   local c1_plain="" c1_color="" c2_plain="" c2_color=""
   local num_fmt="" pad_l=0 pad_r=0 cell_pad=""
+  local idx_l=0 idx_r=0
   local REPLY_PLAIN=""
 
   if [[ -n "$l_text" ]]; then
@@ -228,25 +230,34 @@ print_row() {
   ((pad_r < 0)) && pad_r=0
 
   if [[ -n "$l_num" && "$l_num" =~ ^[0-9]+$ ]]; then
-    local idx_l=$((10#$l_num))
+    idx_l=$((10#$l_num))
     printf -v num_fmt "%2s" "$l_num"
     printf -v cell_pad '%*s' "$pad_l" ""
     WPTT_ITEM_LINE[idx_l]=$WPTT_RENDER_LINE
     WPTT_ITEM_COL[idx_l]=$(( ${#MARGIN} + 3 ))
+    WPTT_ITEM_SIDE[idx_l]=1
     WPTT_ITEM_NORM[idx_l]="${c1_color}${cell_pad}"
     WPTT_ITEM_HL[idx_l]="${C_HL_NUM} ❯[$num_fmt]${C_HL_BG} ${c1_plain:7}${cell_pad}${C_RESET}"
     WPTT_ITEM_LABEL[idx_l]="${l_text}"
   fi
 
   if [[ -n "$r_num" && "$r_num" =~ ^[0-9]+$ ]]; then
-    local idx_r=$((10#$r_num))
+    idx_r=$((10#$r_num))
+    WPTT_HAS_TWO_COLS=1
     printf -v num_fmt "%2s" "$r_num"
     printf -v cell_pad '%*s' "$pad_r" ""
     WPTT_ITEM_LINE[idx_r]=$WPTT_RENDER_LINE
     WPTT_ITEM_COL[idx_r]=$(( ${#MARGIN} + 42 ))
+    WPTT_ITEM_SIDE[idx_r]=2
     WPTT_ITEM_NORM[idx_r]="${c2_color}${cell_pad}"
     WPTT_ITEM_HL[idx_r]="${C_HL_NUM} ❯[$num_fmt]${C_HL_BG} ${c2_plain:7}${cell_pad}${C_RESET}"
     WPTT_ITEM_LABEL[idx_r]="${r_text}"
+  fi
+
+  # Liên kết ngang trực tiếp O(1) nếu cả 2 cột trên cùng dòng đều có mục chọn
+  if ((idx_l > 0 && idx_r > 0)); then
+    WPTT_ITEM_PEER[idx_l]=$idx_r
+    WPTT_ITEM_PEER[idx_r]=$idx_l
   fi
 
   printf "${MARGIN}${C_CYAN}│${C_RESET} %b%*s  %b%*s ${C_CYAN}│${C_RESET}\n" "$c1_color" "$pad_l" "" "$c2_color" "$pad_r" ""
@@ -285,6 +296,7 @@ print_full_row() {
       printf -v hl_pad_str '%*s' "$hl_pad" ""
       WPTT_ITEM_LINE[idx_f]=$WPTT_RENDER_LINE
       WPTT_ITEM_COL[idx_f]=$(( ${#MARGIN} + 2 ))
+      WPTT_ITEM_SIDE[idx_f]=1
       WPTT_ITEM_NORM[idx_f]="$norm_str"
       WPTT_ITEM_HL[idx_f]=" ${C_HL_NUM} ❯[${formatted_index}]${C_HL_BG} ${REPLY_PLAIN}${hl_pad_str}${C_RESET} "
       WPTT_ITEM_LABEL[idx_f]="$REPLY_PLAIN"
@@ -333,8 +345,68 @@ draw_default_grid() {
 }
 
 # ==============================================================================
-# 4A. ENGINE NHẬP LIỆU TƯƠNG TÁC TRỰC TIẾP (100% NATIVE TERMINAL CURSOR)
+# 4A. ENGINE ĐIỀU HƯỚNG KHÔNG GIAN 2 CHIỀU (↑ ↓ ← → SPATIAL NAVIGATION)
 # ==============================================================================
+# Tìm mục ở cột đối diện trên cùng dòng (hoặc dòng gần nhất nếu dòng đó bị khuyết)
+_wptt_find_horizontal_target() {
+  local cur="$1"
+  local dir="$2" # "right" hoặc "left"
+  WPTT_NAV_TARGET=$cur
+
+  if ((cur < 1 || cur > total_valid_opts)); then
+    if [[ "$dir" == "right" ]]; then
+      WPTT_NAV_TARGET=1
+    else
+      WPTT_NAV_TARGET=$total_valid_opts
+    fi
+    return 0
+  fi
+
+  # 1. Nếu Menu chỉ có 1 cột duy nhất: Phím ← / → hoạt động như Lùi / Tiến
+  if ((WPTT_HAS_TWO_COLS == 0)); then
+    if [[ "$dir" == "right" ]]; then
+      WPTT_NAV_TARGET=$((cur + 1))
+      ((WPTT_NAV_TARGET > total_valid_opts)) && WPTT_NAV_TARGET=1
+    else
+      WPTT_NAV_TARGET=$((cur - 1))
+      ((WPTT_NAV_TARGET < 1)) && WPTT_NAV_TARGET=$total_valid_opts
+    fi
+    return 0
+  fi
+
+  # 2. Nếu có sẵn mục đối diện trên cùng dòng ngang (O(1) Lookup) -> Nhảy thẳng sang!
+  local peer="${WPTT_ITEM_PEER[cur]:-0}"
+  if ((peer > 0)); then
+    WPTT_NAV_TARGET=$peer
+    return 0
+  fi
+
+  # 3. Nếu dòng hiện tại bị khuyết mục đối diện (do lệch số dòng hoặc vướng tiêu đề nhóm ▶),
+  #    tìm mục ở cột đối diện có khoảng cách dòng (delta row) gần nhất!
+  local cur_side="${WPTT_ITEM_SIDE[cur]:-1}"
+  local target_side=2
+  ((cur_side == 2)) && target_side=1
+  local cur_line="${WPTT_ITEM_LINE[cur]:-0}"
+
+  local best_idx=0 best_dist=9999 idx=1 cand_line=0 dist=0
+  for ((idx = 1; idx <= total_valid_opts; idx++)); do
+    if (( ${WPTT_ITEM_SIDE[idx]:-0} == target_side )); then
+      cand_line="${WPTT_ITEM_LINE[idx]:-0}"
+      dist=$((cand_line - cur_line))
+      ((dist < 0)) && dist=$((-dist))
+      if ((dist < best_dist)); then
+        best_dist=$dist
+        best_idx=$idx
+      fi
+    fi
+  done
+
+  if ((best_idx > 0)); then
+    WPTT_NAV_TARGET=$best_idx
+  fi
+  return 0
+}
+
 _wptt_update_live_prompt() {
   local buf="$1"
   local prompt_line="$2"
@@ -344,7 +416,7 @@ _wptt_update_live_prompt() {
   local max_right_cols=45
 
   if [[ -z "$buf" ]]; then
-    status_text="${C_CYAN}← Gõ số hoặc bấm phím ${C_AAA_YELLOW}↑↓${C_CYAN} để chọn${C_RESET}"
+    status_text="${C_CYAN}← Gõ số hoặc bấm phím ${C_AAA_YELLOW}↑↓←→${C_CYAN} để chọn${C_RESET}"
   elif [[ "$buf" =~ ^[0-9]+$ ]]; then
     if [[ "$buf" == "0" ]]; then
       local back_lbl="$TEXT_BACK"
@@ -419,7 +491,6 @@ _wptt_update_live_prompt() {
   out_seq+=$'\033[2K\033['"${left_border_col}G${C_CYAN}│${C_RESET}  ${C_AAA_GREEN}>>${C_RESET} ${C_AAA_WHITE}Lựa chọn của bạn:${C_RESET} ${box_color}[${C_AAA_YELLOW}${box_val}${box_color}]${C_RESET} ${status_text}"$'\033['"${right_border_col}G${C_CYAN}│${C_RESET}"
   out_seq+=$'\033['"${input_cursor_col}G"$'\033[?25h'
 
-  # Nếu ghi ra TTY thất bại (đứt kết nối EIO), báo lỗi để thoát vòng lặp ngay
   printf '%b' "$out_seq" 2>/dev/null || return 1
   WPTT_ACTIVE_HL=$new_hl
   return 0
@@ -438,12 +509,10 @@ _wptt_read_interactive_choice() {
     return 0
   fi
 
-  # Vẽ ô nhập liệu trống ban đầu; nếu lỗi ghi TTY thì thoát ngay
   _wptt_update_live_prompt "" "$prompt_line" 0 || return 1
 
-  local char="" rest="" key_guard=0
+  local char="" rest="" key_guard=0 WPTT_NAV_TARGET=0
   while ((++key_guard < 4096)); do
-    # Có Idle Timeout (mặc định 3600s): nếu treo máy bỏ quên hoặc mất TTY sẽ tự trả về != 0 và thoát
     if ! IFS= read -rsn1 -t "$WPTT_MENU_IDLE_SEC" char; then
       return 1
     fi
@@ -469,24 +538,34 @@ _wptt_read_interactive_choice() {
       return 1
     fi
 
-    # 4. Phím Escape / Phím mũi tên ↑ ↓ ← → để di chuyển vùng sáng trực tiếp
+    # 4. Phím Escape / Phím mũi tên 4 chiều ↑ ↓ ← →
     if [[ "$char" == $'\x1b' || "$char" == $'\e' ]]; then
       rest=""
       IFS= read -rsn2 -t 0.03 rest 2>/dev/null || true
       case "$rest" in
-        '[B' | '[C')
+        '[B') # Mũi tên Xuống (↓) -> Tiến 1 mục trong cột
           local next_n=$((WPTT_ACTIVE_HL + 1))
           ((next_n > total_valid_opts)) && next_n=1
           choice="$next_n"
           _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
           ;;
-        '[A' | '[D')
+        '[A') # Mũi tên Lên (↑) -> Lùi 1 mục trong cột
           local prev_n=$((WPTT_ACTIVE_HL - 1))
           ((prev_n < 1)) && prev_n=$total_valid_opts
           choice="$prev_n"
           _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
           ;;
-        '')
+        '[C') # Mũi tên Phải (→) -> Nhảy ngang sang cột đối diện
+          _wptt_find_horizontal_target "$WPTT_ACTIVE_HL" "right"
+          choice="$WPTT_NAV_TARGET"
+          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          ;;
+        '[D') # Mũi tên Trái (←) -> Nhảy ngang về cột đối diện
+          _wptt_find_horizontal_target "$WPTT_ACTIVE_HL" "left"
+          choice="$WPTT_NAV_TARGET"
+          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          ;;
+        '') # Nhấn ESC đơn -> Xóa nhanh ô đang gõ
           if [[ -n "$choice" ]]; then
             choice=""
             _wptt_update_live_prompt "" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
@@ -503,7 +582,6 @@ _wptt_read_interactive_choice() {
     fi
   done
 
-  # Chốt chặn: nếu vượt quá 4096 ký tự trong 1 lần nhập (kẹt phím / flood I/O) -> Báo lỗi thoát
   return 1
 }
 
@@ -957,7 +1035,6 @@ _wptt_menu_loop_guard=0
 
 while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
 
-  # Nếu đang chạy tương tác mà TTY bị đóng (rớt SSH), lập tức dừng vòng lặp
   if [[ -z "${BATS_TEST_FILENAME:-}" && "${CI:-}" != "true" ]]; then
     if [[ ! -t 0 && ! -t 1 ]]; then
       break
@@ -968,8 +1045,11 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
   calc_margin
 
   WPTT_RENDER_LINE=0
+  WPTT_HAS_TWO_COLS=0
   WPTT_ITEM_LINE=()
   WPTT_ITEM_COL=()
+  WPTT_ITEM_SIDE=()
+  WPTT_ITEM_PEER=()
   WPTT_ITEM_NORM=()
   WPTT_ITEM_HL=()
   WPTT_ITEM_LABEL=()
@@ -1015,7 +1095,7 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
   echo -en "\033[2A\033[${cursor_col}G"
 
   # ============================================================================
-  # XỬ LÝ TYPEAHEAD BUFFERING & ĐỌC PHÍM TƯƠNG TÁC (LIVE HIGHLIGHT)
+  # XỬ LÝ TYPEAHEAD BUFFERING & ĐỌC PHÍM TƯƠNG TÁC 4 CHIỀU (↑ ↓ ← →)
   # ============================================================================
   if declare -F wptt_flush_stdin >/dev/null; then
     wptt_flush_stdin
@@ -1134,7 +1214,7 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
       err_msg="[!] Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến ${total_valid_opts}."
       len_err=${#err_msg}
       pad_err=$(((78 - len_err) / 2))
-      printf -v pad_err_l '%*s' "$pad_err" ""
+      printf -v pad_err_l '%*s' "$pad_empty" "" 2>/dev/null || printf -v pad_err_l '%*s' "$pad_err" ""
       printf -v pad_err_r '%*s' "$((78 - len_err - pad_err))" ""
 
       echo -e "\n${MARGIN}${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
