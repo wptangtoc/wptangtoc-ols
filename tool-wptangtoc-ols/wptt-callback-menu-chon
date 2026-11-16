@@ -1,14 +1,13 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Engine Render & Điều hướng Menu Trung tâm (Adaptive Debounce)
+# @description: Engine Render & Điều hướng Menu Trung tâm (Live Highlight + Adaptive Debounce)
 # @since: 2026
 
 # ==============================================================================
 # 1. KHỞI TẠO BIẾN & NẠP THƯ VIỆN GIAO DIỆN (CHỐNG NẠP CHỒNG)
 # ==============================================================================
 
-# Tự động ghi nhận đường dẫn tuyệt đối của Menu hiện tại vào biến môi trường
 [[ -f "$0" ]] && export WPTT_CURRENT_MENU="$0"
 
 if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
@@ -30,7 +29,7 @@ if ! declare -F _runing &>/dev/null; then
 fi
 
 export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
-export LANG=C.UTF-8 2>/dev/null || export LANG=C.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 stty iutf8 2>/dev/null || true
 shopt -s extglob
 PS3=""
@@ -48,7 +47,6 @@ else
   ROUTE_BACK="/usr/bin/wptangtoc"
 fi
 
-# Chỉ tìm số thứ tự menu Terminal khi người dùng thực sự gõ nhầm lệnh CLI vào Menu (0 Subshell)
 _get_cli_menu_num() {
   if [[ -n "${cli_menu_num:-}" ]]; then
     return 0
@@ -99,12 +97,23 @@ trap '_wptt_cleanup_sub_search' EXIT
 trap '_wptt_menu_ctrl_c' SIGINT SIGTERM SIGQUIT
 
 # ==============================================================================
-# 4. ENGINE VẼ GIAO DIỆN (100% NATIVE BASH - 0 SUBSHELL)
+# 4. ENGINE VẼ GIAO DIỆN & GHI NHỚ TỌA ĐỘ Ô MENU (100% NATIVE BASH - 0 SUBSHELL)
 # ==============================================================================
 MARGIN=""
 calc_margin() { MARGIN=""; }
 
-# Hàm khử mã màu ANSI thuần Bash trên RAM (0 Subshell)
+# Bộ nhớ tọa độ dòng/cột trên RAM để tô sáng tức thì (0-Subshell)
+WPTT_RENDER_LINE=0
+declare -a WPTT_ITEM_LINE=()
+declare -a WPTT_ITEM_COL=()
+declare -a WPTT_ITEM_NORM=()
+declare -a WPTT_ITEM_HL=()
+declare -a WPTT_ITEM_LABEL=()
+
+# Màu nền tô sáng mục đang gõ (Xanh lá đậm Emerald + Chữ trắng đậm giống Web Simulator)
+C_HL_BG=$'\033[48;5;22;1;97m'
+C_HL_NUM=$'\033[48;5;22;1;93m'
+
 _strip_ansi() {
   local s="$1"
   while [[ "$s" =~ $'\x1B'\[[0-9\;]*[a-zA-Z] ]]; do
@@ -116,7 +125,7 @@ _strip_ansi() {
 print_row() {
   local l_num="$1" l_text="$2" r_num="$3" r_text="$4"
   local c1_plain="" c1_color="" c2_plain="" c2_color=""
-  local num_fmt pad_l pad_r
+  local num_fmt pad_l pad_r cell_pad
 
   if [[ -n "$l_text" ]]; then
     if [[ -z "$l_num" ]]; then
@@ -148,7 +157,33 @@ print_row() {
   ((pad_l < 0)) && pad_l=0
   pad_r=$((37 - ${#c2_plain}))
   ((pad_r < 0)) && pad_r=0
+
+  # Lưu tọa độ và mẫu chuỗi Bình thường / Tô sáng cho cột trái
+  if [[ -n "$l_num" && "$l_num" =~ ^[0-9]+$ ]]; then
+    local idx_l=$((10#$l_num))
+    printf -v num_fmt "%2s" "$l_num"
+    printf -v cell_pad '%*s' "$pad_l" ""
+    WPTT_ITEM_LINE[idx_l]=$WPTT_RENDER_LINE
+    WPTT_ITEM_COL[idx_l]=$(( ${#MARGIN} + 3 ))
+    WPTT_ITEM_NORM[idx_l]="${c1_color}${cell_pad}"
+    WPTT_ITEM_HL[idx_l]=" ${C_HL_NUM} [$num_fmt]${C_HL_BG} ${c1_plain:7}${cell_pad}${C_RESET}"
+    WPTT_ITEM_LABEL[idx_l]="${l_text}"
+  fi
+
+  # Lưu tọa độ và mẫu chuỗi Bình thường / Tô sáng cho cột phải
+  if [[ -n "$r_num" && "$r_num" =~ ^[0-9]+$ ]]; then
+    local idx_r=$((10#$r_num))
+    printf -v num_fmt "%2s" "$r_num"
+    printf -v cell_pad '%*s' "$pad_r" ""
+    WPTT_ITEM_LINE[idx_r]=$WPTT_RENDER_LINE
+    WPTT_ITEM_COL[idx_r]=$(( ${#MARGIN} + 42 ))
+    WPTT_ITEM_NORM[idx_r]="${c2_color}${cell_pad}"
+    WPTT_ITEM_HL[idx_r]=" ${C_HL_NUM} [$num_fmt]${C_HL_BG} ${c2_plain:7}${cell_pad}${C_RESET}"
+    WPTT_ITEM_LABEL[idx_r]="${r_text}"
+  fi
+
   printf "${MARGIN}${C_CYAN}│${C_RESET} %b%*s  %b%*s ${C_CYAN}│${C_RESET}\n" "$c1_color" "$pad_l" "" "$c2_color" "$pad_r" ""
+  ((WPTT_RENDER_LINE++))
 }
 
 # ==============================================================================
@@ -177,8 +212,23 @@ print_full_row() {
     ((pad < 0)) && pad=0
     printf -v pad_str '%*s' "$pad" ""
 
+    if [[ "$index" =~ ^[0-9]+$ ]]; then
+      local idx_f=$((10#$index))
+      local norm_str="   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${text}${C_RESET}${pad_str}"
+      local hl_pad=$((pad - 1))
+      ((hl_pad < 0)) && hl_pad=0
+      local hl_pad_str=""
+      printf -v hl_pad_str '%*s' "$hl_pad" ""
+      WPTT_ITEM_LINE[idx_f]=$WPTT_RENDER_LINE
+      WPTT_ITEM_COL[idx_f]=$(( ${#MARGIN} + 2 ))
+      WPTT_ITEM_NORM[idx_f]="$norm_str"
+      WPTT_ITEM_HL[idx_f]="  ${C_HL_NUM} [${formatted_index}]${C_HL_BG} ${REPLY_PLAIN}${hl_pad_str}${C_RESET} "
+      WPTT_ITEM_LABEL[idx_f]="$REPLY_PLAIN"
+    fi
+
     echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${text}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
   fi
+  ((WPTT_RENDER_LINE++))
 }
 
 print_header() {
@@ -191,9 +241,13 @@ print_header() {
   local p_right=$((78 - len - p_left))
   ((p_right < 0)) && p_right=0
   printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_BOLD_WHITE}%b${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
+  ((WPTT_RENDER_LINE++))
 }
 
-print_spacer() { printf "${MARGIN}${C_CYAN}│%78s│${C_RESET}\n" ""; }
+print_spacer() {
+  printf "${MARGIN}${C_CYAN}│%78s│${C_RESET}\n" ""
+  ((WPTT_RENDER_LINE++))
+}
 
 draw_default_grid() {
   local item_count=1
@@ -215,24 +269,208 @@ draw_default_grid() {
 }
 
 # ==============================================================================
+# 4A. ENGINE NHẬP LIỆU TƯƠNG TÁC TRỰC TIẾP (LIVE HIGHLIGHT & PREVIEW BAR)
+# ==============================================================================
+# Tô sáng mục [N] ngay trên bảng và hiển thị thanh Preview bên phải ô nhập liệu
+# mà không cần vẽ lại màn hình (0-Subshell, ~100 bytes ANSI mỗi phím bấm).
+_wptt_update_live_prompt() {
+  local buf="$1"
+  local prompt_line="$2"
+  local prev_hl="$3"
+  local new_hl=0
+  local status_text="" status_plain=""
+
+  # Tổng ruột khung = 78 cột.
+  # Cụm bên trái: "  >> Lựa chọn của bạn: " (23) + "[xxxxxx]" (8) + " " (1) = 32 cột.
+  # => Không gian tối đa cho status_plain bên phải là: 78 - 32 = 46 cột (dành 1 cột đệm = 45 cột).
+  local max_right_cols=45
+
+  if [[ "$buf" =~ ^[0-9]+$ ]]; then
+    if [[ "$buf" == "0" ]]; then
+      local back_lbl="$TEXT_BACK"
+      ((${#back_lbl} > 28)) && back_lbl="${back_lbl:0:26}.."
+      status_plain="→ [0] ${back_lbl} (Enter ↵)"
+      status_text="${C_RED}→ [0] ${back_lbl} ${C_YELLOW}(Enter ↵)${C_RESET}"
+    elif [[ "$buf" == "00" ]]; then
+      status_plain="→ [00] Mở công cụ Tìm kiếm (Enter ↵)"
+      status_text="${C_GREEN}→ [00] Mở công cụ Tìm kiếm ${C_YELLOW}(Enter ↵)${C_RESET}"
+    else
+      local num_val=$((10#$buf))
+      if ((num_val >= 1 && num_val <= total_valid_opts)); then
+        new_hl=$num_val
+        local lbl="${WPTT_ITEM_LABEL[num_val]:-}"
+        if [[ -z "$lbl" ]]; then
+          local act_idx="${valid_indices[$((num_val - 1))]}"
+          local REPLY_PLAIN=""
+          _strip_ansi "${options[$act_idx]}"
+          lbl="$REPLY_PLAIN"
+        fi
+        # Tính số ký tự tối đa còn lại cho tên tính năng để không bao giờ tràn 45 cột:
+        # "→ [" (3) + num_val + "] " (2) + lbl + " (Enter ↵)" (10) <= 45
+        local max_lbl=$((max_right_cols - 15 - ${#num_val}))
+        if (( ${#lbl} > max_lbl )); then
+          lbl="${lbl:0:$((max_lbl - 2))}.."
+        fi
+        status_plain="→ [$num_val] $lbl (Enter ↵)"
+        status_text="${C_GREEN}→ [${num_val}] ${C_BOLD_WHITE}${lbl} ${C_YELLOW}(Enter ↵)${C_RESET}"
+      else
+        status_plain="→ [!] Ngoài phạm vi (1-${total_valid_opts})"
+        status_text="${C_RED}→ [!] Ngoài phạm vi (1-${total_valid_opts})${C_RESET}"
+      fi
+    fi
+  elif [[ -n "$buf" ]]; then
+    local short_b="$buf"
+    ((${#short_b} > 30)) && short_b="${short_b:0:28}.."
+    status_plain="→ Lệnh: $short_b"
+    status_text="${C_YELLOW}→ Lệnh: ${short_b}${C_RESET}"
+  fi
+
+  local out_seq=""
+
+  # 1. Trả lại màu bình thường cho mục cũ (nếu thay đổi số)
+  if ((prev_hl > 0 && prev_hl != new_hl)); then
+    local old_line="${WPTT_ITEM_LINE[prev_hl]:-}"
+    local old_col="${WPTT_ITEM_COL[prev_hl]:-}"
+    local old_norm="${WPTT_ITEM_NORM[prev_hl]:-}"
+    if [[ -n "$old_line" && -n "$old_norm" ]]; then
+      local up_old=$((prompt_line - old_line))
+      out_seq+=$'\033['"${up_old}A"$'\033['"${old_col}G${old_norm}"$'\033['"${up_old}B"
+    fi
+  fi
+
+  # 2. Tô sáng mục mới trên bảng Menu
+  if ((new_hl > 0 && new_hl != prev_hl)); then
+    local cur_line="${WPTT_ITEM_LINE[new_hl]:-}"
+    local cur_col="${WPTT_ITEM_COL[new_hl]:-}"
+    local cur_hl="${WPTT_ITEM_HL[new_hl]:-}"
+    if [[ -n "$cur_line" && -n "$cur_hl" ]]; then
+      local up_cur=$((prompt_line - cur_line))
+      out_seq+=$'\033['"${up_cur}A"$'\033['"${cur_col}G${cur_hl}"$'\033['"${up_cur}B"
+    fi
+  fi
+
+  # 3. Cập nhật dòng Prompt ở dưới cùng (Khóa cứng viền phải ở cột 80)
+  local disp_buf="$buf"
+  ((${#disp_buf} > 6)) && disp_buf="${disp_buf:0:6}"
+  local box_val=""
+  printf -v box_val "%-6s" "$disp_buf"
+
+  local rem_width=$((78 - 32 - ${#status_plain}))
+  ((rem_width < 0)) && rem_width=0
+  local rem_pad=""
+  printf -v rem_pad '%*s' "$rem_width" ""
+
+  local box_color="${C_CYAN}"
+  ((new_hl > 0)) && box_color="${C_GREEN}"
+  [[ "$buf" == "0" || "$buf" == "00" ]] && box_color="${C_YELLOW}"
+
+  local prompt_col=$(( ${#MARGIN} + 2 ))
+  out_seq+=$'\033[2K\033['"$(( ${#MARGIN} + 1 ))G${C_CYAN}│${C_RESET}  ${C_GREEN}>>${C_RESET} ${C_BOLD_WHITE}Lựa chọn của bạn:${C_RESET} ${box_color}[${C_BOLD_WHITE}${box_val}${box_color}]${C_RESET} ${status_text}${rem_pad}${C_CYAN}│${C_RESET}"
+
+  # Đặt lại con trỏ vào đúng bên trong ô nhập `[15    ]`
+  local input_cursor_col=$(( ${#MARGIN} + 26 + ${#disp_buf} ))
+  out_seq+=$'\033['"${input_cursor_col}G"
+
+  printf '%b' "$out_seq"
+  WPTT_ACTIVE_HL=$new_hl
+}
+
+_wptt_read_interactive_choice() {
+  local prompt_line="$1"
+  choice=""
+  WPTT_ACTIVE_HL=0
+
+  # Nếu không phải TTY tương tác thật (VD: chạy trong BATS test / Pipe), dùng read chuẩn
+  if [[ ! -t 0 || ! -t 1 || -n "${BATS_TEST_FILENAME:-}" || "${CI:-}" == "true" ]]; then
+    if ! IFS= read -r choice; then
+      return 1
+    fi
+    return 0
+  fi
+
+  # Vẽ ô nhập liệu trống ban đầu
+  _wptt_update_live_prompt "" "$prompt_line" 0
+
+  local char="" rest=""
+  while :; do
+    if ! IFS= read -rsn1 char; then
+      return 1
+    fi
+
+    # 1. Phím Enter (Kết thúc nhập)
+    if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
+      break
+    fi
+
+    # 2. Phím Backspace / Delete
+    if [[ "$char" == $'\x7f' || "$char" == $'\x08' || "$char" == $'\b' ]]; then
+      if [[ -n "$choice" ]]; then
+        choice="${choice%?}"
+        _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+      fi
+      continue
+    fi
+
+    # 3. Ctrl+C hoặc Ctrl+D
+    if [[ "$char" == $'\x03' ]]; then
+      _wptt_menu_ctrl_c
+    elif [[ "$char" == $'\x04' ]]; then
+      return 1
+    fi
+
+    # 4. Phím Escape / Phím mũi tên ↑ ↓ ← → để di chuyển vùng sáng trực tiếp!
+    if [[ "$char" == $'\x1b' || "$char" == $'\e' ]]; then
+      rest=""
+      IFS= read -rsn2 -t 0.03 rest 2>/dev/null || true
+      case "$rest" in
+        '[B' | '[C') # Mũi tên Xuống / Phải -> Tăng số lựa chọn
+          local next_n=$((WPTT_ACTIVE_HL + 1))
+          ((next_n > total_valid_opts)) && next_n=1
+          choice="$next_n"
+          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+          ;;
+        '[A' | '[D') # Mũi tên Lên / Trái -> Giảm số lựa chọn
+          local prev_n=$((WPTT_ACTIVE_HL - 1))
+          ((prev_n < 1)) && prev_n=$total_valid_opts
+          choice="$prev_n"
+          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+          ;;
+        '') # Nhấn ESC đơn -> Xóa nhanh ô đang gõ
+          if [[ -n "$choice" ]]; then
+            choice=""
+            _wptt_update_live_prompt "" "$prompt_line" "$WPTT_ACTIVE_HL"
+          fi
+          ;;
+      esac
+      continue
+    fi
+
+    # 5. Ký tự in được thông thường (Số hoặc chữ lệnh CLI)
+    if (( ${#choice} < 32 )) && [[ "$char" =~ [[:print:]] ]]; then
+      choice+="$char"
+      _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL"
+    fi
+  done
+
+  return 0
+}
+
+# ==============================================================================
 # 4B. ENGINE TÌM KIẾM SEO CHO MENU CON (LAZY-INIT + ZERO-FORK ADAPTIVE DEBOUNCE)
 # ==============================================================================
 wptt_sub_fzf_search() {
   local query="${1:-}"
   [[ -s "${SUB_IDX_FILE:-}" ]] || return 0
 
-  # 1. Cắt khoảng trắng 2 đầu bằng Pure Bash (0-Subshell)
   query="${query#"${query%%[![:space:]]*}"}"
   query="${query%"${query##*[![:space:]]}"}"
 
-  # 2. Fast-path khi xóa trắng thanh tìm kiếm: Phản hồi 0ms tức thì, không sleep
   if [[ -z "$query" ]]; then
     /bin/rm -f -- "${WPTT_SUB_LAST_Q:-}" 2>/dev/null || true
     LC_ALL=C.UTF-8 awk -F'\t' '{ print $1 "\t" $2 "\t" $3 "\t" $4 "\t" }' "$SUB_IDX_FILE"
     return 0
   fi
 
-  # 3. Kiểm tra Query Cache trong RAM (Chống chạy lại khi ấn phím Space/Backspace thừa)
   if [[ -s "${WPTT_SUB_LAST_Q:-}" ]]; then
     local cached_q=""
     IFS= read -r cached_q <"$WPTT_SUB_LAST_Q" || true
@@ -242,7 +480,6 @@ wptt_sub_fzf_search() {
     fi
   fi
 
-  # 4. Zero-Fork Adaptive Debounce qua FIFO (Không fork /usr/bin/sleep)
   local delay="0.050"
   ((${#query} == 1)) && delay="0.075"
   if [[ -p "${WPTT_SUB_FIFO:-}" ]]; then
@@ -251,7 +488,6 @@ wptt_sub_fzf_search() {
     sleep "$delay" 2>/dev/null || true
   fi
 
-  # 5. Thực thi AWK Engine và lưu kết quả tạm vào RAM (/dev/shm)
   if [[ -n "${WPTT_SUB_LAST_Q:-}" && -f "${WPTT_SUB_AWK:-}" ]]; then
     {
       printf '%s\n' "$query"
@@ -269,7 +505,6 @@ wptt_sub_fzf_previewer() {
   local script_to_preview="$2"
   local search_query="${3:-}"
 
-  # Micro-debounce 15ms bằng FIFO: Chống spam đọc đĩa khi giữ phím mũi tên ↑/↓
   if [[ -p "${WPTT_SUB_FIFO:-}" ]]; then
     read -r -t 0.015 <>"$WPTT_SUB_FIFO" 2>/dev/null || true
   fi
@@ -288,15 +523,15 @@ wptt_sub_fzf_previewer() {
       for ((i = 0; i < ${#word}; i++)); do
         ch="${word:i:1}"
         case "$ch" in
-        '\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|') esc_word+="\\$ch" ;;
-        'a' | 'A') esc_word+="(a|à|á|ả|ã|ạ|ă|ằ|ắ|ẳ|ẵ|ặ|â|ầ|ấ|ẩ|ẫ|ậ)" ;;
-        'd' | 'D') esc_word+="(d|đ)" ;;
-        'e' | 'E') esc_word+="(e|è|é|ẻ|ẽ|ẹ|ê|ề|ế|ể|ễ|ệ)" ;;
-        'i' | 'I') esc_word+="(i|ì|í|ỉ|ĩ|ị)" ;;
-        'o' | 'O') esc_word+="(o|ò|ó|ỏ|õ|ọ|ô|ồ|ố|ổ|ỗ|ộ|ơ|ờ|ớ|ở|ỡ|ợ)" ;;
-        'u' | 'U') esc_word+="(u|ù|ú|ủ|ũ|ụ|ư|ừ|ứ|ử|ữ|ự)" ;;
-        'y' | 'Y') esc_word+="(y|ỳ|ý|ỷ|ỹ|ỵ)" ;;
-        *) esc_word+="$ch" ;;
+          '\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|') esc_word+="\\$ch" ;;
+          'a' | 'A') esc_word+="(a|à|á|ả|ã|ạ|ă|ằ|ắ|ẳ|ẵ|ặ|â|ầ|ấ|ẩ|ẫ|ậ)" ;;
+          'd' | 'D') esc_word+="(d|đ)" ;;
+          'e' | 'E') esc_word+="(e|è|é|ẻ|ẽ|ẹ|ê|ề|ế|ể|ễ|ệ)" ;;
+          'i' | 'I') esc_word+="(i|ì|í|ỉ|ĩ|ị)" ;;
+          'o' | 'O') esc_word+="(o|ò|ó|ỏ|õ|ọ|ô|ồ|ố|ổ|ỗ|ộ|ơ|ờ|ớ|ở|ỡ|ợ)" ;;
+          'u' | 'U') esc_word+="(u|ù|ú|ủ|ũ|ụ|ư|ừ|ứ|ử|ữ|ự)" ;;
+          'y' | 'Y') esc_word+="(y|ỳ|ý|ỷ|ỹ|ỵ)" ;;
+          *) esc_word+="$ch" ;;
         esac
       done
       if [[ -n "$alt_regex" ]]; then
@@ -351,7 +586,6 @@ wptt_sub_fzf_previewer() {
   shopt -u nocasematch
 }
 
-# Hàm dựng nhanh Index cho Menu Con (Chỉ khởi tạo khi người dùng thực sự nhấn 00)
 _run_submenu_seo_fzf() {
   local rt_dir="/etc/wptt/tmp"
   if [[ -d /dev/shm && -w /dev/shm ]]; then
@@ -669,15 +903,22 @@ total_valid_opts=${#valid_indices[@]}
 # ==============================================================================
 while true; do
 
-  #tắt tạm thời chế độ tự in phím của Terminal để lúc đang chạy lệnh người dùng gõ phím gì nó print thẳng vào màn hình nhìn xấu không được ux
-  #để không nhập bất cứ input nào trong quá trình render giao diện
   if [[ -t 0 ]]; then stty -echo 2>/dev/null; fi
   calc_margin
-  # clear # GIỮ CỐ ĐỊNH COMMENT ĐỂ KHÔNG BỊ TRÔI LOG SAU KHI CHẠY LỆNH
+
+  # Reset bộ đếm tọa độ dòng trước mỗi lần vẽ bảng Menu
+  WPTT_RENDER_LINE=0
+  WPTT_ITEM_LINE=()
+  WPTT_ITEM_COL=()
+  WPTT_ITEM_NORM=()
+  WPTT_ITEM_HL=()
+  WPTT_ITEM_LABEL=()
 
   echo -e "${MARGIN}${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  ((WPTT_RENDER_LINE++))
   print_header "${MENU_TITLE:-TRUNG TÂM QUẢN TRỊ WPTANGTOC OLS}"
   echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  ((WPTT_RENDER_LINE++))
   print_spacer
 
   if declare -F draw_custom_grid >/dev/null; then
@@ -688,6 +929,7 @@ while true; do
 
   print_spacer
   echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  ((WPTT_RENDER_LINE++))
 
   plain_foot=" Nhập số (1-$total_valid_opts) | [00] Tìm kiếm | [0] $TEXT_BACK "
   color_foot=" ${C_YELLOW}Nhập số (1-$total_valid_opts)${C_RESET} | ${C_GREEN}[00] Tìm kiếm${C_RESET} | ${C_RED}[0] $TEXT_BACK${C_RESET} "
@@ -699,32 +941,34 @@ while true; do
   ((p_r < 0)) && p_r=0
 
   printf "${MARGIN}${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$p_l" "" "$color_foot" "$p_r" ""
+  ((WPTT_RENDER_LINE++))
   echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  printf "${MARGIN}${C_CYAN}│${C_RESET}  ${C_GREEN}>>${C_RESET} ${C_BOLD_WHITE}Lựa chọn của bạn: ${C_RESET}%-55s${C_CYAN}│${C_RESET}\n" ""
+  ((WPTT_RENDER_LINE++))
+
+  PROMPT_ROW_IDX=$WPTT_RENDER_LINE
+  printf "${MARGIN}${C_CYAN}│${C_RESET}  ${C_GREEN}>>${C_RESET} ${C_BOLD_WHITE}Lựa chọn của bạn:${C_RESET} %-55s${C_CYAN}│${C_RESET}\n" ""
+  ((WPTT_RENDER_LINE++))
   echo -e "${MARGIN}${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
   margin_len=${#MARGIN}
-  cursor_col=$((margin_len + 25))
+  cursor_col=$((margin_len + 26))
   echo -en "\033[2A\033[${cursor_col}G"
 
   # ============================================================================
-  # XỬ LÝ TYPEAHEAD BUFFERING (CHỐNG TRÔI LỆNH & RÁC BÀN PHÍM)
+  # XỬ LÝ TYPEAHEAD BUFFERING & ĐỌC PHÍM TƯƠNG TÁC (LIVE HIGHLIGHT)
   # ============================================================================
-
   if declare -F wptt_flush_stdin >/dev/null; then
     wptt_flush_stdin
   fi
 
-  #trả về giá trị được phép nhập
-  if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
-  # ============================================================================
-
-  # Chống vòng lặp vô tận (100% CPU) nếu phiên Terminal bị ngắt đột ngột (EOF)
-  if ! read -r choice; then
+  if ! _wptt_read_interactive_choice "$PROMPT_ROW_IDX"; then
+    if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
     echo -en "\033[2B\n"
     exit 0
   fi
-  echo -en "\033[2B"
+
+  if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
+  echo -en "\033[2B\r"
 
   choice="${choice#"${choice%%[![:space:]]*}"}"
   choice="${choice%"${choice##*[![:space:]]}"}"
@@ -754,7 +998,6 @@ while true; do
     exit 0
 
   elif [[ "$choice" == "00" ]]; then
-    # 1. Nếu đang ở Menu Chính -> Gọi thẳng công cụ tìm kiếm toàn cục search-wptangtoc
     if ((IS_MAIN_MENU == 1)); then
       _wptt_cleanup_sub_search
       /etc/wptt/search-wptangtoc
@@ -764,7 +1007,6 @@ while true; do
       fi
     fi
 
-    # 2. Nếu đang ở Menu Con -> Chạy SEO Search Engine (Không dấu + Sửa chính tả + Preview)
     if command -v fzf &>/dev/null; then
       REPLY_SUB_SELECTED=""
       _run_submenu_seo_fzf
@@ -775,7 +1017,6 @@ while true; do
         if [[ "$sel_num" =~ ^[0-9]+$ ]]; then
           actual_index="${valid_indices[$((10#$sel_num - 1))]}"
 
-          # Ghi nhận +1 điểm thói quen vào wptt_hits_search.tsv
           if [[ -n "$sel_full_title" ]]; then
             [[ -f "$HITS_FILE" ]] || : >"$HITS_FILE" 2>/dev/null
             hits_tmp="${HITS_FILE}.tmp.$$"
