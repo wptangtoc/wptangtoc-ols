@@ -1,3 +1,19 @@
+## WPTangToc OLS 8.4.1.1
+
+🚀 **Tính năng mới**
+- **Trình giả lập Web Simulator:** Tích hợp công cụ giả lập giao diện dòng lệnh trực quan trên nền web, giúp quản trị viên dễ dàng trải nghiệm, làm quen với cấu trúc menu và các tính năng của hệ thống trước khi triển khai thực tế trên VPS.
+- **Hệ thống tài liệu trực tuyến:** Tự động hóa biên dịch toàn diện hệ thống tài liệu tra cứu, cung cấp sơ đồ vị trí phím tắt và hướng dẫn chi tiết cho từng tác vụ quản trị.
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến giao diện điều hướng (UX):** Nâng cấp hệ thống đánh dấu mã màu trực quan tại menu chính, tạo điểm nhấn nổi bật giúp quản trị viên nhận diện nhanh chóng và hạn chế tối đa thao tác nhầm lẫn.
+- **Tinh chỉnh luồng thực thi:** Tối ưu hóa cấu trúc mã nguồn và tốc độ phản hồi lệnh, giúp máy chủ vận hành ổn định và mượt mà hơn.
+
+🐛 **Sửa lỗi**
+- **Khắc phục sự cố vận hành:** Xử lý triệt để các lỗi phát sinh trong quá trình tương tác menu và thực thi lệnh, nâng cao độ ổn định và an toàn tuyệt đối cho toàn bộ hệ thống.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.0
 
 🚀 **Tính năng mới**
