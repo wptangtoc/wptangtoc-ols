@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.4.1.2
+
+🐛 **Sửa lỗi**
+- **Khắc phục lỗi cache JavaScript:** Xử lý triệt để sự cố trình duyệt lưu trữ bộ nhớ đệm (cache) tệp JavaScript cũ trên OpenLiteSpeed, giúp đảm bảo khách truy cập luôn nhận được các đoạn mã cập nhật mới nhất mà không gặp tình trạng xung đột hoặc kẹt dữ liệu cũ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.1
 
 🚀 **Tính năng mới**
