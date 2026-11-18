@@ -585,7 +585,14 @@ rm -rf "${TEMP_CNF_ROOT:?}"
 _rundone "${them:-Khởi tạo thành công} database ${cho:-cho website} $NAME"
 
 #begin ACL object cache
-if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL valkey, redis, keydb (biến lưu trong /etc/wptt/.wptt.conf)
+#begin ACL object cache
+# Khai báo sẵn các biến để lát nữa ghi vào file .conf của VHost
+redis_acl_user=""
+raw_redis_pass=""
+redis_acl_pass_luu=""
+redis_db_id=""
+
+if [[ -n "${REDIS_MASTER_PASS:-}" ]]; then # Xác định có sử dụng ACL Valkey, KeyDB, Redis (biến lưu trong /etc/wptt/.wptt.conf)
   active_cache="Chưa cài đặt"
   socket_path="Không có"
   cache_cli=""
@@ -604,62 +611,94 @@ if [[ -n "$REDIS_MASTER_PASS" ]]; then # Xác định có sử dụng ACL valkey
     cache_cli="redis-cli"
   fi
 
-  # Khai báo sẵn các biến để lát nữa ghi vào file .conf của Vhost
-  redis_acl_user=""
-  raw_redis_pass=""
-  redis_acl_pass_luu=""
-  redis_db_id=""
+  if [[ "$active_cache" != "Chưa cài đặt" && -n "$cache_cli" ]] && command -v "$cache_cli" >/dev/null 2>&1; then
+    acl_task_msg="Khởi tạo tài khoản Object Cache ($active_cache ACL & DB) cho $NAME"
+    _runing "$acl_task_msg"
 
-  if [[ "$active_cache" != "Chưa cài đặt" && -n "$cache_cli" ]]; then
-    _runing "Khởi tạo tài khoản Object Cache (ACL & DB) cho $NAME..."
+    # Đợi tối đa 2 giây nếu Socket đang được tái tạo
+    socket_wait=0
+    while [[ ! -S "$socket_path" ]] && ((socket_wait < 10)); do
+      sleep 0.2
+      ((socket_wait++))
+    done
 
     # CHECK LỖI 1: File Socket có thực sự tồn tại để kết nối không?
     if [[ ! -S "$socket_path" ]]; then
-      echo -en "\033[1A\033[2K\r"
-      _runloi "Lỗi: Dịch vụ $active_cache đang chạy nhưng mất file Socket!"
+      _runloi "$acl_task_msg"
+      echo -e "${C_RED}❌ Lỗi: Dịch vụ $active_cache đang chạy nhưng không tìm thấy Socket ($socket_path)!${C_RESET}"
     else
-      redis_acl_user=$(openssl rand -hex 12)
-      raw_redis_pass=$(openssl rand -hex 16)
-      redis_acl_pass_luu=$(wptt_ma_hoa "$raw_redis_pass")
+      raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS" 2>/dev/null || true)
 
-      # --- BỔ SUNG: THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
-      used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
-      redis_db_id=1
-      while echo "$used_ids" | grep -qw "$redis_db_id"; do
-        ((redis_db_id++))
-        # Chặn tối đa ở mức 999 để không vượt rào cấu hình Databases 1000
-        if [[ $redis_db_id -gt 999 ]]; then
-          redis_db_id=999
-          break
-        fi
-      done
-      # ---------------------------------------------------------
-
-      raw_master_pass=""
-      [[ -n "$REDIS_MASTER_PASS" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
-
-      ACL_RULES_COMMON=(+@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -client -save -bgsave -debug -monitor -swapdb)
       # CHECK LỖI 2: Đảm bảo Master Password được giải mã thành công
       if [[ -z "$raw_master_pass" ]]; then
-        _runloi "Lỗi: Không thể giải mã Master Password của Object Cache!"
-        redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
-        redis_db_id=""    # Xóa DB ID nếu có lỗi
+        _runloi "$acl_task_msg"
+        echo -e "${C_RED}❌ Lỗi: Không thể giải mã Master Password của Object Cache!${C_RESET}"
       else
-        # CHECK LỖI 3: Thực thi lệnh và bắt kết quả (Exit Status) - Đã mở khóa +flushdb
-        if $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_redis_pass" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1; then
-          # Khóa cứng User xuống ổ cứng (Chống mất Cache khi Restart)
-          $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
+        redis_acl_user=$(openssl rand -hex 12)
+        raw_redis_pass=$(openssl rand -hex 16)
+        redis_acl_pass_luu=$(wptt_ma_hoa "$raw_redis_pass")
 
-          _rundone "Khởi tạo thành công Object Cache ACL (Database ID: $redis_db_id)"
+        # --- THUẬT TOÁN TÌM DATABASE ID CÔ LẬP (0-SUBSHELL ARRAY, CHỐNG TRÙNG 100%) ---
+        declare -a _wptt_taken_ids=()
+        shopt -s nullglob
+        for _vf in /etc/wptt/vhost/.*.conf; do
+          [[ ! -f "$_vf" || "$_vf" == *"/..conf" ]] && continue
+          _existing_id=$(awk -F'=' '/^[[:space:]]*redis_db_id=/ {
+            val = $2
+            gsub(/^[ \t\x27"]+|[\x27"\r\n \t]+$/, "", val)
+            if (val ~ /^[0-9]+$/) print val
+          }' "$_vf" 2>/dev/null | tail -n 1)
+          if [[ -n "$_existing_id" && "$_existing_id" =~ ^[0-9]+$ ]] && ((10#$_existing_id >= 1 && 10#$_existing_id <= 999)); then
+            _wptt_taken_ids[$((10#$_existing_id))]=1
+          fi
+        done
+        shopt -u nullglob
+
+        redis_db_id=1
+        while ((redis_db_id <= 999)); do
+          if [[ -z "${_wptt_taken_ids[redis_db_id]:-}" ]]; then
+            break
+          fi
+          ((redis_db_id++))
+        done
+        ((redis_db_id > 999)) && redis_db_id=999
+        unset _wptt_taken_ids _vf _existing_id
+        # ------------------------------------------------------------------------------
+
+        # Mở khóa đủ 1000 Databases trên RAM (phòng trường hợp KeyDB/Valkey vừa restart)
+        REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" CONFIG SET databases 1000 >/dev/null 2>&1 || true
+
+        # Bộ quy tắc ACL chuẩn cho Valkey/Redis 7 và bộ Fallback tương thích 100% với KeyDB (Đã bỏ -client và thêm +select)
+        ACL_RULES_V1=(reset on ">$raw_redis_pass" "~*" "+@all" -flushall +flushdb +select -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
+        ACL_RULES_KEYDB=(reset on ">$raw_redis_pass" "~*" "+@all" -flushall +flushdb +select -config -acl -shutdown -save -bgsave -debug -monitor)
+
+        acl_out=$(REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" ACL SETUSER "$redis_acl_user" "${ACL_RULES_V1[@]}" 2>&1 || true)
+        if [[ "$acl_out" != *"OK"* ]]; then
+          acl_out=$(REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" ACL SETUSER "$redis_acl_user" "${ACL_RULES_KEYDB[@]}" 2>&1 || true)
+        fi
+        if [[ "$acl_out" != *"OK"* ]]; then
+          acl_out=$("$cache_cli" -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" "${ACL_RULES_KEYDB[@]}" 2>&1 || true)
+        fi
+
+        # CHECK LỖI 3: Kiểm tra thực sự nhận được phản hồi "OK" từ Engine
+        if [[ "$acl_out" == *"OK"* ]]; then
+          REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" ACL SAVE >/dev/null 2>&1 || \
+            "$cache_cli" -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1 || true
+
+          _rundone "$acl_task_msg"
         else
-          _runloi "Lỗi: Hệ thống $active_cache từ chối tạo User (Sai Master Pass)!"
-          redis_acl_user="" # Xóa biến để không lưu rác vào Vhost
-          redis_db_id=""    # Xóa DB ID nếu có lỗi
+          _runloi "$acl_task_msg"
+          echo -e "${C_RED}❌ Lỗi: $active_cache từ chối tạo User ACL ($acl_out)!${C_RESET}"
+          redis_acl_user=""
+          raw_redis_pass=""
+          redis_acl_pass_luu=""
+          redis_db_id=""
         fi
       fi
     fi
   fi
 fi
+#end ACL object cache
 # ==============================================================================
 # LƯU CẤU HÌNH VÀ RELOAD
 # ==============================================================================

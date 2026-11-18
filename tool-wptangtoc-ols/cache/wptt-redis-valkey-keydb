@@ -2,7 +2,7 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-
+# @description: Quản lý Object Cache (Valkey / KeyDB / Redis) với Unix Socket, ACL & Database ID Cô lập
 
 function huong_dan() {
   cat <<'EOF'
@@ -10,24 +10,37 @@ function huong_dan() {
 
   Object Cache là một công nghệ tối ưu hóa bộ nhớ tạm (In-Memory Database), giúp WordPress lưu trữ các câu lệnh truy vấn phức tạp thẳng vào bộ nhớ RAM thay vì phải bắt MariaDB/MySQL chạy lại từ đầu. Tính năng này được coi là "Trái tim" để tăng tốc các trang web động (Dynamic Sites) như WooCommerce, các diễn đàn hoặc các trang quản trị wp-admin.
 
-  1. TÍNH NĂNG CÀI ĐẶT (INSTALL OBJECT CACHE):
+1. TÍNH NĂNG CÀI ĐẶT (INSTALL OBJECT CACHE):
    ➜ Tăng tốc đột phá: Tự động tải, biên dịch và cấu hình một trong 3 Engine hàng đầu (Valkey, KeyDB hoặc Redis).
    ➜ Unix Socket & ACL: Bỏ qua kết nối mạng TCP chậm chạp, hệ thống tự động cấu hình giao tiếp qua Unix Socket để tối đa hóa băng thông nội bộ. Đồng thời, kích hoạt tính năng ACL (Phân quyền bảo mật) để cấp cho mỗi website một User/Pass và Database ID độc lập, ngăn chặn hoàn toàn việc nhìn trộm dữ liệu chéo giữa các web.
    ➜ Tương thích PHP: Tự động nhúng Extension `redis.so` và `igbinary.so` vào toàn bộ các phiên bản PHP đang chạy trên OpenLiteSpeed.
 
-  2. TÍNH NĂNG HỦY CÀI ĐẶT (UNINSTALL OBJECT CACHE):
+2. TÍNH NĂNG HỦY CÀI ĐẶT (UNINSTALL OBJECT CACHE):
    ➜ Dọn dẹp sạch sẽ: Tự động dừng dịch vụ (Stop Service), gỡ bỏ gói cài đặt, xóa thư mục dữ liệu, và dọn dẹp các tài khoản ACL đã được mã hóa trong hệ thống để trả lại dung lượng RAM cho máy chủ.
    ➜ An toàn: Hệ thống sẽ tự động tắt Extension PHP liên quan, do đó bạn không cần lo lắng về lỗi 500 khi gỡ bỏ.
 
   ⚠️ CẢNH BÁO QUAN TRỌNG KHI SỬ DỤNG:
-   - "Đại gia sát RAM": Object Cache ngốn rất nhiều RAM. Tuyệt đối KHÔNG nên cài đặt tính năng này nếu VPS của bạn chỉ có 1GB RAM, vì nó sẽ dễ dàng đẩy máy chủ vào trạng thái tràn bộ nhớ (OOM) làm sập luôn cả MariaDB.
-   - Bảo mật Mật khẩu: Master Password (Mật khẩu gốc) chỉ dành cho hệ thống quản trị nội bộ. Tuyệt đối KHÔNG sử dụng Master Password để điền vào cấu hình các Plugin trên WordPress. Hãy sử dụng Mật khẩu ACL riêng biệt được hệ thống cấp phát cho từng trang web.
-
+- "Đại gia sát RAM": Object Cache ngốn rất nhiều RAM. Tuyệt đối KHÔNG nên cài đặt tính năng này nếu VPS của bạn chỉ có 1GB RAM, vì nó sẽ dễ dàng đẩy máy chủ vào trạng thái tràn bộ nhớ (OOM) làm sập luôn cả MariaDB.
+- Bảo mật Mật khẩu: Master Password (Mật khẩu gốc) chỉ dành cho hệ thống quản trị nội bộ. Tuyệt đối KHÔNG sử dụng Master Password để điền vào cấu hình các Plugin trên WordPress. Hãy sử dụng Mật khẩu ACL riêng biệt được hệ thống cấp phát cho từng trang web.
 EOF
 }
 
+# =========================================================================
+# 1. NẠP THƯ VIỆN LÕI TRƯỚC KHI KIỂM TRA RAM (TRÁNH LỖI COMMAND NOT FOUND)
+# =========================================================================
+. /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+. /etc/wptt/echo-color 2>/dev/null
+
+if [[ "${1:-}" == "98" && ! -t 0 ]]; then
+  huong_dan
+  exit 0
+fi
 
 TOTAL_RAM_MB=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
+
 # 1. HARD BLOCK (Chặn tuyệt đối) với VPS siêu nhỏ (512MB)
 if ((TOTAL_RAM_MB <= 600)); then
   _runloi "Cài đặt Object Cache"
@@ -48,19 +61,120 @@ if ((TOTAL_RAM_MB > 600 && TOTAL_RAM_MB <= 1200)); then
   fi
 fi
 
-# Nếu qua được các chốt chặn này (VPS >= 1.5GB hoặc người dùng 1GB vẫn cố cài)
-# -> Tiếp tục chạy code cài đặt Redis/Valkey...
-. /etc/wptt/core-functions 2>/dev/null
-wptt_load_main_conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+# =========================================================================
+# 2. CÁC HÀM BỔ TRỢ KẾT NỐI CLI & ĐỒNG BỘ ACL ĐA ENGINE (VALKEY/KEYDB/REDIS)
+# =========================================================================
+
+# Xác định đúng binary CLI tương ứng với Engine đang chạy
+_wptt_get_cache_cli() {
+  case "${active_cache:-}" in
+    valkey)
+      command -v valkey-cli >/dev/null 2>&1 && { echo "valkey-cli"; return 0; }
+      ;;
+    keydb)
+      command -v keydb-cli >/dev/null 2>&1 && { echo "keydb-cli"; return 0; }
+      ;;
+    redis)
+      command -v redis-cli >/dev/null 2>&1 && { echo "redis-cli"; return 0; }
+      ;;
+  esac
+  if command -v valkey-cli >/dev/null 2>&1; then
+    echo "valkey-cli"
+  elif command -v keydb-cli >/dev/null 2>&1; then
+    echo "keydb-cli"
+  else
+    echo "redis-cli"
+  fi
+}
+
+# Đợi Unix Socket sẵn sàng sau khi khởi động dịch vụ (Fix lỗi KeyDB khởi động đa luồng chậm)
+_wptt_wait_cache_socket() {
+  local sock="$1"
+  local tries=0
+  while ((tries < 25)); do
+    [[ -S "$sock" ]] && return 0
+    sleep 0.2
+    ((tries++))
+  done
+  return 1
+}
+
+# Ghi hoặc cập nhật khóa cấu hình vào file vhost nguyên tử (Atomic Replace 100% độc lập)
+_wptt_set_vhost_kv() {
+  local target_file="$1"
+  local cfg_key="$2"
+  local cfg_val="$3"
+
+  [[ ! -f "$target_file" || -z "$cfg_key" ]] && return 1
+
+  /bin/mkdir -p /etc/wptt/tmp
+  /bin/chmod 700 /etc/wptt/tmp
+  local tmp_vhost
+  tmp_vhost=$(/bin/mktemp /etc/wptt/tmp/wptt_vhost_kv_XXXXXX) || return 1
+
+  # Dùng awk xóa toàn bộ dòng cũ của cfg_key (kể cả dòng bị rỗng redis_db_id=) và ghi dòng mới chuẩn xác
+  if /usr/bin/awk -v k="$cfg_key" -v v="$cfg_val" '
+    BEGIN { found = 0 }
+    $0 ~ "^[[:space:]]*" k "=" {
+      if (!found) {
+        print k "=\x27" v "\x27"
+        found = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!found) {
+        print k "=\x27" v "\x27"
+      }
+    }
+  ' "$target_file" >"$tmp_vhost"; then
+    /bin/chown --reference="$target_file" -- "$tmp_vhost" 2>/dev/null || true
+    /bin/chmod --reference="$target_file" -- "$tmp_vhost" 2>/dev/null || true
+    /bin/mv -T -- "$tmp_vhost" "$target_file"
+  else
+    /bin/rm -f -- "$tmp_vhost"
+    return 1
+  fi
+}
+
+# Thực thi lệnh ACL trên Valkey / KeyDB / Redis an toàn (Không lộ mật khẩu qua ps aux nhờ REDISCLI_AUTH)
+_wptt_apply_acl_user() {
+  local cli="$1"
+  local sock="$2"
+  local master_pass="$3"
+  local acl_user="$4"
+  local acl_pass="$5"
+
+  [[ ! -S "$sock" || -z "$master_pass" || -z "$acl_user" || -z "$acl_pass" ]] && return 1
+
+  # Quy tắc ACL chuẩn tương thích 100% với cả Redis 6 / KeyDB lẫn Redis 7 / Valkey:
+  # - Bắt buộc có `reset` ở đầu để xóa trạng thái lỗi cũ của user (nếu có).
+  # - Bắt buộc có `+select` tường minh để cho phép chuyển sang Database ID > 0 trên KeyDB!
+  local -a rules_v1=(reset on ">$acl_pass" "~*" "+@all" -flushall +flushdb +select -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
+  local -a rules_keydb=(reset on ">$acl_pass" "~*" "+@all" -flushall +flushdb +select -config -acl -shutdown -save -bgsave -debug -monitor)
+
+  local out=""
+  out=$(REDISCLI_AUTH="$master_pass" "$cli" -s "$sock" ACL SETUSER "$acl_user" "${rules_v1[@]}" 2>&1)
+  if [[ "$out" != *"OK"* ]]; then
+    # Fallback nếu KeyDB kén một trong các flag phụ (-module / -swapdb)
+    out=$(REDISCLI_AUTH="$master_pass" "$cli" -s "$sock" ACL SETUSER "$acl_user" "${rules_keydb[@]}" 2>&1)
+  fi
+  if [[ "$out" != *"OK"* ]]; then
+    # Fallback trường hợp Engine chưa nhận REDISCLI_AUTH (một số bản keydb-cli cũ cần cờ -a)
+    "$cli" -s "$sock" -a "$master_pass" --no-auth-warning ACL SETUSER "$acl_user" "${rules_keydb[@]}" >/dev/null 2>&1 || true
+  fi
+
+  # Lưu xuống đĩa cứng (users.acl)
+  REDISCLI_AUTH="$master_pass" "$cli" -s "$sock" ACL SAVE >/dev/null 2>&1 || \
+    "$cli" -s "$sock" -a "$master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1 || true
+  return 0
+}
 
 # =========================================================================
-# HÀM RENDER DANH SÁCH ACL VÀ CẤP PHÁT DATABASE CÔ LẬP
+# 3. HÀM RENDER DANH SÁCH ACL VÀ CẤP PHÁT DATABASE CÔ LẬP
 # =========================================================================
 function in_thong_tin_acl_cho_khach() {
-  # CHẶN NGAY TỪ ĐẦU NẾU CHƯA CÀI ĐẶT
   if [[ "$socket_path" == "Không có" || "$active_cache" == "Chưa cài đặt" ]]; then
     echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_YELLOW}THÔNG TIN KẾT NỐI OBJECT CACHE (ACL & DB)${C_RESET}"
@@ -71,6 +185,8 @@ function in_thong_tin_acl_cho_khach() {
     return
   fi
 
+  _wptt_wait_cache_socket "$socket_path" || true
+
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_YELLOW}THÔNG TIN KẾT NỐI OBJECT CACHE (ACL & DB CÔ LẬP)${C_RESET}"
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
@@ -80,87 +196,84 @@ function in_thong_tin_acl_cho_khach() {
   left_text "  ➤ Port / Cổng       : ${C_YELLOW}0${C_RESET}" 2
   echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-  local cache_cli="redis-cli"
-  command -v valkey-cli >/dev/null 2>&1 && cache_cli="valkey-cli"
-  command -v keydb-cli >/dev/null 2>&1 && cache_cli="keydb-cli"
+  local cache_cli
+  cache_cli="$(_wptt_get_cache_cli)"
 
-  # Nạp và giải mã Master Password từ file cấu hình lõi
   wptt_load_main_conf 2>/dev/null
   local raw_master_pass=""
-  [[ -n "$REDIS_MASTER_PASS" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
+  [[ -n "${REDIS_MASTER_PASS:-}" ]] && raw_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
+
+  # Mở khóa đủ 1000 Databases trên RAM cho KeyDB/Valkey/Redis
+  if [[ -S "$socket_path" && -n "$raw_master_pass" ]]; then
+    REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" CONFIG SET databases 1000 >/dev/null 2>&1 || true
+  fi
+
+  local -a taken_db_ids=()
+  local filepath="" domain=""
+
+  shopt -s nullglob
+  local -a vhost_files=(/etc/wptt/vhost/.*.conf)
+  shopt -u nullglob
 
   local found=0
-  for filepath in /etc/wptt/vhost/.*.conf; do
+  for filepath in "${vhost_files[@]}"; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-    local domain="${filepath##*/}"
+    domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
 
     unset redis_acl_user redis_acl_pass redis_db_id User_name_vhost
-    source "$filepath" 2>/dev/null
+    # shellcheck source=/dev/null
+    source "$filepath" 2>/dev/null || true
     local pass_show=""
+    local need_new_db_id=0
 
-    # 1. TẠO TÀI KHOẢN MỚI HOẶC BỔ SUNG DB_ID NẾU CHƯA CÓ
-    if [[ -z "$redis_acl_user" || -z "$redis_acl_pass" ]]; then
-      local redis_acl_user=$(openssl rand -hex 12)
-      local raw_pass=$(openssl rand -hex 16)
-      redis_acl_pass=$(wptt_ma_hoa "$raw_pass")
-
-      # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
-      local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
-      redis_db_id=1
-      while echo "$used_ids" | grep -qw "$redis_db_id"; do
-        ((redis_db_id++))
-        if [[ $redis_db_id -gt 999 ]]; then
-          redis_db_id=999
-          break
-        fi
-      done
-      # ------------------------------------------------
-
-      echo "redis_acl_user='$redis_acl_user'" >>"$filepath"
-      echo "redis_acl_pass='$redis_acl_pass'" >>"$filepath"
-      echo "redis_db_id='$redis_db_id'" >>"$filepath"
-
-      # Mở khóa +flushdb cho plugin
-      if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
-        # [BẢN VÁ]: Đã xóa -client ra khỏi list để LSCache không bị Failed
-        ACL_RULES_COMMON=(+@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
-        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_pass" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
-
-        # Khóa cứng User xuống ổ cứng (Chống mất Cache khi Restart)
-        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
-      fi
-      pass_show="$raw_pass"
+    # 1. Kiểm tra & Tự động cấp lại nếu redis_db_id bị rỗng hoặc trùng với web trước đó
+    if [[ -z "${redis_db_id:-}" || ! "${redis_db_id:-}" =~ ^[0-9]+$ ]] || ((10#$redis_db_id < 1 || 10#$redis_db_id > 999)); then
+      need_new_db_id=1
+    elif [[ -n "${taken_db_ids[$((10#$redis_db_id))]:-}" ]]; then
+      need_new_db_id=1
     else
-      pass_show=$(wptt_giai_ma "$redis_acl_pass")
-
-      # Cập nhật DB ID cho các website cũ chưa được chia lô
-      if [[ -z "$redis_db_id" ]]; then
-        # --- THUẬT TOÁN TÌM ID CÔ LẬP KHÔNG TRÙNG LẶP ---
-        local used_ids=$(awk -F"['=]" '/^redis_db_id=/ {print $3}' /etc/wptt/vhost/.*.conf 2>/dev/null | tr -d "'" | sort -un)
-        redis_db_id=1
-        while echo "$used_ids" | grep -qw "$redis_db_id"; do
-          ((redis_db_id++))
-          if [[ $redis_db_id -gt 999 ]]; then
-            redis_db_id=999
-            break
-          fi
-        done
-        # ------------------------------------------------
-        echo "redis_db_id='$redis_db_id'" >>"$filepath"
-      fi
-
-      # Cập nhật lại quyền +flushdb
-      if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" ]]; then
-        ACL_RULES_COMMON=(+@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
-        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$pass_show" "~*" "${ACL_RULES_COMMON[@]}" >/dev/null 2>&1
-
-        $cache_cli -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
-      fi
+      redis_db_id=$((10#$redis_db_id))
+      taken_db_ids[redis_db_id]=1
     fi
 
-    if [[ -n "$redis_acl_user" && -n "$pass_show" ]]; then
+    if ((need_new_db_id == 1)); then
+      local cand_id=1
+      while ((cand_id <= 999)); do
+        if [[ -z "${taken_db_ids[cand_id]:-}" ]]; then
+          break
+        fi
+        ((cand_id++))
+      done
+      ((cand_id > 999)) && cand_id=999
+      redis_db_id=$cand_id
+      taken_db_ids[redis_db_id]=1
+      _wptt_set_vhost_kv "$filepath" "redis_db_id" "$redis_db_id"
+    fi
+
+    # 2. Kiểm tra & Tự động tạo lại nếu User hoặc Pass bị rỗng (hoặc giải mã ra rỗng)
+    if [[ -n "${redis_acl_pass:-}" ]]; then
+      pass_show=$(wptt_giai_ma "$redis_acl_pass" 2>/dev/null || true)
+    fi
+
+    if [[ -z "${redis_acl_user:-}" || -z "${redis_acl_pass:-}" || -z "$pass_show" ]]; then
+      redis_acl_user=$(openssl rand -hex 12)
+      local raw_pass
+      raw_pass=$(openssl rand -hex 16)
+      redis_acl_pass=$(wptt_ma_hoa "$raw_pass")
+
+      _wptt_set_vhost_kv "$filepath" "redis_acl_user" "$redis_acl_user"
+      _wptt_set_vhost_kv "$filepath" "redis_acl_pass" "$redis_acl_pass"
+      pass_show="$raw_pass"
+    fi
+
+    # 3. Đồng bộ tài khoản ACL vào Engine đang chạy (Valkey / KeyDB / Redis)
+    if [[ "$socket_path" != "Không có" && -n "$raw_master_pass" && -n "$pass_show" ]]; then
+      _wptt_apply_acl_user "$cache_cli" "$socket_path" "$raw_master_pass" "$redis_acl_user" "$pass_show"
+    fi
+
+    if [[ -n "${redis_acl_user:-}" && -n "$pass_show" ]]; then
       left_text "Website: ${C_GREEN}$domain${C_RESET}" 2
       left_text "   - Username    : ${C_BOLD_WHITE}$redis_acl_user${C_RESET}" 2
       left_text "   - Password    : ${C_YELLOW}$pass_show${C_RESET}" 2
@@ -178,13 +291,10 @@ function in_thong_tin_acl_cho_khach() {
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
     echo -e "\n${C_GREEN}HƯỚNG DẪN ĐIỀN VÀO LITESPEED CACHE / WP-REDIS:${C_RESET}"
     echo -e "1. Bật Object Cache: ${C_YELLOW}ON${C_RESET} | Method: ${C_YELLOW}Redis${C_RESET}"
-    echo -e "2. Host: ${C_YELLOW}unix://$socket_path${C_RESET} | Port: ${C_YELLOW}0${C_RESET}"
+    echo -e "2. Host: ${C_YELLOW}$socket_path${C_RESET} (hoặc ${C_YELLOW}unix://$socket_path${C_RESET}) | Port: ${C_YELLOW}0${C_RESET}"
     echo -e "3. Copy Username/Password và điền đúng số ID Database ở trên."
   fi
 
-  # =========================================================================
-  # BOX THÔNG TIN MASTER KEY CHO ADMIN
-  # =========================================================================
   if [[ -n "$raw_master_pass" ]]; then
     echo -e "\n${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}THÔNG TIN QUẢN TRỊ MASTER KEY (CHỈ DÀNH CHO ADMIN)${C_RESET}"
@@ -195,22 +305,24 @@ function in_thong_tin_acl_cho_khach() {
     left_text "  ${C_YELLOW}CẢNH BÁO BẢO MẬT:${C_RESET}" 2
     left_text "  - Tuyệt đối KHÔNG lấy Master Key này điền vào plugin Website." 2
     left_text "  - Chỉ sử dụng để Debug hoặc bảo trì hệ thống qua dòng lệnh Terminal." 2
-    left_text "    (VD: valkey-cli -s $socket_path -a \"Master_Key\" PING)" 2
+    left_text "    (VD: $cache_cli -s $socket_path -a \"Master_Key\" PING)" 2
     echo -e "${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   fi
 }
 
-
-in_menu_wptt=$1
+in_menu_wptt="${1:-}"
 function hien_thi_tai_khoan_acl() {
   clear
   in_thong_tin_acl_cho_khach
-	wptt_quay_ve_menu "${in_menu_wptt:-}" 0 "enter"
+  wptt_quay_ve_menu "${in_menu_wptt:-}" 0 "enter"
 }
 
+# =========================================================================
+# 4. GIAO DIỆN CHÍNH & KIỂM TRA TRẠNG THÁI ENGINE
+# =========================================================================
 clear
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}${quan_ly_cache} ➜ Object Cache (Valkey / KeyDB / Redis)${C_RESET}"
+center_text "${C_YELLOW}${quan_ly_cache:-Quản lý Cache} ➜ Object Cache (Valkey / KeyDB / Redis)${C_RESET}"
 echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
 active_cache="Chưa cài đặt"
@@ -229,7 +341,7 @@ elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active
   socket_path="/var/run/redis/redis.sock"
 fi
 
-box_inner_width=${box_inner_width:-71}
+box_inner_width=${box_inner_width:-78}
 echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 if [[ "$active_cache" != "Chưa cài đặt" ]]; then
   left_text "Trạng thái    : ${C_GREEN}Đang hoạt động (${active_name_display})${C_RESET}" 2
@@ -242,7 +354,7 @@ echo -e "${C_CYAN}├───────────────────�
 center_text "${C_YELLOW}VUI LÒNG CHỌN ENGINE BẠN MUỐN QUẢN LÝ / CÀI ĐẶT${C_RESET}"
 echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
-OUTPUT=$(cat /etc/*release)
+OUTPUT=$(cat /etc/*release 2>/dev/null || true)
 is_alma_10=false
 if echo "$OUTPUT" | grep -q "AlmaLinux 10\|Rocky Linux 10\|Red Hat Enterprise Linux 10\|Oracle Linux Server 10"; then is_alma_10=true; fi
 
@@ -255,39 +367,53 @@ echo -e "${C_CYAN}╰───────────────────�
 
 while true; do
   if $is_alma_10; then echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-2, 4] [0=Thoát]: ${C_RESET}"; else echo -en "${C_CYAN}Nhập lựa chọn của bạn [1-4] [0=Thoát]: ${C_RESET}"; fi
-  read -r cache_choice
+  read -r cache_choice || exit 0
   if [[ "$cache_choice" == "0" ]]; then
     echo -e "\n${C_GREEN}Đang thoát...${C_RESET}"
     wptt_quay_ve_menu "${1:-}" 0
   fi
   case "$cache_choice" in
-  1)
-    name_service="valkey"
-    display_name="Valkey"
-    break
-    ;;
-  2)
-    name_service="keydb"
-    display_name="KeyDB"
-    break
-    ;;
-  3) if ! $is_alma_10; then
-    name_service="redis"
-    display_name="Redis"
-    break
-  else echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"; fi ;;
-  4) hien_thi_tai_khoan_acl ;;
-  *) echo -e "${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}" ;;
+    1)
+      name_service="valkey"
+      display_name="Valkey"
+      break
+      ;;
+    2)
+      name_service="keydb"
+      display_name="KeyDB"
+      break
+      ;;
+    3)
+      if ! $is_alma_10; then
+        name_service="redis"
+        display_name="Redis"
+        break
+      else
+        echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
+      fi
+      ;;
+    4) hien_thi_tai_khoan_acl ;;
+    *) echo -e "${C_RED}❌ Lựa chọn không hợp lệ! Vui lòng chọn lại.${C_RESET}" ;;
   esac
 done
 
 duong_dan_config_redis="/etc/$name_service/$name_service.conf"
-if $(cat /etc/*release | grep -q "AlmaLinux 8\|Rocky Linux 8\|Red Hat Enterprise Linux 8\|Oracle Linux Server 8") && [[ "$name_service" == 'redis' ]]; then duong_dan_config_redis="/etc/$name_service.conf"; fi
-if [[ ! -f "$duong_dan_config_redis" && -f "/etc/$name_service.conf" ]]; then duong_dan_config_redis="/etc/$name_service.conf"; elif [[ ! -f "$duong_dan_config_redis" && -f "/etc/$name_service/$name_service.conf" ]]; then duong_dan_config_redis="/etc/$name_service/$name_service.conf"; fi
+if echo "$OUTPUT" | grep -q "AlmaLinux 8\|Rocky Linux 8\|Red Hat Enterprise Linux 8\|Oracle Linux Server 8" && [[ "$name_service" == 'redis' ]]; then
+  duong_dan_config_redis="/etc/$name_service.conf"
+fi
+if [[ ! -f "$duong_dan_config_redis" && -f "/etc/$name_service.conf" ]]; then
+  duong_dan_config_redis="/etc/$name_service.conf"
+elif [[ ! -f "$duong_dan_config_redis" && -f "/etc/$name_service/$name_service.conf" ]]; then
+  duong_dan_config_redis="/etc/$name_service/$name_service.conf"
+fi
 
 echo ""
 if [[ ! -f "$duong_dan_config_redis" ]]; then
-  if [[ "$active_cache" != "Chưa cài đặt" && "$active_cache" != "$name_service" ]]; then msg_confirm="Hệ thống đang chạy ${C_YELLOW}$active_name_display${C_RESET}. Bạn có muốn XÓA nó và cài đặt ${C_GREEN}$display_name${C_RESET} không?"; else msg_confirm="Bạn có muốn tiến hành CÀI ĐẶT ${C_GREEN}$display_name${C_RESET} không?"; fi
+  if [[ "$active_cache" != "Chưa cài đặt" && "$active_cache" != "$name_service" ]]; then
+    msg_confirm="Hệ thống đang chạy ${C_YELLOW}$active_name_display${C_RESET}. Bạn có muốn XÓA nó và cài đặt ${C_GREEN}$display_name${C_RESET} không?"
+  else
+    msg_confirm="Bạn có muốn tiến hành CÀI ĐẶT ${C_GREEN}$display_name${C_RESET} không?"
+  fi
 
   if wptt_xac_nhan "$msg_confirm" "" "" "Đồng ý Cài đặt" "Hủy bỏ"; then
     echo ""
@@ -296,44 +422,53 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
 
     for other_service in redis valkey keydb; do
       if [[ "$other_service" != "$name_service" ]]; then
-        systemctl stop $other_service ${other_service}-server >/dev/null 2>&1
-        systemctl disable $other_service ${other_service}-server >/dev/null 2>&1
-        killall -9 ${other_service}-server ${other_service} >/dev/null 2>&1
-        if grep -q "Ubuntu\|Debian" /etc/*release 2>/dev/null; then apt-get remove --purge $other_service ${other_service}-server -y >/dev/null 2>&1; else dnf remove ${other_service:?} -y >/dev/null 2>&1; fi
-        rm -rf /etc/${other_service:?}.conf /etc/${other_service:?} /var/run/${other_service:?} /var/lib/${other_service:?} /var/log/${other_service:?} /etc/monit.d/${other_service:?} /etc/monit/conf.d/${other_service:?}
+        systemctl stop "$other_service" "${other_service}-server" >/dev/null 2>&1 || true
+        systemctl disable "$other_service" "${other_service}-server" >/dev/null 2>&1 || true
+        killall -9 "${other_service}-server" "${other_service}" >/dev/null 2>&1 || true
+        if grep -q "Ubuntu\|Debian" /etc/*release 2>/dev/null; then
+          apt-get remove --purge "$other_service" "${other_service}-server" -y >/dev/null 2>&1 || true
+        else
+          dnf remove "${other_service:?}" -y >/dev/null 2>&1 || true
+        fi
+        rm -rf /etc/"${other_service:?}".conf /etc/"${other_service:?}" /var/run/"${other_service:?}" /var/lib/"${other_service:?}" /var/log/"${other_service:?}" /etc/monit.d/"${other_service:?}" /etc/monit/conf.d/"${other_service:?}"
       fi
     done
 
     if grep -q "Ubuntu\|Debian" /etc/*release 2>/dev/null; then
       apt-get update >/dev/null 2>&1
-      apt-get install "$name_service" "${name_service}"-server -y >/dev/null 2>&1
-      lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
-      for phpredis in "${lsphp[@]}"; do apt-get install lsphp"${phpredis}"-redis lsphp"${phpredis}"-igbinary -y >/dev/null 2>&1; done
+      apt-get install "$name_service" "${name_service}"-server -y >/dev/null 2>&1 || apt-get install "$name_service" -y >/dev/null 2>&1
+      mapfile -t lsphp < <(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$')
+      for phpredis in "${lsphp[@]}"; do
+        apt-get install lsphp"${phpredis}"-redis lsphp"${phpredis}"-igbinary -y >/dev/null 2>&1 || true
+      done
     else
-      dnf install epel-release -y >/dev/null 2>&1
+      dnf install epel-release -y >/dev/null 2>&1 || true
       yum install "${name_service}" -y --disablerepo="mariadb" >/dev/null 2>&1
-      lsphp=($(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
+      mapfile -t lsphp < <(ls -A /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$')
       (/etc/wptt/php/kho-luu-tru-litespeed)
       for phpredis in "${lsphp[@]}"; do
-        if [[ $(dnf list available 2>/dev/null | grep "lsphp${phpredis}-pecl-redis") ]]; then
-          yum install lsphp"${phpredis}"-pecl-redis lsphp"${phpredis}"-pecl-igbinary -y --disablerepo="mariadb" 2>/dev/null
+        if dnf list available 2>/dev/null | grep -q "lsphp${phpredis}-pecl-redis"; then
+          yum install lsphp"${phpredis}"-pecl-redis lsphp"${phpredis}"-pecl-igbinary -y --disablerepo="mariadb" >/dev/null 2>&1 || true
         else
-          dnf install https://rpms.litespeedtech.com/centos/8/x86_64/lsphp${phpredis}-pecl-redis-6.0.2-1.el8.x86_64.rpm -y >/dev/null 2>&1 || true
-          dnf install https://rpms.litespeedtech.com/centos/8/x86_64/lsphp${phpredis}-pecl-igbinary-3.2.14-1.el8.x86_64.rpm -y >/dev/null 2>&1 || true
+          dnf install "https://rpms.litespeedtech.com/centos/8/x86_64/lsphp${phpredis}-pecl-redis-6.0.2-1.el8.x86_64.rpm" -y >/dev/null 2>&1 || true
+          dnf install "https://rpms.litespeedtech.com/centos/8/x86_64/lsphp${phpredis}-pecl-igbinary-3.2.14-1.el8.x86_64.rpm" -y >/dev/null 2>&1 || true
         fi
       done
     fi
 
     if [[ ! -f "$duong_dan_config_redis" ]]; then
-      if [[ -f "/etc/$name_service/$name_service.conf" ]]; then duong_dan_config_redis="/etc/$name_service/$name_service.conf"; elif [[ -f "/etc/$name_service.conf" ]]; then duong_dan_config_redis="/etc/$name_service.conf"; fi
+      if [[ -f "/etc/$name_service/$name_service.conf" ]]; then
+        duong_dan_config_redis="/etc/$name_service/$name_service.conf"
+      elif [[ -f "/etc/$name_service.conf" ]]; then
+        duong_dan_config_redis="/etc/$name_service.conf"
+      fi
     fi
     _rundone "Cài đặt Package $display_name"
 
-    _runing "Cấu hình bảo mật Unix Socket + Requirepass..."
+    _runing "Cấu hình bảo mật Unix Socket + Requirepass"
 
-    # TẠO VÀ LƯU MASTER PASSWORD VÀO FILE .wptt.conf GỐC (MÃ HÓA)
     wptt_load_main_conf 2>/dev/null
-    if [[ -z "$REDIS_MASTER_PASS" ]]; then
+    if [[ -z "${REDIS_MASTER_PASS:-}" ]]; then
       raw_master=$(openssl rand -hex 24)
       master_pass_encrypted=$(wptt_ma_hoa "$raw_master")
       echo "REDIS_MASTER_PASS='$master_pass_encrypted'" >>/etc/wptt/.wptt.conf
@@ -341,61 +476,89 @@ if [[ ! -f "$duong_dan_config_redis" ]]; then
     fi
     dec_master_pass=$(wptt_giai_ma "$REDIS_MASTER_PASS")
 
-    # KHỞI TẠO FILE LƯU TRỮ ACL ĐỂ TRÁNH MẤT USER KHI RESTART
+    # -------------------------------------------------------------------------
+    # [FIX QUAN TRỌNG CHO KEYDB]:
+    # 1. Ghi sẵn "user default on >MasterPass ~* +@all" vào users.acl trước khi
+    #    khởi động để KeyDB KHÔNG bị lỗi xung đột giữa requirepass và aclfile rỗng!
+    # 2. Vô hiệu hóa các dòng databases 16, port 6379, active-replica cũ trong
+    #    file cấu hình gốc của KeyDB để databases 1000 và SELECT <db_id> hoạt động 100%.
+    # -------------------------------------------------------------------------
     mkdir -p "/etc/$name_service"
-    touch "/etc/$name_service/users.acl"
-    chown -hR "$name_service":"$name_service" "/etc/$name_service/users.acl" 2>/dev/null
+    umask 077
+    printf 'user default on >%s ~* +@all\n' "$dec_master_pass" >"/etc/$name_service/users.acl"
+    umask 022
+    chown -hR "$name_service":"$name_service" "/etc/$name_service/users.acl" 2>/dev/null || true
     chmod 600 "/etc/$name_service/users.acl"
 
-    # [TỐI ƯU CÔ LẬP]: Bơm databases 1000 để mở rộng quỹ đất lưu trữ riêng biệt
-    echo -e "\n# WPTangToc Optimize
+    # Comment sạch các chỉ thị cũ trong file config gốc để tránh xung đột với cấu hình WPTangToc ở cuối file
+    sed -i -E \
+      -e 's/^[[:space:]]*(port[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(bind[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(unixsocket[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(unixsocketperm[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(requirepass[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(aclfile[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(databases[[:space:]]+)/#\1/g' \
+      -e 's/^[[:space:]]*(active-replica[[:space:]]+yes)/#active-replica no/g' \
+      -e 's/^[[:space:]]*(multi-master[[:space:]]+yes)/#multi-master no/g' \
+      -e 's/^[[:space:]]*tcp-keepalive 300/tcp-keepalive 0/g' \
+      -e 's/^[[:space:]]*rdbcompression yes/rdbcompression no/g' \
+      -e 's/^[[:space:]]*rdbchecksum yes/rdbchecksum no/g' \
+      "$duong_dan_config_redis"
+
+    cat <<EOF >>"$duong_dan_config_redis"
+
+# WPTangToc Optimize
 port 0
 unixsocket /var/run/$name_service/$name_service.sock
 unixsocketperm 777
-requirepass \"$dec_master_pass\"
+requirepass "$dec_master_pass"
 aclfile /etc/$name_service/users.acl
 maxmemory 128mb
 maxmemory-policy allkeys-lfu
 databases 1000
-save \"\"
+save ""
 appendonly no
-tcp-keepalive 60" >>"$duong_dan_config_redis"
-
-    sed -i 's/^[[:space:]]*port 6379/#port 6379/g' "$duong_dan_config_redis"
-    sed -i 's/^[[:space:]]*tcp-keepalive 300/tcp-keepalive 0/g' "$duong_dan_config_redis"
-    sed -i 's/^[[:space:]]*rdbcompression yes/rdbcompression no/g' "$duong_dan_config_redis"
-    sed -i 's/^[[:space:]]*rdbchecksum yes/rdbchecksum no/g' "$duong_dan_config_redis"
+tcp-keepalive 60
+EOF
 
     mkdir -p /var/run/"$name_service" /var/lib/"$name_service" /var/log/"$name_service"
     chmod 755 /var/run/"$name_service"
     chmod 700 /var/lib/"$name_service"
 
-    chown -hR "$name_service":"$name_service" /var/run/"$name_service" /var/log/"$name_service" /var/lib/"$name_service" 2>/dev/null
-    chown "$name_service":"$name_service" "$duong_dan_config_redis" 2>/dev/null
+    chown -hR "$name_service":"$name_service" /var/run/"$name_service" /var/log/"$name_service" /var/lib/"$name_service" 2>/dev/null || true
+    chown "$name_service":"$name_service" "$duong_dan_config_redis" 2>/dev/null || true
     chmod 600 "$duong_dan_config_redis"
 
     systemctl daemon-reload >/dev/null 2>&1
-    if systemctl list-unit-files | grep -q "^${name_service}-server.service"; then SVC_NAME="${name_service}-server"; else SVC_NAME="${name_service}"; fi
+    if systemctl list-unit-files | grep -q "^${name_service}-server.service"; then
+      SVC_NAME="${name_service}-server"
+    else
+      SVC_NAME="${name_service}"
+    fi
     systemctl enable "$SVC_NAME" >/dev/null 2>&1
     systemctl restart "$SVC_NAME" >/dev/null 2>&1
+
+    # Chờ Unix Socket của KeyDB/Valkey xuất hiện rồi mới tiếp tục nạp ACL
+    active_cache="$name_service"
+    active_name_display="$display_name"
+    socket_path="/var/run/$name_service/$name_service.sock"
+    _wptt_wait_cache_socket "$socket_path" || true
+
     systemctl restart lsws >/dev/null 2>&1
 
-    (/bin/bash /etc/wptt/monit >/dev/null 2>&1)
-    (/bin/bash /etc/wptt/cache/object-cache-optimize-tune >/dev/null 2>&1)
-    (/bin/bash /etc/wptt/oomscore >/dev/null 2>&1)
+    (/bin/bash /etc/wptt/monit >/dev/null 2>&1) || true
+    (/bin/bash /etc/wptt/cache/object-cache-optimize-tune >/dev/null 2>&1) || true
+    (/bin/bash /etc/wptt/oomscore >/dev/null 2>&1) || true
 
     _rundone "Cấu hình bảo mật Unix Socket + Requirepass"
-
-    # FIX LỖI: Cập nhật lại 2 biến trạng thái để hàm in_thong_tin_acl_cho_khach chạy mượt mà
-    active_cache="$name_service"
-    socket_path="/var/run/$name_service/$name_service.sock"
 
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT CÀI ĐẶT OBJECT CACHE${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "Engine        : ${C_YELLOW}$display_name${C_RESET}" 2
     left_text "Chế độ        : ${C_GREEN}Unix Socket + Admin ACL Master${C_RESET}" 2
-    left_text "Cô lập Dữ liệu: ${C_GREEN}Đã kích hoạt Database ID độc lập${C_RESET}" 2
+    left_text "Cô lập Dữ liệu: ${C_GREEN}Đã kích hoạt Database ID độc lập (1000 DBs)${C_RESET}" 2
     echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
 
     in_thong_tin_acl_cho_khach
@@ -409,23 +572,28 @@ else
     echo ""
     wptt_logs "INFO" "Huỷ kích hoạt $name_service"
 
-    _runing "Gỡ bỏ hoàn toàn $display_name và dọn dẹp hệ thống..."
-    systemctl stop "${name_service}" "${name_service}"-server >/dev/null 2>&1
-    systemctl disable "${name_service}" "${name_service}"-server >/dev/null 2>&1
+    _runing "Gỡ bỏ hoàn toàn $display_name và dọn dẹp hệ thống"
+    systemctl stop "${name_service}" "${name_service}"-server >/dev/null 2>&1 || true
+    systemctl disable "${name_service}" "${name_service}"-server >/dev/null 2>&1 || true
 
-    if $(cat /etc/*release | grep -qi "Ubuntu\|Debian"); then apt-get remove --purge "${name_service}" "${name_service}"-server -y >/dev/null 2>&1; else yum remove "${name_service}" -y >/dev/null 2>&1; fi
+    if echo "$OUTPUT" | grep -qi "Ubuntu\|Debian"; then
+      apt-get remove --purge "${name_service}" "${name_service}"-server -y >/dev/null 2>&1 || true
+    else
+      yum remove "${name_service}" -y >/dev/null 2>&1 || true
+    fi
 
-    lsphp=($(ls /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$'))
-    for php_redis in "${lsphp[@]}"; do yum remove lsphp"${php_redis}"-pecl-redis -y --disablerepo="*" --enablerepo="litespeed,litespeed-update" >/dev/null 2>&1; done
+    mapfile -t lsphp < <(ls /usr/local/lsws | grep -oP '^lsphp\K[0-9]+$')
+    for php_redis in "${lsphp[@]}"; do
+      yum remove lsphp"${php_redis}"-pecl-redis -y --disablerepo="*" --enablerepo="litespeed,litespeed-update" >/dev/null 2>&1 || true
+    done
 
     rm -rf "${duong_dan_config_redis:?}" /var/run/"${name_service:?}" /var/lib/"${name_service:?}" /var/log/"${name_service:?}"
     [[ -n "$name_service" && -d /etc/"${name_service}" ]] && rm -rf /etc/"${name_service:?}"
-    if grep -qi "ubuntu\|debian" /etc/*release; then DIR_MONIT="/etc/monit/conf.d"; else DIR_MONIT="/etc/monit.d"; fi
+    if grep -qi "ubuntu\|debian" /etc/*release 2>/dev/null; then DIR_MONIT="/etc/monit/conf.d"; else DIR_MONIT="/etc/monit.d"; fi
     [[ -f "$DIR_MONIT/$name_service" ]] && rm -f "$DIR_MONIT/$name_service"
     if systemctl is-active --quiet monit; then systemctl reload monit >/dev/null 2>&1; fi
 
-    # DỌN DẸP SẠCH SẼ BIẾN TRONG .wptt.conf VÀ VHOST
-    sed -i '/^REDIS_MASTER_PASS=/d' /etc/wptt/.wptt.conf 2>/dev/null
+    sed -i '/^REDIS_MASTER_PASS=/d' /etc/wptt/.wptt.conf 2>/dev/null || true
     for vhost_file in /etc/wptt/vhost/.*.conf; do
       if [[ -f "$vhost_file" ]]; then
         sed -i '/^redis_acl_user=/d' "$vhost_file"
@@ -434,7 +602,7 @@ else
       fi
     done
 
-    _rundone "Gỡ bỏ hoàn toàn $display_name và dọn dẹp hệ thống..."
+    _rundone "Gỡ bỏ hoàn toàn $display_name và dọn dẹp hệ thống"
     echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ OBJECT CACHE${C_RESET}"
     echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"

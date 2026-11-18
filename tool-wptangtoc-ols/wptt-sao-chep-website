@@ -620,45 +620,100 @@ umask 022
 chown root:root "/etc/wptt/vhost/.$NAME2.conf"
 chmod 600 "/etc/wptt/vhost/.$NAME2.conf"
 
-# Xử lý cô lập Redis/Valkey (Giữ nguyên logic an toàn của bạn)
+# ==============================================================================
+# XỬ LÝ CÔ LẬP OBJECT CACHE (VALKEY / KEYDB / REDIS) CHO WEBSITE NHÂN BẢN ($NAME2)
+# ==============================================================================
 if [[ -n "${REDIS_MASTER_PASS:-}" ]]; then
   socket_path=""
   cache_cli=""
 
-  if systemctl is-active --quiet valkey 2>/dev/null; then
+  if systemctl is-active --quiet valkey-server 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
     socket_path="/var/run/valkey/valkey.sock"
     cache_cli="valkey-cli"
-  elif systemctl is-active --quiet redis 2>/dev/null; then
+  elif systemctl is-active --quiet keydb-server 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
+    socket_path="/var/run/keydb/keydb.sock"
+    cache_cli="keydb-cli"
+  elif systemctl is-active --quiet redis-server 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
     socket_path="/var/run/redis/redis.sock"
     cache_cli="redis-cli"
   fi
 
-  if [[ -n "$cache_cli" && -S "$socket_path" ]]; then
-    redis_acl_user="$(openssl rand -hex 12 2>/dev/null)"
-    raw_redis_pass="$(openssl rand -hex 16 2>/dev/null)"
-    redis_acl_pass_luu="$(wptt_ma_hoa "$raw_redis_pass" 2>/dev/null)"
-    redis_acl_pass_luu="${redis_acl_pass_luu//$'\n'/}"
+  if [[ -n "$cache_cli" && -S "$socket_path" ]] && command -v "$cache_cli" >/dev/null 2>&1; then
+    raw_master_pass="$(wptt_giai_ma "$REDIS_MASTER_PASS" 2>/dev/null || true)"
+    raw_master_pass="${raw_master_pass//$'\n'/}"
 
-    redis_db_id="$(awk -F"['=]" '/^redis_db_id=/ { val=$3; gsub(/[^0-9]/,"",val); if(val!="") u[val+0]=1 } END { for(i=1;i<=999;i++) if(!(i in u)){print i; exit} print 999}' /etc/wptt/vhost/.*.conf 2>/dev/null)"
-    [[ -z "$redis_db_id" ]] && redis_db_id=1
+    if [[ -n "$raw_master_pass" ]]; then
+      redis_acl_user="$(openssl rand -hex 12 2>/dev/null)"
+      raw_redis_pass="$(openssl rand -hex 16 2>/dev/null)"
+      redis_acl_pass_luu="$(wptt_ma_hoa "$raw_redis_pass" 2>/dev/null || true)"
+      redis_acl_pass_luu="${redis_acl_pass_luu//$'\n'/}"
 
-    raw_master_pass="$(wptt_giai_ma "$REDIS_MASTER_PASS" 2>/dev/null)"
-    ACL_RULES=(+@all -flushall +flushdb -config -module -replicaof -slaveof -acl -shutdown -client -save -bgsave -debug -monitor -swapdb)
+      # Quét tìm Database ID cô lập (1..999) chưa có website nào sử dụng (chấp nhận mọi kiểu dấu nháy)
+      redis_db_id="$(
+        awk -F'=' '
+          /^[[:space:]]*redis_db_id=/ {
+            val = $2
+            gsub(/[^0-9]/, "", val)
+            if (val != "") {
+              id = val + 0
+              if (id >= 1 && id <= 999) u[id] = 1
+            }
+          }
+          END {
+            for (i = 1; i <= 999; i++) {
+              if (!(i in u)) {
+                print i
+                exit
+              }
+            }
+            print 999
+          }
+        ' /etc/wptt/vhost/.*.conf 2>/dev/null
+      )"
+      [[ -z "$redis_db_id" || ! "$redis_db_id" =~ ^[0-9]+$ ]] && redis_db_id=1
 
-    if [[ -n "$raw_master_pass" ]] && "$cache_cli" -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" on ">$raw_redis_pass" "~*" "${ACL_RULES[@]}" >/dev/null 2>&1; then
-      "$cache_cli" -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1
+      # Đảm bảo Engine (đặc biệt là KeyDB) đã mở khóa đủ 1000 Databases trên RAM
+      REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" CONFIG SET databases 1000 >/dev/null 2>&1 || true
 
-      {
-        echo "redis_acl_user='$redis_acl_user'"
-        echo "redis_acl_pass='$redis_acl_pass_luu'"
-        echo "redis_db_id='$redis_db_id'"
-      } >>"/etc/wptt/vhost/.$NAME2.conf"
+      # Bộ quy tắc ACL chuẩn cho Valkey/Redis 7 và bộ Fallback cho KeyDB (Đã bỏ -client để LSCache không lỗi và thêm +select)
+      ACL_RULES_V1=(reset on ">$raw_redis_pass" "~*" "+@all" -flushall +flushdb +select -config -module -replicaof -slaveof -acl -shutdown -save -bgsave -debug -monitor -swapdb)
+      ACL_RULES_KEYDB=(reset on ">$raw_redis_pass" "~*" "+@all" -flushall +flushdb +select -config -acl -shutdown -save -bgsave -debug -monitor)
 
-      if [[ -d "$duong_dan_nguon_moi/wp-content/plugins/litespeed-cache" ]]; then
-        WP_EXEC_CACHE=(timeout 15 /sbin/runuser -u "$USER" -- "${PHP_EXEC[@]}" /usr/local/bin/wp)
-        "${WP_EXEC_CACHE[@]}" litespeed-option set object-user "$redis_acl_user" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1
-        "${WP_EXEC_CACHE[@]}" litespeed-option set object-pswd "$raw_redis_pass" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1
-        "${WP_EXEC_CACHE[@]}" litespeed-option set object-db_id "$redis_db_id" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1
+      acl_out="$(REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" ACL SETUSER "$redis_acl_user" "${ACL_RULES_V1[@]}" 2>&1 || true)"
+      if [[ "$acl_out" != *"OK"* ]]; then
+        acl_out="$(REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" ACL SETUSER "$redis_acl_user" "${ACL_RULES_KEYDB[@]}" 2>&1 || true)"
+      fi
+      if [[ "$acl_out" != *"OK"* ]]; then
+        acl_out="$("$cache_cli" -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SETUSER "$redis_acl_user" "${ACL_RULES_KEYDB[@]}" 2>&1 || true)"
+      fi
+
+      if [[ "$acl_out" == *"OK"* ]]; then
+        # Lưu cấu hình ACL xuống ổ cứng và làm sạch sẵn DB ID mới cấp phát
+        REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" ACL SAVE >/dev/null 2>&1 || \
+          "$cache_cli" -s "$socket_path" -a "$raw_master_pass" --no-auth-warning ACL SAVE >/dev/null 2>&1 || true
+        REDISCLI_AUTH="$raw_master_pass" "$cache_cli" -s "$socket_path" -n "$redis_db_id" FLUSHDB ASYNC >/dev/null 2>&1 || true
+
+        # Ghi thông tin ACL mới vào file cấu hình VHost của website nhân bản (.NAME2.conf)
+        vhost_target="/etc/wptt/vhost/.$NAME2.conf"
+        if [[ -f "$vhost_target" ]]; then
+          sed -i -e '/^[[:space:]]*redis_acl_user=/d' -e '/^[[:space:]]*redis_acl_pass=/d' -e '/^[[:space:]]*redis_db_id=/d' "$vhost_target" 2>/dev/null || true
+        fi
+        {
+          printf "redis_acl_user='%s'\n" "$redis_acl_user"
+          printf "redis_acl_pass='%s'\n" "$redis_acl_pass_luu"
+          printf "redis_db_id='%s'\n" "$redis_db_id"
+        } >>"$vhost_target"
+
+        # Tự động cập nhật thông tin tài khoản ACL & DB ID mới vào LiteSpeed Cache của website nhân bản
+        if [[ -d "$duong_dan_nguon_moi/wp-content/plugins/litespeed-cache" ]]; then
+          WP_EXEC_CACHE=(timeout 15 /sbin/runuser -u "$USER" -- "${PHP_EXEC[@]}" /usr/local/bin/wp)
+          "${WP_EXEC_CACHE[@]}" litespeed-option set object-host "$socket_path" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
+          "${WP_EXEC_CACHE[@]}" litespeed-option set object-port "0" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
+          "${WP_EXEC_CACHE[@]}" litespeed-option set object-user "$redis_acl_user" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
+          "${WP_EXEC_CACHE[@]}" litespeed-option set object-pswd "$raw_redis_pass" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
+          "${WP_EXEC_CACHE[@]}" litespeed-option set object-db_id "$redis_db_id" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
+          "${WP_EXEC_CACHE[@]}" litespeed-purge all --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
+        fi
       fi
     fi
   fi
