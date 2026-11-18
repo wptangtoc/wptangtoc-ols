@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.2)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.3)
 
 - **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.2**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.3**.
 
 ---
 
@@ -3999,22 +3999,22 @@ Hướng dẫn: Màn hình sẽ tự động làm mới sau mỗi 1 giây. Để
 - **Tệp nguồn:** `/etc/wptt/cache/wptt-redis-valkey-keydb`
 
 ```text
-🚀 TÍNH NĂNG: QUẢN LÝ OBJECT CACHE (VALKEY / KEYDB / REDIS)
+  🚀 TÍNH NĂNG: QUẢN LÝ OBJECT CACHE (VALKEY / KEYDB / REDIS)
 
-Object Cache là một công nghệ tối ưu hóa bộ nhớ tạm (In-Memory Database), giúp WordPress lưu trữ các câu lệnh truy vấn phức tạp thẳng vào bộ nhớ RAM thay vì phải bắt MariaDB/MySQL chạy lại từ đầu. Tính năng này được coi là "Trái tim" để tăng tốc các trang web động (Dynamic Sites) như WooCommerce, các diễn đàn hoặc các trang quản trị wp-admin.
+  Object Cache là một công nghệ tối ưu hóa bộ nhớ tạm (In-Memory Database), giúp WordPress lưu trữ các câu lệnh truy vấn phức tạp thẳng vào bộ nhớ RAM thay vì phải bắt MariaDB/MySQL chạy lại từ đầu. Tính năng này được coi là "Trái tim" để tăng tốc các trang web động (Dynamic Sites) như WooCommerce, các diễn đàn hoặc các trang quản trị wp-admin.
 
 1. TÍNH NĂNG CÀI ĐẶT (INSTALL OBJECT CACHE):
- ➜ Tăng tốc đột phá: Tự động tải, biên dịch và cấu hình một trong 3 Engine hàng đầu (Valkey, KeyDB hoặc Redis).
- ➜ Unix Socket & ACL: Bỏ qua kết nối mạng TCP chậm chạp, hệ thống tự động cấu hình giao tiếp qua Unix Socket để tối đa hóa băng thông nội bộ. Đồng thời, kích hoạt tính năng ACL (Phân quyền bảo mật) để cấp cho mỗi website một User/Pass và Database ID độc lập, ngăn chặn hoàn toàn việc nhìn trộm dữ liệu chéo giữa các web.
- ➜ Tương thích PHP: Tự động nhúng Extension `redis.so` và `igbinary.so` vào toàn bộ các phiên bản PHP đang chạy trên OpenLiteSpeed.
+   ➜ Tăng tốc đột phá: Tự động tải, biên dịch và cấu hình một trong 3 Engine hàng đầu (Valkey, KeyDB hoặc Redis).
+   ➜ Unix Socket & ACL: Bỏ qua kết nối mạng TCP chậm chạp, hệ thống tự động cấu hình giao tiếp qua Unix Socket để tối đa hóa băng thông nội bộ. Đồng thời, kích hoạt tính năng ACL (Phân quyền bảo mật) để cấp cho mỗi website một User/Pass và Database ID độc lập, ngăn chặn hoàn toàn việc nhìn trộm dữ liệu chéo giữa các web.
+   ➜ Tương thích PHP: Tự động nhúng Extension `redis.so` và `igbinary.so` vào toàn bộ các phiên bản PHP đang chạy trên OpenLiteSpeed.
 
 2. TÍNH NĂNG HỦY CÀI ĐẶT (UNINSTALL OBJECT CACHE):
- ➜ Dọn dẹp sạch sẽ: Tự động dừng dịch vụ (Stop Service), gỡ bỏ gói cài đặt, xóa thư mục dữ liệu, và dọn dẹp các tài khoản ACL đã được mã hóa trong hệ thống để trả lại dung lượng RAM cho máy chủ.
- ➜ An toàn: Hệ thống sẽ tự động tắt Extension PHP liên quan, do đó bạn không cần lo lắng về lỗi 500 khi gỡ bỏ.
+   ➜ Dọn dẹp sạch sẽ: Tự động dừng dịch vụ (Stop Service), gỡ bỏ gói cài đặt, xóa thư mục dữ liệu, và dọn dẹp các tài khoản ACL đã được mã hóa trong hệ thống để trả lại dung lượng RAM cho máy chủ.
+   ➜ An toàn: Hệ thống sẽ tự động tắt Extension PHP liên quan, do đó bạn không cần lo lắng về lỗi 500 khi gỡ bỏ.
 
-⚠️ CẢNH BÁO QUAN TRỌNG KHI SỬ DỤNG:
- - "Đại gia sát RAM": Object Cache ngốn rất nhiều RAM. Tuyệt đối KHÔNG nên cài đặt tính năng này nếu VPS của bạn chỉ có 1GB RAM, vì nó sẽ dễ dàng đẩy máy chủ vào trạng thái tràn bộ nhớ (OOM) làm sập luôn cả MariaDB.
- - Bảo mật Mật khẩu: Master Password (Mật khẩu gốc) chỉ dành cho hệ thống quản trị nội bộ. Tuyệt đối KHÔNG sử dụng Master Password để điền vào cấu hình các Plugin trên WordPress. Hãy sử dụng Mật khẩu ACL riêng biệt được hệ thống cấp phát cho từng trang web.
+  ⚠️ CẢNH BÁO QUAN TRỌNG KHI SỬ DỤNG:
+- "Đại gia sát RAM": Object Cache ngốn rất nhiều RAM. Tuyệt đối KHÔNG nên cài đặt tính năng này nếu VPS của bạn chỉ có 1GB RAM, vì nó sẽ dễ dàng đẩy máy chủ vào trạng thái tràn bộ nhớ (OOM) làm sập luôn cả MariaDB.
+- Bảo mật Mật khẩu: Master Password (Mật khẩu gốc) chỉ dành cho hệ thống quản trị nội bộ. Tuyệt đối KHÔNG sử dụng Master Password để điền vào cấu hình các Plugin trên WordPress. Hãy sử dụng Mật khẩu ACL riêng biệt được hệ thống cấp phát cho từng trang web.
 ```
 
 ---

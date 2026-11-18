@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.4.1.3
+
+🐛 **Sửa lỗi**
+- **Khắc phục lỗi KeyDB Object Cache:** Tối ưu hóa và khắc phục triệt để các sự cố phát sinh trong cơ chế lưu trữ bộ nhớ đệm KeyDB Object Cache, giúp tăng tốc độ truy vấn dữ liệu, giảm tải cho máy chủ và đảm bảo hệ thống WordPress vận hành ổn định, mượt mà.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.2
 
 🐛 **Sửa lỗi**
