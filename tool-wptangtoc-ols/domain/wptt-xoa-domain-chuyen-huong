@@ -11,11 +11,11 @@ function huong_dan() {
   Nói một cách đơn giản, đây là hành động dừng việc tự động chuyển tiếp từ tên miền A sang tên miền B. Sau khi xóa chuyển hướng, khi người dùng truy cập vào tên miền A, họ sẽ không còn bị tự động đưa đến tên miền B nữa.
 
   Mục Đích Chính
-  * Khôi phục nội dung gốc: Khi bạn muốn tên miền đang bị chuyển hướng [ví dụ: tên miền A] bắt đầu hiển thị nội dung riêng của nó, thay vì trỏ sang nơi khác.
-  * Thay đổi đích đến của chuyển hướng: Nếu bạn muốn tên miền A chuyển hướng đến một tên miền C hoàn toàn mới, bạn có thể cần xóa chuyển hướng cũ [sang B] trước khi thiết lập chuyển hướng mới [sang C].
-  * Hủy bỏ việc gộp tên miền: Nếu trước đó bạn gộp nhiều tên miền về một, nay muốn tách chúng ra hoạt động độc lập.
-  * Gỡ lỗi: Nếu chuyển hướng đang gây ra lỗi [ví dụ: vòng lặp chuyển hướng, sai đích] thì việc xóa bỏ nó là cần thiết để khắc phục.
-  * Không còn nhu cầu: Khi việc chuyển hướng không còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
+- Khôi phục nội dung gốc: Khi bạn muốn tên miền đang bị chuyển hướng [ví dụ: tên miền A] bắt đầu hiển thị nội dung riêng của nó, thay vì trỏ sang nơi khác.
+- Thay đổi đích đến của chuyển hướng: Nếu bạn muốn tên miền A chuyển hướng đến một tên miền C hoàn toàn mới, bạn có thể cần xóa chuyển hướng cũ [sang B] trước khi thiết lập chuyển hướng mới [sang C].
+- Hủy bỏ việc gộp tên miền: Nếu trước đó bạn gộp nhiều tên miền về một, nay muốn tách chúng ra hoạt động độc lập.
+- Gỡ lỗi: Nếu chuyển hướng đang gây ra lỗi [ví dụ: vòng lặp chuyển hướng, sai đích] thì việc xóa bỏ nó là cần thiết để khắc phục.
+- Không còn nhu cầu: Khi việc chuyển hướng không còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
 EOF
 }
 
@@ -52,8 +52,13 @@ function lua_chon_NAME() {
   unset NAME
   local filepath entry dom htaccess_file line in_block target
   local -a selects=()
+  local -A seen_dom=()
 
-  for filepath in /etc/wptt/chuyen-huong/.*.conf /etc/wptt/chuyen-huong/*.conf; do
+  shopt -s nullglob
+  local -a ch_files=(/etc/wptt/chuyen-huong/.*.conf /etc/wptt/chuyen-huong/*.conf)
+  shopt -u nullglob
+
+  for filepath in "${ch_files[@]}"; do
     [[ -f "$filepath" ]] || continue
 
     entry="${filepath##*/}"
@@ -61,9 +66,11 @@ function lua_chon_NAME() {
     dom="${entry#.}"
     dom="${dom%.conf}"
 
-    # Validate định dạng domain hợp lệ (chống Path Traversal / Injection)
+    # Validate định dạng domain hợp lệ (chống Path Traversal / Injection & chống trùng)
     [[ "$dom" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$ ]] || continue
     [[ "$dom" == *".."* ]] && continue
+    [[ -n "${seen_dom[$dom]:-}" ]] && continue
+    seen_dom["$dom"]=1
 
     htaccess_file="/usr/local/lsws/${dom}/html/.htaccess"
     target=""
@@ -95,7 +102,7 @@ function lua_chon_NAME() {
     selects+=("${dom}|${target}")
   done
 
-  if (( ${#selects[@]} == 0 )); then
+  if ((${#selects[@]} == 0)); then
     printf '%b\n' "${C_YELLOW}Hệ thống chưa có domain nào được kích hoạt sử dụng chuyển hướng!${C_RESET}"
     sleep 2
     wptt_quay_ve_menu "${MENU_WPTT_IN:-}" 1 "enter"
@@ -154,7 +161,7 @@ function lua_chon_NAME() {
         fi
         ;;
       *)
-        if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#selects[@]} )); then
+        if [[ "$reply" =~ ^[0-9]+$ ]] && ((reply >= 1 && reply <= ${#selects[@]})); then
           action_index=$((reply - 1))
           NAME="${selects[$action_index]%%|*}"
           return 0
@@ -167,7 +174,7 @@ function lua_chon_NAME() {
 }
 
 # ==============================================================================
-# HÀM THÁO DỠ VHOST ẢO RỖNG (DÀNH CHO DOMAIN CHỈ TẠO RA ĐỂ CHUYỂN HƯỚNG)
+# HÀM THÁO DỠ VHOST ẢO RỖNG / FALLBACK (TƯƠNG THÍCH CHROOT JAIL & AUTO-HEAL)
 # ==============================================================================
 function wptt_xoa_vhost_ao_chuyen_huong() {
   local clean_dom="${1:?}"
@@ -195,13 +202,26 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
     if [[ -n "$candidate" ]]; then
       local task_main="Chuyển đổi website chính từ ${clean_dom} thành ${candidate}"
       _runing "$task_main"
+
+      if [[ ! -s "/etc/wptt-ssl-tu-ky/${candidate}/${candidate}.key" || ! -s "/etc/wptt-ssl-tu-ky/${candidate}/cert.crt" ]]; then
+        mkdir -p "/etc/wptt-ssl-tu-ky/${candidate}"
+        /usr/bin/openssl req -x509 -nodes -days 3650 \
+          -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
+          -keyout "/etc/wptt-ssl-tu-ky/${candidate}/${candidate}.key" \
+          -out "/etc/wptt-ssl-tu-ky/${candidate}/cert.crt" \
+          -addext "subjectAltName=DNS:${candidate},DNS:*.${candidate}" \
+          -subj "/C=VN/ST=Hanoi/L=Hanoi/O=WPTT/CN=${candidate}" >/dev/null 2>&1 || true
+        /bin/chmod 600 -- "/etc/wptt-ssl-tu-ky/${candidate}/${candidate}.key" 2>/dev/null || true
+        /bin/chmod 644 -- "/etc/wptt-ssl-tu-ky/${candidate}/cert.crt" 2>/dev/null || true
+      fi
+
       local ols_conf="/usr/local/lsws/conf/httpd_config.conf"
       local tmp_ols=""
       if tmp_ols="$(wptt_atomic_begin "$ols_conf")"; then
         sed -i -E '/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*[{]/,/^[[:space:]]*[}]/ {
           /^[[:space:]]*(keyFile|certFile|CACertFile)[[:space:]]+/d
         }' "$tmp_ols"
-        sed -i "/https/a \  keyFile                 /etc/wptt-ssl-tu-ky/${candidate}/${candidate}.key\n  certFile                /etc/wptt-ssl-tu-ky/${candidate}/cert.crt" "$tmp_ols"
+        sed -i -E "/^[[:space:]]*listener[[:space:]]+(https|HTTPS)[[:space:]]*\{/a \\  keyFile                 /etc/wptt-ssl-tu-ky/${candidate}/${candidate}.key\\n  certFile                /etc/wptt-ssl-tu-ky/${candidate}/cert.crt" "$tmp_ols"
         wptt_atomic_commit "$tmp_ols" "$ols_conf"
         wptt_atomic_edit_config "/etc/wptt/.wptt.conf" "Website_chinh=$candidate"
         _rundone "$task_main"
@@ -221,15 +241,20 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
   if [[ -f "$vhost_conf_file" ]]; then
     vhost_user="$(awk '/^[[:space:]]*extUser[[:space:]]+/ {print $2; exit}' "$vhost_conf_file" 2>/dev/null || true)"
   fi
+  if [[ -z "$vhost_user" && -f "/etc/wptt/vhost/.${clean_dom}.conf" ]]; then
+    vhost_user="$(awk -F'=' '/^User_name_vhost=/ {gsub(/["\047\r ]/, "", $2); print $2; exit}' "/etc/wptt/vhost/.${clean_dom}.conf" 2>/dev/null || true)"
+  fi
+  if [[ -z "$vhost_user" && -f "/etc/wptt/vhost_bk/.${clean_dom}.conf" ]]; then
+    vhost_user="$(awk -F'=' '/^User_name_vhost=/ {gsub(/["\047\r ]/, "", $2); print $2; exit}' "/etc/wptt/vhost_bk/.${clean_dom}.conf" 2>/dev/null || true)"
+  fi
   if [[ -z "$vhost_user" ]]; then
     vhost_user="$(awk -F: -v home="/usr/local/lsws/${clean_dom}" '$6 == home {print $1; exit}' /etc/passwd 2>/dev/null || true)"
   fi
   if [[ -z "$vhost_user" ]]; then
     vhost_user="${clean_dom//[-._]/}"
-    (( ${#vhost_user} > 32 )) && vhost_user="${vhost_user:0:30}"
+    ((${#vhost_user} > 32)) && vhost_user="${vhost_user:0:30}"
   fi
 
-  # 3. Khóa User, dừng tiến trình và tháo dỡ Namespace / Mount Point
   case "$vhost_user" in
     "" | root | nobody | nogroup | lsadm | mysql | mariadb | www-data | sshd)
       # Tuyệt đối không đụng vào các tài khoản đặc quyền của hệ thống
@@ -237,6 +262,12 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
       ;;
   esac
 
+  # 3. Xóa ngay cờ .cron_spool và cron Jail TRƯỚC khi umount (chặn race condition Auto-Heal)
+  local jail_path="/usr/local/lsws/${clean_dom}"
+  local domain_safe="${clean_dom//./_}"
+  /bin/rm -f -- "${jail_path}/.cron_spool" "/etc/cron.d/wpttjail_${domain_safe:?}" 2>/dev/null || true
+
+  # Khóa User & dừng tiến trình trước khi tháo Namespace / Mount Point
   if [[ -n "$vhost_user" ]] && id -u "$vhost_user" >/dev/null 2>&1; then
     usermod -L -s /sbin/nologin "$vhost_user" >/dev/null 2>&1 || true
     pkill -9 -u "$vhost_user" >/dev/null 2>&1 || true
@@ -244,30 +275,71 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
     find /tmp /dev/shm /var/tmp -user "$vhost_user" -delete >/dev/null 2>&1 || true
   fi
 
-  # Tháo dỡ Namespace OLS (/var/lsns/*/$clean_dom) nếu chạy trên KVM
+  # Tháo dỡ Namespace OLS (/var/lsns/*/$clean_dom) chuẩn nullglob
+  shopt -s nullglob
+  local -a ols_ns_dirs=(/var/lsns/*/"$clean_dom")
+  shopt -u nullglob
+  local ns_d="" mp=""
+  for ns_d in "${ols_ns_dirs[@]}"; do
+    [[ -d "$ns_d" ]] || continue
+    fuser -k -9 "$ns_d" "$ns_d/mnt" 2>/dev/null || true
+    while IFS= read -r mp; do
+      [[ -n "$mp" ]] && umount -fl "$mp" 2>/dev/null || true
+    done < <(awk -v p="$ns_d" 'index($2, p) == 1 {print $2}' /proc/mounts 2>/dev/null | sort -r)
+    case "$ns_d" in
+      /var/lsns/*/?*.?*) /bin/rm -rf -- "${ns_d:?}" 2>/dev/null || true ;;
+    esac
+  done
 
-	# Xé toạc Namespace OLS
-	OLS_NS_PATH="/var/lsns/*/$clean_dom"
-	if ls $OLS_NS_PATH 1>/dev/null 2>&1; then
-		fuser -k -9 "$OLS_NS_PATH"/* "$OLS_NS_PATH"/*/mnt 2>/dev/null || true
-		umount -fl "$OLS_NS_PATH"/*/mnt 2>/dev/null || true
-		umount -fl "$OLS_NS_PATH"/* 2>/dev/null || true
-		/bin/rm -rf /var/lsns/*/"${clean_dom:?}" 2>/dev/null || true
-	fi
-
-  # Tháo toàn bộ mount point còn sót bên trong thư mục Vhost (nếu có)
-  local jail_path="/usr/local/lsws/${clean_dom}"
+  # Tháo toàn bộ mount point bên trong JAIL_PATH/ (khóa dấu "/" cuối, không ảnh hưởng domain khác)
   if [[ -d "$jail_path" ]]; then
-    local mp
     while IFS= read -r mp; do
       [[ -n "$mp" ]] && umount -fl "$mp" >/dev/null 2>&1 || true
-    done < <(awk -v jp="$jail_path" '$2 ~ "^"jp"(/|$)" {print $2}' /proc/mounts 2>/dev/null | sort -r)
+    done < <(awk -v p="${jail_path}/" 'index($2, p) == 1 {print $2}' /proc/mounts 2>/dev/null | sort -r)
   fi
 
-  # Xóa User khỏi hệ điều hành
-  if [[ -n "$vhost_user" ]] && id -u "$vhost_user" >/dev/null 2>&1; then
-    usermod -R wptangtoc-ols "$vhost_user" >/dev/null 2>&1 || true
-    userdel -f "$vhost_user" >/dev/null 2>&1 || true
+  # Gỡ User khỏi nhóm wptangtoc-ols, xóa User và dọn khối Chroot trong sshd_config
+  if [[ -n "$vhost_user" ]]; then
+    if id -u "$vhost_user" >/dev/null 2>&1; then
+      gpasswd -d "$vhost_user" wptangtoc-ols >/dev/null 2>&1 || true
+      userdel -f "$vhost_user" >/dev/null 2>&1 || true
+    fi
+
+    if grep -q '^wptangtoc-ols:' /etc/group 2>/dev/null; then
+      local remaining_members=""
+      remaining_members="$(awk -F':' '/^wptangtoc-ols:/ {print $4}' /etc/group 2>/dev/null)"
+      if [[ -z "$remaining_members" ]]; then
+        groupdel wptangtoc-ols >/dev/null 2>&1 || true
+        [[ -d /etc/wptt-user ]] && { /bin/chown -hR root:root /etc/wptt-user 2>/dev/null; /bin/chmod -R 700 /etc/wptt-user 2>/dev/null; }
+        [[ -f /usr/bin/wptangtoc-user ]] && { /bin/chown root:root /usr/bin/wptangtoc-user 2>/dev/null; /bin/chmod 700 /usr/bin/wptangtoc-user 2>/dev/null; }
+      fi
+    fi
+
+    local sshd_file="/etc/ssh/sshd_config"
+    if [[ -f "$sshd_file" ]] && grep -q "WPTT_JAIL_${vhost_user}" "$sshd_file" 2>/dev/null; then
+      local tmp_sshd=""
+      tmp_sshd="$(wptt_atomic_begin "$sshd_file" 2>/dev/null || true)"
+      if [[ -n "$tmp_sshd" ]]; then
+        sed -i -e "/^#begin-WPTT_JAIL_${vhost_user}$/,/^#end-WPTT_JAIL_${vhost_user}$/d" "$tmp_sshd" 2>/dev/null || true
+        if /usr/sbin/sshd -t -f "$tmp_sshd" >/dev/null 2>&1; then
+          wptt_atomic_commit "$tmp_sshd" "$sshd_file"
+          systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
+        else
+          /bin/rm -f -- "$tmp_sshd" 2>/dev/null || true
+        fi
+      fi
+    fi
+  fi
+
+  # Kích hoạt daemon 1 lần để tự thu dọn nếu không còn Jail nào hoạt động trên VPS
+  if [[ -x /etc/wptt/wptt-cron-jail-sync.sh ]]; then
+    /bin/bash /etc/wptt/wptt-cron-jail-sync.sh >/dev/null 2>&1 || true
+  fi
+
+  # Chốt chặn bảo vệ dữ liệu hệ thống: Không rm -rf nếu còn điểm mount mắc kẹt trong JAIL_PATH/
+  if [[ -d "$jail_path" ]] && awk -v p="${jail_path}/" 'index($2, p) == 1 {f=1; exit} END {exit !f}' /proc/mounts 2>/dev/null; then
+    _runloi "Vẫn còn điểm mount đang hoạt động trong ${jail_path}, đã dừng xóa để bảo vệ dữ liệu!"
+    return 1
   fi
 
   # 4. ATOMIC TRANSACTION: Gỡ bỏ VirtualHost và Map Listener khỏi httpd_config.conf
@@ -277,9 +349,9 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
     if tmp_ols_master="$(wptt_atomic_begin "$ols_master_conf")"; then
       local clean_esc="${clean_dom//./\\.}"
       sed -i -E "/^[[:space:]]*map[[:space:]]+${clean_esc}[[:space:]]+(.*[[:space:],])?${clean_esc}([[:space:],]|$)/d" "$tmp_ols_master"
-      sed -i -e "/^[[:space:]]*virtualhost[[:space:]]\+${clean_dom:?}/,/^[[:space:]]*}[[:space:]]*$/d" "$tmp_ols_master"
-      sed -i -e "/^[[:space:]]*#bkwptt_virtualhost[[:space:]]\+${clean_dom:?}/,/^[[:space:]]*#bkwptt_}[[:space:]]*$/d" "$tmp_ols_master"
-      sed -i "/${clean_esc}[[:space:]]\+${clean_esc}/d" "$tmp_ols_master"
+      sed -i -E "/^[[:space:]]*virtualhost[[:space:]]+${clean_esc}[[:space:]]*\{/,/^[[:space:]]*\}[[:space:]]*$/d" "$tmp_ols_master"
+      sed -i -E "/^[[:space:]]*#bkwptt_virtualhost[[:space:]]+${clean_esc}[[:space:]]*\{/,/^[[:space:]]*#bkwptt_\}[[:space:]]*$/d" "$tmp_ols_master"
+      sed -i -E "/^[[:space:]]*map[[:space:]]+${clean_esc}[[:space:]]+${clean_esc}[[:space:]]*$/d" "$tmp_ols_master"
 
       if ! wptt_atomic_commit "$tmp_ols_master" "$ols_master_conf"; then
         /bin/rm -f -- "$tmp_ols_master" 2>/dev/null || true
@@ -318,6 +390,7 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
       ;;
   esac
 
+  /bin/rm -rf -- "/wptangtoc-ols/${clean_dom:?}" "/home/${clean_dom:?}" 2>/dev/null || true
   /bin/rm -f -- "/etc/wptt/vhost/.${clean_dom:?}.conf" "/etc/wptt/vhost_bk/.${clean_dom:?}.conf" 2>/dev/null || true
 
   _rundone "$task_del"
@@ -327,7 +400,7 @@ function wptt_xoa_vhost_ao_chuyen_huong() {
   [[ -f "/etc/letsencrypt/live/${clean_dom}/cert.pem" ]] && thu_muc_ssl+=("$clean_dom")
   [[ -f "/etc/letsencrypt/live/www.${clean_dom}/cert.pem" ]] && thu_muc_ssl+=("www.${clean_dom}")
 
-  if (( ${#thu_muc_ssl[@]} > 0 )); then
+  if ((${#thu_muc_ssl[@]} > 0)); then
     local dongyssl='n'
     if wptt_xac_nhan "${xac_nhan:-Xác nhận} ${ban_co_muon:-bạn có muốn} ${xoa:-xóa} ${chung_chi:-chứng chỉ} SSL Let's Encrypt của $clean_dom?" \
       "Nếu sau này khởi tạo lại đúng domain này bạn sẽ không phải xin cấp lại." \
@@ -396,6 +469,11 @@ printf '\n'
 # THỰC THI GỠ BỎ CHUYỂN HƯỚNG
 # ==============================================================================
 if [[ "$xoa_ma_nguon" == "y" ]]; then
+  # Xóa trước cờ .cron_spool và cron Jail để chặn daemon Auto-Heal remount ngược
+  # ngay khi file cấu hình được chuyển từ vhost_bk về vhost
+  clean_safe="${CLEAN//./_}"
+  /bin/rm -f -- "/usr/local/lsws/${CLEAN}/.cron_spool" "/etc/cron.d/wpttjail_${clean_safe:?}" 2>/dev/null || true
+
   # Khôi phục file cấu hình từ vhost_bk về vhost (nếu là website có hồ sơ gốc)
   if [[ -f "/etc/wptt/vhost_bk/.${CLEAN}.conf" ]]; then
     /bin/mv -f -- "/etc/wptt/vhost_bk/.${CLEAN}.conf" "/etc/wptt/vhost/.${CLEAN}.conf" 2>/dev/null || true
@@ -408,6 +486,7 @@ if [[ "$xoa_ma_nguon" == "y" ]]; then
     fi
 
     if [[ -d "/usr/local/lsws/${CLEAN}/html" ]]; then
+      chattr -i "/usr/local/lsws/${CLEAN}/html/.htaccess" >/dev/null 2>&1 || true
       cat >"/usr/local/lsws/${CLEAN}/html/.htaccess" <<'EOF'
 # BEGIN WordPress
 <IfModule mod_rewrite.c>
@@ -422,16 +501,14 @@ RewriteRule . /index.php [L]
 # END WordPress
 EOF
 
-if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
-	if [[ -x "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" ]]; then
-		/bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$CLEAN" --no-reload >/dev/null 2>&1 || true
-	fi
-fi
-# 2. Đồng bộ tiếp các chỉ thị nâng cao (Header, PHP override...) và Reload OLS
-if [[ -x "/etc/wptt/wptt-htaccess-sync" ]]; then
-	/bin/bash "/etc/wptt/wptt-htaccess-sync" "$CLEAN" --no-reload >/dev/null 2>&1 || true
-fi
-
+      if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
+        if [[ -x "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" ]]; then
+          /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$CLEAN" --no-reload >/dev/null 2>&1 || true
+        fi
+      fi
+      if [[ -x "/etc/wptt/wptt-htaccess-sync" ]]; then
+        /bin/bash "/etc/wptt/wptt-htaccess-sync" "$CLEAN" --no-reload >/dev/null 2>&1 || true
+      fi
     fi
 
     if /bin/bash /etc/wptt/domain/wptt-xoa-website "$CLEAN"; then
@@ -483,25 +560,34 @@ EOF
     /bin/mv -f -- "/etc/wptt/vhost_bk/.${CLEAN}.conf" "/etc/wptt/vhost/.${CLEAN}.conf"
   fi
 
-  # Đồng bộ lại quyền sở hữu file .htaccess cho User của website
+  # Đồng bộ lại quyền sở hữu file .htaccess cho User của website & khôi phục Jail nếu đang bật
   if [[ -f "/etc/wptt/vhost/.${CLEAN}.conf" ]]; then
     # shellcheck disable=SC1090
     wptt_load_vhost_conf "/etc/wptt/vhost/.${CLEAN}.conf" 2>/dev/null || true
     if [[ -n "${User_name_vhost:-}" ]] && id -u "$User_name_vhost" >/dev/null 2>&1; then
       /bin/chown -- "${User_name_vhost}:${User_name_vhost}" "$htaccess_target" 2>/dev/null || true
     fi
+
+    # Nếu website này đang bật Chroot Jail (tồn tại .cron_spool), đảm bảo quyền file .conf và Auto-Heal mount
+    if [[ -f "/usr/local/lsws/${CLEAN}/.cron_spool" ]]; then
+      if grep -q '^wptangtoc-ols:' /etc/group 2>/dev/null; then
+        /bin/chown root:wptangtoc-ols "/etc/wptt/vhost/.${CLEAN}.conf" 2>/dev/null || true
+        /bin/chmod 640 "/etc/wptt/vhost/.${CLEAN}.conf" 2>/dev/null || true
+      fi
+      if [[ -x /etc/wptt/wptt-cron-jail-sync.sh ]]; then
+        /bin/bash /etc/wptt/wptt-cron-jail-sync.sh >/dev/null 2>&1 || true
+      fi
+    fi
   fi
 
-
-	if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
-		if [[ -x "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" ]]; then
-			/bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$NAME" --no-reload >/dev/null 2>&1 || true
-		fi
-	fi
-	# 2. Đồng bộ tiếp các chỉ thị nâng cao (Header, PHP override...) và Reload OLS
-	if [[ -x "/etc/wptt/wptt-htaccess-sync" ]]; then
-		/bin/bash "/etc/wptt/wptt-htaccess-sync" "$NAME" >/dev/null 2>&1 || true
-	fi
+  if [[ -f "/etc/wptt/cau-hinh/htaccess-cache-active" ]]; then
+    if [[ -x "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" ]]; then
+      /bin/bash "/etc/wptt/wptt-htaccess-tat-chuyen-doi-vhost" "$CLEAN" --no-reload >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ -x "/etc/wptt/wptt-htaccess-sync" ]]; then
+    /bin/bash "/etc/wptt/wptt-htaccess-sync" "$CLEAN" >/dev/null 2>&1 || true
+  fi
 
   _rundone "$task_restore"
   msg_action="Giữ lại dữ liệu. Chỉ gỡ bỏ luật Chuyển hướng."

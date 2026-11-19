@@ -327,8 +327,6 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     cp -a /usr/lib64/gconv/* "$JAIL_PATH"/usr/lib64/gconv/ 2>/dev/null || true
 
     # [BẢN VÁ TRỌNG TÂM: MỞ ĐƯỜNG MÁU CHO WP-CLI]
-    # Rà quét và dẹp bỏ quyền 700 do Root Umask sinh ra ở các thư mục trung gian
-    # Mở cửa cho env chui qua ngóc ngách để gọi PHP
     find "$JAIL_PATH/usr" -type d -exec chmod 755 {} + 2>/dev/null || true
     find "$JAIL_PATH/opt" -type d -exec chmod 755 {} + 2>/dev/null || true
 
@@ -399,7 +397,7 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     ln -s / "$JAIL_PATH"/usr/local/lsws/"$NAME" 2>/dev/null || true
 
     # -----------------------------------------------------------------
-    # NỐI ỐNG CRON TỰ ĐỘNG ĐỒNG BỘ (BẢO MẬT CHROOT)
+    # NỐI ỐNG CRON TỰ ĐỘNG ĐỒNG BỘ (CHỐNG JAILBREAK + AUTO-HEAL SOCKET/MOUNT)
     # -----------------------------------------------------------------
     CRON_JAIL_FILE="$JAIL_PATH/.cron_spool"
     touch "$CRON_JAIL_FILE"
@@ -410,7 +408,8 @@ HISTTIMEFORMAT="%F %T $(whoami) "' >>/usr/local/lsws/"$NAME"/.bashrc
     cat <<'EOF' >"$JAIL_PATH"/usr/bin/crontab
 #!/bin/bash
 USER_CRON="/.cron_spool"
-touch "$USER_CRON"
+[[ -L "$USER_CRON" || -p "$USER_CRON" ]] && exit 1
+touch "$USER_CRON" 2>/dev/null || exit 1
 if [[ "$1" == "-e" ]]; then
     TMP_FILE=$(mktemp)
     cat "$USER_CRON" > "$TMP_FILE" 2>/dev/null
@@ -433,73 +432,156 @@ fi
 EOF
     chmod 755 "$JAIL_PATH"/usr/bin/crontab
 
-    # Khởi tạo Script đồng bộ Cron hệ thống
+    # Khởi tạo Script đồng bộ Cron bọc thép + Auto-Healing Inode Socket & Mounts sau Reboot
     SYNC_SCRIPT="/etc/wptt/wptt-cron-jail-sync.sh"
     cat <<'EOF' >"$SYNC_SCRIPT"
 #!/bin/bash
-# Dọn dẹp file cron bị lỗi tên (có chứa dấu chấm) từ phiên bản cũ
-rm -f /etc/cron.d/wpttjail_*.* 2>/dev/null
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+# Dọn dẹp file cron lỗi tên (chứa dấu chấm) và symlink trùng lặp trên Ubuntu
+/bin/rm -f -- /etc/cron.d/wpttjail_*.* /etc/cron.d/wptt-cron-jail-sync_cron 2>/dev/null || true
+/bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || true
+
+_is_mounted() {
+    awk -v t="$1" '$2 == t {f=1; exit} END {exit !f}' /proc/mounts 2>/dev/null
+}
+
+# Nhận diện Socket MariaDB thực tế (0-auth, chạy được cả khi root đặt mật khẩu)
+REAL_SOCK=""
+for cand in /run/mysqld/mysqld.sock /var/lib/mysql/mysql.sock /var/run/mysqld/mysqld.sock /tmp/mysql.sock; do
+    if [[ -S "$cand" ]]; then
+        REAL_SOCK="$cand"
+        break
+    fi
+done
+HOST_SOCK_INO=""
+[[ -n "$REAL_SOCK" && -S "$REAL_SOCK" ]] && HOST_SOCK_INO="$(stat -c %i "$REAL_SOCK" 2>/dev/null || true)"
+
 HAS_ACTIVE_JAILS=0
 
 for path in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$path" || "$path" == *"/..conf" ]] && continue
-    domain=$(basename "$path" | sed 's/^\.//;s/\.conf$//')
-    [[ "$domain" != *.* ]] && continue
-    
+    domain="${path##*/}"
+    domain="${domain%.conf}"
+    domain="${domain#.}"
+    [[ "$domain" == ?*.?* && "$domain" =~ ^[a-zA-Z0-9._-]+$ && "$domain" != *..* ]] || continue
+
     JAIL="/usr/local/lsws/$domain"
     SPOOL="$JAIL/.cron_spool"
     domain_safe="${domain//./_}"
     CRON_D="/etc/cron.d/wpttjail_${domain_safe}"
-    
-    if [[ -f "$SPOOL" ]]; then
-        HAS_ACTIVE_JAILS=1
-        User_name_vhost=$(grep -E '^User_name_vhost=' "$path" | cut -d'=' -f2 | tr -d '"' | tr -d "'")
-        [[ -z "$User_name_vhost" ]] && continue
 
-        if [[ "$SPOOL" -nt "$CRON_D" ]] || [[ ! -f "$CRON_D" ]]; then
-            echo "" > "$CRON_D"
+    # Chỉ nhận file thường (chặn Symlink / FIFO)
+    if [[ -f "$SPOOL" && ! -L "$SPOOL" && ! -p "$SPOOL" ]]; then
+        HAS_ACTIVE_JAILS=1
+        User_name_vhost="$(awk -F'=' '/^User_name_vhost=/ {gsub(/["\047\r ]/, "", $2); print $2; exit}' "$path")"
+        [[ -n "$User_name_vhost" && "$User_name_vhost" =~ ^[a-zA-Z0-9_-]+$ ]] || continue
+        id -u "$User_name_vhost" >/dev/null 2>&1 || continue
+
+        # ------------------------------------------------------------------
+        # 1. AUTO-HEALING SOCKET INODE (MariaDB Restart) & MOUNTS (VPS Reboot)
+        # ------------------------------------------------------------------
+        if [[ -n "$REAL_SOCK" && -n "$HOST_SOCK_INO" ]]; then
+            JAIL_SOCK="$JAIL$REAL_SOCK"
+            JAIL_SOCK_INO="$(stat -c %i "$JAIL_SOCK" 2>/dev/null || true)"
+            if [[ "$HOST_SOCK_INO" != "$JAIL_SOCK_INO" ]] || ! _is_mounted "$JAIL_SOCK"; then
+                /bin/mkdir -p "${JAIL_SOCK%/*}" 2>/dev/null || true
+                /bin/chmod 755 "$JAIL/var" "$JAIL/var/lib" "$JAIL/run" "${JAIL_SOCK%/*}" 2>/dev/null || true
+                umount -fl "$JAIL_SOCK" 2>/dev/null || true
+                touch "$JAIL_SOCK" 2>/dev/null || true
+                mount --bind "$REAL_SOCK" "$JAIL_SOCK" 2>/dev/null || true
+                ln -sf "$REAL_SOCK" "$JAIL/tmp/mysql.sock" 2>/dev/null || true
+            fi
+        fi
+
+        if [[ -f "$JAIL/etc/.$domain.conf" ]] && ! _is_mounted "$JAIL/etc/.$domain.conf"; then
+            mount --bind "$path" "$JAIL/etc/.$domain.conf" 2>/dev/null || true
+        fi
+        if [[ -d /etc/wptt-user && -d "$JAIL/etc/wptt-user" ]] && ! _is_mounted "$JAIL/etc/wptt-user"; then
+            mount --bind /etc/wptt-user "$JAIL/etc/wptt-user" 2>/dev/null || true
+        fi
+        if [[ -f /usr/bin/wptangtoc-user && -f "$JAIL/usr/bin/wptangtoc-user" ]] && ! _is_mounted "$JAIL/usr/bin/wptangtoc-user"; then
+            mount --bind /usr/bin/wptangtoc-user "$JAIL/usr/bin/wptangtoc-user" 2>/dev/null || true
+        fi
+
+        # ------------------------------------------------------------------
+        # 2. ĐỒNG BỘ CRON BỌC THÉP (CHỐNG LEO THANG ĐẶC QUYỀN ROOT / RCE)
+        # ------------------------------------------------------------------
+        spool_size="$(stat -c %s "$SPOOL" 2>/dev/null || echo 999999)"
+        if ((spool_size <= 32768)) && { [[ "$SPOOL" -nt "$CRON_D" ]] || [[ ! -f "$CRON_D" ]]; }; then
+            tmp_cron="$(mktemp -p /etc/wptt/tmp "wpttcron_${domain_safe}_XXXXXX")" || continue
+            printf 'SHELL=/bin/bash\nPATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n' > "$tmp_cron"
+            line_cnt=0
+            cron_rx='^[0-9*,/-]{1,32}$'
+
             while IFS= read -r line || [[ -n "$line" ]]; do
-                [[ -z "${line// }" || "$line" == \#* ]] && continue
-                sched=$(echo "$line" | awk '{print $1,$2,$3,$4,$5}')
-                cmd=$(echo "$line" | cut -d' ' -f6-)
-                if [[ -n "$sched" && -n "$cmd" ]]; then
-                    cmd_escaped=$(echo "$cmd" | sed "s/'/'\\\\''/g")
-                    echo "$sched root /usr/sbin/chroot --userspec=$User_name_vhost:$User_name_vhost $JAIL /usr/bin/env HOME=/ PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '$cmd_escaped'" >> "$CRON_D"
+                ((++line_cnt > 100)) && break
+                line="${line//$'\r'/}"
+                line="${line//$'\t'/ }"
+                line="${line#"${line%%[![:space:]]*}"}"
+                [[ -z "$line" || "$line" == \#* ]] && continue
+                [[ "$line" == *[[:cntrl:]]* ]] && continue
+
+                # Chuyển macro hợp lệ sang 5 cột số; chặn mọi macro lạ (@reboot, ...)
+                case "$line" in
+                    @hourly\ *)              line="0 * * * * ${line#@hourly }" ;;
+                    @daily\ *|@midnight\ *)  line="0 0 * * * ${line#* }" ;;
+                    @weekly\ *)              line="0 0 * * 0 ${line#@weekly }" ;;
+                    @monthly\ *)             line="0 0 1 * * ${line#@monthly }" ;;
+                    @yearly\ *|@annually\ *) line="0 0 1 1 * ${line#* }" ;;
+                    @*)                      continue ;;
+                esac
+
+                IFS=' ' read -r f1 f2 f3 f4 f5 cmd <<< "$line"
+                [[ -z "$cmd" ]] && continue
+
+                # Whitelist bắt buộc 5 cột thời gian chỉ gồm số và ký tự lịch trình hợp lệ
+                if [[ "$f1" =~ $cron_rx && "$f2" =~ $cron_rx && "$f3" =~ $cron_rx && "$f4" =~ $cron_rx && "$f5" =~ $cron_rx ]]; then
+                    # Thoát nháy đơn cho bash -c và thoát dấu % (Cron dịch % không thoát thành xuống dòng)
+                    cmd_escaped="$(printf '%s\n' "$cmd" | sed -e "s/'/'\\\\''/g" -e 's/\\%/%/g' -e 's/%/\\%/g')"
+                    printf '%s %s %s %s %s root /usr/sbin/chroot --userspec=%s:%s %s /usr/bin/env HOME=/ PATH=/usr/local/bin:/usr/bin:/bin /bin/bash -c '\''%s'\'' >/dev/null 2>&1\n' \
+                        "$f1" "$f2" "$f3" "$f4" "$f5" "$User_name_vhost" "$User_name_vhost" "$JAIL" "$cmd_escaped" >> "$tmp_cron"
                 fi
             done < "$SPOOL"
-            chmod 644 "$CRON_D"
+
+            /bin/chown root:root "$tmp_cron" 2>/dev/null || true
+            /bin/chmod 644 "$tmp_cron" 2>/dev/null || true
+            /bin/mv -fT -- "$tmp_cron" "$CRON_D" 2>/dev/null || /bin/mv -f -- "$tmp_cron" "$CRON_D" 2>/dev/null || /bin/rm -f -- "$tmp_cron"
         fi
     else
-        rm -f "${CRON_D:?}"
+        /bin/rm -f -- "${CRON_D:?}" 2>/dev/null || true
     fi
 done
 
-if [[ "$HAS_ACTIVE_JAILS" -eq 0 ]]; then
-    rm -f /etc/cron.d/wptt-cron-jail-sync
-    rm -f /etc/wptt/wptt-cron-jail-sync.sh
-    if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-        rm -f /etc/cron.d/wptt-cron-jail-sync_cron
-        systemctl restart cron.service
-    else
-        systemctl restart crond.service
-    fi
+if ((HAS_ACTIVE_JAILS == 0)); then
+    /bin/rm -f -- /etc/cron.d/wptt-cron-jail-sync /etc/cron.d/wptt-cron-jail-sync_cron /etc/wptt/wptt-cron-jail-sync.sh 2>/dev/null || true
+    systemctl reload cron.service 2>/dev/null || systemctl reload crond.service 2>/dev/null || \
+        systemctl restart cron.service 2>/dev/null || systemctl restart crond.service 2>/dev/null || true
 fi
 EOF
     chmod 700 "$SYNC_SCRIPT"
-    echo "* * * * * root /bin/bash $SYNC_SCRIPT >/dev/null 2>&1" >/etc/cron.d/wptt-cron-jail-sync
+
+    # Ghi 1 file cron duy nhất kèm @reboot (hợp lệ trên cả Ubuntu lẫn AlmaLinux/RHEL)
+    /bin/rm -f -- /etc/cron.d/wptt-cron-jail-sync_cron 2>/dev/null || true
+    cat <<EOF >/etc/cron.d/wptt-cron-jail-sync
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+@reboot root /bin/bash $SYNC_SCRIPT >/dev/null 2>&1
+* * * * * root /bin/bash $SYNC_SCRIPT >/dev/null 2>&1
+EOF
+    chmod 644 /etc/cron.d/wptt-cron-jail-sync
 
     if grep -q "Ubuntu" /etc/*release 2>/dev/null; then
-      ln -sf /etc/cron.d/wptt-cron-jail-sync /etc/cron.d/wptt-cron-jail-sync_cron
-      systemctl restart cron.service
+      systemctl reload cron.service 2>/dev/null || systemctl restart cron.service 2>/dev/null || true
     else
-      systemctl restart crond.service
+      systemctl reload crond.service 2>/dev/null || systemctl restart crond.service 2>/dev/null || true
     fi
     # -----------------------------------------------------------------
 
     # Mở khóa niêm phong (-U) và cấp lại quyền Shell bash (-s)
     usermod -U -s /bin/bash "$User_name_vhost" >/dev/null 2>&1
     sed -i -e "/^#begin-WPTT_JAIL_$User_name_vhost/,/^#end-WPTT_JAIL_$User_name_vhost$/d" /etc/ssh/sshd_config 2>/dev/null || true
-    sed -i "/# WPTT_JAIL_$User_name_vhost/,+6d" /etc/ssh/sshd_config 2>/dev/null || true
 
     cat <<EOF >>/etc/ssh/sshd_config
 #begin-WPTT_JAIL_$User_name_vhost
@@ -569,10 +651,11 @@ if [[ -z "$check" ]]; then
   sed -i "/# WPTT_JAIL_$User_name_vhost/,+6d" /etc/ssh/sshd_config 2>/dev/null || true
   systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
 
-  domain_safe="${NAME//./_}"
-  rm -f "/etc/cron.d/wpttjail_${domain_safe:?}" 2>/dev/null || true
-
   JAIL_PATH="/usr/local/lsws/$NAME"
+
+  # Xóa ngay cờ .cron_spool và cron riêng TRƯỚC khi umount để chặn daemon Auto-Heal remount ngược
+  domain_safe="${NAME//./_}"
+  rm -f "/etc/cron.d/wpttjail_${domain_safe:?}" "$JAIL_PATH/.cron_spool" 2>/dev/null || true
 
   OLS_NS_PATH="/var/lsns/*/$NAME"
   if ls "$OLS_NS_PATH" 1>/dev/null 2>&1; then
@@ -614,6 +697,9 @@ if [[ -z "$check" ]]; then
     chown nobody:"$tuong_thich_nhom_litespeed" "$JAIL_PATH"/logs
     chmod 750 "$JAIL_PATH"/logs
   fi
+
+  # Tự dọn sạch daemon nếu không còn Jail nào hoạt động
+  [[ -x /etc/wptt/wptt-cron-jail-sync.sh ]] && /bin/bash /etc/wptt/wptt-cron-jail-sync.sh >/dev/null 2>&1 || true
 
   /usr/local/lsws/bin/lswsctrl restart >/dev/null 2>&1
 
