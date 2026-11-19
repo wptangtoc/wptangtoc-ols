@@ -100,7 +100,7 @@
     <li><b>Trang chủ dự án:</b> <a href="https://wptangtoc.com/wptangtoc-ols/">Tại đây</a></li>
     <li><b>Hệ thống tra cứu tính năng chính thức, sơ đồ vị trí menu và hướng dẫn:</b> <a href="https://wptangtoc.com/wptangtoc-ols-huong-dan/">Tại đây</a></li>
     <li><b>Trải nghiệm thử cấu trúc Menu, giao diện điều khiển của WPTangToc OLS ngay trên trình duyệt:</b> <a href="https://wptangtoc.com/wptangtoc-ols-gia-lap/">Tại đây</a></li>
-    <li><b>Nhật ký cập nhật (Changelog) Commit:</b> <a href="https://github.com/wptangtoc/wptangtoc-ols/commits/main/">Tại đây</a></li>
+    <li><b>Nhật ký cập nhật (Changelog):</b> <a href="https://wptangtoc.com/changelog-wptangtoc-ols/">Tại đây</a></li>
     <li><b>Cộng đồng hỗ trợ:</b> Tham gia <a href="https://www.facebook.com/groups/wptangtoc/">Group Tăng Tốc WordPress</a> trên Facebook để được giải đáp thắc mắc.</li>
 </ul>
 
