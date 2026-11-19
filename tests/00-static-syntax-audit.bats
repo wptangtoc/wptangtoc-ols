@@ -412,7 +412,11 @@ teardown_file() {
   local raw_refs=""
   raw_refs="$(
     LC_ALL=C.UTF-8 timeout 10 xargs -r awk '
-      FNR == 1 { in_heredoc = 0; h_delim = "" }
+      FNR == 1 {
+        in_heredoc = 0
+        h_delim = ""
+        delete guarded_file
+      }
       {
         if (in_heredoc) {
           if ($0 == h_delim) in_heredoc = 0
@@ -427,6 +431,18 @@ teardown_file() {
         line = $0
         sub(/^[ \t]+/, "", line)
         if (line ~ /^#/ || line == "") next
+
+        # Ghi nhận khối kiểm tra tồn tại nhiều dòng: if [[ -f|-x|-e "/etc/wptt/..." ]]; then
+        if (line ~ /^if[ \t]+(\[\[|\[)[ \t]+-[feEsrxd][ \t]+["\x27]?\/etc\/wptt\/[a-zA-Z0-9_.\/-]+["\x27]?[ \t]*(\]\]|\])/) {
+          g_path = line
+          sub(/^.*\/etc\/wptt\//, "", g_path)
+          sub(/["\x27 \t\]].*$/, "", g_path)
+          if (g_path != "") guarded_file[g_path] = 1
+          next
+        }
+        if (line ~ /^(else([ \t;]|$)|elif[ \t]|fi([ \t;]|$))/) {
+          delete guarded_file
+        }
 
         # Bỏ qua các dòng đã có chốt chặn kiểm tra tồn tại trên cùng 1 dòng (VD: [[ -f /etc/wptt/... ]] && . /etc/wptt/...)
         if (line ~ /(\[\[|\[)[ \t]+!*[ \t]*-[feEsrxd][ \t]+[^]]*\/etc\/wptt\//) next
@@ -443,8 +459,9 @@ teardown_file() {
           sub(/^.*(\.|source)[ \t]+["\x27]?\/etc\/wptt\//, "", matched)
           gsub(/["\x27]/, "", matched)
 
+          if (matched in guarded_file) continue
           if (matched ~ /^(tmp|vhost|logs|service|backup-config|wptt-child|lang)\//) continue
-          if (matched ~ /^(wptt-status|wptt-status2|\.wptt\.conf)$/) continue
+          if (matched ~ /^(wptt-status|wptt-status2|\.wptt\.conf|wptt-cron-jail-sync\.sh)$/) continue
 
           printf "%s:%d:SOURCE:%s\n", FILENAME, FNR, matched
         }
@@ -465,7 +482,7 @@ teardown_file() {
             sub(/^.*\/etc\/wptt\//, "", matched)
             gsub(/["\x27]/, "", matched)
 
-            if (matched !~ /^(tmp|vhost|logs|service|backup-config|wptt-child|lang)\// && matched !~ /^(wptt-status|wptt-status2|\.wptt\.conf)$/) {
+            if (!(matched in guarded_file) && matched !~ /^(tmp|vhost|logs|service|backup-config|wptt-child|lang)\// && matched !~ /^(wptt-status|wptt-status2|\.wptt\.conf|wptt-cron-jail-sync\.sh)$/) {
               printf "%s:%d:CALL:%s\n", FILENAME, FNR, matched
             }
           }
