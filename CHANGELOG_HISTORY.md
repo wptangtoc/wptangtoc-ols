@@ -1,3 +1,11 @@
+## WPTangToc OLS 8.4.1.5
+
+🛠️ **Tối ưu hệ thống**
+- **Nâng cấp hệ thống kiểm thử tự động:** Cải tiến toàn diện bộ khung kiểm thử và xác thực kịch bản vận hành, giúp nâng cao độ chính xác, đảm bảo tính ổn định và an toàn tuyệt đối cho mọi tác vụ quản trị máy chủ.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.4
 
 🚀 **Tính năng mới**
