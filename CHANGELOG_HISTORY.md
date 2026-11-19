@@ -1,3 +1,23 @@
+## WPTangToc OLS 8.4.1.4
+
+🚀 **Tính năng mới**
+- **Quản lý Object Cache nâng cao (Valkey / KeyDB / Redis):** Tối ưu hóa cấu hình giao tiếp qua Unix Socket tốc độ cao kết hợp hệ thống bảo mật ACL phân quyền độc lập Database ID cho từng website, giúp tăng tốc truy vấn dữ liệu động và bảo vệ dữ liệu toàn diện.
+- **Nâng cấp cơ chế Preload Cache thông minh:** Tích hợp cơ chế điều tiết thích ứng (Adaptive Throttling) và tối ưu luồng xử lý, giúp tạo lập bộ nhớ đệm trang web nhanh chóng, mượt mà và tiết kiệm tài nguyên.
+
+🛠️ **Tối ưu hệ thống**
+- **Cải tiến quy trình xóa và quản trị website:** Tối ưu hóa toàn diện các tác vụ xử lý tên miền và dọn dẹp tài nguyên, giúp giải phóng không gian lưu trữ chính xác và nâng cao độ mượt mà khi thao tác.
+- **Tinh chỉnh hiệu suất thực thi cốt lõi:** Cải tiến tốc độ phản hồi và độ ổn định của các công cụ quản trị dòng lệnh, giảm thiểu tải trọng trong các tác vụ bảo trì hệ thống.
+
+🐛 **Sửa lỗi**
+- **Khắc phục sự cố vận hành:** Xử lý triệt để các lỗi xung đột tiềm ẩn trong quá trình quản lý bộ nhớ đệm và tương tác tên miền, đảm bảo máy chủ hoạt động liên tục và ổn định.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.3
 
 🐛 **Sửa lỗi**

@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.3)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.4)
 
 - **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.3**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.4**.
 
 ---
 
@@ -813,14 +813,14 @@ Ghi chú: WPTangTocOLS không giới hạn số lượng domain bạn thêm vào
 - **Tệp nguồn:** `/etc/wptt/domain/wptt-xoa-website`
 
 ```text
-Tính năng Xóa domain website [hay Xóa tên miền] trong quản lý máy chủ là quá trình gỡ bỏ một tên miền khỏi cấu hình của máy chủ đó. Sau khi xóa, máy chủ sẽ ngừng phục vụ website và các dịch vụ khác liên quan [mã nguồn, database, ssl, sao lưu...] đến tên miền đó từ máy chủ cụ thể này.
+  Tính năng Xóa domain website [hay Xóa tên miền] trong quản lý máy chủ là quá trình gỡ bỏ một tên miền khỏi cấu hình của máy chủ đó. Sau khi xóa, máy chủ sẽ ngừng phục vụ website và các dịch vụ khác liên quan [mã nguồn, database, ssl, sao lưu...] đến tên miền đó từ máy chủ cụ thể này.
 
-Mục Đích Chính
-* Website không còn cần thiết: Ngừng hoạt động hoàn toàn website trên máy chủ.
-* Chuyển web sang nhà cung cấp khác: Xóa domain cũ sau khi đã di chuyển thành công.
-* Dọn dẹp tài khoản host: Loại bỏ các tên miền phụ không còn sử dụng.
-* Giải phóng tài nguyên: Tối ưu dung lượng đĩa và tài nguyên RAM/CPU.
-* Sau khi bán hoặc chuyển nhượng tên miền: Không phục vụ domain đã đổi chủ.
+  Mục Đích Chính
+- Website không còn cần thiết: Ngừng hoạt động hoàn toàn website trên máy chủ.
+- Chuyển web sang nhà cung cấp khác: Xóa domain cũ sau khi đã di chuyển thành công.
+- Dọn dẹp tài khoản host: Loại bỏ các tên miền phụ không còn sử dụng.
+- Giải phóng tài nguyên: Tối ưu dung lượng đĩa và tài nguyên RAM/CPU.
+- Sau khi bán hoặc chuyển nhượng tên miền: Không phục vụ domain đã đổi chủ.
 ```
 
 ---
@@ -927,16 +927,16 @@ Tính năng chuyển hướng domain rất quan trọng để quản lý truy c�
 - **Tệp nguồn:** `/etc/wptt/domain/wptt-xoa-domain-chuyen-huong`
 
 ```text
-Tính năng Xóa chuyển hướng domain là quá trình gỡ bỏ hoặc vô hiệu hóa một cài đặt đã được thiết lập trước đó để tự động điều hướng người dùng và công cụ tìm kiếm từ một tên miền này sang một tên miền khác.
+  Tính năng Xóa chuyển hướng domain là quá trình gỡ bỏ hoặc vô hiệu hóa một cài đặt đã được thiết lập trước đó để tự động điều hướng người dùng và công cụ tìm kiếm từ một tên miền này sang một tên miền khác.
 
-Nói một cách đơn giản, đây là hành động dừng việc tự động chuyển tiếp từ tên miền A sang tên miền B. Sau khi xóa chuyển hướng, khi người dùng truy cập vào tên miền A, họ sẽ không còn bị tự động đưa đến tên miền B nữa.
+  Nói một cách đơn giản, đây là hành động dừng việc tự động chuyển tiếp từ tên miền A sang tên miền B. Sau khi xóa chuyển hướng, khi người dùng truy cập vào tên miền A, họ sẽ không còn bị tự động đưa đến tên miền B nữa.
 
-Mục Đích Chính
-* Khôi phục nội dung gốc: Khi bạn muốn tên miền đang bị chuyển hướng [ví dụ: tên miền A] bắt đầu hiển thị nội dung riêng của nó, thay vì trỏ sang nơi khác.
-* Thay đổi đích đến của chuyển hướng: Nếu bạn muốn tên miền A chuyển hướng đến một tên miền C hoàn toàn mới, bạn có thể cần xóa chuyển hướng cũ [sang B] trước khi thiết lập chuyển hướng mới [sang C].
-* Hủy bỏ việc gộp tên miền: Nếu trước đó bạn gộp nhiều tên miền về một, nay muốn tách chúng ra hoạt động độc lập.
-* Gỡ lỗi: Nếu chuyển hướng đang gây ra lỗi [ví dụ: vòng lặp chuyển hướng, sai đích] thì việc xóa bỏ nó là cần thiết để khắc phục.
-* Không còn nhu cầu: Khi việc chuyển hướng không còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
+  Mục Đích Chính
+- Khôi phục nội dung gốc: Khi bạn muốn tên miền đang bị chuyển hướng [ví dụ: tên miền A] bắt đầu hiển thị nội dung riêng của nó, thay vì trỏ sang nơi khác.
+- Thay đổi đích đến của chuyển hướng: Nếu bạn muốn tên miền A chuyển hướng đến một tên miền C hoàn toàn mới, bạn có thể cần xóa chuyển hướng cũ [sang B] trước khi thiết lập chuyển hướng mới [sang C].
+- Hủy bỏ việc gộp tên miền: Nếu trước đó bạn gộp nhiều tên miền về một, nay muốn tách chúng ra hoạt động độc lập.
+- Gỡ lỗi: Nếu chuyển hướng đang gây ra lỗi [ví dụ: vòng lặp chuyển hướng, sai đích] thì việc xóa bỏ nó là cần thiết để khắc phục.
+- Không còn nhu cầu: Khi việc chuyển hướng không còn cần thiết nữa [ví dụ: tên miền đích không còn tồn tại, chiến dịch marketing đã kết thúc].
 ```
 
 ---
