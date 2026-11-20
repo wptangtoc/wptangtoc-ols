@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.5)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.6)
 
 - **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.5**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.6**.
 
 ---
 
@@ -44,31 +44,23 @@ Tính năng này làm cho WPTangToc OLS trở thành một lựa chọn hấp d�
 
 ---
 
-## Cập nhật WordPress core (`update-core`)
+## ${cap_nhat:-Cập nhật} WordPress Core (`update-core`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 1. Cập nhật WordPress core  _(bấm lần lượt: 1 → 1 → 1)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 1. ${cap_nhat:-Cập nhật} WordPress Core  _(bấm lần lượt: 1 → 1 → 1)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-core`
 
 ```text
-Tính năng cập nhật core WordPress [hay cập nhật lõi WordPress] là một chức năng cực kỳ quan trọng, được tích hợp sẵn trong wptangtoc ols, cho phép người dùng nâng cấp toàn bộ phần mềm WordPress chính [các file và mã nguồn cốt lõi] lên phiên bản mới nhất do đội ngũ phát triển WordPress phát hành.
-
-Tại sao cần cập nhật core WordPress [lợi ích chính]:
-* Bảo mật Tối thượng: Đây là lý do quan trọng nhất. Các bản cập nhật lõi WordPress thường xuyên vá các lỗ hổng bảo mật được phát hiện. Sử dụng phiên bản WordPress lỗi thời là một rủi ro bảo mật nghiêm trọng, có thể khiến website của bạn dễ dàng bị tấn công.
-* Tính năng Mới và Cải tiến Lớn: Các phiên bản WordPress mới [đặc biệt là các bản phát hành chính] thường giới thiệu nhiều tính năng mới, cải tiến giao diện người dùng [ví dụ: trình soạn thảo block], nâng cao hiệu suất và mang lại trải nghiệm người dùng tốt hơn.
-* Sửa lỗi [Bug Fixes]: Các bản cập nhật sửa các lỗi đã biết từ những phiên bản trước, giúp WordPress hoạt động ổn định, đáng tin cậy hơn và giảm thiểu sự cố.
-* Cải thiện Hiệu suất: Các phiên bản mới thường đi kèm với những tối ưu hóa về mã nguồn, giúp website của bạn tải nhanh hơn và hoạt động hiệu quả hơn.
-* Đảm bảo Tương thích: Giữ cho WordPress tương thích với các công nghệ web mới nhất, phiên bản PHP mới, đồng thời tạo nền tảng ổn định cho các giao diện [theme] và plugin hoạt động.
-
-Tính năng cập nhật core WordPress là một phần không thể thiếu để đảm bảo website của bạn luôn an toàn, ổn định, có đầy đủ các tính năng mới nhất và hoạt động với hiệu suất tối ưu. Việc cập nhật WordPress core thường xuyên là một trong những trách nhiệm quan trọng nhất của người quản trị website.
+Tính năng cập nhật core WordPress nâng cấp toàn bộ mã nguồn lõi WordPress và cấu trúc
+CSDL (update-db) lên phiên bản mới nhất, tự động xử lý khóa file (Lockdown) và dọn cache.
 ```
 
 ---
 
-## Cập nhật plugins (`update-plugin`)
+## ${cap_nhat:-Cập nhật} Plugins (`update-plugin`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 2. Cập nhật plugins  _(bấm lần lượt: 1 → 1 → 2)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 2. ${cap_nhat:-Cập nhật} Plugins  _(bấm lần lượt: 1 → 1 → 2)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-plugin`
 
 ```text
@@ -86,10 +78,10 @@ Tính năng cập nhật plugin WordPress đóng vai trò cực kỳ quan trọn
 
 ---
 
-## Cập nhật themes (`update-theme`)
+## ${cap_nhat:-Cập nhật} Themes (`update-theme`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 3. Cập nhật themes  _(bấm lần lượt: 1 → 1 → 3)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 3. ${cap_nhat:-Cập nhật} Themes  _(bấm lần lượt: 1 → 1 → 3)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-theme`
 
 ```text
@@ -106,99 +98,49 @@ Tính năng cập nhật theme WordPress là một phần thiết yếu để du
 
 ---
 
-## Cài lại wordpress core (`ghi-de-wordpress-core`)
+## ${cap_nhat:-Cập nhật} WordPress (ALL) (`update-full`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 4. Cài lại wordpress core  _(bấm lần lượt: 1 → 1 → 4)_
-- **Tệp nguồn:** `/etc/wptt/wordpress/ghi-de-wordpress-core`
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 4. ${cap_nhat:-Cập nhật} WordPress (ALL)  _(bấm lần lượt: 1 → 1 → 4)_
+- **Tệp nguồn:** `/etc/wptt/wordpress/update-full`
 
 ```text
-Tính năng này để cài đặt lại hoặc ghi đè các file lõi [core files] của WordPress.
+HƯỚNG DẪN: CẬP NHẬT TOÀN DIỆN WORDPRESS (WORDPRESS ALL)
 
-Mục đích sử dụng chính [tính năng] của lệnh này:
+1. TỔNG QUAN
+Tính năng này tự động quét toàn bộ website WordPress hợp lệ đang chạy trên máy chủ (có cấu hình tại /etc/wptt/vhost/ và tồn tại wp-load.php), sau đó tiến hành cập nhật đồng loạt Core, Plugin, Theme và Gói ngôn ngữ. Các website không phải WordPress sẽ tự động được bỏ qua.
 
-* Sửa chữa lỗi lõi WordPress: Nếu các file lõi của WordPress bị hỏng do cập nhật thất bại, bị nhiễm mã độc, hoặc do sửa đổi file không mong muốn, lệnh này có thể khôi phục chúng về trạng thái gốc sạch sẽ.
-* Đảm bảo tính toàn vẹn của file lõi: Giúp chắc chắn rằng các file lõi trên website của bạn hoàn toàn giống với bản phát hành chính thức từ WordPress.org.
-* Giải quyết sự cố không rõ nguyên nhân: Đôi khi, đây là một bước khắc phục sự cố khi website gặp lỗi lạ mà nghi ngờ có liên quan đến file lõi.
+2. QUY TRÌNH CẬP NHẬT TRÊN TỪNG WEBSITE
+Mỗi website được xử lý tuần tự với giới hạn thời gian (timeout) chặt chẽ để tránh treo toàn bộ hàng đợi:
+- Bước 1 - Plugins (tối đa 150s): Cập nhật toàn bộ plugin, giữ nguyên hook thực thi để tương thích với các plugin trả phí/thương mại.
+- Bước 2 - Themes (tối đa 150s): Cập nhật toàn bộ giao diện, hỗ trợ cả các theme thương mại (Bricks, Flatsome, v.v.).
+- Bước 3 - Ngôn ngữ (60s - 120s): Cập nhật bản dịch cho Core, Plugin và Theme.
+- Bước 4 - WordPress Core & Database (180s + 60s): Nâng cấp mã nguồn lõi; chỉ chạy nâng cấp cấu trúc Database (core update-db) khi cập nhật Core thành công.
+- Bước 5 - Dọn Cache & Rewrite (30s): Làm mới Object Cache, Rewrite Rules và xóa bộ nhớ đệm OpenLiteSpeed (wptt-xoacache).
 
-Tóm lại, lệnh này cung cấp một cách mạnh mẽ để làm mới các file lõi WordPress một cách có kiểm soát, giữ lại nội dung quan trọng của bạn, và thường được dùng để sửa lỗi hoặc đảm bảo tính toàn vẹn của cài đặt WordPress.
+3. CƠ CHẾ AN TOÀN & TỐI ƯU TÀI NGUYÊN (ENTERPRISE FAIL-SAFE)
+- Cô lập quyền hạn: Thực thi WP-CLI bằng đúng user sở hữu website qua runuser (không chạy bằng root) và sử dụng đúng phiên bản LSPHP của domain đó.
+- Tương thích Chroot Jail: Tự tạo thư mục HOME và WP-CLI cache tạm (quyền 0700) trong /tmp, tự động xóa sạch sau khi xử lý xong từng website.
+- Bảo vệ hiệu năng VPS: Chạy ở mức ưu tiên CPU thấp (nice -n 10) và tự động giới hạn RAM WP-CLI (256M với VPS <= 768MB RAM, 512M với VPS lớn hơn).
+- Bẫy lỗi an toàn kép (Trap EXIT/INT/TERM/HUP):
+  + Tự động tạm tắt Lockdown (chattr +i) khi cập nhật và bật lại ngay lập tức khi hoàn tất hoặc khi tiến trình bị ngắt đột ngột (Ctrl+C, rớt kết nối SSH).
+  + Tự động xóa file .maintenance bị sót lại nếu quá trình cập nhật bị gián đoạn (chỉ xóa nếu trước đó website không chủ động bật chế độ bảo trì).
+
+4. THEO DÕI NHẬT KÝ & XỬ LÝ LỖI
+- Nếu một website gặp lỗi, hệ thống sẽ ghi nhận bước bị lỗi (plugin, theme, core hoặc core-db) và tiếp tục cập nhật các website còn lại.
+- Xem chi tiết nguyên nhân lỗi tại file log: /var/log/wptangtoc-ols.log
+
+5. KHUYẾN NGHỊ TRƯỚC KHI THỰC HIỆN
+- Luôn tạo bản sao lưu (Backup) toàn bộ website và cơ sở dữ liệu trước khi cập nhật hàng loạt để phòng ngừa xung đột phiên bản giữa Plugin, Theme và PHP.
+- Nên chạy trong phiên tmux hoặc screen nếu máy chủ có số lượng website lớn để tránh bị ngắt giữa chừng do mất kết nối SSH.
 ```
 
 ---
 
-## Cài lại wordpress All (`wptt-update-reinstall-wordpress`)
+## ${kiem_tra:-Kiểm tra} ${phien_ban:-phiên bản} WordPress (`kiem-tra-version-wp`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 5. Cài lại wordpress All  _(bấm lần lượt: 1 → 1 → 5)_
-- **Tệp nguồn:** `/etc/wptt/wordpress/wptt-update-reinstall-wordpress`
-
-```text
-Tính năng Update và Ghi đè [Force Reinstall] Core, Plugin và Theme của WordPress bằng WP-CLI.
-
-Mục đích chính:
-* Cứu hộ Website: Rất hữu ích khi website bị nhiễm mã độc [malware] sửa đổi các file lõi, hoặc khi quá trình cập nhật tự động bị ngắt quãng gây lỗi trắng trang.
-* Cập nhật đồng loạt: Ép buộc tải lại và cập nhật phiên bản mới nhất của toàn bộ mã nguồn từ máy chủ WordPress.org.
-
-Quy trình hoạt động:
-1. Tải và ghi đè lại toàn bộ mã nguồn WordPress Core [bỏ qua thư mục wp-content].
-2. Quét danh sách Plugin hiện có và ép buộc tải lại bản mới nhất từ kho WordPress.org.
-3. Quét danh sách Theme hiện có và ép buộc tải lại bản mới nhất từ kho WordPress.org.
-4. Tự động sửa lại quyền sở hữu [Ownership] file về chuẩn của OpenLiteSpeed để tránh lỗi Permission Denied.
-
-CẢNH BÁO QUAN TRỌNG:
-* Các Plugin và Theme trả phí [Premium - không có trên kho miễn phí của WP.org] sẽ bị bỏ qua và báo lỗi nhẹ [không ảnh hưởng hệ thống].
-* Nếu bạn sửa code trực tiếp vào Theme gốc [thay vì dùng Child Theme], việc ghi đè này SẼ LÀM MẤT TOÀN BỘ CODE TÙY CHỈNH CỦA BẠN. Hãy cân nhắc kỹ!
-```
-
----
-
-## Hạ cấp Core WordPress (`ha-cap-phien-ban-wordpress-core`)
-
-- **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 7. Hạ cấp Core WordPress  _(bấm lần lượt: 1 → 1 → 7)_
-- **Tệp nguồn:** `/etc/wptt/wordpress/ha-cap-phien-ban-wordpress-core`
-
-```text
-Tính năng hạ cấp WordPress core, thì mục đích của nó là cho phép bạn đưa phiên bản lõi [core] của WordPress trên website về một phiên bản cũ hơn.
-
-Mục đích sử dụng của tính năng này:
-
-* Khắc phục sự cố tương thích: Lý do chính thường là khi phiên bản WordPress mới nhất gây ra xung đột nghiêm trọng với một theme hoặc plugin quan trọng nào đó mà bạn chưa thể cập nhật hoặc thay thế.
-* Tránh lỗi nghiêm trọng ở phiên bản mới: Trong một số trường hợp hiếm hoi, phiên bản WordPress mới có thể chứa lỗi ảnh hưởng đến hoạt động website của bạn, và việc hạ cấp tạm thời là giải pháp trong khi chờ bản vá.
-
-thì đây là tính năng hữu ích, để giúp bạn có thể hạ cấp phiên bản Core WordPress về đúng với cái ý muốn của mình
-
-Tóm lại: Nếu WPTangToc OLS của bạn có tính năng hạ cấp WordPress core, nó được dùng để đưa website về phiên bản WordPress cũ hơn nhằm giải quyết các vấn đề tương thích khẩn cấp.
-
-Tuy nhiên, đây là một hành động rủi ro cao, đặc biệt về bảo mật, và chỉ nên được thực hiện như một giải pháp cuối cùng sau khi đã sao lưu đầy đủ và hiểu rõ mọi hệ lụy. Hãy tham khảo tài liệu hoặc cộng đồng hỗ trợ.
-```
-
----
-
-## Hạ cấp Plugin WordPress (`ha-cap-phien-ban-plugins`)
-
-- **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 8. Hạ cấp Plugin WordPress  _(bấm lần lượt: 1 → 1 → 8)_
-- **Tệp nguồn:** `/etc/wptt/wordpress/ha-cap-phien-ban-plugins`
-
-```text
-Tính năng hạ cấp plugin, thì mục đích của nó là cho phép bạn đưa một plugin cụ thể trên website WordPress của bạn trở lại một phiên bản cũ hơn.
-
-Giới thiệu ngắn gọn về tính năng này:
-Mục đích sử dụng:
-* Khắc phục lỗi do cập nhật plugin: Lý do phổ biến nhất là khi phiên bản mới của một plugin gây ra lỗi, xung đột với theme hoặc các plugin khác, hoặc làm hỏng một chức năng nào đó trên website của bạn.
-* Tính năng bị loại bỏ hoặc thay đổi không mong muốn: Đôi khi, phiên bản mới của plugin loại bỏ một tính năng bạn cần hoặc thay đổi cách hoạt động theo hướng bạn không thích.
-* Vấn đề tương thích tạm thời: Trong khi chờ nhà phát triển plugin hoặc theme khác cập nhật để tương thích với phiên bản plugin mới nhất.
-
-Tóm lại: WPTangToc OLS tích hợp tính năng hạ cấp plugin giúp bạn quay lại phiên bản cũ hơn của một plugin để giải quyết các vấn đề phát sinh từ bản cập nhật mới. Tuy nhiên, đây nên được coi là một giải pháp tạm thời và cần thực hiện hết sức cẩn trọng do các rủi ro về bảo mật và tương thích.
-```
-
----
-
-## Kiểm tra phiên bản WordPress (`kiem-tra-version-wp`)
-
-- **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 9. Kiểm tra phiên bản WordPress  _(bấm lần lượt: 1 → 1 → 9)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 5. ${kiem_tra:-Kiểm tra} ${phien_ban:-phiên bản} WordPress  _(bấm lần lượt: 1 → 1 → 5)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/kiem-tra-version-wp`
 
 ```text
@@ -215,6 +157,100 @@ Thay vì phải đăng nhập vào trang quản trị (wp-admin) rườm rà và
  - Rà soát bảo mật: Plugin/Theme cũ, không được cập nhật là nguyên nhân số 1 (chiếm 90%) khiến website bị dính mã độc. Bảng báo cáo này giúp bạn "nhìn thấu" ngay lập tức thành phần nào đang lỗi thời.
  - Siêu tốc & Tiện lợi: Chạy hoàn toàn dưới nền dòng lệnh, không tiêu tốn tài nguyên Web Server. Giúp bạn kiểm tra nhanh trước khi quyết định có nên bấm nút "Cập nhật tất cả" hay không.
  - Chuẩn quyền (Isolated): Tự động nhận diện phiên bản PHP riêng biệt của từng website để thực thi lệnh an toàn.
+```
+
+---
+
+## Hạ cấp WordPress Core (`ha-cap-phien-ban-wordpress-core`)
+
+- **Danh mục:** Quản lý WordPress
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 6. Hạ cấp WordPress Core  _(bấm lần lượt: 1 → 1 → 6)_
+- **Tệp nguồn:** `/etc/wptt/wordpress/ha-cap-phien-ban-wordpress-core`
+
+```text
+Tính năng hạ cấp WordPress core, thì mục đích của nó là cho phép bạn đưa phiên bản lõi [core] của WordPress trên website về một phiên bản cũ hơn.
+
+Mục đích sử dụng của tính năng này:
+
+* Khắc phục sự cố tương thích: Lý do chính thường là khi phiên bản WordPress mới nhất gây ra xung đột nghiêm trọng với một theme hoặc plugin quan trọng nào đó mà bạn chưa thể cập nhật hoặc thay thế.
+* Tránh lỗi nghiêm trọng ở phiên bản mới: Trong một số trường hợp hiếm hoi, phiên bản WordPress mới có thể chứa lỗi ảnh hưởng đến hoạt động website của bạn, và việc hạ cấp tạm thời là giải pháp trong khi chờ bản vá.
+
+thì đây là tính năng hữu ích, để giúp bạn có thể hạ cấp phiên bản Core WordPress về đúng với cái ý muốn của mình
+
+Tóm lại: Nếu WPTangToc OLS của bạn có tính năng hạ cấp WordPress core, nó được dùng để đưa website về phiên bản WordPress cũ hơn nhằm giải quyết các vấn đề tương thích khẩn cấp.
+
+Tuy nhiên, đây là một hành động rủi ro cao, đặc biệt về bảo mật, và chỉ nên được thực hiện như một giải pháp cuối cùng sau khi đã sao lưu đầy đủ và hiểu rõ mọi hệ lụy. Hãy tham khảo tài liệu hoặc cộng đồng hỗ trợ.
+
+Lưu ý quan trọng:
+* Luôn sao lưu (Backup) đầy đủ mã nguồn và cơ sở dữ liệu trước khi hạ cấp.
+* Chỉ nên hạ cấp tạm thời để xử lý xung đột, sau đó cập nhật lại lên bản có vá bảo mật.
+```
+
+---
+
+## Hạ cấp Plugins (`ha-cap-phien-ban-plugins`)
+
+- **Danh mục:** Quản lý WordPress
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 7. Hạ cấp Plugins  _(bấm lần lượt: 1 → 1 → 7)_
+- **Tệp nguồn:** `/etc/wptt/wordpress/ha-cap-phien-ban-plugins`
+
+```text
+Tính năng hạ cấp plugin, thì mục đích của nó là cho phép bạn đưa một plugin cụ thể trên website WordPress của bạn trở lại một phiên bản cũ hơn.
+
+Giới thiệu ngắn gọn về tính năng này:
+Mục đích sử dụng:
+* Khắc phục lỗi do cập nhật plugin: Lý do phổ biến nhất là khi phiên bản mới của một plugin gây ra lỗi, xung đột với theme hoặc các plugin khác, hoặc làm hỏng một chức năng nào đó trên website của bạn.
+* Tính năng bị loại bỏ hoặc thay đổi không mong muốn: Đôi khi, phiên bản mới của plugin loại bỏ một tính năng bạn cần hoặc thay đổi cách hoạt động theo hướng bạn không thích.
+* Vấn đề tương thích tạm thời: Trong khi chờ nhà phát triển plugin hoặc theme khác cập nhật để tương thích với phiên bản plugin mới nhất.
+
+Tóm lại: WPTangToc OLS tích hợp tính năng hạ cấp plugin giúp bạn quay lại phiên bản cũ hơn của một plugin để giải quyết các vấn đề phát sinh từ bản cập nhật mới. Tuy nhiên, đây nên được coi là một giải pháp tạm thời và cần thực hiện hết sức cẩn trọng do các rủi ro về bảo mật và tương thích.
+```
+
+---
+
+## ${cai_lai:-Cài lại} WordPress Core (`ghi-de-wordpress-core`)
+
+- **Danh mục:** Quản lý WordPress
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 8. ${cai_lai:-Cài lại} WordPress Core  _(bấm lần lượt: 1 → 1 → 8)_
+- **Tệp nguồn:** `/etc/wptt/wordpress/ghi-de-wordpress-core`
+
+```text
+Tính năng này để cài đặt lại hoặc ghi đè các file lõi [core files] của WordPress.
+
+Mục đích sử dụng chính [tính năng] của lệnh này:
+
+* Sửa chữa lỗi lõi WordPress: Nếu các file lõi của WordPress bị hỏng do cập nhật thất bại, bị nhiễm mã độc, hoặc do sửa đổi file không mong muốn, lệnh này có thể khôi phục chúng về trạng thái gốc sạch sẽ.
+* Đảm bảo tính toàn vẹn của file lõi: Giúp chắc chắn rằng các file lõi trên website của bạn hoàn toàn giống với bản phát hành chính thức từ WordPress.org.
+* Giải quyết sự cố không rõ nguyên nhân: Đôi khi, đây là một bước khắc phục sự cố khi website gặp lỗi lạ mà nghi ngờ có liên quan đến file lõi.
+
+Tóm lại, lệnh này cung cấp một cách mạnh mẽ để làm mới các file lõi WordPress một cách có kiểm soát, giữ lại nội dung quan trọng của bạn, và thường được dùng để sửa lỗi hoặc đảm bảo tính toàn vẹn của cài đặt WordPress.
+```
+
+---
+
+## ${cai_lai:-Cài lại} WordPress (ALL) (`wptt-update-reinstall-wordpress`)
+
+- **Danh mục:** Quản lý WordPress
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 9. ${cai_lai:-Cài lại} WordPress (ALL)  _(bấm lần lượt: 1 → 1 → 9)_
+- **Tệp nguồn:** `/etc/wptt/wordpress/wptt-update-reinstall-wordpress`
+
+```text
+Tính năng Update và Ghi đè [Force Reinstall] Core, Plugin và Theme của WordPress bằng WP-CLI.
+
+Mục đích chính:
+* Cứu hộ Website: Rất hữu ích khi website bị nhiễm mã độc [malware] sửa đổi các file lõi, hoặc khi quá trình cập nhật tự động bị ngắt quãng gây lỗi trắng trang.
+* Cập nhật đồng loạt: Ép buộc tải lại và cập nhật phiên bản mới nhất của toàn bộ mã nguồn từ máy chủ WordPress.org.
+
+Quy trình hoạt động:
+1. Tạm mở khóa Lockdown (nếu bật) và chuẩn hóa quyền sở hữu file cho user website.
+2. Tải và ghi đè toàn bộ WordPress Core (bỏ qua wp-content) + đồng bộ CSDL (update-db).
+3. Quét và ép tải lại toàn bộ Plugins miễn phí từ WordPress.org (bỏ qua Drop-in, MU-plugin & Plugin Premium).
+4. Quét và ép tải lại toàn bộ Themes miễn phí từ WordPress.org (tự động bỏ qua Theme Premium/Child Theme).
+5. Dọn sạch Cache (Object Cache, Rewrite Rules, LSCache/OpCache) và khôi phục Lockdown.
+
+CẢNH BÁO QUAN TRỌNG:
+* Các Plugin và Theme trả phí [Premium - không có trên kho miễn phí của WP.org] sẽ bị bỏ qua và báo lỗi nhẹ [không ảnh hưởng hệ thống].
+* Nếu bạn sửa code trực tiếp vào Theme gốc [thay vì dùng Child Theme], việc ghi đè này SẼ LÀM MẤT TOÀN BỘ CODE TÙY CHỈNH CỦA BẠN. Hãy cân nhắc kỹ!
 ```
 
 ---

@@ -1,3 +1,15 @@
+## WPTangToc OLS 8.4.1.6
+
+🚀 **Tính năng mới**
+- **Nâng cấp toàn diện công cụ quản lý và cập nhật mã nguồn WordPress:** Cải tiến mạnh mẽ các tính năng cập nhật Core WordPress, Plugin và Theme, đồng thời bổ sung khả năng hạ cấp phiên bản WordPress Core, cài đặt lại Core và cài đặt lại toàn bộ WordPress một cách nhanh chóng, an toàn và chính xác, giúp quản trị viên chủ động hoàn toàn trong việc bảo trì, tối ưu và xử lý sự cố website.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.5
 
 🛠️ **Tối ưu hệ thống**
