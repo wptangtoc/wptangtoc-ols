@@ -18,183 +18,360 @@ function huong_dan() {
 EOF
 }
 
+
+umask 022
+
+# shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 wptt_load_main_conf 2>/dev/null
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 
-tinh_nang_ten="$cap_nhat WordPress Themes"
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+MENU_ARG="${1:-}"
+AUTO_ALL=0
+if [[ "${2:-}" == "--all" || "${2:-}" == "all" ]]; then
+  AUTO_ALL=1
+fi
 
-NAME=$1
+RUNUSER_BIN="$(command -v runuser 2>/dev/null || printf '/sbin/runuser')"
+LOG_FILE="/var/log/wptangtoc-ols.log"
+
+_wptt_calc_wpcli_mem() {
+  local mem_kb=0 k="" v=""
+  while IFS=': ' read -r k v _; do
+    if [[ "$k" == "MemTotal" ]]; then
+      mem_kb="$v"
+      break
+    fi
+  done </proc/meminfo 2>/dev/null
+  if [[ "$mem_kb" =~ ^[0-9]+$ ]] && ((mem_kb > 0 && mem_kb <= 786432)); then
+    printf '256M'
+  else
+    printf '512M'
+  fi
+}
+
+CURRENT_DOMAIN=""
+CURRENT_IS_LOCKED=0
+CURRENT_WPCLI_HOME=""
+
+_wptt_cleanup_state() {
+  if ((CURRENT_IS_LOCKED == 1)) && [[ -n "$CURRENT_DOMAIN" ]]; then
+    if [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]]; then
+      /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$CURRENT_DOMAIN" on >/dev/null 2>&1 || true
+    fi
+    CURRENT_IS_LOCKED=0
+  fi
+  if [[ -n "$CURRENT_WPCLI_HOME" && -d "$CURRENT_WPCLI_HOME" ]]; then
+    case "$CURRENT_WPCLI_HOME" in
+      /tmp/wptt_wpcli_?*) /bin/rm -rf -- "${CURRENT_WPCLI_HOME:?}" 2>/dev/null || true ;;
+    esac
+    CURRENT_WPCLI_HOME=""
+  fi
+}
+
+_wptt_trap_exit() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  _wptt_cleanup_state
+  exit "$rc"
+}
+trap _wptt_trap_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+_wptt_exit() {
+  local code="${1:-0}"
+  local pause="${2:-}"
+  _wptt_cleanup_state
+  trap - EXIT INT TERM HUP
+  if ((AUTO_ALL == 1)); then
+    exit "$code"
+  fi
+  if [[ -n "$pause" ]]; then
+    wptt_quay_ve_menu "$MENU_ARG" "$code" "$pause"
+  else
+    wptt_quay_ve_menu "$MENU_ARG" "$code"
+  fi
+  exit "$code"
+}
+
+tinh_nang_ten="${cap_nhat:-Cập nhật} WordPress Themes"
+if ((AUTO_ALL == 0)); then
+  printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}${quan_ly_cap_nhat_wordpress:-Quản lý cập nhật WordPress} ➜ ${tinh_nang_ten}${C_RESET}"
+  printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+fi
+
+NAME="${1:-}"
 [[ "$NAME" == "98" ]] && NAME=""
 
 if [[ -z "$NAME" ]]; then
+  # shellcheck source=/dev/null
   . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
   lua_chon_NAME "$tinh_nang_ten"
 fi
 
 # ==============================================================================
-# XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE) - BẮT LỖI SUBSHELL
+# XỬ LÝ HÀNG LOẠT (TẤT CẢ WEBSITE) — GỌI NON-INTERACTIVE (--all)
 # ==============================================================================
 if [[ "$NAME" == 'Tất cả website' ]]; then
-  tien_do=1
-  tong_so_web=$(find /etc/wptt/vhost/ -maxdepth 1 -name ".*.conf" ! -name "..conf" 2>/dev/null | wc -l)
-
+  wp_domains=()
   shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
-
     domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
-
-    if [[ "$domain" == ?*.?* ]]; then
-      if [[ -f "/usr/local/lsws/$domain/html/wp-config.php" ]]; then
-        _runing "[ $tien_do / $tong_so_web ] Đang cập nhật themes cho: $domain"
-
-        # Chạy subshell và bắt mã thoát (Exit Status) để kiểm soát lỗi
-        (/bin/bash /etc/wptt/wordpress/update-theme "$domain" >/dev/null 2>&1)
-        exit_status=$?
-
-        if [ "$exit_status" -eq 0 ]; then
-          _rundone "[ $tien_do / $tong_so_web ] Cập nhật hoàn tất cho: $domain"
-        else
-          _runloi "[ $tien_do / $tong_so_web ] Lỗi cập nhật theme cho: $domain (Mã lỗi: $exit_status)"
-        fi
-        ((tien_do++))
+    if [[ "$domain" =~ ^[a-zA-Z0-9._-]+$ && "$domain" == ?*.?* && "$domain" != *..* ]]; then
+      if [[ -f "/usr/local/lsws/${domain}/html/wp-load.php" ]]; then
+        wp_domains+=("$domain")
       fi
     fi
   done
+  shopt -u nullglob
 
-  wptt_quay_ve_menu "${1:-}" 0
+  tong_so_web="${#wp_domains[@]}"
+  if ((tong_so_web == 0)); then
+    echoDo "Hệ thống hiện chưa có website WordPress nào!"
+    _wptt_exit 1 "enter"
+  fi
+
+  tien_do=1
+  for domain in "${wp_domains[@]}"; do
+    batch_task="[ ${tien_do} / ${tong_so_web} ] Cập nhật TẤT CẢ themes cho: ${domain}"
+    _runing "$batch_task"
+
+    /bin/bash /etc/wptt/wordpress/update-theme "$domain" --all </dev/null >>"$LOG_FILE" 2>&1
+    exit_status=$?
+
+    if ((exit_status == 0)); then
+      _rundone "$batch_task"
+    else
+      _runloi "$batch_task"
+    fi
+    ((tien_do++))
+  done
+
+  _wptt_exit 0 "enter"
 fi
 
 # ==============================================================================
 # XỬ LÝ ĐƠN LẺ MỘT WEBSITE
 # ==============================================================================
 if [[ "$NAME" == "0" || -z "$NAME" ]]; then
-  wptt_quay_ve_menu "${1:-}" 1
+  _wptt_exit 1
 fi
 
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ || "$NAME" == -* || "$NAME" == *..* ]]; then
+  echoDo "Lỗi: Tên miền '${NAME}' không hợp lệ!"
+  _wptt_exit 1 "enter"
+fi
+
+pathcheck="/etc/wptt/vhost/.${NAME}.conf"
 if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Lỗi: Tên miền '$NAME' không tồn tại trên hệ thống này!"
-  sleep 3
-  wptt_quay_ve_menu "${1:-}" 1
+  ((AUTO_ALL == 0)) && clear
+  echoDo "Lỗi: Tên miền '${NAME}' không tồn tại trên hệ thống này!"
+  _wptt_exit 1 "enter"
 fi
 
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  clear
-  echoDo "Lỗi: Hệ thống xác nhận tên miền '$NAME' chưa cài đặt WordPress!"
-  sleep 3
-  wptt_quay_ve_menu "${1:-}" 1
+path="/usr/local/lsws/${NAME}/html"
+if [[ ! -f "${path}/wp-load.php" ]]; then
+  ((AUTO_ALL == 0)) && clear
+  echoDo "Lỗi: Hệ thống xác nhận tên miền '${NAME}' chưa cài đặt WordPress!"
+  _wptt_exit 1 "enter"
 fi
 
-path="/usr/local/lsws/$NAME/html"
-
-if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
-  wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
-  _runloi "Không xác định được phiên bản PHP"
-  wptt_quay_ve_menu "${1:-}" 1
+if [[ ! -f /usr/local/bin/wp || ! -x "$RUNUSER_BIN" ]]; then
+  echoDo "Lỗi: Thiếu WP-CLI hoặc runuser trên hệ thống!"
+  _wptt_exit 1 "enter"
 fi
 
-. "$pathcheck" 2>/dev/null
+unset User_name_vhost phien_ban_php_domain_thuc_thi lock_down
+# shellcheck source=/dev/null
+wptt_load_vhost_conf "$pathcheck" 2>/dev/null
+# shellcheck source=/dev/null
+if ! . /etc/wptt/php/php-cli-domain-config "$NAME" >/dev/null 2>&1; then
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME"
+  echoDo "Lỗi: Không xác định được phiên bản PHP cho website ${NAME}!"
+  _wptt_exit 1 "enter"
+fi
 
-WP_EXEC=(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp)
+php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+if [[ -z "${User_name_vhost:-}" || ! -x "$php_bin" ]]; then
+  echoDo "Lỗi: Không tìm thấy user hoặc binary PHP (${php_bin}) cho website ${NAME}!"
+  _wptt_exit 1 "enter"
+fi
 
-echo "Đang kiểm tra các bản cập nhật theme cho website $NAME..."
+WP_MEM_LIMIT="$(_wptt_calc_wpcli_mem)"
+CURRENT_DOMAIN="$NAME"
+CURRENT_WPCLI_HOME="$(mktemp -d /tmp/wptt_wpcli_XXXXXX)" || _wptt_exit 1
+/bin/mkdir -p "${CURRENT_WPCLI_HOME}/cache"
+/bin/chown -R "${User_name_vhost}:${User_name_vhost}" "$CURRENT_WPCLI_HOME" 2>/dev/null || true
+/bin/chmod 0700 "$CURRENT_WPCLI_HOME" "${CURRENT_WPCLI_HOME}/cache" 2>/dev/null || true
+wp_err_file="${CURRENT_WPCLI_HOME}/wp_err.log"
+
+WP_EXEC=(
+  nice -n 10
+  "$RUNUSER_BIN" -u "$User_name_vhost" --
+  env "HOME=${CURRENT_WPCLI_HOME}" "WP_CLI_CACHE_DIR=${CURRENT_WPCLI_HOME}/cache"
+  "$php_bin" -d "disable_functions=" -d "memory_limit=${WP_MEM_LIMIT}"
+  /usr/local/bin/wp
+)
+
+((AUTO_ALL == 0)) && printf 'Đang kiểm tra các bản cập nhật theme cho website %s...\n' "$NAME"
 
 # ==============================================================================
-# QUÉT BẢN CẬP NHẬT VỚI KIỂM TRA MÃ THOÁT WP-CLI
+# QUÉT BẢN CẬP NHẬT (BẮT ĐÚNG MÃ THOÁT + GRACEFUL FALLBACK CHO THEME THƯƠNG MẠI)
 # ==============================================================================
-mapfile -t selects < <("${WP_EXEC[@]}" theme list --update=available --field=name --skip-plugins --skip-themes --quiet --path="$path" 2>/dev/null)
-wp_check_status=$?
+wp_list_out=""
+wp_check_status=0
+wp_fallback_skip=0
 
-if [ $wp_check_status -ne 0 ]; then
-  echoDo "Lỗi kết nối CSDL hoặc WP-CLI khi quét theme. Vui lòng kiểm tra lại trạng thái website."
-  sleep 3
-  wptt_quay_ve_menu "${1:-}" 1
-fi
-
-if [[ ${#selects[@]} -eq 0 ]]; then
-  echo ""
-  echoDone "Website $NAME đã sử dụng các phiên bản theme mới nhất."
-  sleep 2
-  echo ""
+if wp_list_out="$(timeout 90 "${WP_EXEC[@]}" theme list --update=available --field=name --quiet --path="$path" </dev/null 2>"$wp_err_file")"; then
+  wp_check_status=0
 else
-  echo ""
-  echo "========================================================================="
-  echo " Danh sách theme CẦN CẬP NHẬT của website $NAME:"
-  echo "-------------------------------------------------------------------------"
-  "${WP_EXEC[@]}" theme list --update=available --fields=name,version,update_version --skip-plugins --skip-themes --path="$path" 2>/dev/null
-  echo "========================================================================="
-  echo ""
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "WARN" "Quét theme đầy đủ lỗi cho $NAME, thử fallback --skip-plugins --skip-themes: $(tail -n 2 "$wp_err_file" 2>/dev/null)"
+  if wp_list_out="$(timeout 90 "${WP_EXEC[@]}" theme list --update=available --field=name --skip-plugins --skip-themes --quiet --path="$path" </dev/null 2>"$wp_err_file")"; then
+    wp_check_status=0
+    wp_fallback_skip=1
+  else
+    wp_check_status=$?
+  fi
+fi
+
+if ((wp_check_status != 0)); then
+  err_detail="$(tail -n 3 "$wp_err_file" 2>/dev/null || true)"
+  echoDo "Lỗi kết nối CSDL hoặc WP-CLI khi quét theme cho ${NAME} (Mã lỗi: ${wp_check_status})."
+  [[ -n "$err_detail" ]] && printf '%bChi tiết lỗi:%b %s\n' "${C_YELLOW}" "${C_RESET}" "$err_detail"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "WP-CLI quét theme lỗi cho $NAME: $err_detail"
+  _wptt_exit 1 "enter"
+fi
+
+selects=()
+if [[ -n "$wp_list_out" ]]; then
+  while IFS= read -r line; do
+    line="${line//$'\r'/}"
+    [[ -n "$line" ]] && selects+=("$line")
+  done <<<"$wp_list_out"
+fi
+
+exit_status_final=0
+
+if ((${#selects[@]} == 0)); then
+  if ((AUTO_ALL == 0)); then
+    printf '\n'
+    echoDone "Website ${NAME} đã sử dụng các phiên bản theme mới nhất."
+    sleep 2
+    printf '\n'
+  fi
+  _wptt_exit 0
+fi
+
+# Chọn mục tiêu cập nhật
+theme_target=""
+if ((AUTO_ALL == 1)); then
+  theme_target="all"
+else
+  extra_list_flags=()
+  ((wp_fallback_skip == 1)) && extra_list_flags=(--skip-plugins --skip-themes)
+
+  printf -- '\n=========================================================================\n'
+  printf ' Danh sách theme CẦN CẬP NHẬT của website %s:\n' "$NAME"
+  printf -- '\n=========================================================================\n'
+  timeout 60 "${WP_EXEC[@]}" theme list --update=available --fields=name,version,update_version "${extra_list_flags[@]}" --path="$path" </dev/null 2>/dev/null || true
+  printf '=========================================================================\n\n'
+
+  if ((wp_fallback_skip == 1)); then
+    printf '%b[Lưu ý]%b Đang chạy chế độ an toàn (--skip-plugins --skip-themes) do website có lỗi PHP khi nạp đầy đủ.\n\n' "${C_YELLOW}" "${C_RESET}"
+  fi
 
   options=("Cập nhật TẤT CẢ các theme trên")
   for t in "${selects[@]}"; do
-    options+=("Chỉ cập nhật theme: $t")
+    options+=("Chỉ cập nhật theme: ${t}")
   done
 
-  PS3="$(tput setab 0)-//- Chọn thao tác cập nhật (1-$((${#options[@]}))) [0=Thoát]:$(tput sgr0) "
+  PS3="$(tput setab 0 2>/dev/null || true)-//- Chọn thao tác cập nhật (1-${#options[@]}) [0=Thoát]:$(tput sgr0 2>/dev/null || true) "
 
-	theme_target=""
-	select opt in "${options[@]}"; do
-		if [[ "$REPLY" == "0" ]]; then
-			wptt_quay_ve_menu "${1:-}" 1
-		elif [[ "$REPLY" == "1" ]]; then
-			theme_target="all"
-			break
-		elif [[ "$REPLY" -gt 1 && "$REPLY" -le ${#options[@]} ]]; then
-			idx=$((REPLY - 2))
-			theme_target="${selects[$idx]}"
-			break
-		else
-			echoDo "Lựa chọn không hợp lệ."
-		fi
-	done
-
-  echo ""
-
-  # ==============================================================================
-  # THỰC THI CẬP NHẬT VÀ BÁO CÁO KẾT QUẢ ĐÍCH THỰC
-  # ==============================================================================
-  if [[ "$theme_target" == "all" ]]; then
-    _runing "Đang cập nhật TẤT CẢ themes cho website $NAME"
-    if "${WP_EXEC[@]}" theme update --all --path="$path" >/dev/null 2>&1; then
-      "${WP_EXEC[@]}" language theme update --all --path="$path" >/dev/null 2>&1
-      _rundone "Cập nhật TẤT CẢ themes thành công cho website $NAME"
+  select opt in "${options[@]}"; do
+    if [[ "${REPLY:-}" == "0" ]]; then
+      _wptt_exit 1
+    elif [[ "${REPLY:-}" =~ ^[0-9]+$ ]] && ((REPLY == 1)); then
+      theme_target="all"
+      break
+    elif [[ "${REPLY:-}" =~ ^[0-9]+$ ]] && ((REPLY > 1 && REPLY <= ${#options[@]})); then
+      idx=$((REPLY - 2))
+      theme_target="${selects[$idx]}"
+      break
     else
-      _runloi "Cập nhật thất bại! Vui lòng kiểm tra phân quyền file hoặc kết nối API của Theme."
-      exit_status_final=1
+      echoDo "Lựa chọn không hợp lệ, vui lòng chọn lại."
     fi
-  else
-    _runing "Đang cập nhật theme: $theme_target"
-    if "${WP_EXEC[@]}" theme update "$theme_target" --path="$path" >/dev/null 2>&1; then
-      "${WP_EXEC[@]}" language theme update "$theme_target" --path="$path" >/dev/null 2>&1
-      _rundone "Cập nhật thành công theme: $theme_target"
-    else
-      _runloi "Lỗi khi cập nhật theme: $theme_target. Vui lòng kiểm tra lại key bản quyền hoặc kết nối mạng."
-      exit_status_final=1
-    fi
+  done
+
+  if [[ -z "$theme_target" ]]; then
+    _wptt_exit 1
   fi
+  printf '\n'
+fi
 
-  # ==============================================================================
-  # DỌN DẸP HẬU KỲ CHUẨN MỰC (Chỉ thực hiện khi cập nhật thành công)
-  # ==============================================================================
-  if [[ "${exit_status_final:-0}" -eq 0 ]]; then
-    _runing "Đang dọn dẹp các lớp Cache cho website $NAME..."
-    /bin/bash /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
-    _rundone "Dọn dẹp Cache hoàn tất."
-  else
-    echoDo "Bỏ qua dọn dẹp hệ thống do quá trình cập nhật gặp lỗi."
+# ==============================================================================
+# TẠM TẮT LOCKDOWN -> THỰC THI CẬP NHẬT -> KHÔI PHỤC LOCKDOWN
+# ==============================================================================
+if [[ -n "${lock_down:-}" ]]; then
+  CURRENT_IS_LOCKED=1
+  if [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]]; then
+    /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1 || true
   fi
 fi
 
-wptt_quay_ve_menu "${1:-}" "${exit_status_final:-0}"
+if [[ "$theme_target" == "all" ]]; then
+  task_upd="Cập nhật TẤT CẢ themes cho website ${NAME}"
+  ((AUTO_ALL == 0)) && _runing "$task_upd"
+  if timeout 180 "${WP_EXEC[@]}" theme update --all --path="$path" </dev/null >"$wp_err_file" 2>&1; then
+    timeout 120 "${WP_EXEC[@]}" language theme update --all --path="$path" </dev/null >/dev/null 2>&1 || true
+    ((AUTO_ALL == 0)) && _rundone "$task_upd"
+  else
+    ((AUTO_ALL == 0)) && _runloi "$task_upd"
+    err_detail="$(tail -n 3 "$wp_err_file" 2>/dev/null || true)"
+    ((AUTO_ALL == 0)) && [[ -n "$err_detail" ]] && printf '%bChi tiết:%b %s\n' "${C_YELLOW}" "${C_RESET}" "$err_detail"
+    printf '[ERROR] update-theme (%s): %s\n' "$NAME" "$err_detail" >>"$LOG_FILE" 2>/dev/null || true
+    exit_status_final=1
+  fi
+else
+  task_upd="Cập nhật theme ${theme_target} cho website ${NAME}"
+  _runing "$task_upd"
+  if timeout 150 "${WP_EXEC[@]}" theme update "$theme_target" --path="$path" </dev/null >"$wp_err_file" 2>&1; then
+    timeout 60 "${WP_EXEC[@]}" language theme update "$theme_target" --path="$path" </dev/null >/dev/null 2>&1 || true
+    _rundone "$task_upd"
+  else
+    _runloi "$task_upd"
+    err_detail="$(tail -n 3 "$wp_err_file" 2>/dev/null || true)"
+    [[ -n "$err_detail" ]] && printf '%bChi tiết:%b %s\n' "${C_YELLOW}" "${C_RESET}" "$err_detail"
+    printf '[ERROR] update-theme (%s / %s): %s\n' "$NAME" "$theme_target" "$err_detail" >>"$LOG_FILE" 2>/dev/null || true
+    exit_status_final=1
+  fi
+fi
 
+if ((CURRENT_IS_LOCKED == 1)); then
+  if [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]]; then
+    /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on >/dev/null 2>&1 || true
+  fi
+  CURRENT_IS_LOCKED=0
+fi
+
+# Dọn dẹp Cache khi cập nhật thành công
+if ((exit_status_final == 0)); then
+  task_clean="Dọn dẹp các lớp Cache cho website ${NAME}"
+  ((AUTO_ALL == 0)) && _runing "$task_clean"
+  if [[ -f /etc/wptt/cache/wptt-xoacache ]]; then
+    /bin/bash /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1 || true
+  fi
+  ((AUTO_ALL == 0)) && _rundone "$task_clean"
+else
+  ((AUTO_ALL == 0)) && echoDo "Bỏ qua dọn dẹp hệ thống do quá trình cập nhật gặp lỗi."
+fi
+
+_wptt_exit "$exit_status_final"

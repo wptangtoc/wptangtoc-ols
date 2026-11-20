@@ -1,5 +1,5 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
+# @description: Update và Ghi đè (Force Reinstall) Core, Plugins, Themes chuẩn Enterprise Fail-Safe
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
@@ -13,10 +13,11 @@ function huong_dan() {
   * Cập nhật đồng loạt: Ép buộc tải lại và cập nhật phiên bản mới nhất của toàn bộ mã nguồn từ máy chủ WordPress.org.
 
   Quy trình hoạt động:
-  1. Tải và ghi đè lại toàn bộ mã nguồn WordPress Core [bỏ qua thư mục wp-content].
-  2. Quét danh sách Plugin hiện có và ép buộc tải lại bản mới nhất từ kho WordPress.org.
-  3. Quét danh sách Theme hiện có và ép buộc tải lại bản mới nhất từ kho WordPress.org.
-  4. Tự động sửa lại quyền sở hữu [Ownership] file về chuẩn của OpenLiteSpeed để tránh lỗi Permission Denied.
+  1. Tạm mở khóa Lockdown (nếu bật) và chuẩn hóa quyền sở hữu file cho user website.
+  2. Tải và ghi đè toàn bộ WordPress Core (bỏ qua wp-content) + đồng bộ CSDL (update-db).
+  3. Quét và ép tải lại toàn bộ Plugins miễn phí từ WordPress.org (bỏ qua Drop-in, MU-plugin & Plugin Premium).
+  4. Quét và ép tải lại toàn bộ Themes miễn phí từ WordPress.org (tự động bỏ qua Theme Premium/Child Theme).
+  5. Dọn sạch Cache (Object Cache, Rewrite Rules, LSCache/OpCache) và khôi phục Lockdown.
 
   CẢNH BÁO QUAN TRỌNG:
   * Các Plugin và Theme trả phí [Premium - không có trên kho miễn phí của WP.org] sẽ bị bỏ qua và báo lỗi nhẹ [không ảnh hưởng hệ thống].
@@ -24,123 +25,554 @@ function huong_dan() {
 EOF
 }
 
-wptt_load_main_conf
-[[ -z "$ngon_ngu" ]] && ngon_ngu='vi'
-. "/etc/wptt/lang/$ngon_ngu.sh"
-. /etc/wptt/echo-color
 
-clear
 
-tinh_nang_ten="Update và Ghi đè (Core, Plugin, Themes)"
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+umask 022
 
-. /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
-# Nếu gọi script kèm tên domain từ command line
-if [[ -n "$1" && "$1" != "98" ]]; then
-  NAME="$1"
-else
-  lua_chon_NAME "$tinh_nang_ten"
-fi
+cd /root 2>/dev/null || cd /
 
-# --- CHỐT CHẶN THOÁT HIỂM ---
-[[ "$NAME" == "0" || -z "$NAME" ]] && exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
+# shellcheck source=/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
 # ==============================================================================
-# HÀM THỰC THI ÉP UPDATE VÀ GHI ĐỀ CHO 1 DOMAIN
+# CẤU HÌNH TOÀN CỤC & BẪY DỌN DẸP FAIL-SAFE
 # ==============================================================================
-function process_wp_force_update() {
-  local target_domain=$1
-  local doc_root="/usr/local/lsws/$target_domain/html"
+MENU_ARG="${1:-}"
+RUNUSER_BIN="$(command -v runuser 2>/dev/null || printf '/sbin/runuser')"
+LOG_FILE="/var/log/wptangtoc-ols.log"
 
-  if [[ ! -f "$doc_root/wp-load.php" ]]; then
-    echo "Bỏ qua $target_domain: Không phải mã nguồn WordPress."
-    return
+CURRENT_DOMAIN=""
+CURRENT_IS_LOCKED=0
+CURRENT_TMP_DIR=""
+CURRENT_WPCLI_HOME=""
+
+_wptt_calc_wpcli_mem() {
+  local mem_kb=0 k="" v=""
+  while IFS=': ' read -r k v _; do
+    if [[ "$k" == "MemTotal" ]]; then
+      mem_kb="$v"
+      break
+    fi
+  done </proc/meminfo 2>/dev/null
+  if [[ "$mem_kb" =~ ^[0-9]+$ ]] && ((mem_kb > 0 && mem_kb <= 786432)); then
+    printf '256M'
+  else
+    printf '512M'
+  fi
+}
+
+_wptt_has_immutable_site() {
+  local site_path="$1"
+  local attr_out=""
+  command -v lsattr >/dev/null 2>&1 || return 1
+  attr_out="$(lsattr -d "$site_path" "${site_path}/index.php" "${site_path}/wp-admin" "${site_path}/wp-includes" 2>/dev/null || true)"
+  [[ -n "$attr_out" ]] && awk '$1 ~ /i/ {f=1; exit} END {exit !f}' <<<"$attr_out"
+}
+
+# Mở khóa Lockdown + chuẩn hóa quyền cho Core, Plugins và Themes (bảo toàn wp-config.php & chống symlink)
+_wptt_prepare_site_writable() {
+  local site_path="$1"
+  local site_user="$2"
+  local site_dom="$3"
+  local f="" target_dir=""
+
+  if [[ -n "${lock_down:-}" ]]; then
+    CURRENT_IS_LOCKED=1
+    [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]] && /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$site_dom" off >/dev/null 2>&1 || true
   fi
 
-  echo -e "\n\033[1;36m[+] Đang xử lý Update & Ghi đè cho website: \033[1;33m$target_domain\033[0m"
-
-  # Tải cấu hình PHP của Vhost để lấy đúng phiên bản PHP đang chạy
-  . /etc/wptt/vhost/."$target_domain".conf
-  phien_ban_php_domain_thuc_thi=""
-  [[ -f "/etc/wptt/php/php-cli-domain-config" ]] && . "/etc/wptt/php/php-cli-domain-config" "$target_domain" >/dev/null 2>&1
-
-  local WP_CMD="/sbin/runuser -u $User_name_vhost -- /usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php /usr/local/bin/wp"
-
-  # Chuyển vào thư mục gốc của website
-  cd "$doc_root" || return
-
-  # 1. ÉP TẢI LẠI WP CORE
-  echo " - Đang tải và ghi đè WordPress Core..."
-  $WP_CMD core download --skip-content --force --allow-root >/dev/null 2>&1
-
-  # 2. ÉP TẢI LẠI PLUGINS (Chỉ xử lý nếu có plugin)
-  echo " - Đang quét và ghi đè Plugins..."
-  local plugin_list
-  plugin_list=$($WP_CMD plugin list --field=name --allow-root 2>/dev/null)
-
-  if [[ -n "$plugin_list" ]]; then
-    # Ép danh sách thành chuỗi ngang để đưa vào lệnh
-    local plugins_inline=$(echo "$plugin_list" | tr '\n' ' ')
-    # Redirect stderr để ẩn lỗi với các plugin Premium (Elementor Pro, v.v.)
-    $WP_CMD plugin install "$plugins_inline" --force --allow-root >/dev/null 2>&1
+  if command -v chattr >/dev/null 2>&1 && _wptt_has_immutable_site "$site_path"; then
+    chattr -i "$site_path" "${site_path}/index.php" "${site_path}/xmlrpc.php" 2>/dev/null || true
+    shopt -s nullglob
+    for f in "${site_path}"/wp-*.php; do
+      [[ -f "$f" && ! -L "$f" && "${f##*/}" != "wp-config.php" ]] && chattr -i "$f" 2>/dev/null || true
+    done
+    shopt -u nullglob
+    for target_dir in "${site_path}/wp-admin" "${site_path}/wp-includes"; do
+      [[ -d "$target_dir" && ! -L "$target_dir" ]] && chattr -R -i "$target_dir" 2>/dev/null || true
+    done
   fi
 
-  # 3. ÉP TẢI LẠI THEMES (Chỉ xử lý nếu có theme)
-  echo " - Đang quét và ghi đè Themes..."
-  local theme_list
-  theme_list=$($WP_CMD theme list --field=name --allow-root 2>/dev/null)
+  /bin/chown -- "${site_user}:${site_user}" "$site_path" 2>/dev/null || true
+  /bin/chmod u+rwx -- "$site_path" 2>/dev/null || true
 
-  if [[ -n "$theme_list" ]]; then
-    local themes_inline=$(echo "$theme_list" | tr '\n' ' ')
-    $WP_CMD theme install "$themes_inline" --force --allow-root >/dev/null 2>&1
+  shopt -s nullglob
+  for f in "${site_path}/index.php" "${site_path}/xmlrpc.php" "${site_path}"/wp-*.php; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    [[ "${f##*/}" == "wp-config.php" ]] && continue
+    /bin/chown -- "${site_user}:${site_user}" "$f" 2>/dev/null || true
+    /bin/chmod u+rw -- "$f" 2>/dev/null || true
+  done
+  shopt -u nullglob
+
+  for target_dir in \
+    "${site_path}/wp-admin" \
+    "${site_path}/wp-includes" \
+    "${site_path}/wp-content/plugins" \
+    "${site_path}/wp-content/themes"; do
+    if [[ -d "$target_dir" && ! -L "$target_dir" ]]; then
+      /bin/chown -hR -- "${site_user}:${site_user}" "$target_dir" 2>/dev/null || true
+      /bin/chmod -R u+rwX -- "$target_dir" 2>/dev/null || true
+    fi
+  done
+}
+
+# Khởi tạo file tạm tại /etc/wptt/tmp; tự xử lý quyền duyệt của user vhost không chạm /tmp
+_wptt_setup_wpcli_tmp() {
+  local site_dom="$1"
+  local site_user="$2"
+
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || return 1
+  CURRENT_TMP_DIR="$(mktemp -d -p /etc/wptt/tmp "wptt_reinstall_XXXXXX")" || return 1
+
+  if "$RUNUSER_BIN" -u "$site_user" -- test -x /etc/wptt/tmp 2>/dev/null; then
+    /bin/chmod 0711 -- "$CURRENT_TMP_DIR" 2>/dev/null || true
+    CURRENT_WPCLI_HOME="${CURRENT_TMP_DIR}/wpcli_home"
+    /bin/mkdir -p "${CURRENT_WPCLI_HOME}/cache" || return 1
+  else
+    CURRENT_WPCLI_HOME="$(mktemp -d -p "/usr/local/lsws/${site_dom}" ".wptt_wpcli_XXXXXX")" || return 1
+    /bin/mkdir -p "${CURRENT_WPCLI_HOME}/cache" || return 1
   fi
 
-  echo -e "\033[1;32m -> Hoàn tất xử lý cho $target_domain!\033[0m"
-  wptt_logs "INFO" "Update Reinstall WordPress Core/Plugin/Theme $target_domain"
+  /bin/chown -R -- "${site_user}:${site_user}" "$CURRENT_WPCLI_HOME" 2>/dev/null || true
+  /bin/chmod 0700 -- "$CURRENT_WPCLI_HOME" "${CURRENT_WPCLI_HOME}/cache" 2>/dev/null || true
+  return 0
+}
+
+_wptt_extract_wp_error() {
+  local err_file="$1"
+  local filtered=""
+  [[ -s "$err_file" ]] || return 0
+  filtered="$(grep -iE '^(Error:|Warning:|Fatal error:|PHP Fatal)' "$err_file" 2>/dev/null | tail -n 3 || true)"
+  if [[ -z "$filtered" ]]; then
+    filtered="$(grep -vE '^(Downloading|md5 hash|Cleaning up|File removed:|Success:|[0-9]+ files cleaned)' "$err_file" 2>/dev/null | tail -n 3 || true)"
+  fi
+  printf '%s' "$filtered"
+}
+
+_wptt_cleanup_state() {
+  if ((CURRENT_IS_LOCKED == 1)) && [[ -n "$CURRENT_DOMAIN" ]]; then
+    [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]] && /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$CURRENT_DOMAIN" on >/dev/null 2>&1 || true
+    CURRENT_IS_LOCKED=0
+  fi
+
+  if [[ -n "$CURRENT_WPCLI_HOME" && -d "$CURRENT_WPCLI_HOME" ]]; then
+    case "$CURRENT_WPCLI_HOME" in
+      /etc/wptt/tmp/wptt_?*|/usr/local/lsws/?*.?*/.wptt_wpcli_?*)
+        /bin/rm -rf -- "${CURRENT_WPCLI_HOME:?}" 2>/dev/null || true
+        ;;
+    esac
+    CURRENT_WPCLI_HOME=""
+  fi
+
+  if [[ -n "$CURRENT_TMP_DIR" && -d "$CURRENT_TMP_DIR" ]]; then
+    case "$CURRENT_TMP_DIR" in
+      /etc/wptt/tmp/wptt_?*) /bin/rm -rf -- "${CURRENT_TMP_DIR:?}" 2>/dev/null || true ;;
+    esac
+    CURRENT_TMP_DIR=""
+  fi
+}
+
+_wptt_trap_exit() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if ((CURRENT_IS_LOCKED == 1)) && [[ -n "$CURRENT_DOMAIN" ]]; then
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "WARNING" "Tự động khôi phục Lockdown cho ${CURRENT_DOMAIN} do tiến trình cài lại WordPress ALL bị ngắt (mã ${rc})"
+  fi
+  _wptt_cleanup_state
+  exit "$rc"
+}
+trap _wptt_trap_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+_wptt_exit() {
+  local code="${1:-0}"
+  local pause="${2:-}"
+  _wptt_cleanup_state
+  trap - EXIT INT TERM HUP
+  if declare -F wptt_quay_ve_menu >/dev/null 2>&1; then
+    if [[ -n "$pause" ]]; then
+      wptt_quay_ve_menu "$MENU_ARG" "$code" "$pause"
+    else
+      wptt_quay_ve_menu "$MENU_ARG" "$code"
+    fi
+  elif [[ "$MENU_ARG" == "98" ]]; then
+    exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+  fi
+  exit "$code"
 }
 
 # ==============================================================================
-# XỬ LÝ LÔGIC RẼ NHÁNH
+# HÀM THỰC THI ÉP UPDATE VÀ GHI ĐÈ CHO 1 DOMAIN
 # ==============================================================================
+process_wp_force_update() {
+  local target_domain="$1"
+  local progress_prefix="${2:-}"
+  local doc_root="/usr/local/lsws/${target_domain}/html"
+  local vhost_conf="/etc/wptt/vhost/.${target_domain}.conf"
+  local task_label="${progress_prefix}Update và ghi đè WordPress (Core/Plugin/Theme): ${target_domain}"
+
+  if [[ ! "$target_domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ || "$target_domain" == *..* ]]; then
+    echoDo "Bỏ qua '${target_domain}': Tên miền không hợp lệ."
+    return 1
+  fi
+
+  if [[ ! -f "$vhost_conf" || ! -f "${doc_root}/wp-load.php" ]]; then
+    printf '%b[Bỏ qua]%b %s không phải website WordPress hợp lệ.\n' "${C_YELLOW}" "${C_RESET}" "$target_domain"
+    return 1
+  fi
+
+  local avail_kb=""
+  avail_kb="$(df -Pk "$doc_root" 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [[ "$avail_kb" =~ ^[0-9]+$ ]] && ((avail_kb < 153600)); then
+    _runloi "$task_label"
+    echoDo "Phân vùng của ${target_domain} còn dưới 150MB trống. Đã hủy để đảm bảo an toàn!"
+    return 1
+  fi
+
+  _runing "$task_label"
+
+  unset User_name_vhost phien_ban_php_domain_thuc_thi lock_down
+  wptt_load_vhost_conf "$target_domain" 2>/dev/null
+
+  if [[ -z "${User_name_vhost:-}" ]] || ! id -u "$User_name_vhost" >/dev/null 2>&1; then
+    _runloi "$task_label"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "User_name_vhost không hợp lệ cho ${target_domain}"
+    return 1
+  fi
+
+  # shellcheck source=/dev/null
+  if ! . /etc/wptt/php/php-cli-domain-config "$target_domain" >/dev/null 2>&1; then
+    _runloi "$task_label"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không xác định được phiên bản PHP cho ${target_domain}"
+    return 1
+  fi
+
+  local php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  if [[ ! -x "$php_bin" ]]; then
+    _runloi "$task_label"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không tìm thấy binary PHP ${php_bin} cho ${target_domain}"
+    return 1
+  fi
+
+  CURRENT_DOMAIN="$target_domain"
+  if ! _wptt_setup_wpcli_tmp "$target_domain" "$User_name_vhost"; then
+    _runloi "$task_label"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không thể khởi tạo thư mục tạm trong /etc/wptt/tmp cho ${target_domain}"
+    return 1
+  fi
+
+  local wp_out_file="${CURRENT_TMP_DIR}/wp_out.log"
+  local -a wp_exec=(
+    nice -n 10
+    "$RUNUSER_BIN" -u "$User_name_vhost" --
+    env "HOME=${CURRENT_WPCLI_HOME}" "WP_CLI_CACHE_DIR=${CURRENT_WPCLI_HOME}/cache"
+    "$php_bin" -d "disable_functions=" -d "memory_limit=${WP_MEM_LIMIT}"
+    /usr/local/bin/wp
+  )
+
+  _wptt_prepare_site_writable "$doc_root" "$User_name_vhost" "$target_domain"
+
+  local site_err=0
+  local -a failed_parts=()
+  local summary_plugins="0/0"
+  local summary_themes="0/0"
+  local err_detail=""
+
+  # --------------------------------------------------------------------------
+  # 1. ÉP TẢI LẠI WORDPRESS CORE + UPDATE-DB
+  # --------------------------------------------------------------------------
+  if timeout 180 "${wp_exec[@]}" core download --skip-content --force --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1; then
+    : >"$wp_out_file"
+    if ! timeout 60 "${wp_exec[@]}" core update-db --path="$doc_root" </dev/null >"$wp_out_file" 2>&1; then
+      if ! timeout 60 "${wp_exec[@]}" core update-db --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1; then
+        site_err=1
+        failed_parts+=("core-db")
+        err_detail="$(_wptt_extract_wp_error "$wp_out_file")"
+        declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Reinstall core-db lỗi cho ${target_domain}: ${err_detail}"
+      fi
+    fi
+    timeout 60 "${wp_exec[@]}" language core update --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+  else
+    site_err=1
+    failed_parts+=("core")
+    err_detail="$(_wptt_extract_wp_error "$wp_out_file")"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Reinstall core lỗi cho ${target_domain}: ${err_detail}"
+  fi
+
+  # --------------------------------------------------------------------------
+  # 2. ÉP TẢI LẠI PLUGINS (CHỈ LẤY PLUGIN THƯỜNG — TỰ BỎ QUA PREMIUM/CUSTOM/NULL)
+  # --------------------------------------------------------------------------
+  local plugin_raw="" slug=""
+  local -a plugins=()
+  if plugin_raw="$(timeout 60 "${wp_exec[@]}" plugin list --status=active,active-network,inactive --field=name --skip-plugins --skip-themes --quiet --path="$doc_root" </dev/null 2>"$wp_out_file")"; then
+    while IFS= read -r slug; do
+      slug="${slug//$'\r'/}"
+      if [[ "$slug" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && "$slug" != *.php ]]; then
+        plugins+=("$slug")
+      fi
+    done <<<"$plugin_raw"
+  else
+    site_err=1
+    failed_parts+=("plugin-list")
+    err_detail="$(_wptt_extract_wp_error "$wp_out_file")"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Quét danh sách plugin lỗi cho ${target_domain}: ${err_detail}"
+  fi
+
+  if ((${#plugins[@]} > 0)); then
+    local plugin_rc=0 total_p="${#plugins[@]}" not_found_p=0 installed_p=0 skipped_p=0
+    local parsed_installed_p="" skipped_names_p="" hard_err_p=""
+    : >"$wp_out_file"
+    timeout 300 "${wp_exec[@]}" plugin install "${plugins[@]}" --force --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1 || plugin_rc=$?
+
+    not_found_p="$(grep -ciE '^Warning:.*(Plugin not found|could not be found|Invalid plugin slug)' "$wp_out_file" 2>/dev/null || true)"
+    [[ "$not_found_p" =~ ^[0-9]+$ ]] || not_found_p=0
+
+    hard_err_p="$(grep -iE '^(Error:|Warning:|Fatal error:|PHP Fatal)' "$wp_out_file" 2>/dev/null \
+      | grep -viE '(Plugin not found|could not be found|Invalid plugin slug|Only installed [0-9]+ of [0-9]+|No plugins? installed)' \
+      | tail -n 3 || true)"
+
+    if ((plugin_rc == 0)); then
+      summary_plugins="${total_p}/${total_p}"
+    elif ((plugin_rc != 124)) && [[ -z "$hard_err_p" ]] && ((not_found_p > 0)); then
+      parsed_installed_p="$(sed -nE 's/^Error:[[:space:]]+Only installed ([0-9]+) of [0-9]+.*/\1/p' "$wp_out_file" 2>/dev/null | tail -n 1)"
+      if [[ "$parsed_installed_p" =~ ^[0-9]+$ ]]; then
+        installed_p="$parsed_installed_p"
+      elif grep -qiE '^Error:[[:space:]]+No plugins? installed' "$wp_out_file" 2>/dev/null; then
+        installed_p=0
+      else
+        installed_p=$((total_p - not_found_p))
+        ((installed_p < 0)) && installed_p=0
+      fi
+      skipped_p=$((total_p - installed_p))
+      ((skipped_p < 0)) && skipped_p=0
+
+      skipped_names_p="$(sed -nE \
+        -e 's/^Warning:[[:space:]]+([^:[:space:]]+):[[:space:]]+(Plugin not found|Invalid plugin slug).*/\1/p' \
+        -e "s/^Warning:[[:space:]]+The '([^']+)' plugin could not be found.*/\1/p" \
+        "$wp_out_file" 2>/dev/null | sort -u | paste -sd ',' - | sed 's/,/, /g')"
+
+      if [[ -n "$skipped_names_p" ]] && ((${#skipped_names_p} <= 45)); then
+        summary_plugins="${installed_p}/${total_p} (bỏ qua ${skipped_p} ngoài kho WP.org: ${skipped_names_p})"
+      else
+        summary_plugins="${installed_p}/${total_p} (bỏ qua ${skipped_p} ngoài kho WP.org)"
+      fi
+    else
+      site_err=1
+      failed_parts+=("plugins")
+      summary_plugins="lỗi"
+      if ((plugin_rc == 124)); then
+        [[ -z "$err_detail" ]] && err_detail="Quá thời gian chờ khi tải lại plugins (timeout 300s)."
+      else
+        [[ -z "$err_detail" ]] && err_detail="${hard_err_p:-$(_wptt_extract_wp_error "$wp_out_file")}"
+      fi
+      declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Reinstall plugins lỗi cho ${target_domain}: ${hard_err_p:-mã ${plugin_rc}}"
+    fi
+    timeout 120 "${wp_exec[@]}" language plugin update --all --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+  fi
+
+  # --------------------------------------------------------------------------
+  # 3. ÉP TẢI LẠI THEMES (TỰ BỎ QUA THEME PREMIUM/CHILD/CUSTOM)
+  # --------------------------------------------------------------------------
+  local theme_raw=""
+  local -a themes=()
+  if theme_raw="$(timeout 60 "${wp_exec[@]}" theme list --field=name --skip-plugins --skip-themes --quiet --path="$doc_root" </dev/null 2>"$wp_out_file")"; then
+    while IFS= read -r slug; do
+      slug="${slug//$'\r'/}"
+      if [[ "$slug" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ && "$slug" != *.php ]]; then
+        themes+=("$slug")
+      fi
+    done <<<"$theme_raw"
+  else
+    site_err=1
+    failed_parts+=("theme-list")
+    err_detail="$(_wptt_extract_wp_error "$wp_out_file")"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Quét danh sách theme lỗi cho ${target_domain}: ${err_detail}"
+  fi
+
+  if ((${#themes[@]} > 0)); then
+    local theme_rc=0 total_t="${#themes[@]}" not_found_t=0 installed_t=0 skipped_t=0
+    local parsed_installed_t="" skipped_names_t="" hard_err_t=""
+    : >"$wp_out_file"
+    timeout 240 "${wp_exec[@]}" theme install "${themes[@]}" --force --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1 || theme_rc=$?
+
+    not_found_t="$(grep -ciE '^Warning:.*(Theme not found|could not be found|Invalid theme slug)' "$wp_out_file" 2>/dev/null || true)"
+    [[ "$not_found_t" =~ ^[0-9]+$ ]] || not_found_t=0
+
+    hard_err_t="$(grep -iE '^(Error:|Warning:|Fatal error:|PHP Fatal)' "$wp_out_file" 2>/dev/null \
+      | grep -viE '(Theme not found|could not be found|Invalid theme slug|Only installed [0-9]+ of [0-9]+|No themes? installed)' \
+      | tail -n 3 || true)"
+
+    if ((theme_rc == 0)); then
+      summary_themes="${total_t}/${total_t}"
+    elif ((theme_rc != 124)) && [[ -z "$hard_err_t" ]] && ((not_found_t > 0)); then
+      parsed_installed_t="$(sed -nE 's/^Error:[[:space:]]+Only installed ([0-9]+) of [0-9]+.*/\1/p' "$wp_out_file" 2>/dev/null | tail -n 1)"
+      if [[ "$parsed_installed_t" =~ ^[0-9]+$ ]]; then
+        installed_t="$parsed_installed_t"
+      elif grep -qiE '^Error:[[:space:]]+No themes? installed' "$wp_out_file" 2>/dev/null; then
+        installed_t=0
+      else
+        installed_t=$((total_t - not_found_t))
+        ((installed_t < 0)) && installed_t=0
+      fi
+      skipped_t=$((total_t - installed_t))
+      ((skipped_t < 0)) && skipped_t=0
+
+      skipped_names_t="$(sed -nE \
+        -e 's/^Warning:[[:space:]]+([^:[:space:]]+):[[:space:]]+(Theme not found|Invalid theme slug).*/\1/p' \
+        -e "s/^Warning:[[:space:]]+The '([^']+)' theme could not be found.*/\1/p" \
+        "$wp_out_file" 2>/dev/null | sort -u | paste -sd ',' - | sed 's/,/, /g')"
+
+      if [[ -n "$skipped_names_t" ]] && ((${#skipped_names_t} <= 45)); then
+        summary_themes="${installed_t}/${total_t} (bỏ qua ${skipped_t} ngoài kho WP.org: ${skipped_names_t})"
+      else
+        summary_themes="${installed_t}/${total_t} (bỏ qua ${skipped_t} ngoài kho WP.org)"
+      fi
+    else
+      site_err=1
+      failed_parts+=("themes")
+      summary_themes="lỗi"
+      if ((theme_rc == 124)); then
+        [[ -z "$err_detail" ]] && err_detail="Quá thời gian chờ khi tải lại themes (timeout 240s)."
+      else
+        [[ -z "$err_detail" ]] && err_detail="${hard_err_t:-$(_wptt_extract_wp_error "$wp_out_file")}"
+      fi
+      declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Reinstall themes lỗi cho ${target_domain}: ${hard_err_t:-mã ${theme_rc}}"
+    fi
+    timeout 120 "${wp_exec[@]}" language theme update --all --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+  fi
+
+  # --------------------------------------------------------------------------
+  # 4. DỌN CACHE, REWRITE & KHÔI PHỤC LOCKDOWN + FILE TẠM
+  # --------------------------------------------------------------------------
+  timeout 30 "${wp_exec[@]}" cache flush --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+  timeout 30 "${wp_exec[@]}" rewrite flush --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+  [[ -f /etc/wptt/cache/wptt-xoacache ]] && /bin/bash /etc/wptt/cache/wptt-xoacache "$target_domain" >/dev/null 2>&1 || true
+
+  _wptt_cleanup_state
+  CURRENT_DOMAIN=""
+
+  if ((site_err == 0)); then
+    _rundone "$task_label"
+    printf '   %b➜ Plugins: %s | Themes: %s%b\n' "${C_CYAN}" "$summary_plugins" "$summary_themes" "${C_RESET}"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Update Reinstall WordPress Core/Plugin/Theme thành công cho ${target_domain} (Plugins: ${summary_plugins}, Themes: ${summary_themes})"
+    return 0
+  else
+    _runloi "$task_label"
+    printf '   %b➜ Lỗi tại: %s%b\n' "${C_YELLOW}" "${failed_parts[*]}" "${C_RESET}"
+    [[ -n "$err_detail" ]] && printf '   %b➜ Chi tiết: %s%b\n' "${C_YELLOW}" "$err_detail" "${C_RESET}"
+    return 1
+  fi
+}
+
+# ==============================================================================
+# GIAO DIỆN CHÍNH & ĐIỀU PHỐI
+# ==============================================================================
+clear
+tinh_nang_ten="Update và Ghi đè (Core, Plugin, Themes)"
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}${quan_ly_cap_nhat_wordpress:-Quản lý cập nhật WordPress} ➜ ${tinh_nang_ten}${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+if [[ ! -f /usr/local/bin/wp || ! -x "$RUNUSER_BIN" ]]; then
+  echoDo "Lỗi: Thiếu WP-CLI (/usr/local/bin/wp) hoặc runuser trên máy chủ!"
+  _wptt_exit 1 "enter"
+fi
+
+NAME=""
+if [[ -n "${1:-}" && "${1:-}" != "98" ]]; then
+  NAME="$1"
+else
+  # shellcheck source=/dev/null
+  . /etc/wptt/tenmien-them-lua-chon-tat-ca-website-by-wordpress
+  lua_chon_NAME "$tinh_nang_ten"
+fi
+
+if [[ "${NAME:-0}" == "0" || -z "${NAME:-}" ]]; then
+  _wptt_exit 1
+fi
+
+declare -F wptt_check_mariadb >/dev/null 2>&1 && wptt_check_mariadb "$MENU_ARG"
+WP_MEM_LIMIT="$(_wptt_calc_wpcli_mem)"
+
+exit_status_final=0
 
 if [[ "$NAME" == 'Tất cả website' ]]; then
-  echo -e "\nBạn sắp ÉP UPDATE và GHI ĐỀ Core/Plugin/Theme cho \033[1;31mTOÀN BỘ WEBSITE WORDPRESS\033[0m!"
-  echo "Lưu ý: Quá trình này có thể mất nhiều thời gian tùy thuộc vào số lượng website."
-  prompt="Xác nhận thực hiện? [1=Đồng ý, 2=Hủy]: "
-
-  PS3="$prompt"
-  select opt in "Đồng ý" "Hủy bỏ"; do
-    case "$REPLY" in
-    1) break ;;
-    2) exec /etc/wptt/wptt-wordpress-main 1 ;;
-    *)
-      echo -e "\nNhập sai, tự động hủy.\n"
-      exec /etc/wptt/wptt-wordpress-main 1
-      ;;
-    esac
-  done
-
-  # Quét và xử lý đồng loạt
+  wp_domains=()
+  shopt -s nullglob
   for filepath in /etc/wptt/vhost/.*.conf; do
     [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
     domain="${filepath##*/}"
     domain="${domain%.conf}"
     domain="${domain#.}"
-
-    if [[ "$domain" == ?*.?* && -f "/usr/local/lsws/$domain/html/wp-load.php" ]]; then
-      process_wp_force_update "$domain"
+    if [[ "$domain" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ && "$domain" == ?*.?* && "$domain" != *..* ]]; then
+      if [[ -f "/usr/local/lsws/${domain}/html/wp-load.php" ]]; then
+        wp_domains+=("$domain")
+      fi
     fi
   done
+  shopt -u nullglob
 
+  tong_so_web="${#wp_domains[@]}"
+  if ((tong_so_web == 0)); then
+    echoDo "Hệ thống hiện chưa có website WordPress nào!"
+    _wptt_exit 1 "enter"
+  fi
+
+  if ! wptt_xac_nhan "ÉP UPDATE và GHI ĐÈ Core/Plugin/Theme cho TOÀN BỘ ${tong_so_web} website WordPress?" \
+    "Code tùy biến trực tiếp vào file lõi hoặc Theme gốc (không dùng Child Theme) sẽ bị ghi đè." \
+    "Plugin/Theme Premium ngoài kho WordPress.org sẽ tự động được bỏ qua an toàn." \
+    "Đồng ý (Thực hiện)" "Hủy thao tác"; then
+    printf '%b\n' "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+    _wptt_exit 1
+  fi
+
+  printf '\n'
+  tien_do=1
+  so_ok=0
+  so_loi=0
+  for domain in "${wp_domains[@]}"; do
+    if process_wp_force_update "$domain" "[ ${tien_do} / ${tong_so_web} ] "; then
+      ((so_ok++))
+    else
+      ((so_loi++))
+      exit_status_final=1
+    fi
+    ((tien_do++))
+  done
+
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT UPDATE VÀ GHI ĐÈ TOÀN BỘ WEBSITE${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Tổng số website : ${tong_so_web} | Thành công: ${C_GREEN}${so_ok}${C_RESET} | Có lỗi: ${C_RED}${so_loi}${C_RESET}" 2
+  left_text "Nhật ký chi tiết: ${LOG_FILE}" 2
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 else
-  # Xử lý 1 website cụ thể
-  process_wp_force_update "$NAME"
+  if [[ "$MENU_ARG" == "98" ]]; then
+    if ! wptt_xac_nhan "Xác nhận ÉP UPDATE và GHI ĐÈ Core/Plugin/Theme cho website ${NAME}?" \
+      "Code tùy biến trực tiếp vào file lõi hoặc Theme gốc sẽ bị ghi đè." \
+      "Plugin/Theme Premium ngoài kho WordPress.org sẽ tự động được bỏ qua an toàn." \
+      "Đồng ý (Thực hiện)" "Hủy thao tác"; then
+      printf '%b\n' "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+      _wptt_exit 1
+    fi
+  fi
+
+  printf '\n'
+  if ! process_wp_force_update "$NAME"; then
+    exit_status_final=1
+  fi
+
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT QUÁ TRÌNH UPDATE VÀ GHI ĐÈ${C_RESET}"
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 fi
 
-echo -e "\n========================================================================="
-echo -e "\033[1;32m QUÁ TRÌNH UPDATE VÀ GHI ĐÈ ĐÃ HOÀN TẤT!\033[0m"
-echo -e "========================================================================="
-
-[[ ${1:-} == "98" ]] && exec /etc/wptt/wordpress/wptt-update-wordpress-main 1
+_wptt_exit "$exit_status_final" "enter"

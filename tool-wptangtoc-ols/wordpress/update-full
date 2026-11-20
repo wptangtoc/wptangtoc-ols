@@ -2,158 +2,312 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
+# @description: Cập nhật toàn diện WordPress (Core, Plugins, Themes, Languages) cho toàn bộ website
 
+
+function huong_dan() {
+    cat << 'EOF'
+HƯỚNG DẪN: CẬP NHẬT TOÀN DIỆN WORDPRESS (WORDPRESS ALL)
+
+1. TỔNG QUAN
+Tính năng này tự động quét toàn bộ website WordPress hợp lệ đang chạy trên máy chủ (có cấu hình tại /etc/wptt/vhost/ và tồn tại wp-load.php), sau đó tiến hành cập nhật đồng loạt Core, Plugin, Theme và Gói ngôn ngữ. Các website không phải WordPress sẽ tự động được bỏ qua.
+
+2. QUY TRÌNH CẬP NHẬT TRÊN TỪNG WEBSITE
+Mỗi website được xử lý tuần tự với giới hạn thời gian (timeout) chặt chẽ để tránh treo toàn bộ hàng đợi:
+- Bước 1 - Plugins (tối đa 150s): Cập nhật toàn bộ plugin, giữ nguyên hook thực thi để tương thích với các plugin trả phí/thương mại.
+- Bước 2 - Themes (tối đa 150s): Cập nhật toàn bộ giao diện, hỗ trợ cả các theme thương mại (Bricks, Flatsome, v.v.).
+- Bước 3 - Ngôn ngữ (60s - 120s): Cập nhật bản dịch cho Core, Plugin và Theme.
+- Bước 4 - WordPress Core & Database (180s + 60s): Nâng cấp mã nguồn lõi; chỉ chạy nâng cấp cấu trúc Database (core update-db) khi cập nhật Core thành công.
+- Bước 5 - Dọn Cache & Rewrite (30s): Làm mới Object Cache, Rewrite Rules và xóa bộ nhớ đệm OpenLiteSpeed (wptt-xoacache).
+
+3. CƠ CHẾ AN TOÀN & TỐI ƯU TÀI NGUYÊN (ENTERPRISE FAIL-SAFE)
+- Cô lập quyền hạn: Thực thi WP-CLI bằng đúng user sở hữu website qua runuser (không chạy bằng root) và sử dụng đúng phiên bản LSPHP của domain đó.
+- Tương thích Chroot Jail: Tự tạo thư mục HOME và WP-CLI cache tạm (quyền 0700) trong /tmp, tự động xóa sạch sau khi xử lý xong từng website.
+- Bảo vệ hiệu năng VPS: Chạy ở mức ưu tiên CPU thấp (nice -n 10) và tự động giới hạn RAM WP-CLI (256M với VPS <= 768MB RAM, 512M với VPS lớn hơn).
+- Bẫy lỗi an toàn kép (Trap EXIT/INT/TERM/HUP):
+  + Tự động tạm tắt Lockdown (chattr +i) khi cập nhật và bật lại ngay lập tức khi hoàn tất hoặc khi tiến trình bị ngắt đột ngột (Ctrl+C, rớt kết nối SSH).
+  + Tự động xóa file .maintenance bị sót lại nếu quá trình cập nhật bị gián đoạn (chỉ xóa nếu trước đó website không chủ động bật chế độ bảo trì).
+
+4. THEO DÕI NHẬT KÝ & XỬ LÝ LỖI
+- Nếu một website gặp lỗi, hệ thống sẽ ghi nhận bước bị lỗi (plugin, theme, core hoặc core-db) và tiếp tục cập nhật các website còn lại.
+- Xem chi tiết nguyên nhân lỗi tại file log: /var/log/wptangtoc-ols.log
+
+5. KHUYẾN NGHỊ TRƯỚC KHI THỰC HIỆN
+- Luôn tạo bản sao lưu (Backup) toàn bộ website và cơ sở dữ liệu trước khi cập nhật hàng loạt để phòng ngừa xung đột phiên bản giữa Plugin, Theme và PHP.
+- Nên chạy trong phiên tmux hoặc screen nếu máy chủ có số lượng website lớn để tránh bị ngắt giữa chừng do mất kết nối SSH.
+EOF
+}
+
+# shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null
 wptt_load_main_conf 2>/dev/null
-if [[ -z "$ngon_ngu" ]]; then
-  ngon_ngu='vi'
-fi
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
-
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
+# shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null
 
-clear
-tinh_nang_ten="$cap_nhat WordPress ALL"
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_cap_nhat_wordpress ➜ $tinh_nang_ten${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
-
-# ==============================================================================
-# GIAO DIỆN XÁC NHẬN CHUẨN UX
-# ==============================================================================
-echo ""
-if ! wptt_xac_nhan "Cập nhật tất cả Core, Plugin, Theme cho TOÀN BỘ website trên hệ thống?" "Khuyến nghị: Nên Backup trước khi Upgrade." "" "Đồng ý (Cập nhật)" "Hủy thao tác"; then
-	echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-	wptt_quay_ve_menu "${1:-}" 1
-fi
-
-echo ""
+MENU_ARG="${1:-}"
+RUNUSER_BIN="$(command -v runuser 2>/dev/null || printf '/sbin/runuser')"
 LOG_FILE="/var/log/wptangtoc-ols.log"
-echo "--- BẮT ĐẦU CẬP NHẬT TỔNG WordPress: $(date) ---" >>"$LOG_FILE"
+
+_wptt_calc_wpcli_mem() {
+  local mem_kb=0 k="" v=""
+  while IFS=': ' read -r k v _; do
+    if [[ "$k" == "MemTotal" ]]; then
+      mem_kb="$v"
+      break
+    fi
+  done </proc/meminfo 2>/dev/null
+  if [[ "$mem_kb" =~ ^[0-9]+$ ]] && ((mem_kb > 0 && mem_kb <= 786432)); then
+    printf '256M'
+  else
+    printf '512M'
+  fi
+}
 
 # ==============================================================================
 # HỆ THỐNG BẪY LỖI AN TOÀN KÉP (TRAP FAIL-SAFE)
 # ==============================================================================
-# Các biến toàn cục để Trap nhận diện trạng thái của website đang chạy dở
 CURRENT_DOMAIN=""
 CURRENT_MAINTENANCE_FILE=""
 CURRENT_IS_LOCKED=0
-CURRENT_BAO_TRI_ATOMIC=0
+CURRENT_HAD_PRE_MAINT=1
+CURRENT_WPCLI_HOME=""
 
-function wptt_emergency_cleanup() {
-    # 1. Nếu website đang chạy dở bị tắt Lockdown -> Bật lại ngay lập tức
-    if [[ "$CURRENT_IS_LOCKED" -eq 1 && -n "$CURRENT_DOMAIN" ]]; then
-        . /etc/wptt/bao-mat/wptt-chattr-file-lock "$CURRENT_DOMAIN" on >/dev/null 2>&1
-        echo "[CẢNH BÁO] Đã tự động khôi phục Lockdown cho $CURRENT_DOMAIN do tiến trình bị hủy." >>"$LOG_FILE"
+_wptt_release_site_resources() {
+  # 1. Khôi phục Lockdown ngay lập tức nếu tiến trình bị ngắt giữa chừng
+  if ((CURRENT_IS_LOCKED == 1)) && [[ -n "$CURRENT_DOMAIN" ]]; then
+    if [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]]; then
+      /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$CURRENT_DOMAIN" on >/dev/null 2>&1 || true
     fi
-    
-    # 2. Xóa file bảo trì nếu bị kẹt
-    if [[ "$CURRENT_BAO_TRI_ATOMIC" -eq 1 && -f "$CURRENT_MAINTENANCE_FILE" ]]; then
-        rm -f "$CURRENT_MAINTENANCE_FILE"
-    fi
+    CURRENT_IS_LOCKED=0
+  fi
+
+  # 2. Chỉ dọn .maintenance nếu trước lúc chạy website không có sẵn file này
+  if ((CURRENT_HAD_PRE_MAINT == 0)) && [[ -n "$CURRENT_MAINTENANCE_FILE" && -f "$CURRENT_MAINTENANCE_FILE" ]]; then
+    /bin/rm -f -- "$CURRENT_MAINTENANCE_FILE" 2>/dev/null || true
+    CURRENT_HAD_PRE_MAINT=1
+  fi
+
+  # 3. Dọn thư mục cache WP-CLI tạm trên /tmp
+  if [[ -n "$CURRENT_WPCLI_HOME" && -d "$CURRENT_WPCLI_HOME" ]]; then
+    case "$CURRENT_WPCLI_HOME" in
+      /tmp/wptt_wpcli_?*) /bin/rm -rf -- "${CURRENT_WPCLI_HOME:?}" 2>/dev/null || true ;;
+    esac
+    CURRENT_WPCLI_HOME=""
+  fi
 }
-# Kích hoạt Trap chống sập (Bao gồm Ctrl+C, Kill, Terminal đóng đột ngột)
-trap wptt_emergency_cleanup EXIT SIGINT SIGTERM
+
+_wptt_emergency_cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if ((CURRENT_IS_LOCKED == 1)) && [[ -n "$CURRENT_DOMAIN" ]]; then
+    printf '[CẢNH BÁO] Tự động khôi phục Lockdown cho %s do tiến trình bị ngắt (mã %s).\n' "$CURRENT_DOMAIN" "$rc" >>"$LOG_FILE" 2>/dev/null || true
+  fi
+  _wptt_release_site_resources
+  exit "$rc"
+}
+trap _wptt_emergency_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+clear
+tinh_nang_ten="${cap_nhat:-Cập nhật} WordPress ALL"
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}${quan_ly_cap_nhat_wordpress:-Quản lý cập nhật WordPress} ➜ ${tinh_nang_ten}${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+# ==============================================================================
+# PREFLIGHT & XÁC NHẬN
+# ==============================================================================
+if [[ ! -f /usr/local/bin/wp ]]; then
+  echoDo "Lỗi: Không tìm thấy WP-CLI tại /usr/local/bin/wp!"
+  _wptt_release_site_resources
+  wptt_quay_ve_menu "$MENU_ARG" 1 "enter"
+fi
+
+if [[ ! -x "$RUNUSER_BIN" ]]; then
+  echoDo "Lỗi: Không tìm thấy công cụ runuser trên hệ thống!"
+  _wptt_release_site_resources
+  wptt_quay_ve_menu "$MENU_ARG" 1 "enter"
+fi
+
+printf '\n'
+if ! wptt_xac_nhan "Cập nhật tất cả Core, Plugin, Theme cho TOÀN BỘ website trên hệ thống?" "Khuyến nghị: Nên Backup trước khi Upgrade." "" "Đồng ý (Cập nhật)" "Hủy thao tác"; then
+  printf '%b\n\n' "${C_YELLOW}Đã hủy thao tác.${C_RESET}"
+  _wptt_release_site_resources
+  wptt_quay_ve_menu "$MENU_ARG" 1
+fi
+
+printf '\n'
+printf -- '--- BẮT ĐẦU CẬP NHẬT TỔNG WordPress: %(%F %T)T ---\n' -1 >>"$LOG_FILE"
+
+WP_MEM_LIMIT="$(_wptt_calc_wpcli_mem)"
+
+# Thu thập chính xác danh sách website WordPress hợp lệ để đếm tiến độ chuẩn
+wp_domains=()
+shopt -s nullglob
+for filepath in /etc/wptt/vhost/.*.conf; do
+  [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
+  dom="${filepath##*/}"
+  dom="${dom%.conf}"
+  dom="${dom#.}"
+  if [[ "$dom" =~ ^[a-zA-Z0-9._-]+$ && "$dom" == ?*.?* && "$dom" != *..* ]]; then
+    if [[ -f "/usr/local/lsws/${dom}/html/wp-load.php" ]]; then
+      wp_domains+=("$dom")
+    fi
+  fi
+done
+shopt -u nullglob
+
+tong_so_web="${#wp_domains[@]}"
+if ((tong_so_web == 0)); then
+  echoDo "Hệ thống hiện chưa có website WordPress nào để cập nhật!"
+  _wptt_release_site_resources
+  wptt_quay_ve_menu "$MENU_ARG" 1 "enter"
+fi
 
 # ==============================================================================
 # XỬ LÝ CẬP NHẬT TOÀN TẬP
 # ==============================================================================
-for filepath in /etc/wptt/vhost/.*.conf; do
-  [[ ! -f "$filepath" || "$filepath" == *"/..conf" || "$filepath" == *"*"* ]] && continue
+tien_do=1
+so_thanh_cong=0
+so_loi=0
 
-  NAME="${filepath##*/}"; NAME="${NAME%.conf}"; NAME="${NAME#.}"
+for NAME in "${wp_domains[@]}"; do
+  filepath="/etc/wptt/vhost/.${NAME}.conf"
+  path="/usr/local/lsws/${NAME}/html"
 
-  if [[ "$NAME" == ?*.?* ]]; then
-    path="/usr/local/lsws/$NAME/html"
-    if [[ -f "$path/wp-load.php" ]]; then
+  UI_STRING="[ ${tien_do} / ${tong_so_web} ] Cập nhật toàn diện website: ${NAME}"
+  _runing "$UI_STRING"
 
-      UI_STRING="cập nhật toàn diện website: $NAME"
-      _runing "$UI_STRING"
+  unset User_name_vhost phien_ban_php_domain_thuc_thi lock_down
+  CURRENT_DOMAIN="$NAME"
+  CURRENT_IS_LOCKED=0
+  CURRENT_MAINTENANCE_FILE="${path}/.maintenance"
+  CURRENT_HAD_PRE_MAINT=1
+  [[ ! -f "$CURRENT_MAINTENANCE_FILE" ]] && CURRENT_HAD_PRE_MAINT=0
 
-      # ----------------------------------------------------------------------
-      # 1. RESET BIẾN MÔI TRƯỜNG CHỐNG TRÀN DỮ LIỆU
-      # ----------------------------------------------------------------------
-      unset User_name_vhost phien_ban_php_domain_thuc_thi lock_down
-      CURRENT_DOMAIN="$NAME"
-      CURRENT_IS_LOCKED=0
-      CURRENT_BAO_TRI_ATOMIC=0
-      CURRENT_MAINTENANCE_FILE="$path/.maintenance"
-      error_flag=0 # Cờ theo dõi lỗi của riêng website này
+  error_flag=0
+  failed_steps=()
 
-      . "$filepath"
-      if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
-        wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME"
-        _runloi "Lỗi cấu hình PHP cho: $NAME"
-        continue # Lỗi web này thì bỏ qua, nhảy sang web khác chứ không exit toàn bộ script
-      fi
+  # shellcheck source=/dev/null
+  wptt_load_vhost_conf "$NAME" 2>/dev/null
+  if [[ -z "${User_name_vhost:-}" ]] || ! id -u "$User_name_vhost" >/dev/null 2>&1; then
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "User_name_vhost không hợp lệ cho domain $NAME"
+    _runloi "$UI_STRING"
+    ((so_loi++))
+    ((tien_do++))
+    continue
+  fi
 
-      WP_EXEC=( /sbin/runuser -u "$User_name_vhost" -- "/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php" /usr/local/bin/wp )
+  # shellcheck source=/dev/null
+  if ! . /etc/wptt/php/php-cli-domain-config "$NAME" >/dev/null 2>&1; then
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME"
+    _runloi "$UI_STRING"
+    ((so_loi++))
+    ((tien_do++))
+    continue
+  fi
 
-      # ----------------------------------------------------------------------
-      # 2. TẠM TẮT LOCKDOWN & BẬT BẢO TRÌ
-      # ----------------------------------------------------------------------
-      if [[ -n "$lock_down" ]]; then
-        CURRENT_IS_LOCKED=1
-        . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1
-      fi
+  php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  if [[ ! -x "$php_bin" ]]; then
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không tìm thấy binary PHP: $php_bin cho $NAME"
+    _runloi "$UI_STRING"
+    ((so_loi++))
+    ((tien_do++))
+    continue
+  fi
 
-      if [[ ! -f "$CURRENT_MAINTENANCE_FILE" ]]; then
-        echo '<?php $upgrading = time(); // wptt_auto_maintenance ?>' >"$CURRENT_MAINTENANCE_FILE"
-        chown "$User_name_vhost":"$User_name_vhost" "$CURRENT_MAINTENANCE_FILE" 2>/dev/null
-        CURRENT_BAO_TRI_ATOMIC=1
-      elif grep -q "wptt_auto_maintenance" "$CURRENT_MAINTENANCE_FILE" 2>/dev/null; then
-        CURRENT_BAO_TRI_ATOMIC=1
-      fi
+  # Tạo HOME/WP_CLI_CACHE_DIR cô lập (tương thích hoàn toàn với Chroot Jail root:root 755)
+  CURRENT_WPCLI_HOME="$(mktemp -d /etc/wptt/tmp/wptt_wpcli_XXXXXX)" || {
+    _runloi "$UI_STRING"
+    ((so_loi++))
+    ((tien_do++))
+    continue
+  }
+  /bin/mkdir -p "${CURRENT_WPCLI_HOME}/cache"
+  /bin/chown -R "${User_name_vhost}:${User_name_vhost}" "$CURRENT_WPCLI_HOME" 2>/dev/null || true
+  /bin/chmod 0700 "$CURRENT_WPCLI_HOME" "${CURRENT_WPCLI_HOME}/cache" 2>/dev/null || true
 
-      # ----------------------------------------------------------------------
-      # 3. THỰC THI UPDATE VỚI BẮT LỖI (ERROR CATCHING)
-      # Sử dụng || error_flag=1 để ghi nhận lỗi mà không làm sập script
-      # ----------------------------------------------------------------------
-      echo ">> Đang xử lý $NAME..." >>"$LOG_FILE"
-      
-      timeout 120 "${WP_EXEC[@]}" plugin update --all --path="$path" >>"$LOG_FILE" 2>&1 || error_flag=1
-      timeout 120 "${WP_EXEC[@]}" theme update --all --path="$path" >>"$LOG_FILE" 2>&1 || error_flag=1
-      timeout 60 "${WP_EXEC[@]}" language core update --path="$path" >>"$LOG_FILE" 2>&1
-      timeout 120 "${WP_EXEC[@]}" language plugin update --all --path="$path" >>"$LOG_FILE" 2>&1
-      timeout 120 "${WP_EXEC[@]}" language theme update --all --path="$path" >>"$LOG_FILE" 2>&1
-      
-      # Core update đặc biệt quan trọng, nếu lỗi tải mã nguồn thì KHÔNG chạy update-db
-      if timeout 180 "${WP_EXEC[@]}" core update --path="$path" >>"$LOG_FILE" 2>&1; then
-          timeout 60 "${WP_EXEC[@]}" core update-db --path="$path" >>"$LOG_FILE" 2>&1 || error_flag=1
-      else
-          error_flag=1
-      fi
+  WP_EXEC=(
+    nice -n 10
+    "$RUNUSER_BIN" -u "$User_name_vhost" --
+    env "HOME=${CURRENT_WPCLI_HOME}" "WP_CLI_CACHE_DIR=${CURRENT_WPCLI_HOME}/cache"
+    "$php_bin" -d "disable_functions=" -d "memory_limit=${WP_MEM_LIMIT}"
+    /usr/local/bin/wp
+  )
 
-      timeout 30 "${WP_EXEC[@]}" cache flush --path="$path" >>"$LOG_FILE" 2>&1
-      timeout 30 "${WP_EXEC[@]}" rewrite flush --path="$path" >>"$LOG_FILE" 2>&1
-
-
-      # ----------------------------------------------------------------------
-      # 4. HOÀN TRẢ TRẠNG THÁI & DỌN DẸP
-      # ----------------------------------------------------------------------
-      if [[ "$CURRENT_BAO_TRI_ATOMIC" -eq 1 && -f "$CURRENT_MAINTENANCE_FILE" ]]; then
-        rm -f "$CURRENT_MAINTENANCE_FILE"
-        CURRENT_BAO_TRI_ATOMIC=0
-      fi
-      if [[ "$CURRENT_IS_LOCKED" -eq 1 ]]; then
-        . /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" on >/dev/null 2>&1
-        CURRENT_IS_LOCKED=0 # Reset để không ảnh hưởng Trap của web sau
-      fi
-
-      /bin/bash /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1
-      # 5. BÁO CÁO UX RA MÀN HÌNH
-      if [[ "$error_flag" -eq 0 ]]; then
-        _rundone "$UI_STRING"
-      else
-        _runloi "Cập nhật có lỗi (timeout hoặc quyền file) tại: $NAME"
-      fi
-
+  # Tạm tắt Lockdown nếu website đang bật khóa chattr +i
+  if [[ -n "${lock_down:-}" ]]; then
+    CURRENT_IS_LOCKED=1
+    if [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]]; then
+      /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$NAME" off >/dev/null 2>&1 || true
     fi
   fi
+
+  printf '>> [%s] Bắt đầu cập nhật %s (PHP %s, Mem %s)...\n' "$(date '+%F %T')" "$NAME" "$phien_ban_php_domain_thuc_thi" "$WP_MEM_LIMIT" >>"$LOG_FILE"
+
+  # 1. Plugins (không dùng --skip-plugins để hỗ trợ cả plugin thương mại)
+  if ! timeout 150 "${WP_EXEC[@]}" plugin update --all --path="$path" </dev/null >>"$LOG_FILE" 2>&1; then
+    error_flag=1
+    failed_steps+=("plugin")
+  fi
+
+  # 2. Themes (không dùng --skip-themes để hỗ trợ cả theme thương mại như Bricks/Flatsome)
+  if ! timeout 150 "${WP_EXEC[@]}" theme update --all --path="$path" </dev/null >>"$LOG_FILE" 2>&1; then
+    error_flag=1
+    failed_steps+=("theme")
+  fi
+
+  # 3. Ngôn ngữ
+  timeout 60 "${WP_EXEC[@]}" language core update --path="$path" </dev/null >>"$LOG_FILE" 2>&1 || true
+  timeout 120 "${WP_EXEC[@]}" language plugin update --all --path="$path" </dev/null >>"$LOG_FILE" 2>&1 || true
+  timeout 120 "${WP_EXEC[@]}" language theme update --all --path="$path" </dev/null >>"$LOG_FILE" 2>&1 || true
+
+  # 4. Core + Database (nếu Core update lỗi thì không chạy update-db)
+  if timeout 180 "${WP_EXEC[@]}" core update --path="$path" </dev/null >>"$LOG_FILE" 2>&1; then
+    if ! timeout 60 "${WP_EXEC[@]}" core update-db --path="$path" </dev/null >>"$LOG_FILE" 2>&1; then
+      error_flag=1
+      failed_steps+=("core-db")
+    fi
+  else
+    error_flag=1
+    failed_steps+=("core")
+  fi
+
+  # 5. Flush cache & rewrite
+  timeout 30 "${WP_EXEC[@]}" cache flush --path="$path" </dev/null >>"$LOG_FILE" 2>&1 || true
+  timeout 30 "${WP_EXEC[@]}" rewrite flush --path="$path" </dev/null >>"$LOG_FILE" 2>&1 || true
+
+  # Hoàn trả Lockdown, dọn .maintenance sót (nếu có) và dọn thư mục WP-CLI tạm
+  _wptt_release_site_resources
+  CURRENT_DOMAIN=""
+
+  if [[ -f /etc/wptt/cache/wptt-xoacache ]]; then
+    /bin/bash /etc/wptt/cache/wptt-xoacache "$NAME" >/dev/null 2>&1 || true
+  fi
+
+  if ((error_flag == 0)); then
+    _rundone "$UI_STRING"
+    ((so_thanh_cong++))
+  else
+    _runloi "$UI_STRING"
+    printf '   %bLỗi tại bước: %s (chi tiết xem %s)%b\n' "${C_YELLOW}" "${failed_steps[*]}" "$LOG_FILE" "${C_RESET}"
+    ((so_loi++))
+  fi
+
+  ((tien_do++))
 done
 
-echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 center_text "${C_BOLD_WHITE}HOÀN TẤT CẬP NHẬT TOÀN BỘ WEBSITE TRÊN HỆ THỐNG${C_RESET}"
-echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Tổng số website : ${tong_so_web} | Thành công: ${C_GREEN}${so_thanh_cong}${C_RESET} | Có lỗi: ${C_RED}${so_loi}${C_RESET}" 2
+left_text "Nhật ký chi tiết: ${LOG_FILE}" 2
+printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-wptt_quay_ve_menu "${1:-}" 0
+_wptt_release_site_resources
+trap - EXIT INT TERM HUP
+wptt_quay_ve_menu "$MENU_ARG" 0 "enter"
