@@ -23,9 +23,9 @@ function huong_dan() {
    ➜ Đẩy lên Đám mây (Cloud Sync): Không chỉ lưu tại ổ cứng máy chủ (Local), hệ thống hỗ trợ tích hợp Rclone để tự động đẩy file Backup lên Google Drive, OneDrive, S3 Storage hoặc Telegram Cloud. Giúp dữ liệu an toàn tuyệt đối ngay cả khi máy chủ (VPS) bị hỏng ổ cứng hoặc mất quyền truy cập.
 
   🛡️ CÔNG NGHỆ BẢO MẬT & TỐI ƯU HÓA:
-   - Khóa tiến trình (Thread Lock): Nếu bạn đang chạy Backup, hệ thống sẽ khóa chức năng Restore để tránh tình trạng "Đọc - Ghi đè" cùng lúc làm hỏng dữ liệu.
-   - Nén siêu tốc (Zstandard/Gzip): Tự động nén dữ liệu để tiết kiệm tối đa không gian lưu trữ và băng thông khi đẩy lên Cloud.
-   - Loại bỏ file rác: Tự động loại trừ các thư mục Cache, Log lỗi và các bản backup cũ của các Plugin bên thứ 3 (như UpdraftPlus, BackupBuddy) để file Backup nhẹ nhất có thể.
+- Khóa tiến trình (Thread Lock): Nếu bạn đang chạy Backup, hệ thống sẽ khóa chức năng Restore để tránh tình trạng "Đọc - Ghi đè" cùng lúc làm hỏng dữ liệu.
+- Nén siêu tốc (Zstandard/Gzip): Tự động nén dữ liệu để tiết kiệm tối đa không gian lưu trữ và băng thông khi đẩy lên Cloud.
+- Loại bỏ file rác: Tự động loại trừ các thư mục Cache, Log lỗi và các bản backup cũ của các Plugin bên thứ 3 (như UpdraftPlus, BackupBuddy) để file Backup nhẹ nhất có thể.
 EOF
 }
 
@@ -59,6 +59,16 @@ get_cloud_name() {
   else
     echo "Google Drive"
   fi
+}
+
+# Đo dung lượng thực (apparent-size) để hiển thị chính xác tức thì trên ZFS/Btrfs/XFS
+get_backup_dir_size() {
+  local dir="$1"
+  if [[ ! -d "$dir" ]] || [[ -z "$(find "$dir" -type f -print -quit 2>/dev/null)" ]]; then
+    printf '0B'
+    return 0
+  fi
+  du -sh --apparent-size "$dir" 2>/dev/null | awk '{print $1}'
 }
 
 if [[ -z "$NAME" ]]; then
@@ -141,7 +151,7 @@ if [[ $NAME = 'Tất cả website' ]]; then
 
   START_TIMESTAMP_FILE=$(mktemp) #khởi tạo file temp để xác định bắt đầu thực thi all
 
-  before_optimize_full_all=$(du -hs /usr/local/backup-website)
+  before_optimize_full_all="$(get_backup_dir_size "/usr/local/backup-website")"
   if [ "$(ls -A /etc/wptt/vhost | grep -v '^\.\.conf$' | sort -uV)" ]; then
     for filepath in /etc/wptt/vhost/.*.conf; do
       [[ ! -f "$filepath" || "$filepath" == *"/..conf" ]] && continue
@@ -197,7 +207,7 @@ if [[ $NAME = 'Tất cả website' ]]; then
     if [[ $ggdriver2 != '1998' ]]; then
       print_border_mid
       left_text "Dung lượng thư mục trước khi sao lưu  : $before_optimize_full_all"
-      left_text "Dung lượng thư mục sau khi sao lưu  : $(du -hs /usr/local/backup-website)"
+      left_text "Dung lượng thư mục sau khi sao lưu    : $(get_backup_dir_size "/usr/local/backup-website")"
     fi
 
     if [[ $ggdriver = '1998' ]]; then #xac nhan có uploads drive
@@ -303,7 +313,8 @@ fi
 
 wptt_logs "INFO" "Sao lưu website $NAME"
 pathcheck="/usr/local/backup-website/$NAME"
-before_optimize=$(du -hs "$pathcheck" | sed 's/\t//g' | cut -f1 -d '/')
+mkdir -p "$pathcheck"
+before_optimize="$(get_backup_dir_size "$pathcheck")"
 
 unset DB_User_web DB_Password_web DB_Name_web dinh_dang_nen_ma_nguon sql_gz
 wptt_load_main_conf
@@ -421,6 +432,7 @@ if [ $db_backup_status -eq 0 ] && [ -f "$DB_OUTPUT" ]; then
   tuanxacnhandb="1"
   _rundone "$sao_luu_database website $NAME"
   $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 "$DB_OUTPUT" 2>/dev/null
+  sync "$DB_OUTPUT" 2>/dev/null || true
 else
   tuanxacnhandb="0"
   _runloi "$sao_luu_database website $NAME"
@@ -500,6 +512,7 @@ echo -ne "\033[1A\r\033[K"
 if [[ $src_backup_status -eq 0 && -f /usr/local/backup-website/$NAME/$FILE_SRC ]]; then
   _rundone "$sao_luu_ma_nguon website $NAME"
   $ep_luong_cpu_disk_thu_tu_yeu_tien_thap_dang_chay_auto_backup chmod 600 "/usr/local/backup-website/$NAME/$FILE_SRC" 2>/dev/null
+  sync "/usr/local/backup-website/$NAME/$FILE_SRC" 2>/dev/null || true
   tuanxacnhan="1"
 else
   _runloi "$sao_luu_ma_nguon website $NAME"
@@ -549,6 +562,7 @@ if [[ "$checkdathietlap" == "1" ]]; then
     fi
 
     if [[ "$uploads" = "y" || "$ggdriver" = "1998" ]]; then
+      [[ -z "${drive_name:-}" ]] && drive_name="$(get_cloud_name)"
       _runing "file backup uploads $drive_name"
 
       CLOUD_DIR="wptangtoc_ols_backup"
@@ -608,7 +622,7 @@ if [[ "$checkdathietlap" == "1" ]]; then
       fi
 
       function wptt_upload_ux() {
-				_wptt_pause_spinner
+        _wptt_pause_spinner
         local src_file="$1"
         local dest_dir="$2"
         local file_type="$3"
@@ -672,7 +686,7 @@ if [[ "$checkdathietlap" == "1" ]]; then
           fi
         done
 
-				_wptt_resume_spinner
+        _wptt_resume_spinner
         # 4. CHỐT CHẶN CUỐI CÙNG
         if [[ "$success" != "true" ]]; then
           if [[ "$ggdriver" != "1998" ]]; then
@@ -690,11 +704,11 @@ if [[ "$checkdathietlap" == "1" ]]; then
       wptt_upload_ux "/usr/local/backup-website/$NAME/$FILE_SRC" "wptangtoc:$CLOUD_DIR/$NAME" "Mã Nguồn"
       wptt_upload_ux "/usr/local/backup-website/$NAME/$FILE_DB" "wptangtoc:$CLOUD_DIR/$NAME" "Database"
 
-      # KIỂM TRA ĐÍCH DANH FILE O(1) BỎ QUÉT LIST CHẬM CHẠP
+      # KIỂM TRA ĐÍCH DANH CẢ 2 FILE O(1) TRƯỚC KHI XÁC NHẬN UPLOAD THÀNH CÔNG
       check_src=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME/$FILE_SRC" 2>/dev/null)
       check_db=$(rclone lsf "wptangtoc:$CLOUD_DIR/$NAME/$FILE_DB" 2>/dev/null)
 
-      if [[ -n "$check_src" || -n "$check_db" ]]; then
+      if [[ -n "$check_src" && -n "$check_db" ]]; then
         kiem_tra_xem_file_da_uploads="OK"
         _rundone "File backup uploads $drive_name"
 
@@ -755,8 +769,8 @@ if [[ "$tuanxacnhandb" = "1" && "$tuanxacnhan" = "1" ]]; then
 
   echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "$sao_luu_website $NAME thành công"
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   if ! [[ "$clearfile" = "y" || "$ggdriver2" = "1998" ]]; then
+    echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
     left_text "Thư mục backup  : /usr/local/backup-website/$NAME"
     left_text "Thư mục website : /usr/local/lsws/$NAME/html"
     left_text "Disk : $(df -BG | awk '$NF=="/"{printf "%d/%dGB (%s)\n", $3,$2,$5}')                        "
@@ -764,7 +778,9 @@ if [[ "$tuanxacnhandb" = "1" && "$tuanxacnhan" = "1" ]]; then
 
     echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
     left_text "Dung lượng thư mục backup trước khi backup          : $before_optimize"
-    left_text "Dung lượng thư mục backup sau khi backup            : $(du -hs "$pathcheck" | sed 's/\t//g' | cut -f1 -d '/')"
+    left_text "Dung lượng thư mục backup sau khi backup            : $(get_backup_dir_size "$pathcheck")"
+    echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+  else
     echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
   fi
 else
@@ -808,7 +824,7 @@ if [[ "$uploads" = "y" ]]; then
     drive_free=$(echo "$rclone_about_info" | awk '/^Free:/{print $2" "$3}')
   else
     # === XỬ LÝ CHO S3 STORAGE (Không có about, dùng rclone size) ===
-    rclone_size_info=$(rclone size "wptangtoc:$CLOUD_DIR_ALL" 2>/dev/null)
+    rclone_size_info=$(rclone size "wptangtoc:$CLOUD_DIR" 2>/dev/null)
 
     # Bóc tách "33.000 GiB" từ dòng "Total size: 33.000 GiB (35438709360 Byte)"
     s3_used_size=$(echo "$rclone_size_info" | awk '/Total size:/{print $3" "$4}')

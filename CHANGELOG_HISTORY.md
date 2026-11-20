@@ -165,26 +165,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-## WPTangToc OLS 8.4.0.1
-
-🛠️ Tối ưu hệ thống:
-- Tối ưu hóa cơ chế tắt đồng bộ file `.htaccess` sang vhost, giúp tăng tốc độ và giảm tải đáng kể khi nạp lại (reload) LiteSpeed Web Server.
-
-🚀 Tính năng mới & Bảo mật:
-- Nâng cấp toàn diện các lớp bảo mật, giúp hệ thống phòng thủ kiên cố hơn trước các mối đe dọa và lỗ hổng tiềm ẩn.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-# WPTangToc OLS 8.4.0.0
-
-🚀 **Tính năng mới**
-- **Tương thích toàn diện Apache .htaccess:** Nâng cấp cơ chế xử lý tệp `.htaccess` tương thích tuyệt đối với chuẩn Apache trên OpenLiteSpeed, đảm bảo các quy tắc định tuyến, đường dẫn tĩnh và bảo mật của WordPress hoạt động mượt mà, chính xác.
-- **Cập nhật chứng chỉ Google Trust Services (GTS):** Tích hợp và cập nhật các tiêu chuẩn chứng chỉ SSL mới nhất từ Google Trust Services, gia tăng uy tín và độ tin cậy HTTPS cho website.
-
-🛠️ **Tối ưu hệ thống**
-- **Tối ưu hóa cơ chế tải lại dịch vụ (LSWS):** Cải tiến quy trình vô hiệu hóa tệp `.htaccess` và chuyển đổi Virtual Hosts, giúp quá trình reload OpenLiteSpeed diễn ra nhanh chóng, mượt mà và giảm thiểu tối đa độ trễ cho máy chủ.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
