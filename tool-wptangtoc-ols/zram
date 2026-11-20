@@ -2,61 +2,114 @@
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
 # @since: 2026
-# @description: Quản lý Bật/Tắt ZRAM (In-RAM Compressed Swap) đồng bộ Kernel & Tuned Enterprise
+# @description: Quản lý Bật/Tắt ZRAM (In-RAM Compressed Swap) chuẩn Enterprise đồng bộ Kernel & Tuned
+
+set -o pipefail
 
 function huong_dan() {
   cat <<'EOF'
-  1. Tính Năng Cài Đặt ZRAM [Install ZRAM Swap]
+1. Tính Năng Cài Đặt ZRAM [Install ZRAM Swap]
   Cài đặt ZRAM là quá trình thiết lập một phân vùng Swap [bộ nhớ ảo] hoạt động hoàn toàn trên RAM vật lý, sử dụng thuật toán nén dữ liệu thời gian thực.
 
   ZRAM là một công cụ chuẩn Enterprise giúp máy chủ:
-  * Tránh sập nguồn [OOM] khi bị quá tải RAM cục bộ.
-  * Tăng tốc độ đọc/ghi Swap lên gấp hàng nghìn lần so với Swap trên ổ cứng SSD/NVMe.
-  * Bảo vệ tuổi thọ ổ cứng vật lý do không còn phải ghi/xóa các file rác liên tục.
-  * Tự động điều chỉnh thông minh: Sử dụng 50% lượng RAM hiện có đối với máy chủ nhỏ, hoặc khóa trần ở mức tối đa 4GB đối với máy chủ lớn để bảo vệ CPU.
-  * Tự động dọn dẹp và xóa hoàn toàn Swap đĩa cũ để giải phóng dung lượng SSD.
+- Tránh sập nguồn [OOM] khi bị quá tải RAM cục bộ.
+- Tăng tốc độ đọc/ghi Swap lên gấp hàng nghìn lần so với Swap trên ổ cứng SSD/NVMe.
+- Bảo vệ tuổi thọ ổ cứng vật lý do không còn phải ghi/xóa các file rác liên tục.
+- Tự động điều chỉnh thông minh: Sử dụng 50% lượng RAM hiện có đối với máy chủ nhỏ, hoặc khóa trần ở mức tối đa 4GB đối với máy chủ lớn để bảo vệ CPU.
+- Tự động dọn dẹp và xóa hoàn toàn Swap đĩa cũ để giải phóng dung lượng SSD.
 
   Kết quả: Sau khi cài đặt, hệ thống sẽ có một ổ đĩa nén ZRAM [zram0] siêu tốc. Máy chủ sẽ lỳ lợm hơn khi chịu tải nặng.
 
-  2. Tính Năng Hủy Cài Đặt ZRAM [Uninstall ZRAM Swap]
+2. Tính Năng Hủy Cài Đặt ZRAM [Uninstall ZRAM Swap]
   Hủy cài đặt ZRAM là quá trình gỡ bỏ module nén bộ nhớ và trả lại không gian RAM vật lý cũng như trả lại cơ chế Swap đĩa truyền thống của Linux.
 
   Mục đích chính:
-  * CPU của VPS quá yếu, không thể gánh được thuật toán nén.
-  * Máy chủ chuyên dụng cho Database [không dùng chung Web Server].
+- CPU của VPS quá yếu, không thể gánh được thuật toán nén.
+- Máy chủ chuyên dụng cho Database [không dùng chung Web Server].
 
   Kết quả: Dịch vụ ZRAM sẽ được dừng, xóa cấu hình và hệ thống sẽ tự động khởi tạo lại một Swap đĩa dung lượng 1GB [/var/swap.1] để đảm bảo an toàn cơ bản.
 EOF
 }
 
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
+export LC_ALL=C.UTF-8 2>/dev/null || export LC_ALL=en_US.UTF-8 2>/dev/null || true
+export LANG=C.UTF-8 2>/dev/null || export LANG=en_US.UTF-8 2>/dev/null || true
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 stty iutf8 2>/dev/null || true
-umask 077
 
 # shellcheck source=/dev/null
 [[ -f /etc/wptt/core-functions ]] && . /etc/wptt/core-functions 2>/dev/null
-# shellcheck source=/dev/null
 [[ -f /etc/wptt/.wptt.conf ]] && wptt_load_main_conf 2>/dev/null
 [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
 # shellcheck source=/dev/null
-[[ -f "/etc/wptt/lang/$ngon_ngu.sh" ]] && . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+[[ -f "/etc/wptt/lang/${ngon_ngu}.sh" ]] && . "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
 # shellcheck source=/dev/null
 [[ -f /etc/wptt/echo-color ]] && . /etc/wptt/echo-color 2>/dev/null
 
+readonly SYSCTL_BIN="$(command -v sysctl 2>/dev/null || printf '/sbin/sysctl')"
+readonly MKSWAP_BIN="$(command -v mkswap 2>/dev/null || printf '/sbin/mkswap')"
+readonly SWAPON_BIN="$(command -v swapon 2>/dev/null || printf '/sbin/swapon')"
+readonly SWAPOFF_BIN="$(command -v swapoff 2>/dev/null || printf '/sbin/swapoff')"
+
+route_flag="${1:-}"
+tham_so="${1:-}"
 tmp_file=""
-cleanup() {
+
+# ==============================================================================
+# BẪY DỌN DẸP NGUYÊN TỬ (FAIL-SAFE CLEANUP)
+# ==============================================================================
+_wptt_zram_cleanup() {
+  if [[ -n "${tmp_file:-}" && -f "$tmp_file" ]]; then
+    case "$tmp_file" in
+      /etc/wptt/tmp/wptt_*) /bin/rm -f -- "${tmp_file:?}" 2>/dev/null || true ;;
+    esac
+    tmp_file=""
+  fi
+}
+
+_wptt_zram_trap_exit() {
   local rc=$?
   trap - EXIT INT TERM HUP
-  if [[ -n "${tmp_file:-}" && -f "$tmp_file" ]]; then
-    /bin/rm -f -- "${tmp_file:?}"
-  fi
+  _wptt_zram_cleanup
   exit "$rc"
 }
-trap cleanup EXIT
+trap _wptt_zram_trap_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
+
+_wptt_exit() {
+  local code="${1:-0}"
+  local pause="${2:-}"
+  _wptt_zram_cleanup
+  trap - EXIT INT TERM HUP
+  if declare -F wptt_quay_ve_menu >/dev/null 2>&1; then
+    if [[ -n "$pause" ]]; then
+      wptt_quay_ve_menu "$route_flag" "$code" "$pause"
+    else
+      wptt_quay_ve_menu "$route_flag" "$code"
+    fi
+  fi
+  exit "$code"
+}
+
+# ==============================================================================
+# HÀM GHI FILE CẤU HÌNH NGUYÊN TỬ (ATOMIC WRITE)
+# ==============================================================================
+wptt_atomic_write_file() {
+  local target_file="$1"
+  local file_mode="${2:-644}"
+  local target_dir=""
+  target_dir="${target_file%/*}"
+
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || return 1
+  [[ -n "$target_dir" && "$target_dir" != "$target_file" ]] && /bin/mkdir -p "$target_dir" 2>/dev/null || true
+
+  tmp_file="$(mktemp -p /etc/wptt/tmp wptt_zram_cfg_XXXXXX.tmp)" || return 1
+  cat >"$tmp_file" || { _wptt_zram_cleanup; return 1; }
+  /bin/chmod "$file_mode" -- "$tmp_file" || { _wptt_zram_cleanup; return 1; }
+  /bin/mv -fT -- "$tmp_file" "$target_file" || { _wptt_zram_cleanup; return 1; }
+  tmp_file=""
+  return 0
+}
 
 # ==============================================================================
 # HÀM ĐỒNG BỘ THÔNG SỐ VM KERNEL (SYSCTL + TUNED PROFILE) NGUYÊN TỬ
@@ -67,15 +120,15 @@ wptt_sync_zram_kernel_vm() {
   local sysctl_file="/etc/sysctl.d/99-wptangtoc-ols.conf"
   local tuned_file="/etc/tuned/wptangtoc-performance/tuned.conf"
 
-  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
-  chmod 700 /etc/wptt/tmp 2>/dev/null
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || true
+  /bin/mkdir -p /etc/sysctl.d 2>/dev/null || true
 
-  # Dọn dẹp các file cấu hình cũ để tránh xung đột thứ tự nạp của sysctl --system
-  /bin/rm -f /etc/sysctl.d/101-sysctl.conf /etc/sysctl.d/99-wptt-zram.conf 2>/dev/null || true
+  # Dọn các file cũ để tránh xung đột thứ tự nạp của sysctl --system
+  /bin/rm -f -- /etc/sysctl.d/101-sysctl.conf /etc/sysctl.d/99-wptt-zram.conf 2>/dev/null || true
 
   # 1. Cập nhật nguyên tử /etc/sysctl.d/99-wptangtoc-ols.conf
   if [[ -f "$sysctl_file" ]]; then
-    tmp_file="$(mktemp -p /etc/wptt/tmp wptt_sysctl_zram_XXXXXX.tmp)"
+    tmp_file="$(mktemp -p /etc/wptt/tmp wptt_sysctl_zram_XXXXXX.tmp)" || return 1
     awk -v sw="$swappiness_val" -v pc="$page_cluster_val" '
       /^[ \t]*vm\.swappiness[ \t]*=/ {
         print "vm.swappiness = " sw
@@ -93,23 +146,22 @@ wptt_sync_zram_kernel_vm() {
         if (!found_pc) print "vm.page-cluster = " pc
       }
     ' "$sysctl_file" >"$tmp_file"
-    chmod 644 "$tmp_file"
+    /bin/chmod 644 -- "$tmp_file"
     /bin/mv -fT -- "$tmp_file" "$sysctl_file"
     tmp_file=""
   else
-    cat >"$sysctl_file" <<EOF
+    wptt_atomic_write_file "$sysctl_file" 644 <<EOF
 # WPTangToc OLS - ZRAM VM Tuning
 vm.swappiness = ${swappiness_val}
 vm.page-cluster = ${page_cluster_val}
 EOF
-    chmod 644 "$sysctl_file"
   fi
 
   # 2. Đồng bộ với Custom Tuned Profile (nếu máy chủ có cài đặt Tuned)
   if command -v tuned-adm >/dev/null 2>&1; then
-    /bin/mkdir -p /etc/tuned/wptangtoc-performance 2>/dev/null
+    /bin/mkdir -p /etc/tuned/wptangtoc-performance 2>/dev/null || true
     if [[ -f "$tuned_file" ]]; then
-      tmp_file="$(mktemp -p /etc/wptt/tmp wptt_tuned_zram_XXXXXX.tmp)"
+      tmp_file="$(mktemp -p /etc/wptt/tmp wptt_tuned_zram_XXXXXX.tmp)" || return 1
       awk -v sw="$swappiness_val" -v pc="$page_cluster_val" '
         /^[ \t]*vm\.swappiness[ \t]*=/ {
           print "vm.swappiness=" sw
@@ -127,11 +179,11 @@ EOF
           if (!found_pc) print "vm.page-cluster=" pc
         }
       ' "$tuned_file" >"$tmp_file"
-      chmod 644 "$tmp_file"
+      /bin/chmod 644 -- "$tmp_file"
       /bin/mv -fT -- "$tmp_file" "$tuned_file"
       tmp_file=""
     else
-      cat >"$tuned_file" <<EOF
+      wptt_atomic_write_file "$tuned_file" 644 <<EOF
 [main]
 summary=WPTangToc OLS Latency Performance Profile
 include=latency-performance
@@ -145,14 +197,15 @@ vm.page-cluster=${page_cluster_val}
 vm.dirty_background_ratio=0
 vm.dirty_ratio=0
 EOF
-      chmod 644 "$tuned_file"
     fi
     tuned-adm profile wptangtoc-performance >/dev/null 2>&1 || true
   fi
 
   # 3. Áp dụng tức thì vào Runtime Kernel (0-Downtime)
-  /sbin/sysctl -w "vm.swappiness=${swappiness_val}" "vm.page-cluster=${page_cluster_val}" >/dev/null 2>&1 || true
-  /sbin/sysctl --system >/dev/null 2>&1 || true
+  if [[ -x "$SYSCTL_BIN" ]]; then
+    "$SYSCTL_BIN" -w "vm.swappiness=${swappiness_val}" "vm.page-cluster=${page_cluster_val}" >/dev/null 2>&1 || true
+    "$SYSCTL_BIN" --system >/dev/null 2>&1 || true
+  fi
 }
 
 # ==============================================================================
@@ -162,8 +215,8 @@ wptt_update_fstab_swap() {
   local mode="$1" # "remove_disk_swap" hoặc "add_disk_swap"
   [[ -f /etc/fstab ]] || return 0
 
-  /bin/mkdir -p /etc/wptt/tmp 2>/dev/null
-  tmp_file="$(mktemp -p /etc/wptt/tmp wptt_fstab_XXXXXX.tmp)"
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || return 1
+  tmp_file="$(mktemp -p /etc/wptt/tmp wptt_fstab_XXXXXX.tmp)" || return 1
 
   awk -v m="$mode" '
     /\/var\/swap\.1|\/swapfile|\/swap\.img/ { next }
@@ -182,12 +235,11 @@ wptt_update_fstab_swap() {
   ' /etc/fstab >"$tmp_file"
 
   if [[ -s "$tmp_file" ]]; then
-    chmod 644 "$tmp_file"
+    /bin/chmod 644 -- "$tmp_file"
     /bin/mv -fT -- "$tmp_file" /etc/fstab
     tmp_file=""
   else
-    /bin/rm -f -- "${tmp_file:?}"
-    tmp_file=""
+    _wptt_zram_cleanup
   fi
 }
 
@@ -227,16 +279,26 @@ wptt_detect_best_zram_algo() {
   printf '%s' "$best"
 }
 
-route_flag="${1:-}"
-
-clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ TỐI ƯU RAM ➜ Bật/Tắt ZRAM (Swap nén siêu tốc)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+# Thu hồi an toàn mọi thiết bị /dev/zram* đang chạy (dùng chung cho cả Ubuntu & RHEL)
+wptt_reset_all_zram_devices() {
+  local zdev=""
+  shopt -s nullglob
+  for zdev in /dev/zram*; do
+    [[ -b "$zdev" ]] || continue
+    "$SWAPOFF_BIN" "$zdev" >/dev/null 2>&1 || true
+    command -v zramctl >/dev/null 2>&1 && zramctl --reset "$zdev" >/dev/null 2>&1 || true
+  done
+  shopt -u nullglob
+}
 
 # ==============================================================================
-# NHẬN DIỆN HỆ ĐIỀU HÀNH & KIỂM TRA TRẠNG THÁI THỰC TẾ
+# KIỂM TRA QUYỀN ROOT & NHẬN DIỆN HỆ ĐIỀU HÀNH
 # ==============================================================================
+if ((EUID != 0)); then
+  printf '%bLỗi: Tính năng này yêu cầu quyền root!%b\n' "${C_RED:-}" "${C_RESET:-}" >&2
+  _wptt_exit 1
+fi
+
 if grep -qiE "ubuntu|debian" /etc/os-release 2>/dev/null; then
   OS_TYPE="UBUNTU"
   duong_dan_config_zram="/etc/default/zramswap"
@@ -245,44 +307,63 @@ else
   duong_dan_config_zram="/etc/systemd/zram-generator.conf"
 fi
 
-if [[ -f "$duong_dan_config_zram" ]] || grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
+# Chỉ coi là đã bật chuẩn WPTangToc khi file cấu hình quản lý thực sự tồn tại
+ZRAM_DEV_ACTIVE=0
+grep -q '^/dev/zram' /proc/swaps 2>/dev/null && ZRAM_DEV_ACTIVE=1
+
+if [[ -f "$duong_dan_config_zram" ]]; then
   ZRAM_STATUS="ON"
 else
   ZRAM_STATUS="OFF"
 fi
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+bo_qua_xac_nhan="n"
+if [[ "$tham_so" == "on" || "$tham_so" == "off" ]]; then
+  bo_qua_xac_nhan="y"
+fi
+
+if [[ "$bo_qua_xac_nhan" != "y" ]]; then
+  clear
+fi
+
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ TỐI ƯU RAM ➜ Bật/Tắt ZRAM (Swap nén siêu tốc)${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
 if [[ "$ZRAM_STATUS" == "ON" ]]; then
   left_text "Trạng thái    : ${C_GREEN}ĐÃ KÍCH HOẠT (vm.swappiness=100, page-cluster=0)${C_RESET}" 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  printf '%b\n' "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "Máy chủ đang sử dụng ZRAM để nén dữ liệu Swap trực tiếp trên RAM thật." 2
   left_text "Giúp chống tràn bộ nhớ (OOM) và kéo dài tuổi thọ ổ cứng SSD/NVMe." 2
 else
-  left_text "Trạng thái    : ${C_RED}CHƯA KÍCH HOẠT (vm.swappiness=10, page-cluster=3)${C_RESET}" 2
-  echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Hệ thống đang sử dụng Swap ghi/xóa truyền thống lên ổ đĩa." 2
-  left_text "Khuyến nghị BẬT ZRAM để tăng tốc hệ thống và bảo vệ SSD/NVMe." 2
+  if ((ZRAM_DEV_ACTIVE == 1)); then
+    left_text "Trạng thái    : ${C_YELLOW}CHƯA CHUẨN HÓA (Phát hiện /dev/zram hệ thống chưa có config WPTT)${C_RESET}" 2
+  else
+    left_text "Trạng thái    : ${C_RED}CHƯA KÍCH HOẠT (vm.swappiness=10, page-cluster=3)${C_RESET}" 2
+  fi
+  printf '%b\n' "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Khuyến nghị BẬT ZRAM chuẩn WPTangToc để tối ưu dung lượng, thuật toán nén" 2
+  left_text "và đồng bộ thông số Kernel (swappiness=100, page-cluster=0)." 2
 fi
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 # ==============================================================================
-# XỬ LÝ ĐỐI SỐ DÒNG LỆNH (CLI)
+# XỬ LÝ ĐỐI SỐ DÒNG LỆNH (CLI: on / off)
 # ==============================================================================
-tham_so="${1:-}"
-bo_qua_xac_nhan="n"
-
 if [[ "$tham_so" == "on" ]]; then
-  if [[ "$ZRAM_STATUS" == "ON" ]]; then
-    echo -e "${C_YELLOW}ZRAM đã được kích hoạt từ trước!${C_RESET}"
-    wptt_quay_ve_menu "$route_flag" 0
+  if [[ "$ZRAM_STATUS" == "ON" && "$ZRAM_DEV_ACTIVE" -eq 1 ]]; then
+    printf '%bZRAM đã được kích hoạt từ trước!%b\n' "${C_YELLOW}" "${C_RESET}"
+    _wptt_exit 0
   fi
-  bo_qua_xac_nhan="y"
+  # Nếu file cấu hình chưa có (VD: AWS Ubuntu có sẵn /dev/zram0 lạ) hoặc service đang tắt -> ép đi tiếp để chuẩn hóa
+  ZRAM_STATUS="OFF"
 elif [[ "$tham_so" == "off" ]]; then
-  if [[ "$ZRAM_STATUS" == "OFF" ]]; then
-    echo -e "${C_YELLOW}ZRAM chưa được cài đặt, không thể tắt!${C_RESET}"
-    wptt_quay_ve_menu "$route_flag" 0
+  if [[ "$ZRAM_STATUS" == "OFF" && "$ZRAM_DEV_ACTIVE" -eq 0 ]]; then
+    printf '%bZRAM chưa được cài đặt, không thể tắt!%b\n' "${C_YELLOW}" "${C_RESET}"
+    _wptt_exit 0
   fi
-  bo_qua_xac_nhan="y"
+  ZRAM_STATUS="ON"
 fi
 
 # ==============================================================================
@@ -291,13 +372,15 @@ fi
 if [[ "$ZRAM_STATUS" == "OFF" ]]; then
 
   if [[ "$bo_qua_xac_nhan" != "y" ]]; then
-    if ! wptt_xac_nhan "Bạn có muốn CÀI ĐẶT và BẬT ZRAM không?" "Hệ thống sẽ tự động gỡ bỏ Swap đĩa cũ và tạo vùng nén siêu tốc." "" "Đồng ý Bật ZRAM" "Hủy thao tác"; then
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-      wptt_quay_ve_menu "$route_flag" 0
+    if ! wptt_xac_nhan "Bạn có muốn CÀI ĐẶT và BẬT ZRAM không?" \
+      "Hệ thống sẽ tự động gỡ bỏ Swap đĩa cũ và tạo vùng nén siêu tốc." "" \
+      "Đồng ý Bật ZRAM" "Hủy thao tác"; then
+      printf '%bĐã hủy thao tác.%b\n\n' "${C_YELLOW}" "${C_RESET}"
+      _wptt_exit 0
     fi
   fi
 
-  wptt_logs "INFO" "Kích hoạt ZRAM"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Kích hoạt ZRAM"
 
   # 1. Tính toán dung lượng RAM bằng Pure Bash (0-Subshell)
   tong_ram_kb=0
@@ -320,22 +403,35 @@ if [[ "$ZRAM_STATUS" == "OFF" ]]; then
     ZRAM_PERCENT=$((4096 * 100 / rong_ram_mb))
     ((ZRAM_PERCENT < 5)) && ZRAM_PERCENT=5
   fi
+  ((ZRAM_SIZE_MB < 128)) && ZRAM_SIZE_MB=128
 
-  echo ""
-  _runing "Đang cài đặt thư viện ZRAM cho $OS_TYPE..."
+  printf '\n'
+  task_pkg="Cài đặt thư viện và cấu hình ZRAM cho ${OS_TYPE}"
+  _runing "$task_pkg"
 
   if [[ "$OS_TYPE" == "UBUNTU" ]]; then
-    DEBIAN_FRONTEND=noninteractive apt-get update >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get purge zram-generator -y >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get install zram-tools -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 update >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 purge zram-generator -y >/dev/null 2>&1 || true
+
+    # Tự chữa lành cho kernel cloud (VD: linux-aws) nếu thiếu module zram.ko
+    if ! modprobe zram >/dev/null 2>&1; then
+      DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install "linux-modules-extra-$(uname -r)" -y >/dev/null 2>&1 || true
+      modprobe zram >/dev/null 2>&1 || true
+    fi
+
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 install zram-tools -y >/dev/null 2>&1 || true
     BEST_ALGO="$(wptt_detect_best_zram_algo)"
-    cat >"$duong_dan_config_zram" <<EOF
+
+    if ! wptt_atomic_write_file "$duong_dan_config_zram" 644 <<EOF
 ALGO=${BEST_ALGO}
 PERCENT=${ZRAM_PERCENT}
 SIZE=${ZRAM_SIZE_MB}
 PRIORITY=100
 EOF
-    chmod 644 "$duong_dan_config_zram"
+    then
+      _runloi "$task_pkg"
+      _wptt_exit 1 "enter"
+    fi
   else
     if command -v dnf >/dev/null 2>&1; then
       dnf install zram-generator -y >/dev/null 2>&1 || true
@@ -344,53 +440,67 @@ EOF
     fi
     BEST_ALGO="$(wptt_detect_best_zram_algo)"
 
-    cat >"$duong_dan_config_zram" <<EOF
+    if ! wptt_atomic_write_file "$duong_dan_config_zram" 644 <<EOF
 [zram0]
-zram-fraction = 1.0
-max-zram-size = ${ZRAM_SIZE_MB}
 zram-size = ${ZRAM_SIZE_MB}
 compression-algorithm = ${BEST_ALGO}
 swap-priority = 100
 fs-type = swap
 EOF
-    chmod 644 "$duong_dan_config_zram"
+    then
+      _runloi "$task_pkg"
+      _wptt_exit 1 "enter"
+    fi
   fi
-  _rundone "Cài đặt thư viện thành công"
+  _rundone "$task_pkg"
 
   # 2. Khởi động dịch vụ ZRAM TRƯỚC khi tắt Swap đĩa (Chống OOM lúc chuyển giao)
-  _runing "Đang khởi động dịch vụ ZRAM ($BEST_ALGO - ${ZRAM_SIZE_MB}MB)..."
+  task_start="Khởi động dịch vụ ZRAM (${BEST_ALGO} - ${ZRAM_SIZE_MB}MB)"
+  _runing "$task_start"
+
+  # Nếu tồn tại /dev/zram* lạ do hệ thống tạo sẵn trước khi zramswap hoạt động, xả sạch để nhận đúng cấu hình mới
+  if ((ZRAM_DEV_ACTIVE == 1)); then
+    if [[ "$OS_TYPE" == "UBUNTU" ]] && ! systemctl is-active --quiet zramswap 2>/dev/null; then
+      wptt_reset_all_zram_devices
+    elif [[ "$OS_TYPE" == "RHEL" ]] && ! systemctl is-active --quiet dev-zram0.swap 2>/dev/null; then
+      wptt_reset_all_zram_devices
+    fi
+  fi
+
   systemctl daemon-reload >/dev/null 2>&1 || true
   if [[ "$OS_TYPE" == "UBUNTU" ]]; then
     systemctl enable zramswap >/dev/null 2>&1 || true
     systemctl restart zramswap >/dev/null 2>&1 || true
   else
+    systemctl restart systemd-zram-setup@zram0.service >/dev/null 2>&1 || true
     systemctl start dev-zram0.swap >/dev/null 2>&1 || true
   fi
-  _rundone "ZRAM đã hoạt động"
+  _rundone "$task_start"
 
   # 3. Đồng bộ Kernel VM (swappiness=100, page-cluster=0) & Dọn dẹp Swap đĩa cũ
-  _runing "Đang đồng bộ Kernel (swappiness=100) và thu hồi Swap đĩa cũ..."
+  task_vm="Đồng bộ Kernel (swappiness=100) và thu hồi Swap đĩa cũ"
+  _runing "$task_vm"
   wptt_sync_zram_kernel_vm 100 0
 
   # Chỉ tắt các phân vùng Swap trên ổ cứng (Giữ nguyên /dev/zram*)
   while IFS=' ' read -r sw_dev _; do
     [[ "$sw_dev" == "Filename" || -z "$sw_dev" || "$sw_dev" == /dev/zram* ]] && continue
-    swapoff "$sw_dev" >/dev/null 2>&1 || true
+    "$SWAPOFF_BIN" "$sw_dev" >/dev/null 2>&1 || true
   done </proc/swaps
 
-  /bin/rm -f /var/swap.1 /swapfile /swap.img 2>/dev/null || true
+  /bin/rm -f -- /var/swap.1 /swapfile /swap.img 2>/dev/null || true
   wptt_update_fstab_swap "remove_disk_swap"
   systemctl daemon-reload >/dev/null 2>&1 || true
-  _rundone "Tối ưu hóa môi trường RAM hoàn tất"
+  _rundone "$task_vm"
 
-  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT KÍCH HOẠT ZRAM${C_RESET}"
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
   left_text "Dung lượng ZRAM : ${C_YELLOW}${ZRAM_SIZE_MB} MB${C_RESET}" 2
   left_text "Thuật toán nén  : ${C_YELLOW}${BEST_ALGO}${C_RESET}" 2
   left_text "Thông số Kernel : ${C_YELLOW}vm.swappiness = 100 | vm.page-cluster = 0${C_RESET}" 2
   left_text "Trạng thái      : ${C_BOLD_WHITE}Máy chủ đã trang bị bộ đệm nén RAM siêu tốc.${C_RESET}" 2
-  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 # ==============================================================================
 # PHẦN 2: HỦY CÀI ĐẶT ZRAM (ĐANG ON -> YÊU CẦU OFF)
@@ -398,39 +508,70 @@ EOF
 else
 
   if [[ "$bo_qua_xac_nhan" != "y" ]]; then
-    if ! wptt_xac_nhan "Bạn có chắc chắn muốn TẮT và GỠ BỎ ZRAM không?" "Hệ thống sẽ tái tạo lại file Swap đĩa truyền thống (1024MB)." "" "Đồng ý Gỡ Bỏ" "Hủy thao tác"; then
-      echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-      wptt_quay_ve_menu "$route_flag" 0
+    if ! wptt_xac_nhan "Bạn có chắc chắn muốn TẮT và GỠ BỎ ZRAM không?" \
+      "Hệ thống sẽ tái tạo lại file Swap đĩa truyền thống (1024MB)." "" \
+      "Đồng ý Gỡ Bỏ" "Hủy thao tác"; then
+      printf '%bĐã hủy thao tác.%b\n\n' "${C_YELLOW}" "${C_RESET}"
+      _wptt_exit 0
     fi
   fi
 
-  wptt_logs "INFO" "Huỷ kích hoạt ZRAM"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Huỷ kích hoạt ZRAM"
 
   # 1. Tạo và kích hoạt Swap đĩa 1024MB TRƯỚC khi tắt ZRAM (Chống tràn RAM gây sập MariaDB)
-  echo ""
-  _runing "Đang khởi tạo lại Swap đĩa dự phòng (1024MB) trước khi rút ZRAM..."
-  /bin/rm -f /var/swap.1 /swapfile /swap.img 2>/dev/null || true
-  if command -v fallocate >/dev/null 2>&1; then
-    fallocate -l 1024M /var/swap.1 >/dev/null 2>&1 || /bin/dd if=/dev/zero of=/var/swap.1 bs=1M count=1024 >/dev/null 2>&1
-  else
-    /bin/dd if=/dev/zero of=/var/swap.1 bs=1M count=1024 >/dev/null 2>&1
-  fi
-  chmod 600 /var/swap.1
-  /sbin/mkswap /var/swap.1 >/dev/null 2>&1 || true
-  /sbin/swapon /var/swap.1 >/dev/null 2>&1 || true
-  wptt_update_fstab_swap "add_disk_swap"
-  _rundone "Tái tạo Swap đĩa truyền thống hoàn tất"
+  printf '\n'
+  task_swap="Khởi tạo lại Swap đĩa dự phòng (1024MB) trước khi rút ZRAM"
+  _runing "$task_swap"
 
-  # 2. Dừng dịch vụ ZRAM (Lúc này dữ liệu trong ZRAM sẽ xả an toàn sang /var/swap.1)
-  _runing "Đang dừng dịch vụ ZRAM và đồng bộ lại Kernel (swappiness=10)..."
+  avail_var_kb="$(df -Pk /var 2>/dev/null | awk 'NR==2 {print $4}')"
+  swap_created=0
+  if [[ "$avail_var_kb" =~ ^[0-9]+$ ]] && ((avail_var_kb >= 1572864)); then
+    /bin/rm -f -- /var/swap.1 /swapfile /swap.img 2>/dev/null || true
+
+    if command -v fallocate >/dev/null 2>&1; then
+      fallocate -l 1024M /var/swap.1 >/dev/null 2>&1 || true
+    fi
+
+    # Đảm bảo file hợp lệ cho swapon; nếu FS (Btrfs/XFS) từ chối fallocate thì ghi lại bằng dd
+    if [[ -f /var/swap.1 ]]; then
+      /bin/chmod 600 -- /var/swap.1
+      if "$MKSWAP_BIN" /var/swap.1 >/dev/null 2>&1 && "$SWAPON_BIN" /var/swap.1 >/dev/null 2>&1; then
+        swap_created=1
+      fi
+    fi
+
+    if ((swap_created == 0)); then
+      /bin/rm -f -- /var/swap.1 2>/dev/null || true
+      if /bin/dd if=/dev/zero of=/var/swap.1 bs=1M count=1024 status=none >/dev/null 2>&1; then
+        /bin/chmod 600 -- /var/swap.1
+        if "$MKSWAP_BIN" /var/swap.1 >/dev/null 2>&1 && "$SWAPON_BIN" /var/swap.1 >/dev/null 2>&1; then
+          swap_created=1
+        fi
+      fi
+    fi
+  fi
+
+  if ((swap_created == 1)); then
+    wptt_update_fstab_swap "add_disk_swap"
+    _rundone "$task_swap"
+  else
+    /bin/rm -f -- /var/swap.1 2>/dev/null || true
+    _runloi "$task_swap"
+    printf '%bCảnh báo:%b Không đủ dung lượng trống tại /var hoặc phân vùng không hỗ trợ swapfile; vẫn tiếp tục gỡ ZRAM.\n' "${C_YELLOW}" "${C_RESET}"
+  fi
+
+  # 2. Dừng dịch vụ ZRAM và xả toàn bộ /dev/zram* trên cả Ubuntu lẫn RHEL
+  task_stop="Dừng dịch vụ ZRAM và đồng bộ lại Kernel (swappiness=10)"
+  _runing "$task_stop"
+
   if [[ "$OS_TYPE" == "UBUNTU" ]]; then
     systemctl stop zramswap >/dev/null 2>&1 || true
     systemctl disable zramswap >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get remove --purge zram-tools -y >/dev/null 2>&1 || true
+    wptt_reset_all_zram_devices
+    DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=60 remove --purge zram-tools -y >/dev/null 2>&1 || true
   else
     systemctl stop dev-zram0.swap >/dev/null 2>&1 || true
-    swapoff /dev/zram0 >/dev/null 2>&1 || true
-    zramctl --reset /dev/zram0 >/dev/null 2>&1 || true
+    wptt_reset_all_zram_devices
     if command -v dnf >/dev/null 2>&1; then
       dnf remove zram-generator -y >/dev/null 2>&1 || true
     else
@@ -438,21 +579,25 @@ else
     fi
   fi
 
-  /bin/rm -f "${duong_dan_config_zram:?}"
+  /bin/rm -f -- "${duong_dan_config_zram:?}" 2>/dev/null || true
   systemctl daemon-reload >/dev/null 2>&1 || true
 
   # 3. Chuyển Kernel VM về chế độ Swap đĩa (swappiness=10, page-cluster=3)
   wptt_sync_zram_kernel_vm 10 3
-  _rundone "Dọn dẹp cấu hình ZRAM và đồng bộ Kernel thành công"
+  _rundone "$task_stop"
 
-  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT GỠ BỎ ZRAM${C_RESET}"
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Swap hiện tại   : ${C_YELLOW}Swap Đĩa Truyền Thống (/var/swap.1 - 1024MB)${C_RESET}" 2
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  if ((swap_created == 1)); then
+    left_text "Swap hiện tại   : ${C_YELLOW}Swap Đĩa Truyền Thống (/var/swap.1 - 1024MB)${C_RESET}" 2
+  else
+    left_text "Swap hiện tại   : ${C_YELLOW}Không có Swap đĩa (chưa đủ dung lượng tại /var)${C_RESET}" 2
+  fi
   left_text "Thông số Kernel : ${C_YELLOW}vm.swappiness = 10 | vm.page-cluster = 3${C_RESET}" 2
-  left_text "Trạng thái      : ${C_BOLD_WHITE}Đã khôi phục cơ chế Swap ổ cứng an toàn.${C_RESET}" 2
-  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  left_text "Trạng thái      : ${C_BOLD_WHITE}Đã gỡ bỏ ZRAM và khôi phục cấu hình Kernel mặc định.${C_RESET}" 2
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 fi
 
-wptt_quay_ve_menu "$route_flag" 0
+_wptt_exit 0

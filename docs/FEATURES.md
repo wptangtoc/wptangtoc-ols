@@ -44,10 +44,10 @@ Tính năng này làm cho WPTangToc OLS trở thành một lựa chọn hấp d�
 
 ---
 
-## ${cap_nhat:-Cập nhật} WordPress Core (`update-core`)
+## Cập nhật WordPress Core (`update-core`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 1. ${cap_nhat:-Cập nhật} WordPress Core  _(bấm lần lượt: 1 → 1 → 1)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 1. Cập nhật WordPress Core  _(bấm lần lượt: 1 → 1 → 1)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-core`
 
 ```text
@@ -57,10 +57,10 @@ CSDL (update-db) lên phiên bản mới nhất, tự động xử lý khóa fil
 
 ---
 
-## ${cap_nhat:-Cập nhật} Plugins (`update-plugin`)
+## Cập nhật Plugins (`update-plugin`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 2. ${cap_nhat:-Cập nhật} Plugins  _(bấm lần lượt: 1 → 1 → 2)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 2. Cập nhật Plugins  _(bấm lần lượt: 1 → 1 → 2)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-plugin`
 
 ```text
@@ -78,10 +78,10 @@ Tính năng cập nhật plugin WordPress đóng vai trò cực kỳ quan trọn
 
 ---
 
-## ${cap_nhat:-Cập nhật} Themes (`update-theme`)
+## Cập nhật Themes (`update-theme`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 3. ${cap_nhat:-Cập nhật} Themes  _(bấm lần lượt: 1 → 1 → 3)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 3. Cập nhật Themes  _(bấm lần lượt: 1 → 1 → 3)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-theme`
 
 ```text
@@ -98,10 +98,10 @@ Tính năng cập nhật theme WordPress là một phần thiết yếu để du
 
 ---
 
-## ${cap_nhat:-Cập nhật} WordPress (ALL) (`update-full`)
+## Cập nhật WordPress (ALL) (`update-full`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 4. ${cap_nhat:-Cập nhật} WordPress (ALL)  _(bấm lần lượt: 1 → 1 → 4)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 4. Cập nhật WordPress (ALL)  _(bấm lần lượt: 1 → 1 → 4)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/update-full`
 
 ```text
@@ -137,10 +137,10 @@ Mỗi website được xử lý tuần tự với giới hạn thời gian (time
 
 ---
 
-## ${kiem_tra:-Kiểm tra} ${phien_ban:-phiên bản} WordPress (`kiem-tra-version-wp`)
+## Kiểm tra phiên bản WordPress (`kiem-tra-version-wp`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 5. ${kiem_tra:-Kiểm tra} ${phien_ban:-phiên bản} WordPress  _(bấm lần lượt: 1 → 1 → 5)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 5. Kiểm tra phiên bản WordPress  _(bấm lần lượt: 1 → 1 → 5)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/kiem-tra-version-wp`
 
 ```text
@@ -208,10 +208,10 @@ Tóm lại: WPTangToc OLS tích hợp tính năng hạ cấp plugin giúp bạn 
 
 ---
 
-## ${cai_lai:-Cài lại} WordPress Core (`ghi-de-wordpress-core`)
+## Cài lại WordPress Core (`ghi-de-wordpress-core`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 8. ${cai_lai:-Cài lại} WordPress Core  _(bấm lần lượt: 1 → 1 → 8)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 8. Cài lại WordPress Core  _(bấm lần lượt: 1 → 1 → 8)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/ghi-de-wordpress-core`
 
 ```text
@@ -228,10 +228,10 @@ Tóm lại, lệnh này cung cấp một cách mạnh mẽ để làm mới các
 
 ---
 
-## ${cai_lai:-Cài lại} WordPress (ALL) (`wptt-update-reinstall-wordpress`)
+## Cài lại WordPress (ALL) (`wptt-update-reinstall-wordpress`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 9. ${cai_lai:-Cài lại} WordPress (ALL)  _(bấm lần lượt: 1 → 1 → 9)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 1. Quản lý Cập nhật WordPress › 9. Cài lại WordPress (ALL)  _(bấm lần lượt: 1 → 1 → 9)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/wptt-update-reinstall-wordpress`
 
 ```text
@@ -1788,20 +1788,20 @@ Lợi ích:
 - **Tệp nguồn:** `/etc/wptt/backup-restore/wptt-saoluu`
 
 ```text
-💾 TÍNH NĂNG: SAO LƯU WEBSITE (BACKUP WEBSITE)
+  💾 TÍNH NĂNG: SAO LƯU WEBSITE (BACKUP WEBSITE)
 
-Sao lưu (Backup) là quá trình đóng gói toàn bộ dữ liệu của website (Mã nguồn & Database) và cất giữ ở một nơi an toàn. 
+  Sao lưu (Backup) là quá trình đóng gói toàn bộ dữ liệu của website (Mã nguồn & Database) và cất giữ ở một nơi an toàn. 
 
-Đây là "Chiếc phao cứu sinh" quan trọng nhất của mọi quản trị viên. Nếu website của bạn bị Hacker tấn công, bị lỗi do cập nhật Plugin, hoặc bạn thao tác xóa nhầm dữ liệu, tính năng này giúp bạn "Quay ngược thời gian" để khôi phục lại website về trạng thái hoạt động hoàn hảo trước đó.
+  Đây là "Chiếc phao cứu sinh" quan trọng nhất của mọi quản trị viên. Nếu website của bạn bị Hacker tấn công, bị lỗi do cập nhật Plugin, hoặc bạn thao tác xóa nhầm dữ liệu, tính năng này giúp bạn "Quay ngược thời gian" để khôi phục lại website về trạng thái hoạt động hoàn hảo trước đó.
 
-🚀 HỆ THỐNG SAO LƯU HOẠT ĐỘNG NHƯ THẾ NÀO?
- ➜ Sao lưu Toàn diện: Đóng gói toàn bộ file Code, Hình ảnh (Uploads) và xuất (Dump) toàn bộ Cơ sở dữ liệu (Database).
- ➜ Đẩy lên Đám mây (Cloud Sync): Không chỉ lưu tại ổ cứng máy chủ (Local), hệ thống hỗ trợ tích hợp Rclone để tự động đẩy file Backup lên Google Drive, OneDrive, S3 Storage hoặc Telegram Cloud. Giúp dữ liệu an toàn tuyệt đối ngay cả khi máy chủ (VPS) bị hỏng ổ cứng hoặc mất quyền truy cập.
+  🚀 HỆ THỐNG SAO LƯU HOẠT ĐỘNG NHƯ THẾ NÀO?
+   ➜ Sao lưu Toàn diện: Đóng gói toàn bộ file Code, Hình ảnh (Uploads) và xuất (Dump) toàn bộ Cơ sở dữ liệu (Database).
+   ➜ Đẩy lên Đám mây (Cloud Sync): Không chỉ lưu tại ổ cứng máy chủ (Local), hệ thống hỗ trợ tích hợp Rclone để tự động đẩy file Backup lên Google Drive, OneDrive, S3 Storage hoặc Telegram Cloud. Giúp dữ liệu an toàn tuyệt đối ngay cả khi máy chủ (VPS) bị hỏng ổ cứng hoặc mất quyền truy cập.
 
-🛡️ CÔNG NGHỆ BẢO MẬT & TỐI ƯU HÓA:
- - Khóa tiến trình (Thread Lock): Nếu bạn đang chạy Backup, hệ thống sẽ khóa chức năng Restore để tránh tình trạng "Đọc - Ghi đè" cùng lúc làm hỏng dữ liệu.
- - Nén siêu tốc (Zstandard/Gzip): Tự động nén dữ liệu để tiết kiệm tối đa không gian lưu trữ và băng thông khi đẩy lên Cloud.
- - Loại bỏ file rác: Tự động loại trừ các thư mục Cache, Log lỗi và các bản backup cũ của các Plugin bên thứ 3 (như UpdraftPlus, BackupBuddy) để file Backup nhẹ nhất có thể.
+  🛡️ CÔNG NGHỆ BẢO MẬT & TỐI ƯU HÓA:
+- Khóa tiến trình (Thread Lock): Nếu bạn đang chạy Backup, hệ thống sẽ khóa chức năng Restore để tránh tình trạng "Đọc - Ghi đè" cùng lúc làm hỏng dữ liệu.
+- Nén siêu tốc (Zstandard/Gzip): Tự động nén dữ liệu để tiết kiệm tối đa không gian lưu trữ và băng thông khi đẩy lên Cloud.
+- Loại bỏ file rác: Tự động loại trừ các thư mục Cache, Log lỗi và các bản backup cũ của các Plugin bên thứ 3 (như UpdraftPlus, BackupBuddy) để file Backup nhẹ nhất có thể.
 ```
 
 ---
@@ -1842,18 +1842,18 @@ Nếu website của bạn bất ngờ gặp sự cố (Bị Hacker tấn công, 
 - **Tệp nguồn:** `/etc/wptt/db/wptt-saoluu-database`
 
 ```text
-Tính năng Sao lưu database [Database Backup] là quá trình tạo ra một bản sao của toàn bộ cơ sở dữ liệu của bạn – bao gồm cấu trúc [các bảng, cột], dữ liệu chứa trong đó, các chỉ mục [index] – rồi lưu trữ bản sao đó ở một nơi an toàn. Khôi phục là cặp đôi không thể thiếu cho sự an toàn của dữ liệu.
+  Tính năng Sao lưu database [Database Backup] là quá trình tạo ra một bản sao của toàn bộ cơ sở dữ liệu của bạn – bao gồm cấu trúc [các bảng, cột], dữ liệu chứa trong đó, các chỉ mục [index] – rồi lưu trữ bản sao đó ở một nơi an toàn. Khôi phục là cặp đôi không thể thiếu cho sự an toàn của dữ liệu.
 
-Nói một cách đơn giản, đây là việc bạn chụp lại một bức ảnh toàn bộ kho chứa dữ liệu [database] của mình tại một thời điểm nhất định, để nếu có chuyện không may xảy ra với kho chính, bạn vẫn còn bức ảnh đó để dựng lại.
+  Nói một cách đơn giản, đây là việc bạn chụp lại một bức ảnh toàn bộ kho chứa dữ liệu [database] của mình tại một thời điểm nhất định, để nếu có chuyện không may xảy ra với kho chính, bạn vẫn còn bức ảnh đó để dựng lại.
 
-Mục Đích Chính [Vô Cùng Quan Trọng]
-* Phòng chống mất mát dữ liệu: Đây là mục đích hàng đầu. Bảo vệ dữ liệu khỏi lỗi phần cứng, lỗi phần mềm, xóa nhầm bởi con người, tấn công mạng [malware, ransomware], hoặc thiên tai.
-* Khôi phục sau sự cố [Disaster Recovery]: Cho phép bạn đưa database trở lại trạng thái hoạt động ổn định sau khi gặp vấn đề.
-* Di chuyển dữ liệu [Data Migration]: Sử dụng bản sao lưu để chuyển database sang một máy chủ mới hoặc một môi trường khác.
-* Phục vụ thử nghiệm và phát triển: Tạo bản sao của database sản xuất để thử nghiệm tính năng mới hoặc gỡ lỗi mà không ảnh hưởng đến dữ liệu thật.
-* Lưu trữ và tuân thủ quy định: Một số ngành nghề yêu cầu phải sao lưu và lưu trữ dữ liệu định kỳ.
+  Mục Đích Chính [Vô Cùng Quan Trọng]
+- Phòng chống mất mát dữ liệu: Đây là mục đích hàng đầu. Bảo vệ dữ liệu khỏi lỗi phần cứng, lỗi phần mềm, xóa nhầm bởi con người, tấn công mạng [malware, ransomware], hoặc thiên tai.
+- Khôi phục sau sự cố [Disaster Recovery]: Cho phép bạn đưa database trở lại trạng thái hoạt động ổn định sau khi gặp vấn đề.
+- Di chuyển dữ liệu [Data Migration]: Sử dụng bản sao lưu để chuyển database sang một máy chủ mới hoặc một môi trường khác.
+- Phục vụ thử nghiệm và phát triển: Tạo bản sao của database sản xuất để thử nghiệm tính năng mới hoặc gỡ lỗi mà không ảnh hưởng đến dữ liệu thật.
+- Lưu trữ và tuân thủ quy định: Một số ngành nghề yêu cầu phải sao lưu và lưu trữ dữ liệu định kỳ.
 
-Để sẵn sàng để sử dụng khi cần khôi phục.
+  Để sẵn sàng để sử dụng khi cần khôi phục.
 ```
 
 ---

@@ -152,14 +152,22 @@ in_log_neu_loi() {
 
 @test "AutoTune: Cấu hình ZRAM được tạo thành công dựa theo Hệ Điều Hành" {
   if grep -qi "ubuntu" /etc/os-release 2>/dev/null; then
-      # Kiểm tra chuẩn Ubuntu
-      [ -f "/etc/default/zramswap" ]
-      run grep "ALGO=" /etc/default/zramswap
-      [ "$status" -eq 0 ]
+    if [[ ! -f "/etc/default/zramswap" ]]; then
+      {
+        echo "=== DEBUG ZRAM UBUNTU ==="
+        uname -a
+        cat /proc/swaps 2>/dev/null || true
+        modprobe -v zram 2>&1 || true
+        dpkg -l zram-tools zram-generator 2>&1 || true
+        ls -la /etc/default/zram* /etc/systemd/zram* 2>&1 || true
+      } >&3
+    fi
+    [ -f "/etc/default/zramswap" ]
+    run grep "ALGO=" /etc/default/zramswap
+    [ "$status" -eq 0 ]
   else
-      # Kiểm tra chuẩn RHEL/AlmaLinux
-      [ -f "/etc/systemd/zram-generator.conf" ]
-      run grep "zram-size =" /etc/systemd/zram-generator.conf
-      [ "$status" -eq 0 ]
+    [ -f "/etc/systemd/zram-generator.conf" ]
+    run grep "zram-size =" /etc/systemd/zram-generator.conf
+    [ "$status" -eq 0 ]
   fi
 }
