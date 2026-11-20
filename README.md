@@ -77,7 +77,7 @@
 <h2>🛠️ Danh sách Tính năng Đồ sộ</h2>
 <p>WPTangToc OLS không chỉ là kịch bản cài đặt, mà là một hệ sinh thái quản trị máy chủ hoàn chỉnh mang tiêu chuẩn Enterprise, bao gồm:</p>
 <ul>
-    <li><b>Nền tảng lõi tối thượng:</b> Vận hành trên OpenLiteSpeed, LSPHP tùy biến đa phiên bản (7.1 đến 8.5 chạy song song) và hệ quản trị cơ sở dữ liệu MariaDB LTS (10.11 đến 12.3).</li>
+    <li><b>Nền tảng lõi tối thượng:</b> Vận hành trên OpenLiteSpeed, LSPHP tùy biến đa phiên bản (7.1 đến 8.6 chạy song song) và hệ quản trị cơ sở dữ liệu MariaDB LTS (10.11 đến 12.3).</li>
     <li><b>Tối ưu Hệ điều hành & Mạng (Kernel Tuning):</b> Tự động cấu hình sysctl, ulimit, kích hoạt thuật toán chống nghẽn mạng TCP BBR và phân bổ tối ưu Zram/Swap theo đúng phần cứng vật lý.</li>
     <li><b>Quản lý Website toàn diện:</b> Khởi tạo không giới hạn Domain/Subdomain, cấp phát chứng chỉ SSL Let's Encrypt hoặc ZeroSSL chỉ với 1 thao tác tự động gia hạn vĩnh viễn.</li>
     <li><b>Dễ dàng nhân bản (Clone)</b> Tạo môi trường thử nghiệm (Staging cấp sẵn miễn phí domain *.wptangtoc-ols.com để giả lập) chỉ với 1 thao tác.</li>
