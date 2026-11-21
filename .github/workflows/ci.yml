@@ -510,12 +510,40 @@ jobs:
             echo "::group::🚀 Khởi tạo máy chủ WPTangToc OLS (Cài đặt hệ thống)"
             export TERM=xterm
             export CI=true
+            export GITHUB_ACTIONS=true
 
             LOG_INSTALL="$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log"
             LOG_BATS="$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
-            trap 'cp /var/log/wptangtoc-install.log "$LOG_INSTALL" 2>/dev/null || true' EXIT
+            CURRENT_STEP="init"
+
+            cleanup_vm() {
+              rc=$?
+              cp /var/log/wptangtoc-install.log "$LOG_INSTALL" 2>/dev/null || true
+              if [ "$rc" -ne 0 ]; then
+                echo "::endgroup::"
+                echo "::error::VM dừng sớm tại bước [$CURRENT_STEP] với mã lỗi $rc"
+                if [ -f /var/log/wptangtoc-ols.log ]; then
+                  echo "=== 40 dòng cuối /var/log/wptangtoc-ols.log ==="
+                  tail -n 40 /var/log/wptangtoc-ols.log || true
+                fi
+              fi
+              exit "$rc"
+            }
+            trap cleanup_vm EXIT
+
+            stub_wptt_menus() {
+              printf '#!/bin/bash\nexit 0\n' > /usr/bin/wptangtoc
+              printf '#!/bin/bash\nexit 0\n' > /etc/wptt/wptt-status
+              printf '#!/bin/bash\nexit 0\n' > /etc/wptt/wptt-status2
+              find /etc/wptt -maxdepth 2 -type f -name 'wptt-*main' | while IFS= read -r mfile; do
+                printf '#!/bin/bash\nexit 0\n' > "$mfile"
+                chmod +x "$mfile"
+              done
+              chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 2>/dev/null || true
+            }
 
             # 1. Tắt các timer chạy ngầm tranh chấp khóa DNF
+            CURRENT_STEP="disable-dnf-timers"
             cloud-init status --wait >/dev/null 2>&1 || true
             systemctl stop dnf-makecache.timer dnf-automatic.timer packagekit.service 2>/dev/null || true
             systemctl disable dnf-makecache.timer dnf-automatic.timer packagekit.service 2>/dev/null || true
@@ -524,6 +552,7 @@ jobs:
             rm -f /var/run/yum.pid /var/run/dnf.pid 2>/dev/null || true
 
             # 2. Tối ưu hóa tốc độ DNF trên QEMU (Ép IPv4 chống treo, tải 10 luồng, tắt weak_deps)
+            CURRENT_STEP="configure-dnf"
             sed -i '/^ip_resolve=/d; /^max_parallel_downloads=/d; /^fastestmirror=/d; /^install_weak_deps=/d; /^timeout=/d; /^minrate=/d' /etc/dnf/dnf.conf 2>/dev/null || true
             cat << 'EOF_DNF_CONF' >> /etc/dnf/dnf.conf
             ip_resolve=4
@@ -536,23 +565,25 @@ jobs:
 
             dnf install -y epel-release sudo curl e2fsprogs
             dnf install -y bats
-            curl -sO https://wptangtoc.com/share/wptangtoc-ols
+            curl -4 -fsSL --retry 3 --retry-delay 2 --max-time 30 -O https://wptangtoc.com/share/wptangtoc-ols
 
             # 3. Khóa cứng lệnh reboot/shutdown/poweroff/halt
+            CURRENT_STEP="mask-reboot"
             systemctl mask reboot.target halt.target poweroff.target shutdown.target || true
 
             for cmd in reboot shutdown halt poweroff; do
               chattr -i /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
               rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-              echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-              chmod +x /usr/sbin/$cmd
-              ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-              ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
-              chattr +i /usr/sbin/$cmd 2>/dev/null || true
-              chattr +i /sbin/$cmd 2>/dev/null || true
+              printf '#!/bin/bash\necho "Đã chặn lệnh %s trên CI/CD!"\n' "$cmd" > "/usr/sbin/$cmd"
+              chmod +x "/usr/sbin/$cmd"
+              ln -sf "/usr/sbin/$cmd" "/sbin/$cmd" 2>/dev/null || true
+              ln -sf "/usr/sbin/$cmd" "/bin/$cmd" 2>/dev/null || true
+              chattr +i "/usr/sbin/$cmd" 2>/dev/null || true
+              chattr +i "/sbin/$cmd" 2>/dev/null || true
             done
 
             # 4. Wrapper DNF/YUM: Chặn update/upgrade và luôn ép cờ tăng tốc IPv4 + 10 luồng
+            CURRENT_STEP="wrap-dnf"
             mv /usr/bin/dnf /usr/bin/dnf_real
             cat << 'EOF' > /usr/bin/dnf
             #!/bin/bash
@@ -566,37 +597,51 @@ jobs:
             chmod +x /usr/bin/dnf
             ln -sf /usr/bin/dnf /usr/bin/yum
 
-            bash wptangtoc-ols --auto
+            CURRENT_STEP="install-wptangtoc"
+            bash wptangtoc-ols --auto </dev/null
 
+            CURRENT_STEP="sync-commit-code"
             cd "$GITHUB_WORKSPACE"
             echo "🔄 Đang chép đè mã nguồn từ commit hiện tại vào /etc/wptt/..."
             cp -a ./tool-wptangtoc-ols/. /etc/wptt/
             chmod -R 755 /etc/wptt/
-
             mkdir -p /etc/wptt/tmp
-            curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt \
-              | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
+            chmod 700 /etc/wptt/tmp
 
-            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
+            # 5. Vô hiệu hóa Menu TRƯỚC khi đổi domain chính (đồng bộ với Ubuntu)
+            CURRENT_STEP="stub-menus-pre"
+            stub_wptt_menus
 
-            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-            for file in /etc/wptt/wptt-*main; do
-              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-            done
-            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status \
-              /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
+            # 6. Lấy version an toàn (ép IPv4 + retry + fallback cục bộ, không để grep chết ngầm)
+            CURRENT_STEP="fetch-version"
+            VER_VAL="$(curl -4 -fsSL --connect-timeout 10 --max-time 20 --retry 3 --retry-delay 2 \
+              https://wptangtoc.com/share/version-wptangtoc-ols.txt 2>/dev/null \
+              | head -n 1 | tr -d '\r\n' || true)"
+            if echo "$VER_VAL" | grep -q '\.'; then
+              printf '%s\n' "$VER_VAL" > /etc/wptt/tmp/wptangtoc-ols-version-main
+            elif [ -s ./version-wptangtoc-ols.txt ]; then
+              head -n 1 ./version-wptangtoc-ols.txt > /etc/wptt/tmp/wptangtoc-ols-version-main
+            elif [ ! -s /etc/wptt/tmp/wptangtoc-ols-version-main ]; then
+              printf '8.4.1.7\n' > /etc/wptt/tmp/wptangtoc-ols-version-main
+            fi
+
+            CURRENT_STEP="change-main-domain"
+            echo "🌐 Đang đổi domain mặc định sang github.wptangtoc.com..."
+            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com </dev/null
+
+            CURRENT_STEP="stub-menus-post"
+            stub_wptt_menus
             echo "::endgroup::"
 
+            CURRENT_STEP="run-bats"
             echo "::group::🧪 Chạy Kiểm thử BATS (Cô lập từng file)"
             if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
               set -o pipefail
               cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-              > "$LOG_BATS"
+              : > "$LOG_BATS"
 
               for test_file in tests/*.bats; do
-                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$LOG_BATS"
+                printf '\n=== ĐANG CHẠY BÀI TEST: %s ===\n' "$test_file" | tee -a "$LOG_BATS"
                 cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
                 bats "$test_file" | tee -a "$LOG_BATS"
               done
@@ -668,11 +713,39 @@ jobs:
             echo "::group::🚀 Khởi tạo máy chủ WPTangToc OLS (Cài đặt hệ thống)"
             export TERM=xterm
             export CI=true
+            export GITHUB_ACTIONS=true
 
             LOG_INSTALL="$GITHUB_WORKSPACE/wptangtoc-install-alma${{ matrix.release }}-${{ matrix.arch }}.log"
             LOG_BATS="$GITHUB_WORKSPACE/bats-test-alma${{ matrix.release }}-${{ matrix.arch }}.log"
-            trap 'cp /var/log/wptangtoc-install.log "$LOG_INSTALL" 2>/dev/null || true' EXIT
+            CURRENT_STEP="init"
 
+            cleanup_vm() {
+              rc=$?
+              cp /var/log/wptangtoc-install.log "$LOG_INSTALL" 2>/dev/null || true
+              if [ "$rc" -ne 0 ]; then
+                echo "::endgroup::"
+                echo "::error::VM dừng sớm tại bước [$CURRENT_STEP] với mã lỗi $rc"
+                if [ -f /var/log/wptangtoc-ols.log ]; then
+                  echo "=== 40 dòng cuối /var/log/wptangtoc-ols.log ==="
+                  tail -n 40 /var/log/wptangtoc-ols.log || true
+                fi
+              fi
+              exit "$rc"
+            }
+            trap cleanup_vm EXIT
+
+            stub_wptt_menus() {
+              printf '#!/bin/bash\nexit 0\n' > /usr/bin/wptangtoc
+              printf '#!/bin/bash\nexit 0\n' > /etc/wptt/wptt-status
+              printf '#!/bin/bash\nexit 0\n' > /etc/wptt/wptt-status2
+              find /etc/wptt -maxdepth 2 -type f -name 'wptt-*main' | while IFS= read -r mfile; do
+                printf '#!/bin/bash\nexit 0\n' > "$mfile"
+                chmod +x "$mfile"
+              done
+              chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 2>/dev/null || true
+            }
+
+            CURRENT_STEP="disable-dnf-timers"
             cloud-init status --wait >/dev/null 2>&1 || true
             systemctl stop dnf-makecache.timer dnf-automatic.timer packagekit.service 2>/dev/null || true
             systemctl disable dnf-makecache.timer dnf-automatic.timer packagekit.service 2>/dev/null || true
@@ -680,6 +753,7 @@ jobs:
             killall -9 dnf yum packagekitd 2>/dev/null || true
             rm -f /var/run/yum.pid /var/run/dnf.pid 2>/dev/null || true
 
+            CURRENT_STEP="configure-dnf"
             sed -i '/^ip_resolve=/d; /^max_parallel_downloads=/d; /^fastestmirror=/d; /^install_weak_deps=/d; /^timeout=/d; /^minrate=/d' /etc/dnf/dnf.conf 2>/dev/null || true
             cat << 'EOF_DNF_CONF' >> /etc/dnf/dnf.conf
             ip_resolve=4
@@ -692,21 +766,23 @@ jobs:
 
             dnf install -y epel-release sudo curl e2fsprogs
             dnf install -y bats
-            curl -sO https://wptangtoc.com/share/wptangtoc-ols
+            curl -4 -fsSL --retry 3 --retry-delay 2 --max-time 30 -O https://wptangtoc.com/share/wptangtoc-ols
 
+            CURRENT_STEP="mask-reboot"
             systemctl mask reboot.target halt.target poweroff.target shutdown.target || true
 
             for cmd in reboot shutdown halt poweroff; do
               chattr -i /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
               rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-              echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-              chmod +x /usr/sbin/$cmd
-              ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-              ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
-              chattr +i /usr/sbin/$cmd 2>/dev/null || true
-              chattr +i /sbin/$cmd 2>/dev/null || true
+              printf '#!/bin/bash\necho "Đã chặn lệnh %s trên CI/CD!"\n' "$cmd" > "/usr/sbin/$cmd"
+              chmod +x "/usr/sbin/$cmd"
+              ln -sf "/usr/sbin/$cmd" "/sbin/$cmd" 2>/dev/null || true
+              ln -sf "/usr/sbin/$cmd" "/bin/$cmd" 2>/dev/null || true
+              chattr +i "/usr/sbin/$cmd" 2>/dev/null || true
+              chattr +i "/sbin/$cmd" 2>/dev/null || true
             done
 
+            CURRENT_STEP="wrap-dnf"
             mv /usr/bin/dnf /usr/bin/dnf_real
             cat << 'EOF' > /usr/bin/dnf
             #!/bin/bash
@@ -720,37 +796,49 @@ jobs:
             chmod +x /usr/bin/dnf
             ln -sf /usr/bin/dnf /usr/bin/yum
 
-            bash wptangtoc-ols --auto
+            CURRENT_STEP="install-wptangtoc"
+            bash wptangtoc-ols --auto </dev/null
 
+            CURRENT_STEP="sync-commit-code"
             cd "$GITHUB_WORKSPACE"
             echo "🔄 Đang chép đè mã nguồn từ commit hiện tại vào /etc/wptt/..."
             cp -a ./tool-wptangtoc-ols/. /etc/wptt/
             chmod -R 755 /etc/wptt/
-
             mkdir -p /etc/wptt/tmp
-            curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt \
-              | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
+            chmod 700 /etc/wptt/tmp
 
-            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
+            CURRENT_STEP="stub-menus-pre"
+            stub_wptt_menus
 
-            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-            for file in /etc/wptt/wptt-*main; do
-              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-            done
-            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status \
-              /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
+            CURRENT_STEP="fetch-version"
+            VER_VAL="$(curl -4 -fsSL --connect-timeout 10 --max-time 20 --retry 3 --retry-delay 2 \
+              https://wptangtoc.com/share/version-wptangtoc-ols.txt 2>/dev/null \
+              | head -n 1 | tr -d '\r\n' || true)"
+            if echo "$VER_VAL" | grep -q '\.'; then
+              printf '%s\n' "$VER_VAL" > /etc/wptt/tmp/wptangtoc-ols-version-main
+            elif [ -s ./version-wptangtoc-ols.txt ]; then
+              head -n 1 ./version-wptangtoc-ols.txt > /etc/wptt/tmp/wptangtoc-ols-version-main
+            elif [ ! -s /etc/wptt/tmp/wptangtoc-ols-version-main ]; then
+              printf '8.4.1.7\n' > /etc/wptt/tmp/wptangtoc-ols-version-main
+            fi
+
+            CURRENT_STEP="change-main-domain"
+            echo "🌐 Đang đổi domain mặc định sang github.wptangtoc.com..."
+            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com </dev/null
+
+            CURRENT_STEP="stub-menus-post"
+            stub_wptt_menus
             echo "::endgroup::"
 
+            CURRENT_STEP="run-bats"
             echo "::group::🧪 Chạy Kiểm thử BATS (Cô lập từng file)"
             if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
               set -o pipefail
               cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-              > "$LOG_BATS"
+              : > "$LOG_BATS"
 
               for test_file in tests/*.bats; do
-                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$LOG_BATS"
+                printf '\n=== ĐANG CHẠY BÀI TEST: %s ===\n' "$test_file" | tee -a "$LOG_BATS"
                 cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
                 bats "$test_file" | tee -a "$LOG_BATS"
               done
@@ -828,11 +916,39 @@ jobs:
             echo "::group::🚀 Khởi tạo máy chủ WPTangToc OLS (Cài đặt hệ thống)"
             export TERM=xterm
             export CI=true
+            export GITHUB_ACTIONS=true
 
             LOG_INSTALL="$GITHUB_WORKSPACE/wptangtoc-install-rocky${{ matrix.release }}-${{ matrix.arch }}.log"
             LOG_BATS="$GITHUB_WORKSPACE/bats-test-rocky${{ matrix.release }}-${{ matrix.arch }}.log"
-            trap 'cp /var/log/wptangtoc-install.log "$LOG_INSTALL" 2>/dev/null || true' EXIT
+            CURRENT_STEP="init"
 
+            cleanup_vm() {
+              rc=$?
+              cp /var/log/wptangtoc-install.log "$LOG_INSTALL" 2>/dev/null || true
+              if [ "$rc" -ne 0 ]; then
+                echo "::endgroup::"
+                echo "::error::VM dừng sớm tại bước [$CURRENT_STEP] với mã lỗi $rc"
+                if [ -f /var/log/wptangtoc-ols.log ]; then
+                  echo "=== 40 dòng cuối /var/log/wptangtoc-ols.log ==="
+                  tail -n 40 /var/log/wptangtoc-ols.log || true
+                fi
+              fi
+              exit "$rc"
+            }
+            trap cleanup_vm EXIT
+
+            stub_wptt_menus() {
+              printf '#!/bin/bash\nexit 0\n' > /usr/bin/wptangtoc
+              printf '#!/bin/bash\nexit 0\n' > /etc/wptt/wptt-status
+              printf '#!/bin/bash\nexit 0\n' > /etc/wptt/wptt-status2
+              find /etc/wptt -maxdepth 2 -type f -name 'wptt-*main' | while IFS= read -r mfile; do
+                printf '#!/bin/bash\nexit 0\n' > "$mfile"
+                chmod +x "$mfile"
+              done
+              chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status /etc/wptt/wptt-status2 2>/dev/null || true
+            }
+
+            CURRENT_STEP="disable-dnf-timers"
             cloud-init status --wait >/dev/null 2>&1 || true
             systemctl stop dnf-makecache.timer dnf-automatic.timer packagekit.service 2>/dev/null || true
             systemctl disable dnf-makecache.timer dnf-automatic.timer packagekit.service 2>/dev/null || true
@@ -840,6 +956,7 @@ jobs:
             killall -9 dnf yum packagekitd 2>/dev/null || true
             rm -f /var/run/yum.pid /var/run/dnf.pid 2>/dev/null || true
 
+            CURRENT_STEP="configure-dnf"
             sed -i '/^ip_resolve=/d; /^max_parallel_downloads=/d; /^fastestmirror=/d; /^install_weak_deps=/d; /^timeout=/d; /^minrate=/d' /etc/dnf/dnf.conf 2>/dev/null || true
             cat << 'EOF_DNF_CONF' >> /etc/dnf/dnf.conf
             ip_resolve=4
@@ -852,21 +969,23 @@ jobs:
 
             dnf install -y epel-release sudo curl e2fsprogs
             dnf install -y bats
-            curl -sO https://wptangtoc.com/share/wptangtoc-ols
+            curl -4 -fsSL --retry 3 --retry-delay 2 --max-time 30 -O https://wptangtoc.com/share/wptangtoc-ols
 
+            CURRENT_STEP="mask-reboot"
             systemctl mask reboot.target halt.target poweroff.target shutdown.target || true
 
             for cmd in reboot shutdown halt poweroff; do
               chattr -i /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
               rm -f /sbin/$cmd /usr/sbin/$cmd /bin/$cmd /usr/bin/$cmd 2>/dev/null || true
-              echo -e '#!/bin/bash\necho "Đã chặn lệnh '$cmd' trên CI/CD!"' > /usr/sbin/$cmd
-              chmod +x /usr/sbin/$cmd
-              ln -sf /usr/sbin/$cmd /sbin/$cmd 2>/dev/null || true
-              ln -sf /usr/sbin/$cmd /bin/$cmd 2>/dev/null || true
-              chattr +i /usr/sbin/$cmd 2>/dev/null || true
-              chattr +i /sbin/$cmd 2>/dev/null || true
+              printf '#!/bin/bash\necho "Đã chặn lệnh %s trên CI/CD!"\n' "$cmd" > "/usr/sbin/$cmd"
+              chmod +x "/usr/sbin/$cmd"
+              ln -sf "/usr/sbin/$cmd" "/sbin/$cmd" 2>/dev/null || true
+              ln -sf "/usr/sbin/$cmd" "/bin/$cmd" 2>/dev/null || true
+              chattr +i "/usr/sbin/$cmd" 2>/dev/null || true
+              chattr +i "/sbin/$cmd" 2>/dev/null || true
             done
 
+            CURRENT_STEP="wrap-dnf"
             mv /usr/bin/dnf /usr/bin/dnf_real
             cat << 'EOF' > /usr/bin/dnf
             #!/bin/bash
@@ -880,37 +999,49 @@ jobs:
             chmod +x /usr/bin/dnf
             ln -sf /usr/bin/dnf /usr/bin/yum
 
-            bash wptangtoc-ols --auto
+            CURRENT_STEP="install-wptangtoc"
+            bash wptangtoc-ols --auto </dev/null
 
+            CURRENT_STEP="sync-commit-code"
             cd "$GITHUB_WORKSPACE"
             echo "🔄 Đang chép đè mã nguồn từ commit hiện tại vào /etc/wptt/..."
             cp -a ./tool-wptangtoc-ols/. /etc/wptt/
             chmod -R 755 /etc/wptt/
-
             mkdir -p /etc/wptt/tmp
-            curl -s https://wptangtoc.com/share/version-wptangtoc-ols.txt \
-              | head -1 | grep '\.' > /etc/wptt/tmp/wptangtoc-ols-version-main
+            chmod 700 /etc/wptt/tmp
 
-            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com
+            CURRENT_STEP="stub-menus-pre"
+            stub_wptt_menus
 
-            echo -e '#!/bin/bash\nexit 0' > /usr/bin/wptangtoc
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status
-            echo -e '#!/bin/bash\nexit 0' > /etc/wptt/wptt-status2
-            for file in /etc/wptt/wptt-*main; do
-              if [ -f "$file" ]; then echo -e '#!/bin/bash\nexit 0' > "$file"; fi
-            done
-            chmod +x /usr/bin/wptangtoc /etc/wptt/wptt-status \
-              /etc/wptt/wptt-status2 /etc/wptt/wptt-*main 2>/dev/null || true
+            CURRENT_STEP="fetch-version"
+            VER_VAL="$(curl -4 -fsSL --connect-timeout 10 --max-time 20 --retry 3 --retry-delay 2 \
+              https://wptangtoc.com/share/version-wptangtoc-ols.txt 2>/dev/null \
+              | head -n 1 | tr -d '\r\n' || true)"
+            if echo "$VER_VAL" | grep -q '\.'; then
+              printf '%s\n' "$VER_VAL" > /etc/wptt/tmp/wptangtoc-ols-version-main
+            elif [ -s ./version-wptangtoc-ols.txt ]; then
+              head -n 1 ./version-wptangtoc-ols.txt > /etc/wptt/tmp/wptangtoc-ols-version-main
+            elif [ ! -s /etc/wptt/tmp/wptangtoc-ols-version-main ]; then
+              printf '8.4.1.7\n' > /etc/wptt/tmp/wptangtoc-ols-version-main
+            fi
+
+            CURRENT_STEP="change-main-domain"
+            echo "🌐 Đang đổi domain mặc định sang github.wptangtoc.com..."
+            bash /etc/wptt/domain/wptt-thay-domain-chinh-wptangtoc-ols-com github.wptangtoc.com </dev/null
+
+            CURRENT_STEP="stub-menus-post"
+            stub_wptt_menus
             echo "::endgroup::"
 
+            CURRENT_STEP="run-bats"
             echo "::group::🧪 Chạy Kiểm thử BATS (Cô lập từng file)"
             if find tests -type f -name '*.bats' 2>/dev/null | grep -q .; then
               set -o pipefail
               cp /etc/wptt/core-functions /tmp/core-functions-master-backup.sh 2>/dev/null || true
-              > "$LOG_BATS"
+              : > "$LOG_BATS"
 
               for test_file in tests/*.bats; do
-                echo -e "\n=== ĐANG CHẠY BÀI TEST: $test_file ===" | tee -a "$LOG_BATS"
+                printf '\n=== ĐANG CHẠY BÀI TEST: %s ===\n' "$test_file" | tee -a "$LOG_BATS"
                 cp /tmp/core-functions-master-backup.sh /etc/wptt/core-functions 2>/dev/null || true
                 bats "$test_file" | tee -a "$LOG_BATS"
               done
