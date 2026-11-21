@@ -1,3 +1,12 @@
+## 🚀 Tính năng mới
+- **Hỗ trợ PHP 8.6:** Cập nhật khả năng tương thích hoàn chỉnh với PHP 8.6, giúp quản trị viên dễ dàng cài đặt và vận hành website WordPress trên nền tảng PHP mới nhất với hiệu suất tối ưu.
+
+## 🛠️ Tối ưu hệ thống
+- **Cải tiến ZRAM trên AWS:** Tinh chỉnh cơ chế tối ưu hóa bộ nhớ ảo ZRAM, nâng cao độ ổn định và khả năng tương thích tuyệt đối khi triển khai trên các template máy chủ của Amazon Web Services (AWS).
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS 8.4.1.6
 
 🚀 **Tính năng mới**

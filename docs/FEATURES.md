@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.6)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.7)
 
 - **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.6**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.7**.
 
 ---
 
@@ -3328,7 +3328,7 @@ Giới thiệu ngắn gọn:
 Mục đích: Cho phép người dùng linh hoạt lựa chọn và quản lý phiên bản PHP phù hợp với yêu cầu của từng website, tối ưu hóa hiệu suất và đảm bảo tính tương thích.
 
 Cách hoạt động:
-* Cài đặt nhiều phiên bản PHP: Dễ dàng cài đặt song song các phiên bản PHP phổ biến [ví dụ: PHP 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5].
+* Cài đặt nhiều phiên bản PHP: Dễ dàng cài đặt song song các phiên bản PHP phổ biến [ví dụ: PHP 7.4, 8.0, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6].
 * Chuyển đổi phiên bản PHP cho từng website: Gán một phiên bản PHP cụ thể cho mỗi website riêng biệt trên cùng một máy chủ.
 * Gỡ cài đặt phiên bản PHP: Loại bỏ các phiên bản PHP không còn sử dụng.
 * Quản lý tiện ích mở rộng PHP [extensions]: Có thể bao gồm khả năng cài đặt hoặc tùy chỉnh các extensions cần thiết.
@@ -5460,25 +5460,25 @@ Sau khi xóa swap thành công, không gian đĩa đó sẽ được giải phó
 
 ```text
 1. Tính Năng Cài Đặt ZRAM [Install ZRAM Swap]
-Cài đặt ZRAM là quá trình thiết lập một phân vùng Swap [bộ nhớ ảo] hoạt động hoàn toàn trên RAM vật lý, sử dụng thuật toán nén dữ liệu thời gian thực.
+  Cài đặt ZRAM là quá trình thiết lập một phân vùng Swap [bộ nhớ ảo] hoạt động hoàn toàn trên RAM vật lý, sử dụng thuật toán nén dữ liệu thời gian thực.
 
-ZRAM là một công cụ chuẩn Enterprise giúp máy chủ:
-* Tránh sập nguồn [OOM] khi bị quá tải RAM cục bộ.
-* Tăng tốc độ đọc/ghi Swap lên gấp hàng nghìn lần so với Swap trên ổ cứng SSD/NVMe.
-* Bảo vệ tuổi thọ ổ cứng vật lý do không còn phải ghi/xóa các file rác liên tục.
-* Tự động điều chỉnh thông minh: Sử dụng 50% lượng RAM hiện có đối với máy chủ nhỏ, hoặc khóa trần ở mức tối đa 4GB đối với máy chủ lớn để bảo vệ CPU.
-* Tự động dọn dẹp và xóa hoàn toàn Swap đĩa cũ để giải phóng dung lượng SSD.
+  ZRAM là một công cụ chuẩn Enterprise giúp máy chủ:
+- Tránh sập nguồn [OOM] khi bị quá tải RAM cục bộ.
+- Tăng tốc độ đọc/ghi Swap lên gấp hàng nghìn lần so với Swap trên ổ cứng SSD/NVMe.
+- Bảo vệ tuổi thọ ổ cứng vật lý do không còn phải ghi/xóa các file rác liên tục.
+- Tự động điều chỉnh thông minh: Sử dụng 50% lượng RAM hiện có đối với máy chủ nhỏ, hoặc khóa trần ở mức tối đa 4GB đối với máy chủ lớn để bảo vệ CPU.
+- Tự động dọn dẹp và xóa hoàn toàn Swap đĩa cũ để giải phóng dung lượng SSD.
 
-Kết quả: Sau khi cài đặt, hệ thống sẽ có một ổ đĩa nén ZRAM [zram0] siêu tốc. Máy chủ sẽ lỳ lợm hơn khi chịu tải nặng.
+  Kết quả: Sau khi cài đặt, hệ thống sẽ có một ổ đĩa nén ZRAM [zram0] siêu tốc. Máy chủ sẽ lỳ lợm hơn khi chịu tải nặng.
 
 2. Tính Năng Hủy Cài Đặt ZRAM [Uninstall ZRAM Swap]
-Hủy cài đặt ZRAM là quá trình gỡ bỏ module nén bộ nhớ và trả lại không gian RAM vật lý cũng như trả lại cơ chế Swap đĩa truyền thống của Linux.
+  Hủy cài đặt ZRAM là quá trình gỡ bỏ module nén bộ nhớ và trả lại không gian RAM vật lý cũng như trả lại cơ chế Swap đĩa truyền thống của Linux.
 
-Mục đích chính:
-* CPU của VPS quá yếu, không thể gánh được thuật toán nén.
-* Máy chủ chuyên dụng cho Database [không dùng chung Web Server].
+  Mục đích chính:
+- CPU của VPS quá yếu, không thể gánh được thuật toán nén.
+- Máy chủ chuyên dụng cho Database [không dùng chung Web Server].
 
-Kết quả: Dịch vụ ZRAM sẽ được dừng, xóa cấu hình và hệ thống sẽ tự động khởi tạo lại một Swap đĩa dung lượng 1GB [/var/swap.1] để đảm bảo an toàn cơ bản.
+  Kết quả: Dịch vụ ZRAM sẽ được dừng, xóa cấu hình và hệ thống sẽ tự động khởi tạo lại một Swap đĩa dung lượng 1GB [/var/swap.1] để đảm bảo an toàn cơ bản.
 ```
 
 ---
