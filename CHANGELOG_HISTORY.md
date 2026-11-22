@@ -1,3 +1,14 @@
+## 🚀 Phiên bản 8.4.1.9
+
+### 🛠️ Tối ưu hệ thống & Điều hướng
+- **Nâng cấp bảo mật và ổn định menu:** Loại bỏ việc sử dụng thư mục tạm `/dev/shm` nhằm tăng cường bảo mật hệ thống và cải thiện độ mượt mà khi thao tác.
+- **Cải thiện trải nghiệm điều hướng:** Hỗ trợ phím `ESC` giúp quản trị viên dễ dàng thoát menu linh hoạt và trực quan hơn.
+- **Khắc phục lỗi nhập liệu tốc độ cao:** Xử lý triệt để tình trạng rớt phím khi thao tác nhanh trong quá trình gửi nhịp tim DSR.
+- **Tối ưu cơ chế DSR Heartbeat:** Đảm bảo nhịp tim DSR luôn hoạt động ổn định, ngăn chặn hoàn toàn nguy cơ lặp vô hạn (infinite loop) bất kể cấu trúc phân cấp shell (`SHLVL`) của môi trường phức tạp đến đâu.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## WPTangToc OLS v8.4.1.8
 
 🛠️ Tối ưu hệ thống
