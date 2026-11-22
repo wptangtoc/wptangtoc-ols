@@ -1,44 +1,80 @@
 #!/bin/bash
 # @author: Gia Tuấn
 # @website: https://wptangtoc.com
-# @description: Engine Render & Điều hướng Menu Trung tâm (2D Spatial Navigation ↑↓←→ + WCAG AAA + Active DSR Heartbeat)
+# @description: Engine Render & Điều hướng Menu Trung tâm (0-Subshell 2D Spatial Nav ↑↓←→ + WCAG AAA + 0ms Ctrl+C + Active DSR Heartbeat)
 # @since: 2026
 
 # ==============================================================================
-# 1. KHỞI TẠO BIẾN & NẠP THƯ VIỆN GIAO DIỆN (CHỐNG NẠP CHỒNG)
+# 1. KHỞI TẠO BIẾN & NẠP THƯ VIỆN GIAO DIỆN (CHỐNG NẠP CHỒNG & AN TOÀN SET -EU)
 # ==============================================================================
 
-[[ -f "$0" ]] && export WPTT_CURRENT_MENU="$0"
+if [[ -f "$0" ]]; then
+  export WPTT_CURRENT_MENU="$0"
+fi
+
+# Lưu trạng thái TTY gốc & thiết bị PTY 1 lần duy nhất trước khi thao tác stty
+WPTT_ORIG_STTY=""
+WPTT_TTY_DEV=""
+if [[ -t 0 && -z "${BATS_TEST_FILENAME:-}" && "${CI:-}" != "true" && "${GITHUB_ACTIONS:-}" != "true" ]]; then
+  WPTT_ORIG_STTY="$(stty -g </dev/tty 2>/dev/null || stty -g 2>/dev/null || true)"
+  if [[ -L "/proc/$$/fd/0" ]]; then
+    WPTT_TTY_DEV="$(readlink "/proc/$$/fd/0" 2>/dev/null || true)"
+  fi
+fi
 
 if ! declare -F wptt_smart_reload_lsws &>/dev/null; then
   # shellcheck source=/dev/null
-  . /etc/wptt/core-functions 2>/dev/null
+  . /etc/wptt/core-functions 2>/dev/null || true
 fi
 
 if [[ -z "${ngon_ngu:-}" || -z "${tai_ma_nguon_wordpress:-}" ]]; then
+  if declare -F wptt_load_main_conf &>/dev/null; then
+    wptt_load_main_conf 2>/dev/null || true
+  fi
+  if [[ -z "${ngon_ngu:-}" ]]; then
+    ngon_ngu='vi'
+  fi
   # shellcheck source=/dev/null
-  wptt_load_main_conf 2>/dev/null
-  [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
-  # shellcheck source=/dev/null
-  . "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null
+  if [[ -r "/etc/wptt/lang/${ngon_ngu}.sh" ]]; then
+    . "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null || true
+  fi
 fi
 
 if ! declare -F _runing &>/dev/null; then
   # shellcheck source=/dev/null
-  . /etc/wptt/echo-color 2>/dev/null
+  if [[ -r /etc/wptt/echo-color ]]; then
+    . /etc/wptt/echo-color 2>/dev/null || true
+  fi
 fi
 
-# Chuẩn hóa mọi biến màu từ dạng chữ '\033' sang byte ESC thật ($'\033') một lần duy nhất
-_wptt_esc=$'\033'
-for _cvar in C_RESET C_RED C_GREEN C_YELLOW C_BLUE C_PURPLE C_CYAN C_WHITE C_BOLD_WHITE; do
-  if [[ -n "${!_cvar:-}" ]]; then
-    _cval="${!_cvar}"
-    _cval="${_cval//\\033/$_wptt_esc}"
-    _cval="${_cval//\\e/$_wptt_esc}"
-    printf -v "$_cvar" '%s' "$_cval"
-  fi
-done
-unset _wptt_esc _cvar _cval
+# Chuẩn hóa mọi biến màu từ dạng chữ '\033'/'\e' sang byte ESC thật ($'\033') (0-Subshell)
+# Gọi lại sau run_action phòng trường hợp script con nạp đè /etc/wptt/echo-color
+_wptt_normalize_colors() {
+  : "${C_RESET:=$'\033[0m'}" \
+    "${C_RED:=$'\033[1;31m'}" \
+    "${C_GREEN:=$'\033[1;32m'}" \
+    "${C_YELLOW:=$'\033[1;33m'}" \
+    "${C_BLUE:=$'\033[1;34m'}" \
+    "${C_PURPLE:=$'\033[1;35m'}" \
+    "${C_CYAN:=$'\033[1;36m'}" \
+    "${C_WHITE:=$'\033[0;37m'}" \
+    "${C_BOLD_WHITE:=$'\033[1;97m'}"
+
+  local esc=$'\033' cvar="" cval=""
+  for cvar in C_RESET C_RED C_GREEN C_YELLOW C_BLUE C_PURPLE C_CYAN C_WHITE C_BOLD_WHITE; do
+    cval="${!cvar:-}"
+    if [[ -n "$cval" ]]; then
+      if [[ "$cval" == *'\033'* ]]; then
+        cval="${cval//\\033/$esc}"
+      fi
+      if [[ "$cval" == *'\e'* ]]; then
+        cval="${cval//\\e/$esc}"
+      fi
+      printf -v "$cvar" '%s' "$cval"
+    fi
+  done
+}
+_wptt_normalize_colors
 
 # Bảo đảm charset UTF-8 bằng Pure Bash (0-Subshell) để ${#var} đếm chuẩn ký tự Tiếng Việt
 _wptt_eff_cs="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
@@ -54,15 +90,18 @@ case "${_wptt_eff_cs,,}" in
 esac
 unset _wptt_eff_cs
 
-stty iutf8 2>/dev/null || true
+if [[ -t 0 && -z "${BATS_TEST_FILENAME:-}" && "${CI:-}" != "true" && "${GITHUB_ACTIONS:-}" != "true" ]]; then
+  stty iutf8 </dev/tty 2>/dev/null || stty iutf8 2>/dev/null || true
+fi
 shopt -s extglob
 PS3=""
 
-# Cấu hình cầu chì chống treo / chống lặp vô tận
+# Cấu hình cầu chì chống treo / chống lặp vô tận (chịu lag SSH quốc tế)
 WPTT_MENU_IDLE_SEC="${WPTT_MENU_IDLE_SEC:-3600}"   # Tự thoát nếu treo Menu không thao tác quá 1 giờ
 WPTT_MAX_MENU_LOOPS="${WPTT_MAX_MENU_LOOPS:-500}"  # Chốt chặn số vòng lặp tối đa trong 1 phiên
-WPTT_DSR_INTERVAL="${WPTT_DSR_INTERVAL:-10}"       # Chu kỳ gửi nhịp tim ANSI DSR khi nhàn rỗi (giây)
-WPTT_DSR_MAX_MISS="${WPTT_DSR_MAX_MISS:-2}"        # Số nhịp mất phản hồi liên tiếp để xác định Terminal đã đóng
+WPTT_DSR_INTERVAL="${WPTT_DSR_INTERVAL:-30}"       # Chu kỳ gửi nhịp tim ANSI DSR khi nhàn rỗi (giây)
+WPTT_DSR_TIMEOUT="${WPTT_DSR_TIMEOUT:-3.0}"        # Thời gian chờ phản hồi 1 nhịp tim DSR (giây)
+WPTT_DSR_MAX_MISS="${WPTT_DSR_MAX_MISS:-3}"        # Mất 3 nhịp liên tiếp (~9s im lặng) mới kết luận đứt kết nối
 
 # ==============================================================================
 # 2. XÁC ĐỊNH ROUTE ĐIỀU HƯỚNG & NHẬN DIỆN MENU CHÍNH / MENU CON
@@ -96,7 +135,7 @@ _get_cli_menu_num() {
 }
 
 # ==============================================================================
-# 3. BẪY TÍN HIỆU AN TOÀN, CHỐT CHẶN MỒ CÔI & ACTIVE ANSI DSR HEARTBEAT
+# 3. BẪY TÍN HIỆU 0MS, KHÔI PHỤC TTY, CHỐNG MỒ CÔI & ACTIVE ANSI DSR HEARTBEAT
 # ==============================================================================
 # Đọc PPid và SID sống trực tiếp từ Kernel (/proc/$$/stat) bằng Pure Bash (0-Subshell)
 WPTT_LIVE_PPID=0
@@ -108,9 +147,13 @@ _wptt_read_proc_ids() {
   if [[ -r "/proc/$$/stat" ]]; then
     IFS= read -r stat_line <"/proc/$$/stat" || true
     after_comm="${stat_line##*) }"
-    read -r st ppid pgrp sid _ <<<"$after_comm"
-    [[ "$ppid" =~ ^[0-9]+$ ]] && WPTT_LIVE_PPID="$ppid"
-    [[ "$sid" =~ ^[0-9]+$ ]] && WPTT_LIVE_SID="$sid"
+    read -r st ppid pgrp sid _ <<<"$after_comm" || true
+    if [[ "$ppid" =~ ^[0-9]+$ ]]; then
+      WPTT_LIVE_PPID="$ppid"
+    fi
+    if [[ "$sid" =~ ^[0-9]+$ ]]; then
+      WPTT_LIVE_SID="$sid"
+    fi
   fi
 }
 
@@ -120,23 +163,81 @@ WPTT_ORIG_SID="$WPTT_LIVE_SID"
 
 WPTT_DSR_CALIBRATED=0
 WPTT_DSR_SUPPORTED=0
-WPTT_PENDING_CHAR=""
+WPTT_PENDING_BUF=""
 WPTT_PENDING_ESC=""
+WPTT_PENDING_ENTER=0
+WPTT_TTY_RAW=0
+WPTT_ON_PROMPT_LINE=0
 
+WPTT_SUB_TMPDIR=""
 SUB_IDX_FILE=""
 WPTT_SUB_FIFO=""
 WPTT_SUB_LAST_Q=""
 WPTT_SUB_AWK=""
 
+_wptt_is_interactive_tty() {
+  [[ -t 0 && -t 1 && -z "${BATS_TEST_FILENAME:-}" && "${CI:-}" != "true" && "${GITHUB_ACTIONS:-}" != "true" ]]
+}
+
+# Xóa màn hình 0-Subshell (không fork /usr/bin/clear)
+_wptt_clear_screen() {
+  if _wptt_is_interactive_tty; then
+    printf '\033[H\033[2J\033[3J'
+  fi
+}
+
+# Vào chế độ đọc phím trực tiếp: tắt echo + tắt isig để Ctrl+C trả byte 0x03 ngay 0ms
+_wptt_tty_enter_raw() {
+  if ! _wptt_is_interactive_tty; then
+    return 0
+  fi
+  if ((WPTT_TTY_RAW == 0)); then
+    stty -echo -isig </dev/tty 2>/dev/null || stty -echo -isig 2>/dev/null || true
+    WPTT_TTY_RAW=1
+  fi
+}
+
+# Khôi phục nguyên trạng TTY (chỉ chạy stty khi thực sự đang ở raw mode hoặc ép force)
+_wptt_restore_tty() {
+  local force="${1:-0}"
+  if ! _wptt_is_interactive_tty; then
+    return 0
+  fi
+  if ((WPTT_TTY_RAW == 0 && force == 0)); then
+    return 0
+  fi
+  if [[ -n "${WPTT_ORIG_STTY:-}" ]]; then
+    stty "$WPTT_ORIG_STTY" </dev/tty 2>/dev/null || stty "$WPTT_ORIG_STTY" 2>/dev/null || true
+  else
+    stty sane </dev/tty 2>/dev/null || stty sane 2>/dev/null || true
+  fi
+  # Luôn ép bật lại echo + icanon + isig phòng trường hợp TTY gốc vốn đã bị tắt trước đó
+  stty echo icanon isig </dev/tty 2>/dev/null || stty echo icanon isig 2>/dev/null || true
+  printf '\033[?25h' 2>/dev/null || true
+  WPTT_TTY_RAW=0
+}
+
 _wptt_cleanup_sub_search() {
-  /bin/rm -f -- "${SUB_IDX_FILE:-}" "${WPTT_SUB_FIFO:-}" "${WPTT_SUB_LAST_Q:-}" "${WPTT_SUB_AWK:-}" 2>/dev/null || true
+  if [[ -n "${WPTT_SUB_TMPDIR:-}" && -d "$WPTT_SUB_TMPDIR" ]]; then
+    case "$WPTT_SUB_TMPDIR" in
+      /etc/wptt/tmp/wptt_sub_?*)
+        /bin/rm -rf -- "${WPTT_SUB_TMPDIR:?}" 2>/dev/null || true
+        ;;
+    esac
+  fi
+  WPTT_SUB_TMPDIR=""
   SUB_IDX_FILE=""
   WPTT_SUB_FIFO=""
   WPTT_SUB_LAST_Q=""
   WPTT_SUB_AWK=""
 }
 
-# Kiểm tra tiến trình cha, Session Leader và thiết bị PTY (lớp kiểm tra thụ động 0ms)
+_wptt_on_exit() {
+  _wptt_cleanup_sub_search
+  _wptt_restore_tty 1
+}
+
+# Kiểm tra tiến trình cha, Session Leader và thiết bị PTY (0-subshell trước, chỉ gọi stty sau cùng)
 _wptt_tty_alive() {
   if [[ -n "${BATS_TEST_FILENAME:-}" || "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
     return 0
@@ -159,18 +260,15 @@ _wptt_tty_alive() {
     IFS= read -r sid_stat <"/proc/${WPTT_ORIG_SID}/stat" || return 1
     sid_state="${sid_stat##*) }"
     sid_state="${sid_state%% *}"
-    [[ "$sid_state" == "Z" || "$sid_state" == "X" ]] && return 1
-  fi
-
-  # 3. Kiểm tra đích thiết bị PTY thật trên fd/0 (bắt trường hợp /dev/pts/N (deleted))
-  local tty_target=""
-  if [[ -L "/proc/$$/fd/0" ]]; then
-    tty_target="$(readlink "/proc/$$/fd/0" 2>/dev/null || true)"
-    if [[ -z "$tty_target" || "$tty_target" == *" (deleted)" || ! -e "$tty_target" ]]; then
+    if [[ "$sid_state" == "Z" || "$sid_state" == "X" ]]; then
       return 1
     fi
   fi
 
+  # 3. Kiểm tra nhanh thiết bị PTY đã lưu (0-subshell) + xác thực ioctl TTY sống
+  if [[ -n "$WPTT_TTY_DEV" && ! -c "$WPTT_TTY_DEV" ]]; then
+    return 1
+  fi
   if [[ ! -t 0 || ! -t 1 ]]; then
     return 1
   fi
@@ -181,24 +279,83 @@ _wptt_tty_alive() {
   return 0
 }
 
-# Xả sạch một chuỗi phản hồi DSR \033[row;colR nếu đang nằm kẹt phía sau phím người dùng vừa bấm
+# Đọc trọn chuỗi Escape Sequence (CSI/SS3) bằng Pure Bash để không rớt byte thừa vào ô nhập
+_wptt_read_esc_tail() {
+  local timeout_first="${1:-0.03}"
+  local c1="" c2="" i=0
+  REPLY_ESC_TAIL=""
+
+  IFS= read -rsn1 -t "$timeout_first" c1 2>/dev/null || return 0
+  if [[ "$c1" == $'\x03' ]]; then
+    _wptt_handle_ctrl_c_exit
+  fi
+
+  REPLY_ESC_TAIL="$c1"
+  if [[ "$c1" == "[" ]]; then
+    for ((i = 0; i < 20; i++)); do
+      c2=""
+      IFS= read -rsn1 -t 0.03 c2 2>/dev/null || break
+      if [[ "$c2" == $'\x03' ]]; then
+        _wptt_handle_ctrl_c_exit
+      fi
+      REPLY_ESC_TAIL+="$c2"
+      if [[ "$c2" == [A-Za-z~@] ]]; then
+        break
+      fi
+    done
+  elif [[ "$c1" == "O" ]]; then
+    IFS= read -rsn1 -t 0.03 c2 2>/dev/null || return 0
+    if [[ "$c2" == $'\x03' ]]; then
+      _wptt_handle_ctrl_c_exit
+    fi
+    REPLY_ESC_TAIL+="$c2"
+  fi
+  return 0
+}
+
+# Xả sạch chuỗi phản hồi DSR \033[row;colR nếu nằm kẹt sau phím người dùng vừa bấm
+# Đồng thời bảo toàn toàn bộ phím gõ nhanh chen ngang vào hàng đợi WPTT_PENDING_BUF
 _wptt_drain_trailing_dsr() {
-  local dc="" i=0
-  if IFS= read -rsn1 -t 0.15 dc </dev/tty 2>/dev/null; then
+  local dc="" seq="" i=0 j=0
+  local dsr_re=$'^\x1b\\[[0-9]+;[0-9]+R$'
+
+  for ((i = 0; i < 12; i++)); do
+    dc=""
+    IFS= read -rsn1 -t 0.15 dc </dev/tty 2>/dev/null || break
+    if [[ "$dc" == $'\x03' ]]; then
+      _wptt_handle_ctrl_c_exit
+    fi
     if [[ "$dc" == $'\x1b' ]]; then
-      for ((i = 0; i < 24; i++)); do
+      seq="$dc"
+      for ((j = 0; j < 24; j++)); do
+        dc=""
         IFS= read -rsn1 -t 0.05 dc </dev/tty 2>/dev/null || break
-        if ((i > 0)) && [[ "$dc" == [A-Za-z~] ]]; then
+        if [[ "$dc" == $'\x03' ]]; then
+          _wptt_handle_ctrl_c_exit
+        fi
+        seq+="$dc"
+        if ((j > 0)) && [[ "$dc" == [A-Za-z~@] ]]; then
           break
         fi
       done
+      if [[ "$seq" =~ $dsr_re ]]; then
+        return 0
+      fi
+      if [[ "${#seq}" -gt 1 && -z "$WPTT_PENDING_ESC" ]]; then
+        WPTT_PENDING_ESC="${seq:1}"
+      fi
+    elif [[ -z "$dc" || "$dc" == $'\n' || "$dc" == $'\r' ]]; then
+      WPTT_PENDING_ENTER=1
+    else
+      WPTT_PENDING_BUF+="$dc"
     fi
-  fi
+  done
+  return 0
 }
 
-# Gửi nhịp tim ANSI DSR (\033[6n) - Yêu cầu stty -echo đang bật để phản hồi hoàn toàn vô hình
+# Gửi nhịp tim ANSI DSR (\033[6n) - Pure Bash 0-Subshell, hoàn toàn vô hình khi -echo đang bật
 _wptt_dsr_probe() {
-  local timeout_first="${1:-1.5}"
+  local timeout_first="${1:-$WPTT_DSR_TIMEOUT}"
   local strict_mode="${2:-0}"
   local c="" resp="" i=0 rc=0
   local dsr_re=$'^\x1b\\[[0-9]+;[0-9]+R$'
@@ -210,13 +367,21 @@ _wptt_dsr_probe() {
     return 1
   fi
 
+  # Bắt Ctrl+C tức thì nếu người dùng bấm đúng lúc đang gửi nhịp tim
+  if [[ "$c" == $'\x03' ]]; then
+    _wptt_handle_ctrl_c_exit
+  fi
+
   if [[ "$c" == $'\x1b' ]]; then
     resp="$c"
     for ((i = 0; i < 24; i++)); do
       c=""
       IFS= read -rsn1 -t 0.15 c </dev/tty 2>/dev/null || break
+      if [[ "$c" == $'\x03' ]]; then
+        _wptt_handle_ctrl_c_exit
+      fi
       resp+="$c"
-      if ((i > 0)) && [[ "$c" == [A-Za-z~] ]]; then
+      if ((i > 0)) && [[ "$c" == [A-Za-z~@] ]]; then
         break
       fi
     done
@@ -225,81 +390,101 @@ _wptt_dsr_probe() {
       return 0
     fi
 
-    # Nếu không phải phản hồi DSR mà là phím ESC/mũi tên người dùng bấm đúng lúc probe
-    if ((strict_mode == 1)); then
-      [[ "${#resp}" -gt 1 ]] && WPTT_PENDING_ESC="${resp:1}"
-      _wptt_drain_trailing_dsr
-      return 1
+    # Không phải DSR mà là phím ESC/mũi tên người dùng bấm chen ngang -> giữ lại phím
+    if [[ "${#resp}" -gt 1 ]]; then
+      WPTT_PENDING_ESC="${resp:1}"
+    else
+      WPTT_PENDING_BUF+=$'\x1b'
     fi
-    [[ "${#resp}" -gt 1 ]] && WPTT_PENDING_ESC="${resp:1}"
     _wptt_drain_trailing_dsr
+    if ((strict_mode == 1)); then
+      return 2
+    fi
     return 0
   fi
 
-  # Người dùng vừa bấm một phím thường đúng lúc probe -> terminal 100% đang sống, giữ lại phím không để mất
-  WPTT_PENDING_CHAR="$c"
+  # Người dùng bấm Enter hoặc phím thường đúng lúc probe -> terminal 100% đang sống, giữ lại phím
+  if [[ -z "$c" || "$c" == $'\n' || "$c" == $'\r' ]]; then
+    WPTT_PENDING_ENTER=1
+  else
+    WPTT_PENDING_BUF+="$c"
+  fi
   _wptt_drain_trailing_dsr
   if ((strict_mode == 1)); then
-    return 1
+    return 2
   fi
   return 0
 }
 
 # Hiệu chuẩn 1 lần lúc khởi động: chỉ bật DSR Heartbeat nếu terminal thật có hỗ trợ \033[6n
 _wptt_dsr_calibrate() {
-  ((WPTT_DSR_CALIBRATED == 1)) && return 0
-  WPTT_DSR_CALIBRATED=1
-  WPTT_DSR_SUPPORTED=0
-
-  if [[ ! -t 0 || ! -t 1 || -n "${BATS_TEST_FILENAME:-}" || "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  if ((WPTT_DSR_CALIBRATED == 1)); then
     return 0
   fi
-  [[ "${TERM:-dumb}" == "dumb" ]] && return 0
 
-  if _wptt_dsr_probe 0.8 1; then
+  if ! _wptt_is_interactive_tty || [[ "${TERM:-dumb}" == "dumb" ]]; then
+    WPTT_DSR_CALIBRATED=1
+    WPTT_DSR_SUPPORTED=0
+    return 0
+  fi
+
+  local probe_rc=0
+  _wptt_dsr_probe 0.8 1 || probe_rc=$?
+  if ((probe_rc == 0)); then
+    WPTT_DSR_CALIBRATED=1
     WPTT_DSR_SUPPORTED=1
+  elif ((probe_rc == 2)); then
+    WPTT_DSR_CALIBRATED=0
+    WPTT_DSR_SUPPORTED=0
+  else
+    WPTT_DSR_CALIBRATED=1
+    WPTT_DSR_SUPPORTED=0
   fi
 }
 
 _wptt_menu_hangup() {
-  trap - SIGINT SIGTERM SIGQUIT SIGHUP SIGPIPE EXIT
-  _wptt_cleanup_sub_search
-  [[ -t 0 ]] && stty echo 2>/dev/null || true
+  trap - SIGINT SIGTERM SIGQUIT SIGHUP SIGPIPE
   exit 129
 }
 
 # Chờ phím ngắn nhưng KHÔNG nuốt EOF/EIO khi SSH ngắt kết nối
 _wptt_pause_brief() {
-  local sec="${1:-1.5}" rc=0
-  [[ ! -t 0 ]] && return 0
-  IFS= read -r -s -n 1 -t "$sec" _ 2>/dev/null || rc=$?
+  local sec="${1:-1.5}" rc=0 ch=""
+  if [[ ! -t 0 ]]; then
+    return 0
+  fi
+  IFS= read -r -s -n 1 -t "$sec" ch 2>/dev/null || rc=$?
+  if [[ "$ch" == $'\x03' ]]; then
+    _wptt_handle_ctrl_c_exit
+  fi
   # rc=0 (đã bấm phím), rc>128 (hết giờ chờ); còn lại là EOF/EIO -> thoát ngay
   if ((rc != 0 && rc <= 128)); then
     _wptt_menu_hangup
   fi
 }
 
-# Chờ nhấn Enter có kiểm tra sống TTY + DSR Heartbeat (không treo 1 giờ nếu đóng tab ngang)
+# Chờ nhấn Enter có kiểm tra sống TTY + DSR Heartbeat + Ctrl+C 0ms
 _wptt_wait_enter() {
   local rc=0 elapsed=0 idle_probe=0 probe_miss=0 poll_sec=5 ch=""
-  if [[ ! -t 0 || ! -t 1 || -n "${BATS_TEST_FILENAME:-}" || "${CI:-}" == "true" ]]; then
+  if ! _wptt_is_interactive_tty; then
     IFS= read -r -t "$WPTT_MENU_IDLE_SEC" _ || return 1
     return 0
   fi
 
-  stty -echo 2>/dev/null || true
+  _wptt_tty_enter_raw
   while ((elapsed < WPTT_MENU_IDLE_SEC)); do
     rc=0
     IFS= read -rsn1 -t "$poll_sec" ch || rc=$?
+
     if ((rc == 0)); then
       if [[ -z "$ch" || "$ch" == $'\n' || "$ch" == $'\r' ]]; then
-        stty echo 2>/dev/null || true
+        _wptt_restore_tty
         printf '\n'
         return 0
       elif [[ "$ch" == $'\x03' ]]; then
-        _wptt_menu_ctrl_c
+        _wptt_handle_ctrl_c_exit
       elif [[ "$ch" == $'\x04' ]]; then
-        stty echo 2>/dev/null || true
+        _wptt_restore_tty
         return 1
       fi
       idle_probe=0
@@ -307,46 +492,65 @@ _wptt_wait_enter() {
       continue
     elif ((rc > 128)); then
       if ! _wptt_tty_alive; then
-        stty echo 2>/dev/null || true
+        _wptt_restore_tty
         return 1
       fi
       elapsed=$((elapsed + poll_sec))
       idle_probe=$((idle_probe + poll_sec))
       if ((WPTT_DSR_SUPPORTED == 1)) && ((idle_probe >= WPTT_DSR_INTERVAL || probe_miss > 0)); then
         idle_probe=0
-        if _wptt_dsr_probe 1.5 0; then
+        if _wptt_dsr_probe "$WPTT_DSR_TIMEOUT" 0; then
           probe_miss=0
-          WPTT_PENDING_CHAR=""
+          if ((WPTT_PENDING_ENTER == 1)); then
+            WPTT_PENDING_ENTER=0
+            WPTT_PENDING_BUF=""
+            WPTT_PENDING_ESC=""
+            _wptt_restore_tty
+            printf '\n'
+            return 0
+          fi
+          WPTT_PENDING_BUF=""
           WPTT_PENDING_ESC=""
         else
           probe_miss=$((probe_miss + 1))
           if ((probe_miss >= WPTT_DSR_MAX_MISS)); then
-            stty echo 2>/dev/null || true
+            _wptt_restore_tty
             return 1
           fi
         fi
       fi
     else
-      stty echo 2>/dev/null || true
+      _wptt_restore_tty
       return 1
     fi
   done
-  stty echo 2>/dev/null || true
+  _wptt_restore_tty
   return 1
 }
 
-_wptt_menu_ctrl_c() {
-  trap - SIGINT SIGTERM SIGQUIT SIGHUP SIGPIPE EXIT
+_wptt_handle_ctrl_c_exit() {
+  trap - SIGINT SIGTERM SIGQUIT SIGHUP SIGPIPE
+
+  # 1. Hủy bỏ ngay bộ đếm ITIMER_REAL còn sót của read -t (chống tuyệt đối SIGALRM(14) sau exec)
+  # read -t 1 </dev/null gặp EOF trong 0.05ms và tự chạy reset_alarm() -> falarm(0, 0) (0-subshell)
+  trap '' ALRM
+  IFS= read -r -t 1 _ </dev/null 2>/dev/null || true
+  trap - ALRM
+
   _wptt_cleanup_sub_search
   if ! _wptt_tty_alive; then
     exit 130
   fi
-  stty sane 2>/dev/null || true
-  printf '\033[?25h' 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
 
-  # Nếu đang ở SHLVL >= 2 và tiến trình cha là một shell tương tác (bash/zsh/sh...),
-  # thoát về thẳng shell cha gốc để tự hạ tầng SHLVL thay vì chồng thêm login shell mới.
+  if ((WPTT_ON_PROMPT_LINE == 1)); then
+    printf '\033[2B\r' 2>/dev/null || true
+    WPTT_ON_PROMPT_LINE=0
+  fi
+  _wptt_restore_tty 1
+
+  # 2. Nhánh SHLVL >= 2: KHÔNG gọi 'trap - EXIT' trước 'exit 0'!
+  # Bash chạy unwind_protect (ttyrestore) TRƯỚC rồi mới chạy trap EXIT (_wptt_on_exit -> _wptt_restore_tty 1),
+  # đảm bảo echo/icanon/isig luôn được bật lại sau cùng.
   local parent_comm=""
   _wptt_read_proc_ids
   if ((${SHLVL:-1} >= 2 && WPTT_LIVE_PPID > 1)) && [[ -r "/proc/${WPTT_LIVE_PPID}/comm" ]]; then
@@ -355,18 +559,29 @@ _wptt_menu_ctrl_c() {
 
   case "$parent_comm" in
     bash | sh | zsh | fish | dash | ash | ksh)
-      printf '\n\nĐã thoát về Terminal gốc. Nhập lệnh %b1%b để quay lại.\n' "${C_GREEN}" "${C_RESET}"
+      printf '\nĐã thoát về Terminal gốc. Nhập lệnh %s1%s để quay lại.\n' "${C_GREEN}" "${C_RESET}"
       exit 0
       ;;
   esac
 
-  printf '\n\nĐã thoát. Nhập lệnh %b1%b để quay lại.\n' "${C_GREEN}" "${C_RESET}"
+  # 3. Nhánh SHLVL == 1: ITIMER_REAL đã về 0, exec bash --login an toàn tuyệt đối
+  trap - EXIT
+  printf '\nĐã thoát. Nhập lệnh %s1%s để quay lại.\n' "${C_GREEN}" "${C_RESET}"
   export WPTT_BYPASS=1
   exec bash --login
 }
-trap '_wptt_cleanup_sub_search' EXIT
-trap '_wptt_menu_hangup' SIGHUP SIGTERM SIGQUIT SIGPIPE
-trap '_wptt_menu_ctrl_c' SIGINT
+
+_wptt_menu_ctrl_c() {
+  _wptt_handle_ctrl_c_exit
+}
+
+_wptt_arm_traps() {
+  shopt -s extglob
+  trap '_wptt_on_exit' EXIT
+  trap '_wptt_menu_hangup' SIGHUP SIGTERM SIGQUIT SIGPIPE
+  trap '_wptt_menu_ctrl_c' SIGINT
+}
+_wptt_arm_traps
 
 # ==============================================================================
 # 4. ENGINE VẼ GIAO DIỆN & BẢN ĐỒ TỌA ĐỘ 2 CHIỀU (100% NATIVE BASH - 0 SUBSHELL)
@@ -411,8 +626,12 @@ C_AAA_CYAN=$'\033[1;38;5;117m'     # Xanh da trời sáng (10.6:1)
 _strip_ansi() {
   local s="$1"
   local esc=$'\x1B'
-  [[ "$s" == *'\033'* ]] && s="${s//\\033/$esc}"
-  [[ "$s" == *'\e'* ]] && s="${s//\\e/$esc}"
+  if [[ "$s" == *'\033'* ]]; then
+    s="${s//\\033/$esc}"
+  fi
+  if [[ "$s" == *'\e'* ]]; then
+    s="${s//\\e/$esc}"
+  fi
   if [[ "$s" != *"$esc"* ]]; then
     REPLY_PLAIN="$s"
     return 0
@@ -432,13 +651,17 @@ print_row() {
     l_text="$REPLY_PLAIN"
     if [[ -z "$l_num" ]]; then
       c1_plain="  ▶ ${l_text}"
-      ((${#c1_plain} > 36)) && c1_plain="${c1_plain:0:34}.."
+      if ((${#c1_plain} > 36)); then
+        c1_plain="${c1_plain:0:34}.."
+      fi
       c1_color="  ${C_AAA_YELLOW}▶ ${C_AAA_WHITE}${c1_plain:4}${C_RESET}"
     else
       printf -v num_fmt "%2s" "$l_num"
-      c1_plain="  [$num_fmt] ${l_text}"
-      ((${#c1_plain} > 36)) && c1_plain="${c1_plain:0:34}.."
-      c1_color="  ${C_GREEN}[$num_fmt]${C_RESET} ${C_CYAN}${c1_plain:7}${C_RESET}"
+      c1_plain="  [${num_fmt}] ${l_text}"
+      if ((${#c1_plain} > 36)); then
+        c1_plain="${c1_plain:0:34}.."
+      fi
+      c1_color="  ${C_GREEN}[${num_fmt}]${C_RESET} ${C_CYAN}${c1_plain:7}${C_RESET}"
     fi
   fi
 
@@ -447,22 +670,26 @@ print_row() {
     r_text="$REPLY_PLAIN"
     if [[ -z "$r_num" ]]; then
       c2_plain="  ▶ ${r_text}"
-      ((${#c2_plain} > 36)) && c2_plain="${c2_plain:0:34}.."
+      if ((${#c2_plain} > 36)); then
+        c2_plain="${c2_plain:0:34}.."
+      fi
       c2_color="  ${C_AAA_YELLOW}▶ ${C_AAA_WHITE}${c2_plain:4}${C_RESET}"
     else
       printf -v num_fmt "%2s" "$r_num"
-      c2_plain="  [$num_fmt] ${r_text}"
-      ((${#c2_plain} > 36)) && c2_plain="${c2_plain:0:34}.."
-      c2_color="  ${C_GREEN}[$num_fmt]${C_RESET} ${C_CYAN}${c2_plain:7}${C_RESET}"
+      c2_plain="  [${num_fmt}] ${r_text}"
+      if ((${#c2_plain} > 36)); then
+        c2_plain="${c2_plain:0:34}.."
+      fi
+      c2_color="  ${C_GREEN}[${num_fmt}]${C_RESET} ${C_CYAN}${c2_plain:7}${C_RESET}"
     fi
   fi
 
   pad_l=$((37 - ${#c1_plain}))
-  ((pad_l < 0)) && pad_l=0
+  if ((pad_l < 0)); then pad_l=0; fi
   pad_r=$((37 - ${#c2_plain}))
-  ((pad_r < 0)) && pad_r=0
+  if ((pad_r < 0)); then pad_r=0; fi
 
-  if [[ -n "$l_num" && "$l_num" =~ ^[0-9]+$ ]]; then
+  if [[ -n "$l_num" && "$l_num" =~ ^[0-9]+$ && "${#l_num}" -le 6 ]]; then
     idx_l=$((10#$l_num))
     printf -v num_fmt "%2s" "$l_num"
     printf -v cell_pad '%*s' "$pad_l" ""
@@ -470,11 +697,11 @@ print_row() {
     WPTT_ITEM_COL[idx_l]=$(( ${#MARGIN} + 3 ))
     WPTT_ITEM_SIDE[idx_l]=1
     WPTT_ITEM_NORM[idx_l]="${c1_color}${cell_pad}"
-    WPTT_ITEM_HL[idx_l]="${C_HL_NUM} ❯[$num_fmt]${C_HL_BG} ${c1_plain:7}${cell_pad}${C_RESET}"
+    WPTT_ITEM_HL[idx_l]="${C_HL_NUM} ❯[${num_fmt}]${C_HL_BG} ${c1_plain:7}${cell_pad}${C_RESET}"
     WPTT_ITEM_LABEL[idx_l]="${l_text}"
   fi
 
-  if [[ -n "$r_num" && "$r_num" =~ ^[0-9]+$ ]]; then
+  if [[ -n "$r_num" && "$r_num" =~ ^[0-9]+$ && "${#r_num}" -le 6 ]]; then
     idx_r=$((10#$r_num))
     WPTT_HAS_TWO_COLS=1
     printf -v num_fmt "%2s" "$r_num"
@@ -483,7 +710,7 @@ print_row() {
     WPTT_ITEM_COL[idx_r]=$(( ${#MARGIN} + 42 ))
     WPTT_ITEM_SIDE[idx_r]=2
     WPTT_ITEM_NORM[idx_r]="${c2_color}${cell_pad}"
-    WPTT_ITEM_HL[idx_r]="${C_HL_NUM} ❯[$num_fmt]${C_HL_BG} ${c2_plain:7}${cell_pad}${C_RESET}"
+    WPTT_ITEM_HL[idx_r]="${C_HL_NUM} ❯[${num_fmt}]${C_HL_BG} ${c2_plain:7}${cell_pad}${C_RESET}"
     WPTT_ITEM_LABEL[idx_r]="${r_text}"
   fi
 
@@ -493,8 +720,12 @@ print_row() {
     WPTT_ITEM_PEER[idx_r]=$idx_l
   fi
 
-  printf "${MARGIN}${C_CYAN}│${C_RESET} %b%*s  %b%*s ${C_CYAN}│${C_RESET}\n" "$c1_color" "$pad_l" "" "$c2_color" "$pad_r" ""
-  ((WPTT_RENDER_LINE++))
+  printf '%s%s│%s %s%*s  %s%*s %s│%s\n' \
+    "$MARGIN" "$C_CYAN" "$C_RESET" \
+    "$c1_color" "$pad_l" "" \
+    "$c2_color" "$pad_r" "" \
+    "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
 }
 
 print_full_row() {
@@ -507,61 +738,88 @@ print_full_row() {
   _strip_ansi "$text"
 
   if [[ -z "$index" ]]; then
-    clean_len=$((5 + ${#REPLY_PLAIN}))
+    local title_txt="${REPLY_PLAIN^^}"
+    if ((${#title_txt} > 72)); then
+      title_txt="${title_txt:0:70}.."
+    fi
+    clean_len=$((5 + ${#title_txt}))
     pad=$((box_inner_width - clean_len))
-    ((pad < 0)) && pad=0
+    if ((pad < 0)); then pad=0; fi
     printf -v pad_str '%*s' "$pad" ""
 
-    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_AAA_YELLOW}▶${C_RESET} ${C_AAA_WHITE}${REPLY_PLAIN^^}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
+    printf '%s%s│%s   %s▶%s %s%s%s%s%s│%s\n' \
+      "$MARGIN" "$C_CYAN" "$C_RESET" \
+      "$C_AAA_YELLOW" "$C_RESET" \
+      "$C_AAA_WHITE" "$title_txt" "$C_RESET" \
+      "$pad_str" "$C_CYAN" "$C_RESET"
   else
     printf -v formatted_index "%2s" "$index"
-    clean_len=$((3 + ${#formatted_index} + 3 + ${#REPLY_PLAIN}))
+    local row_txt="$REPLY_PLAIN"
+    local max_txt=$((box_inner_width - 6 - ${#formatted_index}))
+    if ((${#row_txt} > max_txt)); then
+      row_txt="${row_txt:0:$((max_txt - 2))}.."
+    fi
+    clean_len=$((3 + ${#formatted_index} + 3 + ${#row_txt}))
     pad=$((box_inner_width - clean_len))
-    ((pad < 0)) && pad=0
+    if ((pad < 0)); then pad=0; fi
     printf -v pad_str '%*s' "$pad" ""
 
-    if [[ "$index" =~ ^[0-9]+$ ]]; then
+    if [[ "$index" =~ ^[0-9]+$ && "${#index}" -le 6 ]]; then
       local idx_f=$((10#$index))
-      local norm_str="   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${REPLY_PLAIN}${C_RESET}${pad_str}"
+      local norm_str="   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${row_txt}${C_RESET}${pad_str}"
       local hl_pad=$((pad - 1))
-      ((hl_pad < 0)) && hl_pad=0
+      if ((hl_pad < 0)); then hl_pad=0; fi
       local hl_pad_str=""
       printf -v hl_pad_str '%*s' "$hl_pad" ""
       WPTT_ITEM_LINE[idx_f]=$WPTT_RENDER_LINE
       WPTT_ITEM_COL[idx_f]=$(( ${#MARGIN} + 2 ))
       WPTT_ITEM_SIDE[idx_f]=1
       WPTT_ITEM_NORM[idx_f]="$norm_str"
-      WPTT_ITEM_HL[idx_f]=" ${C_HL_NUM} ❯[${formatted_index}]${C_HL_BG} ${REPLY_PLAIN}${hl_pad_str}${C_RESET} "
-      WPTT_ITEM_LABEL[idx_f]="$REPLY_PLAIN"
+      WPTT_ITEM_HL[idx_f]=" ${C_HL_NUM} ❯[${formatted_index}]${C_HL_BG} ${row_txt}${hl_pad_str}${C_RESET} "
+      WPTT_ITEM_LABEL[idx_f]="$row_txt"
     fi
 
-    echo -e "${MARGIN}${C_CYAN}│${C_RESET}   ${C_GREEN}[${formatted_index}]${C_RESET} ${C_CYAN}${REPLY_PLAIN}${C_RESET}${pad_str}${C_CYAN}│${C_RESET}"
+    printf '%s%s│%s   %s[%s]%s %s%s%s%s%s│%s\n' \
+      "$MARGIN" "$C_CYAN" "$C_RESET" \
+      "$C_GREEN" "$formatted_index" "$C_RESET" \
+      "$C_CYAN" "$row_txt" "$C_RESET" \
+      "$pad_str" "$C_CYAN" "$C_RESET"
   fi
-  ((WPTT_RENDER_LINE++))
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
 }
 
 print_header() {
   local text="${1:-TRUNG TÂM QUẢN TRỊ WPTANGTOC OLS}"
+  local esc=$'\033'
+  if [[ "$text" == *'\033'* ]]; then
+    text="${text//\\033/$esc}"
+  fi
+  if [[ "$text" == *'\e'* ]]; then
+    text="${text//\\e/$esc}"
+  fi
   local REPLY_PLAIN=""
   _strip_ansi "$text"
   local len=${#REPLY_PLAIN}
   local p_left=$(((78 - len) / 2))
-  ((p_left < 0)) && p_left=0
+  if ((p_left < 0)); then p_left=0; fi
   local p_right=$((78 - len - p_left))
-  ((p_right < 0)) && p_right=0
-  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s${C_AAA_WHITE}%b${C_RESET}%*s${C_CYAN}│${C_RESET}\n" "$p_left" "" "$text" "$p_right" ""
-  ((WPTT_RENDER_LINE++))
+  if ((p_right < 0)); then p_right=0; fi
+  printf '%s%s│%s%*s%s%s%s%*s%s│%s\n' \
+    "$MARGIN" "$C_CYAN" "$C_RESET" \
+    "$p_left" "" "$C_AAA_WHITE" "$text" "$C_RESET" \
+    "$p_right" "" "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
 }
 
 print_spacer() {
-  printf "${MARGIN}${C_CYAN}│%78s│${C_RESET}\n" ""
-  ((WPTT_RENDER_LINE++))
+  printf '%s%s│%78s│%s\n' "$MARGIN" "$C_CYAN" "" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
 }
 
 draw_default_grid() {
   local item_count=1
   local opt="" clean_opt=""
-  for opt in "${options[@]}"; do
+  for opt in "${options[@]+"${options[@]}"}"; do
     if [[ "$opt" == *"───"* ]]; then
       print_spacer
       clean_opt="${opt//───/}"
@@ -572,7 +830,7 @@ draw_default_grid() {
       print_row "" "$clean_opt" "" ""
     else
       print_row "$item_count" "$opt" "" ""
-      ((item_count++))
+      item_count=$((item_count + 1))
     fi
   done
 }
@@ -584,6 +842,11 @@ _wptt_find_horizontal_target() {
   local cur="$1"
   local dir="$2" # "right" hoặc "left"
   WPTT_NAV_TARGET=$cur
+
+  if ((total_valid_opts <= 0)); then
+    WPTT_NAV_TARGET=0
+    return 0
+  fi
 
   if ((cur < 1 || cur > total_valid_opts)); then
     if [[ "$dir" == "right" ]]; then
@@ -598,10 +861,10 @@ _wptt_find_horizontal_target() {
   if ((WPTT_HAS_TWO_COLS == 0)); then
     if [[ "$dir" == "right" ]]; then
       WPTT_NAV_TARGET=$((cur + 1))
-      ((WPTT_NAV_TARGET > total_valid_opts)) && WPTT_NAV_TARGET=1
+      if ((WPTT_NAV_TARGET > total_valid_opts)); then WPTT_NAV_TARGET=1; fi
     else
       WPTT_NAV_TARGET=$((cur - 1))
-      ((WPTT_NAV_TARGET < 1)) && WPTT_NAV_TARGET=$total_valid_opts
+      if ((WPTT_NAV_TARGET < 1)); then WPTT_NAV_TARGET=$total_valid_opts; fi
     fi
     return 0
   fi
@@ -616,7 +879,7 @@ _wptt_find_horizontal_target() {
   # 3. Nếu dòng hiện tại bị khuyết mục đối diện, tìm mục gần nhất theo khoảng cách dòng
   local cur_side="${WPTT_ITEM_SIDE[cur]:-1}"
   local target_side=2
-  ((cur_side == 2)) && target_side=1
+  if ((cur_side == 2)); then target_side=1; fi
   local cur_line="${WPTT_ITEM_LINE[cur]:-0}"
 
   local best_idx=0 best_dist=9999 idx=1 cand_line=0 dist=0
@@ -624,7 +887,7 @@ _wptt_find_horizontal_target() {
     if (( ${WPTT_ITEM_SIDE[idx]:-0} == target_side )); then
       cand_line="${WPTT_ITEM_LINE[idx]:-0}"
       dist=$((cand_line - cur_line))
-      ((dist < 0)) && dist=$((-dist))
+      if ((dist < 0)); then dist=$((-dist)); fi
       if ((dist < best_dist)); then
         best_dist=$dist
         best_idx=$idx
@@ -651,11 +914,13 @@ _wptt_update_live_prompt() {
   elif [[ "$buf" =~ ^[0-9]+$ ]]; then
     if [[ "$buf" == "0" ]]; then
       local back_lbl="$TEXT_BACK"
-      ((${#back_lbl} > 28)) && back_lbl="${back_lbl:0:26}.."
+      if ((${#back_lbl} > 28)); then
+        back_lbl="${back_lbl:0:26}.."
+      fi
       status_text="${C_AAA_RED}→ [0] ${C_AAA_WHITE}${back_lbl} ${C_AAA_YELLOW}(Enter ↵)${C_RESET}"
     elif [[ "$buf" == "00" ]]; then
       status_text="${C_AAA_GREEN}→ [00] ${C_AAA_WHITE}Mở công cụ Tìm kiếm ${C_AAA_YELLOW}(Enter ↵)${C_RESET}"
-    else
+    elif (( ${#buf} <= 6 )); then
       local num_val=$((10#$buf))
       if ((num_val >= 1 && num_val <= total_valid_opts)); then
         new_hl=$num_val
@@ -667,6 +932,7 @@ _wptt_update_live_prompt() {
           lbl="$REPLY_PLAIN"
         fi
         local max_lbl=$((max_right_cols - 15 - ${#num_val}))
+        if ((max_lbl < 6)); then max_lbl=6; fi
         if (( ${#lbl} > max_lbl )); then
           lbl="${lbl:0:$((max_lbl - 2))}.."
         fi
@@ -674,10 +940,14 @@ _wptt_update_live_prompt() {
       else
         status_text="${C_AAA_RED}→ [!] Ngoài phạm vi (1-${total_valid_opts})${C_RESET}"
       fi
+    else
+      status_text="${C_AAA_RED}→ [!] Ngoài phạm vi (1-${total_valid_opts})${C_RESET}"
     fi
   else
     local short_b="$buf"
-    ((${#short_b} > 30)) && short_b="${short_b:0:28}.."
+    if ((${#short_b} > 30)); then
+      short_b="${short_b:0:28}.."
+    fi
     status_text="${C_AAA_YELLOW}→ Lệnh: ${C_AAA_WHITE}${short_b}${C_RESET}"
   fi
 
@@ -707,13 +977,17 @@ _wptt_update_live_prompt() {
 
   # 3. Dựng ô Input [11    ] sạch sẽ và đặt Con trỏ gốc của Terminal vào đúng vị trí
   local disp_buf="$buf"
-  ((${#disp_buf} > 6)) && disp_buf="${disp_buf:0:6}"
+  if ((${#disp_buf} > 6)); then
+    disp_buf="${disp_buf:0:6}"
+  fi
   local len_b=${#disp_buf}
   local box_val=""
   printf -v box_val "%-6s" "$disp_buf"
 
   local box_color="${C_AAA_GREEN}"
-  [[ "$buf" == "0" || "$buf" == "00" ]] && box_color="${C_AAA_YELLOW}"
+  if [[ "$buf" == "0" || "$buf" == "00" ]]; then
+    box_color="${C_AAA_YELLOW}"
+  fi
 
   local left_border_col=$(( ${#MARGIN} + 1 ))
   local right_border_col=$(( ${#MARGIN} + 80 ))
@@ -722,7 +996,7 @@ _wptt_update_live_prompt() {
   out_seq+=$'\033[2K\033['"${left_border_col}G${C_CYAN}│${C_RESET}  ${C_AAA_GREEN}>>${C_RESET} ${C_AAA_WHITE}Lựa chọn của bạn:${C_RESET} ${box_color}[${C_AAA_YELLOW}${box_val}${box_color}]${C_RESET} ${status_text}"$'\033['"${right_border_col}G${C_CYAN}│${C_RESET}"
   out_seq+=$'\033['"${input_cursor_col}G"$'\033[?25h'
 
-  printf '%b' "$out_seq" 2>/dev/null || return 1
+  printf '%s' "$out_seq" 2>/dev/null || return 1
   WPTT_ACTIVE_HL=$new_hl
   return 0
 }
@@ -733,7 +1007,7 @@ _wptt_read_interactive_choice() {
   WPTT_ACTIVE_HL=0
 
   # Nếu không phải TTY tương tác thật (VD: chạy trong BATS test / Pipe), dùng read chuẩn
-  if [[ ! -t 0 || ! -t 1 || -n "${BATS_TEST_FILENAME:-}" || "${CI:-}" == "true" ]]; then
+  if ! _wptt_is_interactive_tty; then
     if ! IFS= read -r -t "$WPTT_MENU_IDLE_SEC" choice; then
       return 1
     fi
@@ -742,20 +1016,25 @@ _wptt_read_interactive_choice() {
 
   _wptt_update_live_prompt "" "$prompt_line" 0 || return 1
 
-  local char="" rest="" key_guard=0 WPTT_NAV_TARGET=0
+  local char="" rest="" REPLY_ESC_TAIL="" key_guard=0 WPTT_NAV_TARGET=0
   local rc=0 idle_elapsed=0 idle_since_probe=0 probe_miss=0 poll_sec=5
 
-  while ((++key_guard < 4096)); do
+  while ((key_guard < 4096)); do
+    key_guard=$((key_guard + 1))
+
     if [[ -n "$WPTT_PENDING_ESC" ]]; then
       char=$'\x1b'
       rest="$WPTT_PENDING_ESC"
       WPTT_PENDING_ESC=""
       rc=0
-    elif [[ -n "$WPTT_PENDING_CHAR" ]]; then
-      char="$WPTT_PENDING_CHAR"
-      WPTT_PENDING_CHAR=""
+    elif [[ -n "$WPTT_PENDING_BUF" ]]; then
+      char="${WPTT_PENDING_BUF:0:1}"
+      WPTT_PENDING_BUF="${WPTT_PENDING_BUF:1}"
       rest=""
       rc=0
+    elif ((WPTT_PENDING_ENTER == 1)); then
+      WPTT_PENDING_ENTER=0
+      return 0
     else
       rest=""
       rc=0
@@ -766,13 +1045,20 @@ _wptt_read_interactive_choice() {
       # Lớp 1 (mỗi 5s): kiểm tra cha, SID, PTY
       _wptt_tty_alive || return 1
       idle_elapsed=$((idle_elapsed + poll_sec))
-      ((idle_elapsed >= WPTT_MENU_IDLE_SEC)) && return 1
+      if ((idle_elapsed >= WPTT_MENU_IDLE_SEC)); then
+        return 1
+      fi
+
+      # Nếu lần hiệu chuẩn đầu bị người dùng bấm chen ngang -> hiệu chuẩn lại lúc nhàn rỗi
+      if ((WPTT_DSR_CALIBRATED == 0)); then
+        _wptt_dsr_calibrate
+      fi
 
       # Lớp 2 (mỗi WPTT_DSR_INTERVAL giây): gửi nhịp tim ANSI DSR \033[6n kiểm tra Terminal thật còn sống
       idle_since_probe=$((idle_since_probe + poll_sec))
       if ((WPTT_DSR_SUPPORTED == 1)) && ((idle_since_probe >= WPTT_DSR_INTERVAL || probe_miss > 0)); then
         idle_since_probe=0
-        if _wptt_dsr_probe 1.5 0; then
+        if _wptt_dsr_probe "$WPTT_DSR_TIMEOUT" 0; then
           probe_miss=0
         else
           probe_miss=$((probe_miss + 1))
@@ -807,46 +1093,69 @@ _wptt_read_interactive_choice() {
       continue
     fi
 
-    # 3. Ctrl+C hoặc Ctrl+D
+    # 3. Ctrl+C (0ms nhờ -isig) hoặc Ctrl+D
     if [[ "$char" == $'\x03' ]]; then
-      _wptt_menu_ctrl_c
+      _wptt_handle_ctrl_c_exit
     elif [[ "$char" == $'\x04' ]]; then
       return 1
     fi
 
-    # 4. Phím Escape / Phím mũi tên 4 chiều ↑ ↓ ← →
+    # 4. Phím Escape / Phím mũi tên 4 chiều ↑ ↓ ← → / Home / End
     if [[ "$char" == $'\x1b' || "$char" == $'\e' ]]; then
       if [[ -z "$rest" ]]; then
-        IFS= read -rsn2 -t 0.03 rest 2>/dev/null || true
+        _wptt_read_esc_tail 0.03
+        rest="$REPLY_ESC_TAIL"
       fi
       case "$rest" in
         '[B' | 'OB') # Mũi tên Xuống (↓) -> Tiến 1 mục trong cột
-          local next_n=$((WPTT_ACTIVE_HL + 1))
-          ((next_n > total_valid_opts)) && next_n=1
-          choice="$next_n"
-          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          if ((total_valid_opts > 0)); then
+            local next_n=$((WPTT_ACTIVE_HL + 1))
+            if ((next_n > total_valid_opts)); then next_n=1; fi
+            choice="$next_n"
+            _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          fi
           ;;
         '[A' | 'OA') # Mũi tên Lên (↑) -> Lùi 1 mục trong cột
-          local prev_n=$((WPTT_ACTIVE_HL - 1))
-          ((prev_n < 1)) && prev_n=$total_valid_opts
-          choice="$prev_n"
-          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          if ((total_valid_opts > 0)); then
+            local prev_n=$((WPTT_ACTIVE_HL - 1))
+            if ((prev_n < 1)); then prev_n=$total_valid_opts; fi
+            choice="$prev_n"
+            _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          fi
           ;;
         '[C' | 'OC') # Mũi tên Phải (→) -> Nhảy ngang sang cột đối diện
-          _wptt_find_horizontal_target "$WPTT_ACTIVE_HL" "right"
-          choice="$WPTT_NAV_TARGET"
-          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          if ((total_valid_opts > 0)); then
+            _wptt_find_horizontal_target "$WPTT_ACTIVE_HL" "right"
+            choice="$WPTT_NAV_TARGET"
+            _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          fi
           ;;
         '[D' | 'OD') # Mũi tên Trái (←) -> Nhảy ngang về cột đối diện
-          _wptt_find_horizontal_target "$WPTT_ACTIVE_HL" "left"
-          choice="$WPTT_NAV_TARGET"
-          _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          if ((total_valid_opts > 0)); then
+            _wptt_find_horizontal_target "$WPTT_ACTIVE_HL" "left"
+            choice="$WPTT_NAV_TARGET"
+            _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          fi
+          ;;
+        '[H' | 'OH' | '[1~' | '[7~') # Phím Home -> Về mục đầu tiên
+          if ((total_valid_opts > 0)); then
+            choice="1"
+            _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          fi
+          ;;
+        '[F' | 'OF' | '[4~' | '[8~') # Phím End -> Tới mục cuối cùng
+          if ((total_valid_opts > 0)); then
+            choice="$total_valid_opts"
+            _wptt_update_live_prompt "$choice" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
+          fi
           ;;
         '') # Nhấn ESC đơn -> Xóa nhanh ô đang gõ
           if [[ -n "$choice" ]]; then
             choice=""
             _wptt_update_live_prompt "" "$prompt_line" "$WPTT_ACTIVE_HL" || return 1
           fi
+          ;;
+        *) # Nuốt gọn các phím F1-F12 / PgUp / PgDn / Delete / DSR trễ
           ;;
       esac
       continue
@@ -867,7 +1176,9 @@ _wptt_read_interactive_choice() {
 # ==============================================================================
 wptt_sub_fzf_search() {
   local query="${1:-}"
-  [[ -s "${SUB_IDX_FILE:-}" ]] || return 0
+  if [[ ! -s "${SUB_IDX_FILE:-}" ]]; then
+    return 0
+  fi
 
   query="${query#"${query%%[![:space:]]*}"}"
   query="${query%"${query##*[![:space:]]}"}"
@@ -882,13 +1193,15 @@ wptt_sub_fzf_search() {
     local cached_q=""
     IFS= read -r cached_q <"$WPTT_SUB_LAST_Q" || true
     if [[ "$query" == "$cached_q" ]]; then
-      tail -n +2 "$WPTT_SUB_LAST_Q" 2>/dev/null
+      tail -n +2 "$WPTT_SUB_LAST_Q" 2>/dev/null || true
       return 0
     fi
   fi
 
   local delay="0.050"
-  ((${#query} == 1)) && delay="0.075"
+  if ((${#query} == 1)); then
+    delay="0.075"
+  fi
   if [[ -p "${WPTT_SUB_FIFO:-}" ]]; then
     read -r -t "$delay" <>"$WPTT_SUB_FIFO" 2>/dev/null || true
   else
@@ -896,12 +1209,16 @@ wptt_sub_fzf_search() {
   fi
 
   if [[ -n "${WPTT_SUB_LAST_Q:-}" && -f "${WPTT_SUB_AWK:-}" ]]; then
-    {
+    local last_q_tmp="${WPTT_SUB_LAST_Q}.tmp.$$"
+    if {
       printf '%s\n' "$query"
       LC_ALL=C.UTF-8 awk -F'\t' -v q="$query" -v hits_file="${HITS_FILE:-}" -f "$WPTT_SUB_AWK" "$SUB_IDX_FILE"
-    } >"${WPTT_SUB_LAST_Q}.tmp.$$" 2>/dev/null &&
-      /bin/mv -f "${WPTT_SUB_LAST_Q}.tmp.$$" "$WPTT_SUB_LAST_Q" 2>/dev/null
-    tail -n +2 "$WPTT_SUB_LAST_Q" 2>/dev/null
+    } >"$last_q_tmp" 2>/dev/null; then
+      /bin/mv -fT -- "$last_q_tmp" "$WPTT_SUB_LAST_Q" 2>/dev/null || /bin/rm -f -- "$last_q_tmp" 2>/dev/null || true
+    else
+      /bin/rm -f -- "$last_q_tmp" 2>/dev/null || true
+    fi
+    tail -n +2 "$WPTT_SUB_LAST_Q" 2>/dev/null || true
   elif [[ -f "${WPTT_SUB_AWK:-}" ]]; then
     LC_ALL=C.UTF-8 awk -F'\t' -v q="$query" -v hits_file="${HITS_FILE:-}" -f "$WPTT_SUB_AWK" "$SUB_IDX_FILE"
   fi
@@ -916,16 +1233,18 @@ wptt_sub_fzf_previewer() {
     read -r -t 0.015 <>"$WPTT_SUB_FIFO" 2>/dev/null || true
   fi
 
-  printf "\033[1;36m⚡ %s\033[0m\n" "$f_title"
+  printf '\033[1;36m⚡ %s\033[0m\n' "$f_title"
 
   if [[ -z "$script_to_preview" || ! -r "$script_to_preview" ]]; then
     return 0
   fi
 
   local alt_regex="" word="" esc_word="" i=0 ch=""
+  local -a q_tokens=()
   if [[ -n "$search_query" ]]; then
-    for word in $search_query; do
-      ((${#word} < 2)) && continue
+    read -r -a q_tokens <<<"$search_query" || true
+    for word in "${q_tokens[@]+"${q_tokens[@]}"}"; do
+      if ((${#word} < 2)); then continue; fi
       esc_word=""
       for ((i = 0; i < ${#word}; i++)); do
         ch="${word:i:1}"
@@ -950,7 +1269,9 @@ wptt_sub_fzf_previewer() {
   fi
 
   local active=0 line="" trimmed="" line_count=0 re=""
-  [[ -n "$alt_regex" ]] && re="($alt_regex)"
+  if [[ -n "$alt_regex" ]]; then
+    re="($alt_regex)"
+  fi
 
   shopt -s nocasematch
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -962,8 +1283,8 @@ wptt_sub_fzf_previewer() {
       continue
     fi
     trimmed="${line#"${line%%[![:space:]]*}"}"
-    [[ "$trimmed" == "}"* ]] && break
-    [[ -z "$trimmed" || "$trimmed" == "EOF"* || "$trimmed" == "cat <<"* ]] && continue
+    if [[ "$trimmed" == "}"* ]]; then break; fi
+    if [[ -z "$trimmed" || "$trimmed" == "EOF"* || "$trimmed" == "cat <<"* ]]; then continue; fi
 
     if [[ "$trimmed" == "echo "* ]]; then
       line="${trimmed#echo }"
@@ -980,31 +1301,37 @@ wptt_sub_fzf_previewer() {
       local out="" rest="$line" m_str="" prefix=""
       while [[ "$rest" =~ $re ]]; do
         m_str="${BASH_REMATCH[1]}"
-        [[ -z "$m_str" ]] && break
+        if [[ -z "$m_str" ]]; then break; fi
         prefix="${rest%%"$m_str"*}"
         out+="${prefix}"$'\033[1;33;4m'"${m_str}"$'\033[0m'
         rest="${rest#*"$m_str"}"
       done
       line="${out}${rest}"
     fi
-    printf "\033[90m%b\033[0m\n" "$line"
-    ((++line_count >= 5)) && break
+    printf '\033[90m%s\033[0m\n' "$line"
+    line_count=$((line_count + 1))
+    if ((line_count >= 5)); then break; fi
   done <"$script_to_preview"
   shopt -u nocasematch
 }
 
 _run_submenu_seo_fzf() {
+  # Luôn dùng /etc/wptt/tmp (0700 root-only), tuyệt đối không ghi vào /dev/shm dùng chung
   local rt_dir="/etc/wptt/tmp"
-  if [[ -d /dev/shm && -w /dev/shm ]]; then
-    rt_dir="/dev/shm"
-  else
-    /bin/mkdir -p /etc/wptt/tmp 2>/dev/null || true
-  fi
+  /bin/mkdir -p -m 0700 "$rt_dir" 2>/dev/null || true
+  /bin/chmod 0700 -- "$rt_dir" 2>/dev/null || true
 
-  export SUB_IDX_FILE="${rt_dir}/wptt_sub_idx_${EUID:-0}_$$.tsv"
-  export WPTT_SUB_FIFO="${rt_dir}/wptt_sub_fifo_${EUID:-0}_$$"
-  export WPTT_SUB_LAST_Q="${rt_dir}/wptt_sub_last_${EUID:-0}_$$"
-  export WPTT_SUB_AWK="${rt_dir}/wptt_sub_awk_${EUID:-0}_$$.awk"
+  WPTT_SUB_TMPDIR="$(mktemp -d -p "$rt_dir" "wptt_sub_XXXXXX" 2>/dev/null || true)"
+  if [[ -z "$WPTT_SUB_TMPDIR" || ! -d "$WPTT_SUB_TMPDIR" ]]; then
+    REPLY_SUB_SELECTED=""
+    return 1
+  fi
+  /bin/chmod 0700 -- "$WPTT_SUB_TMPDIR" 2>/dev/null || true
+
+  export SUB_IDX_FILE="${WPTT_SUB_TMPDIR}/idx.tsv"
+  export WPTT_SUB_FIFO="${WPTT_SUB_TMPDIR}/fifo"
+  export WPTT_SUB_LAST_Q="${WPTT_SUB_TMPDIR}/last_q"
+  export WPTT_SUB_AWK="${WPTT_SUB_TMPDIR}/search.awk"
   export HITS_FILE="/etc/wptt/tmp/wptt_hits_search.tsv"
   export -f wptt_sub_fzf_search wptt_sub_fzf_previewer
 
@@ -1179,11 +1506,19 @@ EOF
   local global_idx="/etc/wptt/tmp/wptt_search_ft_v4_${ngon_ngu:-vi}_${version_wptangtoc_ols:-latest}.idx"
   local -a raw_sub_lines=()
   local count=1 i=0 REPLY_PLAIN=""
-  for i in "${valid_indices[@]}"; do
+  for i in "${valid_indices[@]+"${valid_indices[@]}"}"; do
     _strip_ansi "${options[$i]}"
     raw_sub_lines+=("${count}"$'\t'"${REPLY_PLAIN}")
-    ((count++))
+    count=$((count + 1))
   done
+
+  if ((${#raw_sub_lines[@]} == 0)); then
+    export -n SUB_IDX_FILE WPTT_SUB_FIFO WPTT_SUB_LAST_Q WPTT_SUB_AWK 2>/dev/null || true
+    export -nf wptt_sub_fzf_search wptt_sub_fzf_previewer 2>/dev/null || true
+    _wptt_cleanup_sub_search
+    REPLY_SUB_SELECTED=""
+    return 0
+  fi
 
   LC_ALL=C.UTF-8 awk -F'\t' -v OFS='\t' -v g_idx="$global_idx" '
     function norm_vn(s) {
@@ -1262,39 +1597,76 @@ EOF
 
       print disp, num, full_t, script_p, base_hot, opt_len, opt_norm, opt_ascii, d_ascii, t_words
     }
-  ' < <(printf "%s\n" "${raw_sub_lines[@]}") >"$SUB_IDX_FILE" 2>/dev/null
+  ' < <(printf '%s\n' "${raw_sub_lines[@]}") >"$SUB_IDX_FILE" 2>/dev/null
 
   local -a sub_init_lines=()
   local f_disp="" f_num="" f_full="" f_script=""
   while IFS=$'\t' read -r f_disp f_num f_full f_script _; do
-    [[ -z "$f_disp" ]] && continue
+    if [[ -z "$f_disp" ]]; then continue; fi
     sub_init_lines+=("${f_disp}"$'\t'"${f_num}"$'\t'"${f_full}"$'\t'"${f_script}"$'\t')
   done <"$SUB_IDX_FILE"
 
-  export SHELL=/bin/bash
   REPLY_SUB_SELECTED=""
   trap '' SIGINT
-  REPLY_SUB_SELECTED=$(
-    printf "%s\n" "${sub_init_lines[@]}" | fzf \
-      --ansi \
-      --disabled \
-      --bind 'change:reload:wptt_sub_fzf_search {q}' \
-      --prompt="🔍 Tìm kiếm trong Menu này > " \
-      --height='~55%' \
-      --border=rounded \
-      --color=border:cyan \
-      --layout=reverse \
-      --cycle \
-      --with-nth=1 \
-      --delimiter=$'\t' \
-      --header="Gõ từ khóa | ESC hủy" \
-      --preview='wptt_sub_fzf_previewer {3} {4} {5}' \
-      --preview-window=up:4:wrap
-  ) || true
-  trap '_wptt_menu_ctrl_c' SIGINT
+  if ((${#sub_init_lines[@]} > 0)); then
+    REPLY_SUB_SELECTED="$(
+      SHELL=/bin/bash fzf \
+        --ansi \
+        --disabled \
+        --bind 'change:reload:wptt_sub_fzf_search {q}' \
+        --prompt="🔍 Tìm kiếm trong Menu này > " \
+        --height='~55%' \
+        --border=rounded \
+        --color=border:cyan \
+        --layout=reverse \
+        --cycle \
+        --with-nth=1 \
+        --delimiter=$'\t' \
+        --header="Gõ từ khóa | ESC hủy" \
+        --preview='wptt_sub_fzf_previewer {3} {4} {5}' \
+        --preview-window=up:4:wrap < <(printf '%s\n' "${sub_init_lines[@]}")
+    )" || true
+  fi
+  _wptt_arm_traps
 
+  export -n SUB_IDX_FILE WPTT_SUB_FIFO WPTT_SUB_LAST_Q WPTT_SUB_AWK 2>/dev/null || true
+  export -nf wptt_sub_fzf_search wptt_sub_fzf_previewer 2>/dev/null || true
   _wptt_cleanup_sub_search
   _wptt_tty_alive || _wptt_menu_hangup
+}
+
+_wptt_record_search_hit() {
+  local feat="$1"
+  if [[ -z "$feat" ]]; then
+    return 0
+  fi
+
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || return 0
+  local hits_file="/etc/wptt/tmp/wptt_hits_search.tsv"
+  if [[ ! -f "$hits_file" ]]; then
+    : >"$hits_file" 2>/dev/null || return 0
+    /bin/chmod 0600 -- "$hits_file" 2>/dev/null || true
+  fi
+
+  local hits_tmp=""
+  hits_tmp="$(mktemp -p /etc/wptt/tmp "wptt_hits_XXXXXX.tmp" 2>/dev/null || true)"
+  if [[ -z "$hits_tmp" ]]; then
+    return 0
+  fi
+
+  if awk -F'\t' -v feat="$feat" '
+      BEGIN { OFS="\t"; found=0 }
+      NF >= 2 {
+        if ($1 == feat) { $2 = int($2) + 1; found=1 }
+        print $1, $2
+      }
+      END { if (!found) print feat, 1 }
+    ' "$hits_file" >"$hits_tmp" 2>/dev/null; then
+    /bin/chmod 0600 -- "$hits_tmp" 2>/dev/null || true
+    /bin/mv -fT -- "$hits_tmp" "$hits_file" 2>/dev/null || /bin/rm -f -- "$hits_tmp" 2>/dev/null || true
+  else
+    /bin/rm -f -- "$hits_tmp" 2>/dev/null || true
+  fi
 }
 
 # ==============================================================================
@@ -1302,20 +1674,23 @@ EOF
 # ==============================================================================
 valid_indices=()
 for i in "${!options[@]}"; do
-  [[ "${options[$i]}" != *"───"* ]] && valid_indices+=("$i")
+  if [[ "${options[$i]}" != *"───"* ]]; then
+    valid_indices+=("$i")
+  fi
 done
 total_valid_opts=${#valid_indices[@]}
 
 # ==============================================================================
-# 6. VÒNG LẶP DASHBOARD CHÍNH (HARD-CAPPED LOOP + ANTI-ORPHAN + DSR HEARTBEAT)
+# 6. VÒNG LẶP DASHBOARD CHÍNH (HARD-CAPPED LOOP + 0MS CTRL+C + DSR HEARTBEAT)
 # ==============================================================================
 _wptt_menu_loop_guard=0
 
-while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
+while ((_wptt_menu_loop_guard < WPTT_MAX_MENU_LOOPS)); do
+  _wptt_menu_loop_guard=$((_wptt_menu_loop_guard + 1))
 
   _wptt_tty_alive || break
-
-  if [[ -t 0 ]]; then stty -echo 2>/dev/null; fi
+  WPTT_ON_PROMPT_LINE=0
+  _wptt_tty_enter_raw
   calc_margin
 
   WPTT_RENDER_LINE=0
@@ -1328,11 +1703,11 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
   WPTT_ITEM_HL=()
   WPTT_ITEM_LABEL=()
 
-  echo -e "${MARGIN}${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-  ((WPTT_RENDER_LINE++))
+  printf '%s%s╭──────────────────────────────────────────────────────────────────────────────╮%s\n' "$MARGIN" "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
   print_header "${MENU_TITLE:-TRUNG TÂM QUẢN TRỊ WPTANGTOC OLS}"
-  echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  ((WPTT_RENDER_LINE++))
+  printf '%s%s├──────────────────────────────────────────────────────────────────────────────┤%s\n' "$MARGIN" "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
   print_spacer
 
   if declare -F draw_custom_grid >/dev/null; then
@@ -1342,31 +1717,38 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
   fi
 
   print_spacer
-  echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  ((WPTT_RENDER_LINE++))
+  printf '%s%s├──────────────────────────────────────────────────────────────────────────────┤%s\n' "$MARGIN" "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
 
-  plain_foot=" Nhập số (1-$total_valid_opts) | [00] Tìm kiếm | [0] $TEXT_BACK "
-  color_foot=" ${C_AAA_WHITE}Nhập số (1-$total_valid_opts)${C_RESET} │ ${C_AAA_GREEN}[00] Tìm kiếm${C_RESET} │ ${C_AAA_RED}[0] $TEXT_BACK${C_RESET} "
+  plain_foot=" Nhập số (1-${total_valid_opts}) | [00] Tìm kiếm | [0] ${TEXT_BACK} "
+  color_foot=" ${C_AAA_WHITE}Nhập số (1-${total_valid_opts})${C_RESET} │ ${C_AAA_GREEN}[00] Tìm kiếm${C_RESET} │ ${C_AAA_RED}[0] ${TEXT_BACK}${C_RESET} "
 
   len_foot=${#plain_foot}
   p_l=$(((78 - len_foot) / 2))
-  ((p_l < 0)) && p_l=0
+  if ((p_l < 0)); then p_l=0; fi
   p_r=$((78 - len_foot - p_l))
-  ((p_r < 0)) && p_r=0
+  if ((p_r < 0)); then p_r=0; fi
 
-  printf "${MARGIN}${C_CYAN}│${C_RESET}%*s%b%*s${C_CYAN}│${C_RESET}\n" "$p_l" "" "$color_foot" "$p_r" ""
-  ((WPTT_RENDER_LINE++))
-  echo -e "${MARGIN}${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  ((WPTT_RENDER_LINE++))
+  printf '%s%s│%s%*s%s%*s%s│%s\n' "$MARGIN" "$C_CYAN" "$C_RESET" "$p_l" "" "$color_foot" "$p_r" "" "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
+  printf '%s%s├──────────────────────────────────────────────────────────────────────────────┤%s\n' "$MARGIN" "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
 
   PROMPT_ROW_IDX=$WPTT_RENDER_LINE
-  printf "${MARGIN}${C_CYAN}│${C_RESET}  ${C_AAA_GREEN}>>${C_RESET} ${C_AAA_WHITE}Lựa chọn của bạn:${C_RESET} %-55s${C_CYAN}│${C_RESET}\n" ""
-  ((WPTT_RENDER_LINE++))
-  echo -e "${MARGIN}${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  printf '%s%s│%s  %s>>%s %sLựa chọn của bạn:%s %-55s%s│%s\n' \
+    "$MARGIN" "$C_CYAN" "$C_RESET" \
+    "$C_AAA_GREEN" "$C_RESET" \
+    "$C_AAA_WHITE" "$C_RESET" "" \
+    "$C_CYAN" "$C_RESET"
+  WPTT_RENDER_LINE=$((WPTT_RENDER_LINE + 1))
+  printf '%s%s╰──────────────────────────────────────────────────────────────────────────────╯%s\n' "$MARGIN" "$C_CYAN" "$C_RESET"
 
   margin_len=${#MARGIN}
   cursor_col=$((margin_len + 26))
-  echo -en "\033[2A\033[${cursor_col}G"
+  if _wptt_is_interactive_tty; then
+    printf '\033[2A\033[%dG' "$cursor_col"
+    WPTT_ON_PROMPT_LINE=1
+  fi
 
   # ============================================================================
   # XỬ LÝ TYPEAHEAD BUFFERING, HIỆU CHUẨN DSR & ĐỌC PHÍM 4 CHIỀU (↑ ↓ ← →)
@@ -1378,13 +1760,19 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
   _wptt_dsr_calibrate
 
   if ! _wptt_read_interactive_choice "$PROMPT_ROW_IDX"; then
-    if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
-    echo -en "\033[2B\n" 2>/dev/null || true
+    if ((WPTT_ON_PROMPT_LINE == 1)); then
+      printf '\033[2B\n' 2>/dev/null || true
+      WPTT_ON_PROMPT_LINE=0
+    fi
+    _wptt_restore_tty
     exit 0
   fi
 
-  if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
-  echo -en "\033[2B\r"
+  if ((WPTT_ON_PROMPT_LINE == 1)); then
+    printf '\033[2B\r'
+    WPTT_ON_PROMPT_LINE=0
+  fi
+  _wptt_restore_tty
 
   choice="${choice#"${choice%%[![:space:]]*}"}"
   choice="${choice%"${choice##*[![:space:]]}"}"
@@ -1396,111 +1784,107 @@ while ((++_wptt_menu_loop_guard <= WPTT_MAX_MENU_LOOPS)); do
     empty_msg="[!] Bạn chưa nhập gì cả. Vui lòng điền một con số rồi ấn Enter!"
     len_empty=${#empty_msg}
     pad_empty=$(((78 - len_empty) / 2))
-    ((pad_empty < 0)) && pad_empty=0
+    if ((pad_empty < 0)); then pad_empty=0; fi
     pad_empty_r_len=$((78 - len_empty - pad_empty))
-    ((pad_empty_r_len < 0)) && pad_empty_r_len=0
+    if ((pad_empty_r_len < 0)); then pad_empty_r_len=0; fi
     printf -v pad_empty_l '%*s' "$pad_empty" ""
     printf -v pad_empty_r '%*s' "$pad_empty_r_len" ""
 
-    echo -e "\n${MARGIN}${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-    echo -e "${MARGIN}${C_YELLOW}│${C_RESET}${pad_empty_l}${C_AAA_WHITE}${empty_msg}${C_RESET}${pad_empty_r}${C_YELLOW}│${C_RESET}"
-    echo -e "${MARGIN}${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+    printf '\n%s%s╭──────────────────────────────────────────────────────────────────────────────╮%s\n' "$MARGIN" "$C_YELLOW" "$C_RESET"
+    printf '%s%s│%s%s%s%s%s%s%s│%s\n' "$MARGIN" "$C_YELLOW" "$C_RESET" "$pad_empty_l" "$C_AAA_WHITE" "$empty_msg" "$C_RESET" "$pad_empty_r" "$C_YELLOW" "$C_RESET"
+    printf '%s%s╰──────────────────────────────────────────────────────────────────────────────╯%s\n' "$MARGIN" "$C_YELLOW" "$C_RESET"
     _wptt_pause_brief 1.2
-    clear
+    _wptt_clear_screen
     continue
 
   elif [[ "$choice" == "0" ]]; then
+    trap - EXIT
     _wptt_cleanup_sub_search
-    clear
+    _wptt_restore_tty 1
+    _wptt_clear_screen
     exec "$ROUTE_BACK" 1
     exit 0
 
   elif [[ "$choice" == "00" ]]; then
     if ((IS_MAIN_MENU == 1)); then
-      _wptt_cleanup_sub_search
       if [[ -f /etc/wptt/search-wptangtoc ]]; then
-        chmod +x /etc/wptt/search-wptangtoc 2>/dev/null || true
+        trap - EXIT
+        _wptt_cleanup_sub_search
+        _wptt_restore_tty 1
+        /bin/chmod +x /etc/wptt/search-wptangtoc 2>/dev/null || true
         exec /etc/wptt/search-wptangtoc
       fi
     fi
 
     if command -v fzf &>/dev/null; then
       REPLY_SUB_SELECTED=""
-      _run_submenu_seo_fzf
+      _run_submenu_seo_fzf || true
 
       if [[ -n "$REPLY_SUB_SELECTED" ]]; then
         IFS=$'\t' read -r _ sel_num sel_full_title _ <<<"$REPLY_SUB_SELECTED"
         sel_num="${sel_num//[[:space:]]/}"
-        if [[ "$sel_num" =~ ^[0-9]+$ ]]; then
+        if [[ "$sel_num" =~ ^[0-9]+$ && "${#sel_num}" -le 6 ]] && ((10#$sel_num >= 1 && 10#$sel_num <= total_valid_opts)); then
           actual_index="${valid_indices[$((10#$sel_num - 1))]}"
-
-          if [[ -n "$sel_full_title" ]]; then
-            [[ -f "$HITS_FILE" ]] || : >"$HITS_FILE" 2>/dev/null
-            hits_tmp="${HITS_FILE}.tmp.$$"
-            if awk -F'\t' -v feat="$sel_full_title" '
-                BEGIN { OFS="\t"; found=0 }
-                NF >= 2 {
-                  if ($1 == feat) { $2 = int($2) + 1; found=1 }
-                  print $1, $2
-                }
-                END { if (!found) print feat, 1 }
-              ' "$HITS_FILE" >"$hits_tmp" 2>/dev/null; then
-              /bin/mv -f "$hits_tmp" "$HITS_FILE" 2>/dev/null || /bin/rm -f "$hits_tmp"
-            else
-              /bin/rm -f "$hits_tmp"
-            fi
-          fi
-
-          echo -e "\n${MARGIN}${C_AAA_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
+          _wptt_record_search_hit "$sel_full_title"
+          printf '\n%s%s>> Đang khởi chạy: %s%s\n\n' "$MARGIN" "$C_AAA_GREEN" "${options[$actual_index]}" "$C_RESET"
+          _wptt_restore_tty
           run_action "$actual_index"
+          _wptt_normalize_colors
+          _wptt_arm_traps
         fi
       else
-        clear
+        _wptt_clear_screen
       fi
     else
-      echo -e "\n${MARGIN}${C_AAA_RED}[!] Lỗi: FZF chưa được cài đặt.${C_RESET}"
+      printf '\n%s%s[!] Lỗi: FZF chưa được cài đặt.%s\n' "$MARGIN" "$C_AAA_RED" "$C_RESET"
       _wptt_pause_brief 1.5
     fi
 
-  elif [[ "$choice" =~ ^[0-9]+$ ]] && ((10#$choice >= 1 && 10#$choice <= total_valid_opts)); then
+  elif [[ "$choice" =~ ^[0-9]+$ && "${#choice}" -le 6 ]] && ((10#$choice >= 1 && 10#$choice <= total_valid_opts)); then
     actual_index="${valid_indices[$((10#$choice - 1))]}"
-    echo -e "\n${MARGIN}${C_AAA_GREEN}>> Đang khởi chạy: ${options[$actual_index]}${C_RESET}\n"
+    printf '\n%s%s>> Đang khởi chạy: %s%s\n\n' "$MARGIN" "$C_AAA_GREEN" "${options[$actual_index]}" "$C_RESET"
+    _wptt_restore_tty
     run_action "$actual_index"
+    _wptt_normalize_colors
+    _wptt_arm_traps
 
   elif [[ -n "$choice" ]]; then
     f_word="${choice%% *}"
-    if command -v "$f_word" >/dev/null 2>&1; then
+    if [[ "$f_word" != -* ]] && command -v -- "$f_word" >/dev/null 2>&1; then
       _get_cli_menu_num
-      echo -e "\n${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      text_nhan_dien="Sếp đang muốn chạy lệnh CLI: $choice"
+      text_nhan_dien="Sếp đang muốn chạy lệnh CLI: ${choice}"
+      if ((${#text_nhan_dien} > 74)); then
+        text_nhan_dien="${text_nhan_dien:0:72}.."
+      fi
       pad1=$((76 - ${#text_nhan_dien}))
-      ((pad1 < 0)) && pad1=0
+      if ((pad1 < 0)); then pad1=0; fi
       printf -v pad1_str '%*s' "$pad1" ""
-      echo -e "${C_YELLOW}│${C_RESET}  ${C_AAA_WHITE}${text_nhan_dien}${C_RESET}${pad1_str}${C_YELLOW}│${C_RESET}"
 
-      text_huong_dan="Để gõ lệnh CLI, vào Menu ➜ $cli_menu_num (Terminal) hoặc nhấn Ctrl + C"
-      len_hd=${#text_huong_dan}
-      pad2=$((76 - len_hd))
-      ((pad2 < 0)) && pad2=0
+      text_huong_dan="Để gõ lệnh CLI, vào Menu ➜ ${cli_menu_num} (Terminal) hoặc nhấn Ctrl + C"
+      pad2=$((76 - ${#text_huong_dan}))
+      if ((pad2 < 0)); then pad2=0; fi
       printf -v pad2_str '%*s' "$pad2" ""
-      echo -e "${C_YELLOW}│${C_RESET}  ${C_AAA_CYAN}${text_huong_dan}${C_RESET}${pad2_str}${C_YELLOW}│${C_RESET}"
-      echo -e "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
-      echo -en "\n${C_AAA_GREEN}➜ Nhấn [Enter] để quay lại Menu...${C_RESET}"
+      printf '\n%s╭──────────────────────────────────────────────────────────────────────────────╮%s\n' "$C_YELLOW" "$C_RESET"
+      printf '%s│%s  %s%s%s%s%s│%s\n' "$C_YELLOW" "$C_RESET" "$C_AAA_WHITE" "$text_nhan_dien" "$C_RESET" "$pad1_str" "$C_YELLOW" "$C_RESET"
+      printf '%s│%s  %s%s%s%s%s│%s\n' "$C_YELLOW" "$C_RESET" "$C_AAA_CYAN" "$text_huong_dan" "$C_RESET" "$pad2_str" "$C_YELLOW" "$C_RESET"
+      printf '%s╰──────────────────────────────────────────────────────────────────────────────╯%s\n' "$C_YELLOW" "$C_RESET"
+
+      printf '\n%s➜ Nhấn [Enter] để quay lại Menu...%s' "$C_AAA_GREEN" "$C_RESET"
       _wptt_wait_enter || exit 0
     else
       err_msg="[!] Lựa chọn không hợp lệ. Vui lòng nhập từ 1 đến ${total_valid_opts}."
       len_err=${#err_msg}
       pad_err=$(((78 - len_err) / 2))
-      ((pad_err < 0)) && pad_err=0
+      if ((pad_err < 0)); then pad_err=0; fi
       pad_err_r_len=$((78 - len_err - pad_err))
-      ((pad_err_r_len < 0)) && pad_err_r_len=0
+      if ((pad_err_r_len < 0)); then pad_err_r_len=0; fi
       printf -v pad_err_l '%*s' "$pad_err" ""
       printf -v pad_err_r '%*s' "$pad_err_r_len" ""
 
-      echo -e "\n${MARGIN}${C_RED}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-      echo -e "${MARGIN}${C_RED}│${C_RESET}${pad_err_l}${C_AAA_WHITE}${err_msg}${C_RESET}${pad_err_r}${C_RED}│${C_RESET}"
-      echo -e "${MARGIN}${C_RED}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      printf '\n%s%s╭──────────────────────────────────────────────────────────────────────────────╮%s\n' "$MARGIN" "$C_RED" "$C_RESET"
+      printf '%s%s│%s%s%s%s%s%s%s│%s\n' "$MARGIN" "$C_RED" "$C_RESET" "$pad_err_l" "$C_AAA_WHITE" "$err_msg" "$C_RESET" "$pad_err_r" "$C_RED" "$C_RESET"
+      printf '%s%s╰──────────────────────────────────────────────────────────────────────────────╯%s\n' "$MARGIN" "$C_RED" "$C_RESET"
       _wptt_pause_brief 1.5
     fi
   fi
