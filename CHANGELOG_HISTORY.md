@@ -1,3 +1,11 @@
+## WPTangToc OLS v8.4.1.8
+
+🛠️ Tối ưu hệ thống
+- Nâng cấp toàn diện tính năng bật/tắt XML-RPC trên WordPress với cơ chế bảo mật 2 lớp (chặn đồng thời ở cấp độ máy chủ web và PHP), giúp ngăn chặn triệt để các cuộc tấn công brute-force, khai thác lỗ hổng và tối ưu hóa tài nguyên hệ thống.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
 ## 🚀 Tính năng mới
 - **Hỗ trợ PHP 8.6:** Cập nhật khả năng tương thích hoàn chỉnh với PHP 8.6, giúp quản trị viên dễ dàng cài đặt và vận hành website WordPress trên nền tảng PHP mới nhất với hiệu suất tối ưu.
 

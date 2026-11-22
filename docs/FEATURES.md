@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.7)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.8)
 
 - **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.7**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.8**.
 
 ---
 
@@ -761,27 +761,35 @@ Thay đổi salt WordPress là một tính năng bảo mật quan trọng, giúp
 
 ---
 
-## Tắt XML RPC WordPress (`plugin-xml-rpc-wptangtoc`)
+## Tắt / Bật XML RPC WordPress (`plugin-xml-rpc-wptangtoc`)
 
 - **Danh mục:** Quản lý WordPress
-- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 27. Tắt XML RPC WordPress  _(bấm lần lượt: 1 → 27)_
+- **Vị trí menu:** Menu chính › 1. Quản lý WordPress › 27. Tắt / Bật XML RPC WordPress  _(bấm lần lượt: 1 → 27)_
 - **Tệp nguồn:** `/etc/wptt/wordpress/plugin-xml-rpc-wptangtoc`
 
 ```text
 WPTangToc OLS có tính năng tắt XML-RPC WordPress, thì đây là một biện pháp bảo mật và tối ưu hóa quan trọng, giúp bạn vô hiệu hóa tệp xmlrpc.php trên các website WordPress của mình.
 
-XML-RPC là gì?
-* xmlrpc.php là một tệp tin trong WordPress, hoạt động như một Giao diện Lập trình Ứng dụng [API]. Nó cho phép các ứng dụng và dịch vụ bên ngoài kết nối và thực hiện các hành động trên website WordPress của bạn từ xa [ví dụ: đăng bài từ điện thoại, nhận thông báo pingback/trackback, kết nối với các dịch vụ như Jetpack].
+ XML-RPC là gì?
+ * xmlrpc.php là một tệp tin trong WordPress, hoạt động như một Giao diện Lập trình Ứng dụng [API]. Nó cho phép các ứng dụng và dịch vụ bên ngoài kết nối và thực hiện các hành động trên website WordPress của bạn từ xa [ví dụ: đăng bài từ điện thoại, nhận thông báo pingback/trackback, kết nối với các dịch vụ như Jetpack].
 
-🎯 Tại sao cần tắt XML-RPC?
-* Tăng cường Bảo mật: Đây là lý do chính. xmlrpc.php là một mục tiêu tấn công rất phổ biến:
-* Tấn công Brute-Force: Kẻ tấn công có thể thử hàng ngàn mật khẩu qua xmlrpc.php để dò tài khoản admin.
-* Tấn công DDoS [Khuếch đại]: Lợi dụng tính năng pingback để tấn công các website khác.
-* Quét và Thu thập Thông tin: Bị lợi dụng để tìm kiếm người dùng hoặc thông tin khác.
-* Giảm tải Server: Vô hiệu hóa xmlrpc.php giúp ngăn chặn các truy cập không mong muốn từ bot và kẻ tấn công, giảm bớt gánh nặng không cần thiết cho máy chủ.
-* Không còn Cần thiết: Với sự phát triển của REST API trong WordPress, nhiều chức năng của XML-RPC đã trở nên lỗi thời hoặc ít được sử dụng đối với nhiều website hiện đại.
+ 🎯 Tại sao cần tắt XML-RPC?
+ * Tăng cường Bảo mật: Đây là lý do chính. xmlrpc.php là một mục tiêu tấn công rất phổ biến:
+ * Tấn công Brute-Force: Kẻ tấn công có thể thử hàng ngàn mật khẩu qua xmlrpc.php để dò tài khoản admin.
+ * Tấn công DDoS [Khuếch đại]: Lợi dụng tính năng pingback để tấn công các website khác.
+ * Quét và Thu thập Thông tin: Bị lợi dụng để tìm kiếm người dùng hoặc thông tin khác.
+ * Giảm tải Server: Vô hiệu hóa xmlrpc.php giúp ngăn chặn các truy cập không mong muốn từ bot và kẻ tấn công, giảm bớt gánh nặng không cần thiết cho máy chủ.
+ * Không còn Cần thiết: Với sự phát triển của REST API trong WordPress, nhiều chức năng của XML-RPC đã trở nên lỗi thời hoặc ít được sử dụng đối với nhiều website hiện đại.
 
-Tóm lại: Tính năng tắt xmlrpc.php trong WPTangToc OLS là một công cụ hữu ích giúp bạn gia cố bảo mật và giảm tải cho website WordPress bằng cách loại bỏ một cổng giao tiếp thường bị lợi dụng để tấn công. Đây là một trong những bước bảo mật cơ bản được khuyến nghị cho hầu hết các website WordPress hiện nay, miễn là bạn không còn phụ thuộc vào các chức năng của XML-RPC.
+ Tính năng Quản lý Bật / Tắt XML-RPC WordPress trên WPTangToc OLS vận hành đồng bộ 2 lớp:
+ 1. Tầng Webserver (OpenLiteSpeed .htaccess): Chặn trực tiếp mọi truy cập vào xmlrpc.php bằng mã 403 Forbidden (0 PHP, 0 MariaDB) với thẻ # BEGIN / # END WPTangToc Block XML-RPC.
+ 2. Tầng Ứng dụng (WordPress Plugin): Cài và kích hoạt plugin xml-rpc-wptangtoc để tắt toàn diện phương thức XML-RPC, Pingback/Trackback, header X-Pingback và thẻ RSD/WLW.
+
+ Cơ chế thông minh:
+ * Tự động phát hiện trạng thái hiện tại của từng lớp để đề xuất TẮT (Chặn) hoặc BẬT LẠI.
+ * Khi BẬT LẠI XML-RPC: Tự động gỡ đúng khối cấu hình trong .htaccess, reload OpenLiteSpeed và vô hiệu hóa + xóa sạch plugin xml-rpc-wptangtoc.
+
+ Tóm lại: Tính năng tắt xmlrpc.php trong WPTangToc OLS là một công cụ hữu ích giúp bạn gia cố bảo mật và giảm tải cho website WordPress bằng cách loại bỏ một cổng giao tiếp thường bị lợi dụng để tấn công. Đây là một trong những bước bảo mật cơ bản được khuyến nghị cho hầu hết các website WordPress hiện nay, miễn là bạn không còn phụ thuộc vào các chức năng của XML-RPC.
 ```
 
 ---
