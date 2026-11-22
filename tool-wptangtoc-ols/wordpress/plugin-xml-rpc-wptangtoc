@@ -1,10 +1,15 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
-. /etc/wptt/echo-color 2>/dev/null
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @since: 2026
+# @description: Quản lý Bật / Tắt XML-RPC WordPress 2 lớp (Webserver .htaccess 403 + WordPress Plugin)
+
+set -o pipefail
 
 function huong_dan() {
   cat <<'EOF'
-  WPTangToc OLS có tính năng tắt XML-RPC WordPress, thì đây là một biện pháp bảo mật và tối ưu hóa quan trọng, giúp bạn vô hiệu hóa tệp xmlrpc.php trên các website WordPress của mình.
+
+ WPTangToc OLS có tính năng tắt XML-RPC WordPress, thì đây là một biện pháp bảo mật và tối ưu hóa quan trọng, giúp bạn vô hiệu hóa tệp xmlrpc.php trên các website WordPress của mình.
 
   XML-RPC là gì?
   * xmlrpc.php là một tệp tin trong WordPress, hoạt động như một Giao diện Lập trình Ứng dụng [API]. Nó cho phép các ứng dụng và dịch vụ bên ngoài kết nối và thực hiện các hành động trên website WordPress của bạn từ xa [ví dụ: đăng bài từ điện thoại, nhận thông báo pingback/trackback, kết nối với các dịch vụ như Jetpack].
@@ -17,63 +22,667 @@ function huong_dan() {
   * Giảm tải Server: Vô hiệu hóa xmlrpc.php giúp ngăn chặn các truy cập không mong muốn từ bot và kẻ tấn công, giảm bớt gánh nặng không cần thiết cho máy chủ.
   * Không còn Cần thiết: Với sự phát triển của REST API trong WordPress, nhiều chức năng của XML-RPC đã trở nên lỗi thời hoặc ít được sử dụng đối với nhiều website hiện đại.
 
+  Tính năng Quản lý Bật / Tắt XML-RPC WordPress trên WPTangToc OLS vận hành đồng bộ 2 lớp:
+  1. Tầng Webserver (OpenLiteSpeed .htaccess): Chặn trực tiếp mọi truy cập vào xmlrpc.php bằng mã 403 Forbidden (0 PHP, 0 MariaDB) với thẻ # BEGIN / # END WPTangToc Block XML-RPC.
+  2. Tầng Ứng dụng (WordPress Plugin): Cài và kích hoạt plugin xml-rpc-wptangtoc để tắt toàn diện phương thức XML-RPC, Pingback/Trackback, header X-Pingback và thẻ RSD/WLW.
+
+  Cơ chế thông minh:
+  * Tự động phát hiện trạng thái hiện tại của từng lớp để đề xuất TẮT (Chặn) hoặc BẬT LẠI.
+  * Khi BẬT LẠI XML-RPC: Tự động gỡ đúng khối cấu hình trong .htaccess, reload OpenLiteSpeed và vô hiệu hóa + xóa sạch plugin xml-rpc-wptangtoc.
+
   Tóm lại: Tính năng tắt xmlrpc.php trong WPTangToc OLS là một công cụ hữu ích giúp bạn gia cố bảo mật và giảm tải cho website WordPress bằng cách loại bỏ một cổng giao tiếp thường bị lợi dụng để tấn công. Đây là một trong những bước bảo mật cơ bản được khuyến nghị cho hầu hết các website WordPress hiện nay, miễn là bạn không còn phụ thuộc vào các chức năng của XML-RPC.
 EOF
 }
 
-. /etc/wptt/echo-color
-tinh_nang_ten="Tắt xml-rpc WordPress"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_wordpress ➜ $tinh_nang_ten${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+cd /root 2>/dev/null || cd /
 
-. /etc/wptt/tenmien-only-website-by-wordpress
-lua_chon_NAME "$tinh_nang_ten"
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null
+wptt_load_main_conf 2>/dev/null
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null
+# shellcheck source=/dev/null
+. /etc/wptt/echo-color 2>/dev/null
 
-. /etc/wptt/echo-color
-if [[ "$NAME" = "0" || -z "$NAME" ]]; then
-  wptt_quay_ve_menu "${1:-}" 1
-fi
+# ==============================================================================
+# CẤU HÌNH TOÀN CỤC & THẺ ĐÁNH DẤU .HTACCESS
+# ==============================================================================
+MENU_ARG="${1:-}"
+ACTION_ARG="${2:-}"
+RUNUSER_BIN="$(command -v runuser 2>/dev/null || printf '/sbin/runuser')"
+readonly RUNUSER_BIN
+XMLRPC_PLUGIN_SLUG="xml-rpc-wptangtoc"
+XMLRPC_PLUGIN_URL="https://wptangtoc.com/share/xml-rpc-wptangtoc.zip"
+HTACCESS_BEGIN="# BEGIN WPTangToc Block XML-RPC"
+HTACCESS_END="# END WPTangToc Block XML-RPC"
 
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
+CURRENT_DOMAIN=""
+CURRENT_IS_LOCKED=0
+CURRENT_DOCROOT_IMMUTABLE=0
+CURRENT_DOCROOT_PATH=""
+CURRENT_HTACCESS_IMMUTABLE=0
+CURRENT_HTACCESS_PATH=""
+CURRENT_TMP_DIR=""
+CURRENT_WPCLI_HOME=""
+
+# ==============================================================================
+# HÀM HỖ TRỢ, TỐI ƯU RAM & BẪY DỌN DẸP FAIL-SAFE
+# ==============================================================================
+_wptt_calc_wpcli_mem() {
+  local mem_kb=0 k="" v=""
+  while IFS=': ' read -r k v _; do
+    if [[ "$k" == "MemTotal" ]]; then
+      mem_kb="$v"
+      break
+    fi
+  done </proc/meminfo 2>/dev/null
+  if [[ "$mem_kb" =~ ^[0-9]+$ ]] && ((mem_kb > 0 && mem_kb <= 786432)); then
+    printf '256M'
+  else
+    printf '512M'
+  fi
+}
+
+_wptt_file_is_immutable() {
+  local target="$1"
+  local attr_out=""
+  [[ -e "$target" ]] || return 1
+  command -v lsattr >/dev/null 2>&1 || return 1
+  attr_out="$(lsattr -d "$target" 2>/dev/null || true)"
+  [[ -n "$attr_out" ]] && awk '$1 ~ /i/ {f=1; exit} END {exit !f}' <<<"$attr_out"
+}
+
+_wptt_setup_wpcli_tmp() {
+  local site_dom="$1"
+  local site_user="$2"
+
+  /bin/mkdir -p -m 0700 /etc/wptt/tmp 2>/dev/null || return 1
+  CURRENT_TMP_DIR="$(mktemp -d -p /etc/wptt/tmp "wptt_xmlrpc_XXXXXX")" || return 1
+
+  if "$RUNUSER_BIN" -u "$site_user" -- test -x /etc/wptt/tmp 2>/dev/null; then
+    /bin/chmod 0711 -- "$CURRENT_TMP_DIR" 2>/dev/null || true
+    CURRENT_WPCLI_HOME="${CURRENT_TMP_DIR}/wpcli_home"
+    /bin/mkdir -p "${CURRENT_WPCLI_HOME}/cache" || return 1
+  else
+    CURRENT_WPCLI_HOME="$(mktemp -d -p "/usr/local/lsws/${site_dom}" ".wptt_wpcli_XXXXXX")" || return 1
+    /bin/mkdir -p "${CURRENT_WPCLI_HOME}/cache" || return 1
+  fi
+
+  /bin/chown -R -- "${site_user}:${site_user}" "$CURRENT_WPCLI_HOME" 2>/dev/null || true
+  /bin/chmod 0700 -- "$CURRENT_WPCLI_HOME" "${CURRENT_WPCLI_HOME}/cache" 2>/dev/null || true
+  return 0
+}
+
+_wptt_unlock_site_for_edit() {
+  local site_dom="$1"
+  local site_root="$2"
+  local ht_file="${site_root}/.htaccess"
+
+  if [[ -n "${lock_down:-}" ]]; then
+    CURRENT_IS_LOCKED=1
+    [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]] && /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$site_dom" off >/dev/null 2>&1 || true
+  fi
+
+  CURRENT_DOCROOT_PATH="$site_root"
+  if _wptt_file_is_immutable "$site_root"; then
+    CURRENT_DOCROOT_IMMUTABLE=1
+    chattr -i "$site_root" 2>/dev/null || true
+  fi
+
+  CURRENT_HTACCESS_PATH="$ht_file"
+  if [[ -f "$ht_file" && ! -L "$ht_file" ]] && _wptt_file_is_immutable "$ht_file"; then
+    CURRENT_HTACCESS_IMMUTABLE=1
+    chattr -i "$ht_file" 2>/dev/null || true
+  fi
+}
+
+_wptt_cleanup_state() {
+  if ((CURRENT_HTACCESS_IMMUTABLE == 1)) && [[ -n "$CURRENT_HTACCESS_PATH" && -f "$CURRENT_HTACCESS_PATH" ]]; then
+    command -v chattr >/dev/null 2>&1 && chattr +i "$CURRENT_HTACCESS_PATH" 2>/dev/null || true
+    CURRENT_HTACCESS_IMMUTABLE=0
+  fi
+
+  if ((CURRENT_DOCROOT_IMMUTABLE == 1)) && [[ -n "$CURRENT_DOCROOT_PATH" && -d "$CURRENT_DOCROOT_PATH" ]]; then
+    command -v chattr >/dev/null 2>&1 && chattr +i "$CURRENT_DOCROOT_PATH" 2>/dev/null || true
+    CURRENT_DOCROOT_IMMUTABLE=0
+  fi
+
+  if ((CURRENT_IS_LOCKED == 1)) && [[ -n "$CURRENT_DOMAIN" ]]; then
+    [[ -f /etc/wptt/bao-mat/wptt-chattr-file-lock ]] && /bin/bash /etc/wptt/bao-mat/wptt-chattr-file-lock "$CURRENT_DOMAIN" on >/dev/null 2>&1 || true
+    CURRENT_IS_LOCKED=0
+  fi
+
+  if [[ -n "$CURRENT_WPCLI_HOME" && -d "$CURRENT_WPCLI_HOME" ]]; then
+    case "$CURRENT_WPCLI_HOME" in
+      /etc/wptt/tmp/wptt_?*|/usr/local/lsws/?*.?*/.wptt_wpcli_?*)
+        /bin/rm -rf -- "${CURRENT_WPCLI_HOME:?}" 2>/dev/null || true
+        ;;
+    esac
+    CURRENT_WPCLI_HOME=""
+  fi
+
+  if [[ -n "$CURRENT_TMP_DIR" && -d "$CURRENT_TMP_DIR" ]]; then
+    case "$CURRENT_TMP_DIR" in
+      /etc/wptt/tmp/wptt_?*) /bin/rm -rf -- "${CURRENT_TMP_DIR:?}" 2>/dev/null || true ;;
+    esac
+    CURRENT_TMP_DIR=""
+  fi
+}
+
+_wptt_trap_exit() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  _wptt_cleanup_state
+  exit "$rc"
+}
+trap _wptt_trap_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+_wptt_exit() {
+  local code="${1:-0}"
+  local pause="${2:-}"
+  _wptt_cleanup_state
+  trap - EXIT INT TERM HUP
+  if declare -F wptt_quay_ve_menu >/dev/null 2>&1; then
+    if [[ -n "$pause" ]]; then
+      wptt_quay_ve_menu "$MENU_ARG" "$code" "$pause"
+    else
+      wptt_quay_ve_menu "$MENU_ARG" "$code"
+    fi
+  fi
+  exit "$code"
+}
+
+_wptt_validate_htaccess_path() {
+  local doc_root="$1"
+  local htaccess_file="${doc_root}/.htaccess"
+  local real_root="" real_ht=""
+
+  if [[ -L "$htaccess_file" ]]; then
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Phát hiện .htaccess là symlink bất thường tại ${htaccess_file}"
+    return 1
+  fi
+
+  real_root="$(readlink -f "$doc_root" 2>/dev/null || printf '%s' "$doc_root")"
+  if [[ -e "$htaccess_file" ]]; then
+    real_ht="$(readlink -f "$htaccess_file" 2>/dev/null || printf '%s' "$htaccess_file")"
+    if [[ "$real_ht" != "${real_root}/.htaccess" ]]; then
+      declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Đường dẫn thực của .htaccess nằm ngoài webroot: ${real_ht}"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+_wptt_reload_ols_or_rollback() {
+  local htaccess_file="$1"
+  local ht_bak="$2"
+  local site_user="$3"
+  local orig_mode="$4"
+
+  if [[ -x /usr/local/lsws/bin/lswsctrl ]] && { pgrep -x openlitespeed >/dev/null 2>&1 || systemctl is-active --quiet lsws 2>/dev/null; }; then
+    if ! /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1; then
+      if [[ -f "$ht_bak" ]]; then
+        /bin/cp -fp -- "$ht_bak" "$htaccess_file" 2>/dev/null || true
+        /bin/chown -- "${site_user}:${site_user}" "$htaccess_file" 2>/dev/null || true
+        /bin/chmod -- "$orig_mode" "$htaccess_file" 2>/dev/null || true
+      else
+        /bin/rm -f -- "$htaccess_file" 2>/dev/null || true
+      fi
+      declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Reload OpenLiteSpeed thất bại sau khi cập nhật .htaccess cho ${CURRENT_DOMAIN}, đã rollback."
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# ==============================================================================
+# TẦNG WEBSERVER: GHI / GỠ KHỐI CHẶN XML-RPC TRONG .HTACCESS (ATOMIC & IDEMPOTENT)
+# ==============================================================================
+_wptt_apply_htaccess_block() {
+  local doc_root="$1"
+  local site_user="$2"
+  local htaccess_file="${doc_root}/.htaccess"
+  local orig_mode="644"
+  local ht_bak="" ht_new="" ht_rest=""
+
+  _wptt_validate_htaccess_path "$doc_root" || return 1
+  [[ -f "$htaccess_file" ]] && orig_mode="$(stat -c '%a' "$htaccess_file" 2>/dev/null || printf '644')"
+
+  ht_bak="${CURRENT_TMP_DIR}/htaccess.bak"
+  ht_new="${CURRENT_TMP_DIR}/htaccess.new"
+  ht_rest="${CURRENT_TMP_DIR}/htaccess.rest"
+
+  if [[ -f "$htaccess_file" ]]; then
+    /bin/cp -fp -- "$htaccess_file" "$ht_bak" || return 1
+    awk -v b="$HTACCESS_BEGIN" -v e="$HTACCESS_END" '
+      $0 == b { skip=1; next }
+      skip && $0 == e { skip=0; next }
+      !skip {
+        if (!started && $0 ~ /^[[:space:]]*$/) next
+        started=1
+        print
+      }
+    ' "$htaccess_file" >"$ht_rest" || return 1
+  else
+    : >"$ht_rest"
+  fi
+
+  {
+    printf '%s\n' "$HTACCESS_BEGIN"
+    printf '<IfModule mod_rewrite.c>\n'
+    printf 'RewriteEngine On\n'
+    printf 'RewriteRule ^xmlrpc\\.php$ - [F,L,NC]\n'
+    printf '</IfModule>\n'
+    printf '%s\n' "$HTACCESS_END"
+    if [[ -s "$ht_rest" ]]; then
+      printf '\n'
+      cat "$ht_rest"
+    fi
+  } >"$ht_new" || return 1
+
+  [[ -s "$ht_new" ]] || return 1
+
+  /bin/chown -- "${site_user}:${site_user}" "$ht_new" 2>/dev/null || true
+  /bin/chmod -- "$orig_mode" "$ht_new" 2>/dev/null || /bin/chmod 0644 -- "$ht_new" 2>/dev/null || true
+
+  if ! /bin/mv -fT -- "$ht_new" "$htaccess_file"; then
+    [[ -f "$ht_bak" ]] && /bin/cp -fp -- "$ht_bak" "$htaccess_file" 2>/dev/null || true
+    return 1
+  fi
+
+  command -v restorecon >/dev/null 2>&1 && restorecon -q "$htaccess_file" 2>/dev/null || true
+  _wptt_reload_ols_or_rollback "$htaccess_file" "$ht_bak" "$site_user" "$orig_mode"
+}
+
+_wptt_remove_htaccess_block() {
+  local doc_root="$1"
+  local site_user="$2"
+  local htaccess_file="${doc_root}/.htaccess"
+  local orig_mode="644"
+  local ht_bak="" ht_new=""
+
+  [[ -e "$htaccess_file" ]] || return 0
+  _wptt_validate_htaccess_path "$doc_root" || return 1
+
+  grep -qxF -- "$HTACCESS_BEGIN" "$htaccess_file" 2>/dev/null || return 0
+
+  orig_mode="$(stat -c '%a' "$htaccess_file" 2>/dev/null || printf '644')"
+  ht_bak="${CURRENT_TMP_DIR}/htaccess.bak"
+  ht_new="${CURRENT_TMP_DIR}/htaccess.new"
+
+  /bin/cp -fp -- "$htaccess_file" "$ht_bak" || return 1
+
+  awk -v b="$HTACCESS_BEGIN" -v e="$HTACCESS_END" '
+    $0 == b { skip=1; next }
+    skip && $0 == e { skip=0; next }
+    !skip {
+      if (!started && $0 ~ /^[[:space:]]*$/) next
+      started=1
+      print
+    }
+  ' "$htaccess_file" >"$ht_new" || return 1
+
+  /bin/chown -- "${site_user}:${site_user}" "$ht_new" 2>/dev/null || true
+  /bin/chmod -- "$orig_mode" "$ht_new" 2>/dev/null || /bin/chmod 0644 -- "$ht_new" 2>/dev/null || true
+
+  if ! /bin/mv -fT -- "$ht_new" "$htaccess_file"; then
+    /bin/cp -fp -- "$ht_bak" "$htaccess_file" 2>/dev/null || true
+    return 1
+  fi
+
+  command -v restorecon >/dev/null 2>&1 && restorecon -q "$htaccess_file" 2>/dev/null || true
+  _wptt_reload_ols_or_rollback "$htaccess_file" "$ht_bak" "$site_user" "$orig_mode"
+}
+
+# ==============================================================================
+# TẦNG NGHIỆP VỤ: TẮT (CHẶN 2 LỚP) VÀ BẬT LẠI (GỠ 2 LỚP)
+# ==============================================================================
+_wptt_do_disable_xmlrpc() {
+  local task_label="Tắt (Chặn 2 lớp) XML-RPC WordPress cho website ${NAME}"
+  local plugin_ok=1 err_msg=""
+
+  _runing "$task_label"
+  _wptt_unlock_site_for_edit "$NAME" "$doc_root"
+
+  # Bước 1: Lớp ứng dụng WordPress (Cài hoặc kích hoạt plugin xml-rpc-wptangtoc)
+  if ((has_plugin_active == 0)); then
+    : >"$wp_out_file"
+    if [[ -d "${doc_root}/wp-content/plugins/${XMLRPC_PLUGIN_SLUG}" ]]; then
+      if ! timeout 60 "${WP_EXEC[@]}" plugin activate "$XMLRPC_PLUGIN_SLUG" --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1; then
+        plugin_ok=0
+      fi
+    else
+      if ! timeout 120 "${WP_EXEC[@]}" plugin install "$XMLRPC_PLUGIN_URL" --activate --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1; then
+        plugin_ok=0
+      fi
+    fi
+  fi
+
+  if ((plugin_ok == 0)); then
+    err_msg="$(grep -iE '^(Error:|Warning:|Fatal)' "$wp_out_file" 2>/dev/null | tail -n 2 || true)"
+    _wptt_cleanup_state
+    _runloi "$task_label"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Cài/kích hoạt plugin tắt XML-RPC thất bại cho ${NAME}: ${err_msg}"
+    [[ -n "$err_msg" ]] && printf '%bChi tiết lỗi:%b %s\n' "${C_YELLOW}" "${C_RESET}" "$err_msg"
+    return 1
+  fi
+
+  # Bước 2: Lớp Webserver (.htaccess 403 + reload OpenLiteSpeed)
+  if ! _wptt_apply_htaccess_block "$doc_root" "$User_name_vhost"; then
+    _wptt_cleanup_state
+    _runloi "$task_label"
+    printf '%bLỗi:%b Không thể ghi quy tắc chặn XML-RPC vào %s/.htaccess hoặc reload OpenLiteSpeed.\n' \
+      "${C_RED}" "${C_RESET}" "$doc_root"
+    return 1
+  fi
+
+  timeout 20 "${WP_EXEC[@]}" cache flush --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+
+  _wptt_cleanup_state
+  _rundone "$task_label"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Tắt XML-RPC 2 lớp (.htaccess + Plugin) thành công cho website ${NAME}"
+
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}ĐÃ TẮT (CHẶN 2 LỚP) XML-RPC THÀNH CÔNG${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website         : ${C_YELLOW}${NAME}${C_RESET}" 2
+  left_text "Lớp Webserver   : ${C_GREEN}Chặn 403 Forbidden tại .htaccess (# BEGIN WPTangToc Block XML-RPC)${C_RESET}" 2
+  left_text "Lớp WordPress   : ${C_GREEN}Plugin ${XMLRPC_PLUGIN_SLUG} (Đã kích hoạt)${C_RESET}" 2
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  return 0
+}
+
+_wptt_do_enable_xmlrpc() {
+  local task_label="Bật lại (Gỡ chặn 2 lớp) XML-RPC WordPress cho website ${NAME}"
+  local plugin_dir="${doc_root}/wp-content/plugins/${XMLRPC_PLUGIN_SLUG}"
+  local plugin_ok=1 err_msg=""
+
+  _runing "$task_label"
+  _wptt_unlock_site_for_edit "$NAME" "$doc_root"
+
+  # Bước 1: Gỡ khối chặn XML-RPC trong .htaccess + reload OpenLiteSpeed
+  if ! _wptt_remove_htaccess_block "$doc_root" "$User_name_vhost"; then
+    _wptt_cleanup_state
+    _runloi "$task_label"
+    printf '%bLỗi:%b Không thể gỡ quy tắc chặn XML-RPC khỏi %s/.htaccess hoặc reload OpenLiteSpeed.\n' \
+      "${C_RED}" "${C_RESET}" "$doc_root"
+    return 1
+  fi
+
+  # Bước 2: Vô hiệu hóa và gỡ sạch plugin xml-rpc-wptangtoc
+  if [[ -d "$plugin_dir" ]]; then
+    : >"$wp_out_file"
+    timeout 60 "${WP_EXEC[@]}" plugin deactivate "$XMLRPC_PLUGIN_SLUG" --skip-plugins --skip-themes --path="$doc_root" </dev/null >"$wp_out_file" 2>&1 || true
+    if ! timeout 60 "${WP_EXEC[@]}" plugin delete "$XMLRPC_PLUGIN_SLUG" --skip-plugins --skip-themes --path="$doc_root" </dev/null >>"$wp_out_file" 2>&1; then
+      # Dự phòng an toàn theo allowlist nếu thư mục plugin bị lỗi metadata không thể xóa qua WP-CLI
+      if [[ -d "$plugin_dir" && ! -L "$plugin_dir" ]]; then
+        case "$plugin_dir" in
+          /usr/local/lsws/?*.?*/html/wp-content/plugins/xml-rpc-wptangtoc)
+            /bin/rm -rf -- "${plugin_dir:?}" 2>/dev/null || plugin_ok=0
+            ;;
+          *)
+            plugin_ok=0
+            ;;
+        esac
+      fi
+    fi
+  fi
+
+  if ((plugin_ok == 0)) || [[ -d "$plugin_dir" ]]; then
+    err_msg="$(grep -iE '^(Error:|Warning:|Fatal)' "$wp_out_file" 2>/dev/null | tail -n 2 || true)"
+    _wptt_cleanup_state
+    _runloi "$task_label"
+    declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Gỡ plugin ${XMLRPC_PLUGIN_SLUG} thất bại cho ${NAME}: ${err_msg}"
+    [[ -n "$err_msg" ]] && printf '%bChi tiết lỗi:%b %s\n' "${C_YELLOW}" "${C_RESET}" "$err_msg"
+    return 1
+  fi
+
+  timeout 20 "${WP_EXEC[@]}" cache flush --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1 || true
+
+  _wptt_cleanup_state
+  _rundone "$task_label"
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "INFO" "Bật lại XML-RPC (gỡ .htaccess + gỡ plugin) thành công cho website ${NAME}"
+
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}ĐÃ BẬT LẠI XML-RPC WORDPRESS THÀNH CÔNG${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Website         : ${C_YELLOW}${NAME}${C_RESET}" 2
+  left_text "Lớp Webserver   : ${C_YELLOW}Đã gỡ quy tắc chặn XML-RPC trong .htaccess${C_RESET}" 2
+  left_text "Lớp WordPress   : ${C_YELLOW}Đã gỡ bỏ plugin ${XMLRPC_PLUGIN_SLUG}${C_RESET}" 2
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  return 0
+}
+
+# ==============================================================================
+# GIAO DIỆN CHÍNH, CHỌN WEBSITE & KIỂM TRA TIỀN ĐIỀU KIỆN
+# ==============================================================================
+tinh_nang_ten="Bật / Tắt XML-RPC WordPress"
+
+if [[ -t 0 && -z "$ACTION_ARG" ]]; then
   clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
 fi
 
-pathcheckwp="/usr/local/lsws/$NAME/html/wp-load.php"
-if [[ ! -f "$pathcheckwp" ]]; then
-  echoDo "Hệ thống xác nhận bạn không sử dụng WordPress"
-  echoDo "Tính năng này chỉ có thể hoạt động trên WordPress"
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}${quan_ly_wordpress:-Quản lý WordPress} ➜ ${tinh_nang_ten}${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+NAME="${1:-}"
+[[ "$NAME" == "98" ]] && NAME=""
+
+if [[ -z "$NAME" ]]; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/tenmien-only-website-by-wordpress
+  lua_chon_NAME "$tinh_nang_ten"
 fi
 
-wptt_check_mariadb "${1:-}"
-
-wptt_load_vhost_conf "$NAME"
-
-pathcheckplugin="/usr/local/lsws/$NAME/html/wp-content/plugins/xml-rpc-wptangtoc"
-if [[ -d "$pathcheckplugin" ]]; then
-  echoDo "Bạn đã kích hoạt trước đó rồi"
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
+if [[ "${NAME:-0}" == "0" || -z "${NAME:-}" ]]; then
+  _wptt_exit 1
 fi
 
-_runing "Tắt xml rpc WordPress cho website $NAME"
-wptt_load_vhost_conf "$NAME"
-if ! . /etc/wptt/php/php-cli-domain-config "$NAME"; then
-  wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain $NAME (thư viện php-cli-domain-config thất bại)."
-  _runloi "Không xác định được phiên bản PHP"
-  wptt_quay_ve_menu "${1:-}" 1
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ || "$NAME" == *..* ]]; then
+  echoDo "Lỗi: Tên miền '${NAME}' không hợp lệ!"
+  _wptt_exit 1 "enter"
 fi
-WP_EXEC=(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp)
-"${WP_EXEC[@]}" plugin install https://wptangtoc.com/share/xml-rpc-wptangtoc.zip --path=/usr/local/lsws/"$NAME"/html --activate
-if [ $? -eq 0 ]; then
-  _rundone "Tắt xml rpc WordPress cho website $NAME"
+
+pathcheck="/etc/wptt/vhost/.${NAME}.conf"
+if [[ ! -f "$pathcheck" ]]; then
+  echoDo "Tên miền '${NAME}' không tồn tại trên hệ thống này!"
+  _wptt_exit 1 "enter"
+fi
+
+doc_root="/usr/local/lsws/${NAME}/html"
+if [[ ! -f "${doc_root}/wp-load.php" ]]; then
+  echoDo "Hệ thống xác nhận '${NAME}' không sử dụng WordPress."
+  echoDo "Tính năng này chỉ có thể hoạt động trên WordPress."
+  _wptt_exit 1 "enter"
+fi
+
+if [[ ! -f /usr/local/bin/wp || ! -x "$RUNUSER_BIN" ]]; then
+  echoDo "Lỗi: Thiếu WP-CLI (/usr/local/bin/wp) hoặc runuser trên máy chủ!"
+  _wptt_exit 1 "enter"
+fi
+
+declare -F wptt_check_mariadb >/dev/null 2>&1 && wptt_check_mariadb "$MENU_ARG"
+
+unset User_name_vhost phien_ban_php_domain_thuc_thi lock_down
+wptt_load_vhost_conf "$NAME" 2>/dev/null
+
+if [[ -z "${User_name_vhost:-}" ]] || ! id -u "$User_name_vhost" >/dev/null 2>&1; then
+  echoDo "Lỗi: Không tìm thấy user hệ thống hợp lệ cho website '${NAME}'!"
+  _wptt_exit 1 "enter"
+fi
+
+# shellcheck source=/dev/null
+if ! . /etc/wptt/php/php-cli-domain-config "$NAME" >/dev/null 2>&1; then
+  declare -F wptt_logs >/dev/null 2>&1 && wptt_logs "ERROR" "Không thể lấy cấu hình PHP cho domain ${NAME}"
+  echoDo "Lỗi: Không xác định được phiên bản PHP cho website '${NAME}'!"
+  _wptt_exit 1 "enter"
+fi
+
+php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+if [[ ! -x "$php_bin" ]]; then
+  echoDo "Lỗi: Không tìm thấy binary PHP tại ${php_bin}!"
+  _wptt_exit 1 "enter"
+fi
+
+CURRENT_DOMAIN="$NAME"
+if ! _wptt_setup_wpcli_tmp "$NAME" "$User_name_vhost"; then
+  echoDo "Lỗi: Không thể khởi tạo không gian tạm trong /etc/wptt/tmp!"
+  _wptt_exit 1 "enter"
+fi
+
+WP_MEM_LIMIT="$(_wptt_calc_wpcli_mem)"
+wp_out_file="${CURRENT_TMP_DIR}/wp_out.log"
+
+WP_EXEC=(
+  nice -n 10
+  "$RUNUSER_BIN" -u "$User_name_vhost" --
+  env "HOME=${CURRENT_WPCLI_HOME}" "WP_CLI_CACHE_DIR=${CURRENT_WPCLI_HOME}/cache"
+  "$php_bin" -d "disable_functions=" -d "memory_limit=${WP_MEM_LIMIT}"
+  /usr/local/bin/wp
+)
+
+# ==============================================================================
+# QUÉT & HIỂN THỊ TRẠNG THÁI THỰC TẾ CỦA CẢ 2 LỚP
+# ==============================================================================
+has_htaccess_rule=0
+if [[ -f "${doc_root}/.htaccess" ]] \
+  && grep -qxF -- "$HTACCESS_BEGIN" "${doc_root}/.htaccess" 2>/dev/null \
+  && grep -qxF -- "$HTACCESS_END" "${doc_root}/.htaccess" 2>/dev/null; then
+  has_htaccess_rule=1
+fi
+
+has_plugin_dir=0
+has_plugin_active=0
+if [[ -d "${doc_root}/wp-content/plugins/${XMLRPC_PLUGIN_SLUG}" ]]; then
+  has_plugin_dir=1
+  if timeout 30 "${WP_EXEC[@]}" plugin is-active "$XMLRPC_PLUGIN_SLUG" --skip-plugins --skip-themes --path="$doc_root" </dev/null >/dev/null 2>&1; then
+    has_plugin_active=1
+  fi
+fi
+
+if ((has_htaccess_rule == 1 && has_plugin_active == 1)); then
+  XMLRPC_STATE="BLOCKED_FULL"
+  state_text="${C_GREEN}ĐANG TẮT (Đã chặn đủ 2 lớp — Bảo mật tối ưu)${C_RESET}"
+elif ((has_htaccess_rule == 1 || has_plugin_dir == 1)); then
+  XMLRPC_STATE="BLOCKED_PARTIAL"
+  state_text="${C_YELLOW}CHẶN CHƯA ĐẦY ĐỦ (Mới kích hoạt 1 phần — Khuyến nghị chuẩn hóa)${C_RESET}"
 else
-  _runloi "Tắt xml rpc WordPress cho website $NAME"
-  wptt_quay_ve_menu "${1:-}" 1
+  XMLRPC_STATE="ENABLED"
+  state_text="${C_RED}ĐANG BẬT (Mặc định WordPress — Khuyến nghị TẮT để bảo mật)${C_RESET}"
 fi
 
-wptt_quay_ve_menu "${1:-}" 0
+if ((has_htaccess_rule == 1)); then
+  layer1_text="${C_GREEN}Đang chặn 403 Forbidden (.htaccess)${C_RESET}"
+else
+  layer1_text="${C_RED}Chưa chặn${C_RESET}"
+fi
+
+if ((has_plugin_active == 1)); then
+  layer2_text="${C_GREEN}Đang kích hoạt (${XMLRPC_PLUGIN_SLUG})${C_RESET}"
+elif ((has_plugin_dir == 1)); then
+  layer2_text="${C_YELLOW}Đã cài nhưng chưa kích hoạt (${XMLRPC_PLUGIN_SLUG})${C_RESET}"
+else
+  layer2_text="${C_RED}Chưa cài đặt${C_RESET}"
+fi
+
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+left_text "Website         : ${C_BOLD_WHITE}${NAME}${C_RESET}" 2
+left_text "Trạng thái      : ${state_text}" 2
+printf '%b\n' "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+left_text "Lớp Webserver   : ${layer1_text}" 2
+left_text "Lớp WordPress   : ${layer2_text}" 2
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+# ==============================================================================
+# XÁC ĐỊNH HÀNH ĐỘNG (CLI / TƯƠNG TÁC)
+# ==============================================================================
+TARGET_ACTION=""
+
+if [[ -n "$ACTION_ARG" ]]; then
+  case "${ACTION_ARG,,}" in
+    off|disable|tat|chan) TARGET_ACTION="disable" ;;
+    on|enable|bat|mo)     TARGET_ACTION="enable" ;;
+    *)
+      echoDo "Lỗi: Tham số '${ACTION_ARG}' không hợp lệ! Chỉ hỗ trợ 'off' (Tắt XML-RPC) hoặc 'on' (Bật lại XML-RPC)."
+      _wptt_exit 2
+      ;;
+  esac
+elif [[ ! -t 0 || "${CI:-}" == "true" ]]; then
+  # Tương thích ngược với script/BATS gọi trực tiếp '<script> <domain>' không có tham số thứ 2
+  TARGET_ACTION="disable"
+else
+  case "$XMLRPC_STATE" in
+    ENABLED)
+      if ! wptt_xac_nhan "Bạn có muốn TẮT (Chặn 2 lớp) XML-RPC cho website ${NAME}?" \
+        "Chặn 403 tại .htaccess OpenLiteSpeed + cài plugin ${XMLRPC_PLUGIN_SLUG}." \
+        "Chống Brute-Force và Pingback DDoS hiệu quả mà không tốn PHP/Database." \
+        "Đồng ý Tắt XML-RPC" "Hủy thao tác"; then
+        printf '%bĐã hủy thao tác.%b\n\n' "${C_YELLOW}" "${C_RESET}"
+        _wptt_exit 0
+      fi
+      TARGET_ACTION="disable"
+      ;;
+    BLOCKED_FULL)
+      if ! wptt_xac_nhan "Website ${NAME} đang TẮT XML-RPC. Bạn có muốn BẬT LẠI không?" \
+        "Hệ thống sẽ gỡ khối chặn trong .htaccess và xóa plugin ${XMLRPC_PLUGIN_SLUG}." \
+        "Lưu ý: Chỉ nên bật lại nếu bạn thực sự cần Jetpack hoặc app kết nối XML-RPC." \
+        "Đồng ý Bật lại XML-RPC" "Hủy thao tác"; then
+        printf '%bĐã hủy thao tác.%b\n\n' "${C_YELLOW}" "${C_RESET}"
+        _wptt_exit 0
+      fi
+      TARGET_ACTION="enable"
+      ;;
+    BLOCKED_PARTIAL)
+      printf '%b\n' "${C_YELLOW}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+      left_text "${C_BOLD_WHITE}Chọn thao tác cho website ${NAME}:${C_RESET}" 2
+      printf '%b\n' "${C_YELLOW}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+      left_text "1) Hoàn thiện TẮT (Chặn đủ 2 lớp: .htaccess + Plugin)" 2
+      left_text "2) BẬT LẠI XML-RPC (Gỡ sạch cả .htaccess và Plugin)" 2
+      left_text "0) Hủy thao tác" 2
+      printf '%b\n' "${C_YELLOW}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+      read -r -p "Nhập lựa chọn của bạn (0-2): " partial_choice
+      case "${partial_choice:-0}" in
+        1) TARGET_ACTION="disable" ;;
+        2) TARGET_ACTION="enable" ;;
+        *)
+          printf '%bĐã hủy thao tác.%b\n\n' "${C_YELLOW}" "${C_RESET}"
+          _wptt_exit 0
+          ;;
+      esac
+      ;;
+  esac
+fi
+
+# ==============================================================================
+# THỰC THI THEO HÀNH ĐỘNG ĐÃ CHỌN (IDEMPOTENT)
+# ==============================================================================
+if [[ "$TARGET_ACTION" == "disable" ]]; then
+  if [[ "$XMLRPC_STATE" == "BLOCKED_FULL" ]]; then
+    printf '%b[i] Website %s đã được TẮT XML-RPC đầy đủ 2 lớp từ trước.%b\n' \
+      "${C_YELLOW}" "$NAME" "${C_RESET}"
+    _wptt_exit 0 "enter"
+  fi
+
+  if ! _wptt_do_disable_xmlrpc; then
+    _wptt_exit 1 "enter"
+  fi
+elif [[ "$TARGET_ACTION" == "enable" ]]; then
+  if [[ "$XMLRPC_STATE" == "ENABLED" ]]; then
+    printf '%b[i] Website %s hiện đã BẬT XML-RPC (không có lớp chặn nào).%b\n' \
+      "${C_YELLOW}" "$NAME" "${C_RESET}"
+    _wptt_exit 0 "enter"
+  fi
+
+  if ! _wptt_do_enable_xmlrpc; then
+    _wptt_exit 1 "enter"
+  fi
+fi
+
+_wptt_exit 0 "enter"
