@@ -3,6 +3,13 @@
 # @website: https://wptangtoc.com
 # @since: 2026
 
+set -uo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+umask 022
+stty iutf8 2>/dev/null || true
+
 function huong_dan() {
   cat <<'EOF'
   Tính năng Xóa extension PHP là quá trình gỡ bỏ hoặc vô hiệu hóa các thư viện mở rộng [module] đã được cài đặt trước đó ra khỏi môi trường PHP của bạn. Khi một extension bị xóa, các chức năng mà nó cung cấp sẽ không còn sẵn có để sử dụng trong các đoạn mã PHP nữa.
@@ -13,16 +20,11 @@ function huong_dan() {
   * Tăng cường bảo mật: Giảm thiểu bề mặt tấn công bằng cách gỡ bỏ những thành phần không cần thiết, vì mỗi extension đều có thể tiềm ẩn lỗ hổng.
   * Giải quyết xung đột: Gỡ bỏ extension có thể giúp khắc phục sự không tương thích giữa các extension với nhau hoặc với phiên bản PHP/ứng dụng.
   * Dọn dẹp môi trường: Giữ cho môi trường PHP gọn gàng, chỉ chứa những gì thực sự cần thiết.
-  * Khi không còn nhu cầu: Nếu một ứng dụng web không còn cần đến một extension cụ thể nữa.
+  * Hỗ trợ gỡ sạch CacheWerk Relay (sao lưu và xóa 99-wptt-relay.ini, gỡ gói lsphp-relay và tải lại êm ái worker LSPHP).
 
   Sau khi xóa hoặc vô hiệu hóa và khởi động lại web server, PHP sẽ không còn tải extension đó nữa, và mọi cố gắng gọi hàm từ extension đó sẽ gây ra lỗi.
 EOF
 }
-
-export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
-stty iutf8 2>/dev/null || true
 
 # shellcheck source=/dev/null
 . /etc/wptt/core-functions 2>/dev/null || true
@@ -30,68 +32,198 @@ stty iutf8 2>/dev/null || true
 wptt_load_main_conf 2>/dev/null || true
 [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
 # shellcheck source=/dev/null
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null || true
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null || true
 # shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null || true
+
+# ==============================================================================
+# CẤU HÌNH TOÀN CỤC & HÀM DỌN DẸP AN TOÀN
+# ==============================================================================
+readonly MENU_ARG="${1:-}"
+readonly WPTT_TMP_ROOT="/etc/wptt/tmp"
+readonly RELAY_LOG_DIR="/var/log/wptt"
+readonly RELAY_LOG_FILE="${RELAY_LOG_DIR}/relay-install.log"
+readonly RELAY_BACKUP_ROOT="/etc/wptt/backup/relay"
+
+SESSION_ID=""
+printf -v SESSION_ID '%(%Y%m%d-%H%M%S)T-%d' -1 "$$"
+
+TMP_DIR=""
+
+_wptt_cleanup_tmp() {
+  if [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" ]]; then
+    case "$TMP_DIR" in
+      /etc/wptt/tmp/wptt-ext-xoa.*)
+        /bin/rm -rf -- "${TMP_DIR:?}" 2>/dev/null || true
+        ;;
+    esac
+    TMP_DIR=""
+  fi
+}
 
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM HUP
-  /bin/rm -f -- /etc/wptt/tmp/php_extension.txt 2>/dev/null || true
+  _wptt_cleanup_tmp
   exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ PHP ➜ Xóa Extension (Gỡ bỏ thư viện mở rộng)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+_wptt_exit_menu() {
+  local code="${1:-0}"
+  local pause="${2:-}"
+  _wptt_cleanup_tmp
+  trap - EXIT INT TERM HUP
+  if declare -F wptt_quay_ve_menu >/dev/null 2>&1; then
+    if [[ -n "$pause" ]]; then
+      wptt_quay_ve_menu "$MENU_ARG" "$code" "$pause"
+    else
+      wptt_quay_ve_menu "$MENU_ARG" "$code"
+    fi
+  fi
+  exit "$code"
+}
+
+_wptt_pkg_is_installed() {
+  local pkg="$1"
+  if command -v dpkg-query >/dev/null 2>&1; then
+    dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null | grep -qxF "install ok installed"
+  elif command -v rpm >/dev/null 2>&1; then
+    rpm -q "$pkg" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+_wptt_reload_ols_lsphp() {
+  if [[ -d /usr/local/lsws/admin/tmp ]]; then
+    /bin/touch -- /usr/local/lsws/admin/tmp/.lsphp_restart.txt 2>/dev/null || true
+  fi
+  if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+    wptt_smart_reload_lsws >/dev/null 2>&1 3>&-
+  elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl reload lsws >/dev/null 2>&1 || systemctl restart lsws >/dev/null 2>&1
+  elif [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+_relay_get_ini_dir() {
+  local php_bin="$1" line="" ini_dir=""
+  while IFS= read -r line; do
+    if [[ "$line" == "Scan for additional .ini files in:"* ]]; then
+      ini_dir="${line#Scan for additional .ini files in:}"
+      ini_dir="${ini_dir#"${ini_dir%%[![:space:]]*}"}"
+      ini_dir="${ini_dir%"${ini_dir##*[![:space:]]}"}"
+      break
+    fi
+  done < <("$php_bin" --ini 2>/dev/null)
+  [[ -n "$ini_dir" && -d "$ini_dir" && "$ini_dir" != "(none)" ]] || return 1
+  printf '%s\n' "$ini_dir"
+}
+
+_relay_cleanup_ini() {
+  local ver="$1"
+  local php_bin="/usr/local/lsws/lsphp${ver}/bin/php"
+  local ini_dir="" target_ini=""
+
+  ini_dir="$(_relay_get_ini_dir "$php_bin")" || return 0
+  target_ini="${ini_dir}/99-wptt-relay.ini"
+
+  if [[ -f "$target_ini" && ! -L "$target_ini" ]]; then
+    /bin/mkdir -p -m 700 -- "$RELAY_BACKUP_ROOT" 2>/dev/null || true
+    /bin/cp -a -- "$target_ini" "${RELAY_BACKUP_ROOT}/uninstall-lsphp${ver}-99-wptt-relay.ini.${SESSION_ID}.bak" 2>/dev/null || true
+    case "$target_ini" in
+      /usr/local/lsws/lsphp*/etc/*99-wptt-relay.ini)
+        /bin/rm -f -- "${target_ini:?}" 2>/dev/null || true
+        ;;
+    esac
+  fi
+}
+
+_relay_log_uninstall() {
+  local msg="$1" ts=""
+  printf -v ts '%(%F %T)T' -1
+  /bin/mkdir -p -m 750 -- "$RELAY_LOG_DIR" 2>/dev/null || return 0
+  if [[ ! -f "$RELAY_LOG_FILE" ]]; then
+    (
+      umask 027
+      : > "$RELAY_LOG_FILE"
+    )
+    /bin/chmod 640 -- "$RELAY_LOG_FILE" 2>/dev/null || true
+  fi
+  [[ -w "$RELAY_LOG_FILE" ]] && printf '[%s] [INFO] [%s] %s\n' "$ts" "$SESSION_ID" "$msg" >> "$RELAY_LOG_FILE"
+}
 
 # ==============================================================================
-# BƯỚC 1: CHỌN PHIÊN BẢN PHP
+# GIAO DIỆN CHÍNH & BƯỚC 1: CHỌN PHIÊN BẢN PHP
 # ==============================================================================
+clear
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ PHP ➜ Xóa Extension (Gỡ bỏ thư viện mở rộng)${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
 /bin/bash /etc/wptt/php/wptt-php-version-domain
-echo -e "${C_YELLOW}Vui lòng chọn Phiên bản PHP bạn muốn GỠ BỎ Extension:${C_RESET}"
+printf '%bVui lòng chọn Phiên bản PHP bạn muốn GỠ BỎ Extension:%b\n' "${C_YELLOW}" "${C_RESET}"
 # shellcheck source=/dev/null
 . /etc/wptt/php/tenmien-php 2>/dev/null || true
 
 if [[ -z "${LSPHP:-}" || "$LSPHP" == "0" ]]; then
-  wptt_quay_ve_menu "${1:-}" 0
+  _wptt_exit_menu 0
 fi
 
-if [[ ! -d "/usr/local/lsws/$LSPHP" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Phiên bản $LSPHP chưa được cài đặt trên máy chủ!${C_RESET}"
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
+if [[ ! "$LSPHP" =~ ^lsphp([0-9]{2,3})$ ]]; then
+  printf '\n%b❌ Lỗi: Tên phiên bản PHP không hợp lệ (%s)!%b\n' "${C_RED}" "$LSPHP" "${C_RESET}"
+  _wptt_exit_menu 1 "enter"
 fi
 
-php_ver_hien_thi=$(echo "$LSPHP" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g')
+php_ver_num="${BASH_REMATCH[1]}"
+php_ver_dot="${php_ver_num:0:1}.${php_ver_num:1}"
+php_ver_hien_thi="PHP ${php_ver_dot}"
+
+if [[ ! -d "/usr/local/lsws/${LSPHP}" ]]; then
+  printf '\n%b❌ Lỗi: Phiên bản %s chưa được cài đặt trên máy chủ!%b\n' "${C_RED}" "$LSPHP" "${C_RESET}"
+  _wptt_exit_menu 1 "enter"
+fi
 
 # ==============================================================================
 # BƯỚC 2: QUÉT DANH SÁCH EXTENSION ĐÃ CÀI (SIÊU TỐC QUA C-BINARY)
 # ==============================================================================
-echo ""
-SCAN_MSG="Đang quét danh sách Extensions ĐÃ CÀI ĐẶT trên $php_ver_hien_thi..."
+printf '\n'
+SCAN_MSG="Đang quét danh sách Extensions ĐÃ CÀI ĐẶT trên ${php_ver_hien_thi}..."
 _runing "$SCAN_MSG"
 
-/bin/mkdir -p /etc/wptt/tmp
-chmod 700 /etc/wptt/tmp
-/bin/rm -f -- /etc/wptt/tmp/php_extension.txt
+/bin/mkdir -p -m 700 -- "$WPTT_TMP_ROOT"
+TMP_DIR="$(mktemp -d "${WPTT_TMP_ROOT}/wptt-ext-xoa.XXXXXX")"
+EXT_LIST_FILE="${TMP_DIR}/php_extension.txt"
+: > "$EXT_LIST_FILE"
 
 declare -a php_extension_da_cai_dat=()
 
-# TẦNG 1: Lấy danh sách qua Package Manager Core (0.01 giây)
+# TẦNG 1: Lấy danh sách gói ĐÃ CÀI ĐẶT thật sự (0.01 giây)
 if command -v dpkg-query >/dev/null 2>&1; then
-  mapfile -t php_extension_da_cai_dat < <(dpkg-query -W -f='${binary:Package}\n' "${LSPHP}-*" 2>/dev/null | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
+  mapfile -t php_extension_da_cai_dat < <(
+    dpkg-query -W -f='${Status}\t${binary:Package}\n' "${LSPHP}-*" 2>/dev/null \
+      | awk -F'\t' '$1 == "install ok installed" {print $2}' \
+      | sed "s/^${LSPHP}-//" \
+      | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u
+  )
 elif command -v rpm >/dev/null 2>&1; then
-  mapfile -t php_extension_da_cai_dat < <(rpm -qa --qf "%{NAME}\n" "${LSPHP}-*" 2>/dev/null | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
+  mapfile -t php_extension_da_cai_dat < <(
+    rpm -qa --qf "%{NAME}\n" "${LSPHP}-*" 2>/dev/null \
+      | sed "s/^${LSPHP}-//" \
+      | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u
+  )
 fi
 
-# Loại trừ gói base php (ví dụ: lsphp81) khỏi danh sách xóa
-for phpexe in "${php_extension_da_cai_dat[@]}"; do
+# Loại trừ gói base php (ví dụ: lsphp83) khỏi danh sách xóa
+for phpexe in "${php_extension_da_cai_dat[@]+"${php_extension_da_cai_dat[@]}"}"; do
   if [[ -n "$phpexe" && "$phpexe" != "$LSPHP" ]]; then
-    echo "$phpexe" >>/etc/wptt/tmp/php_extension.txt
+    printf '%s\n' "$phpexe" >> "$EXT_LIST_FILE"
   fi
 done
 
@@ -100,186 +232,199 @@ _rundone "$SCAN_MSG"
 # ==============================================================================
 # BƯỚC 3: GIAO DIỆN CHỌN EXTENSION ĐỂ XÓA (LAYOUT 2 CỘT + FZF)
 # ==============================================================================
-mapfile -t selects < <(sort -u /etc/wptt/tmp/php_extension.txt | sed '/^$/d' || true)
+mapfile -t selects < <(sort -u "$EXT_LIST_FILE" | sed '/^$/d' || true)
 
-if [[ ${#selects[@]} -eq 0 ]]; then
-  echo -e "\n${C_RED}❌ Phiên bản $php_ver_hien_thi của bạn chưa cài đặt Extension nào!${C_RESET}"
-  sleep 3
-  wptt_quay_ve_menu "${1:-}" 0
+if (( ${#selects[@]} == 0 )); then
+  printf '\n%b❌ Phiên bản %s của bạn chưa cài đặt Extension nào!%b\n' "${C_RED}" "$php_ver_hien_thi" "${C_RESET}"
+  sleep 2
+  _wptt_exit_menu 0
 fi
 
-echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}DANH SÁCH EXTENSIONS ĐÃ CÀI TRÊN: ${C_YELLOW}$php_ver_hien_thi${C_RESET}"
-echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+printf '\n%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}DANH SÁCH EXTENSIONS ĐÃ CÀI TRÊN: ${C_YELLOW}${php_ver_hien_thi}${C_RESET}"
+printf '%b\n' "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
 total=${#selects[@]}
 for ((i = 0; i < total; i += 2)); do
   idx1=$((i + 1))
   val1="${selects[$i]}"
-  pad_val1=$(printf "%-28s" "$val1")
-  str_col1="  ${C_CYAN}$(printf "%2d" $idx1))${C_RESET} ${C_BOLD_WHITE}${pad_val1}${C_RESET}"
+  pad_val1="$(printf '%-28s' "$val1")"
+  str_col1="  ${C_CYAN}$(printf '%2d' "$idx1"))${C_RESET} ${C_BOLD_WHITE}${pad_val1}${C_RESET}"
 
   idx2=$((i + 2))
   if ((idx2 <= total)); then
     val2="${selects[$((i + 1))]}"
-    str_col2="${C_CYAN}$(printf "%2d" $idx2))${C_RESET} ${C_BOLD_WHITE}${val2}${C_RESET}"
+    str_col2="${C_CYAN}$(printf '%2d' "$idx2"))${C_RESET} ${C_BOLD_WHITE}${val2}${C_RESET}"
     left_text "${str_col1}${str_col2}" 0
   else
     left_text "${str_col1}" 0
   fi
 done
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+printf '%b\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 php_extension_chon=""
 
 while true; do
-  if command -v fzf &>/dev/null; then
-    echo -en "${C_CYAN}Nhập số thứ tự Extension cần XÓA (1-${#selects[@]}) hoặc gõ [00=Tìm kiếm, 0=Thoát]: ${C_RESET}"
+  if command -v fzf >/dev/null 2>&1; then
+    printf '%bNhập số thứ tự Extension cần XÓA (1-%d) hoặc gõ [00=Tìm kiếm, 0=Thoát]: %b' "${C_CYAN}" "${#selects[@]}" "${C_RESET}"
   else
-    echo -en "${C_CYAN}Nhập số thứ tự Extension cần XÓA (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
+    printf '%bNhập số thứ tự Extension cần XÓA (1-%d) [0=Thoát]: %b' "${C_CYAN}" "${#selects[@]}" "${C_RESET}"
   fi
-  read -r REPLY
+
+  if [[ -t 0 ]]; then stty -echo 2>/dev/null || true; fi
+  if declare -F wptt_flush_stdin >/dev/null 2>&1; then
+    wptt_flush_stdin
+  fi
+  if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
+
+  IFS= read -r REPLY || _wptt_exit_menu 0
 
   if [[ "$REPLY" == "0" ]]; then
-    wptt_quay_ve_menu "${1:-}" 0
-  elif [[ "$REPLY" == "00" && -x $(command -v fzf) ]]; then
-    fzf_result=$(printf "%s\n" "${selects[@]}" | fzf \
+    _wptt_exit_menu 0
+  elif [[ "$REPLY" == "00" ]] && command -v fzf >/dev/null 2>&1; then
+    fzf_result="$(printf '%s\n' "${selects[@]}" | fzf \
       --prompt="Nhập extension cần XÓA > " \
       --height='~60%' \
       --border=rounded \
       --color=border:red \
       --layout=reverse \
       --header="Tìm thấy ${#selects[@]} extension đã cài. [↑/↓] Di chuyển, [ESC] Hủy, [Enter] Chọn." \
-      --preview='echo -e "CẢNH BÁO: Bạn đang chọn XÓA: \033[1;31m{}\033[0m"')
+      --preview='echo -e "CẢNH BÁO: Bạn đang chọn XÓA: \033[1;31m{}\033[0m"' || true)"
     if [[ -n "$fzf_result" ]]; then
       php_extension_chon="$fzf_result"
       break
     else
-      echo -e "${C_YELLOW}Đã hủy tìm kiếm FZF.${C_RESET}"
+      printf '%bĐã hủy tìm kiếm FZF.%b\n' "${C_YELLOW}" "${C_RESET}"
     fi
-  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && ((REPLY >= 1)) && ((REPLY <= ${#selects[@]})); then
-    php_extension_chon="${selects[$((REPLY - 1))]}"
+  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && (( 10#$REPLY >= 1 && 10#$REPLY <= ${#selects[@]} )); then
+    php_extension_chon="${selects[$((10#$REPLY - 1))]}"
     break
   else
-    echo -e "${C_RED}❌ Lựa chọn không hợp lệ!${C_RESET}"
+    printf '%b❌ Lựa chọn không hợp lệ!%b\n' "${C_RED}" "${C_RESET}"
   fi
 done
 
-thong_bao_2=""
-case "$php_extension_chon" in
-mysqlnd | mysqli | mysql | pdo | pdo_mysql)
-  thong_bao_2="CẢNH BÁO TỬ HUYỆT: Xóa '$php_extension_chon' website sẽ SẬP DATABASE lập tức (Error Establishing)!"
-  ;;
-json)
-  thong_bao_2="CẢNH BÁO CỐT LÕI: Thiếu 'json' sẽ làm hỏng Block Editor (Gutenberg) và WordPress REST API!"
-  ;;
-curl)
-  thong_bao_2="NGUY HIỂM: Thiếu 'curl', web sẽ không thể update Plugin/Theme hay kết nối API Thanh toán!"
-  ;;
-mbstring)
-  thong_bao_2="NGUY HIỂM: Thiếu 'mbstring' sẽ làm vỡ Font chữ (UTF-8) và gây lỗi trắng trang ở nhiều Theme!"
-  ;;
-zip)
-  thong_bao_2="CẢNH BÁO: Thiếu 'zip' bạn sẽ KHÔNG THỂ cài đặt, upload hay update Theme/Plugin từ file .zip!"
-  ;;
-xml | dom | simplexml)
-  thong_bao_2="CẢNH BÁO: Thiếu '$php_extension_chon' sẽ làm hỏng Sitemap (SEO) và lỗi xử lý dữ liệu chuẩn XML!"
-  ;;
-gd)
-  thong_bao_2="CẢNH BÁO: Thiếu '$php_extension_chon', tính năng Upload, Cắt xén, Resize hình ảnh sẽ bị liệt hoàn toàn!"
-  ;;
-opcache)
-  thong_bao_2="LƯU Ý HIỆU SUẤT: Xóa 'opcache' sẽ làm tốc độ website chậm đi cực kỳ nghiêm trọng!"
-  ;;
-intl)
-  thong_bao_2="LƯU Ý: Xóa 'intl' sẽ gây lỗi cho các website Đa ngôn ngữ (WPML, Polylang) và dịch thuật!"
-  ;;
-openssl)
-  thong_bao_2="CẢNH BÁO BẢO MẬT: Gỡ '$php_extension_chon' sẽ làm đứt gãy các kết nối an toàn (HTTPS/API) ra bên ngoài!"
-  ;;
-igbinary | memcached | pecl-memcached)
-  thong_bao_2="LƯU Ý CACHE: Xóa '$php_extension_chon' có thể làm mất kết nối Object Cache Memcached!"
-  ;;
-igbinary | redis | pecl-redis)
-  thong_bao_2="LƯU Ý CACHE: Xóa '$php_extension_chon' có thể làm mất kết nối Object Cache Redis!"
-  ;;
-ioncube)
-  thong_bao_2="Lưu ý: Nếu source code còn dùng plugin bản quyền ioncube thì khi xoá sẽ gây lỗi!"
-  ;;
-*)
-  thong_bao_2="Hãy chắc chắn là Source code không còn cần đến nó!"
-  ;;
-esac
-
-
-#xóa extension opcache là webserver litespeed sẽ ngỏm luôn, cảnh báo stop người dùng
-if [[ "$php_extension_chon" == "opcache" ]]; then
-	echoDo "Bạn không thể xóa opcache extension"
-	echo "Nếu xóa máy chủ webserver LiteSpeed sẽ gặp sự cố ngay lập tức"
-	echo "Nếu bạn có nhu cầu tắt opcache để dev test hãy truy cập vào menu Quản Lý Cache => để tắt Opcache Cache PHP"
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
+if [[ ! "$php_extension_chon" =~ ^[a-zA-Z0-9._+-]+$ ]]; then
+  printf '%bLỗi: Tên extension không hợp lệ (%s)!%b\n' "${C_RED}" "$php_extension_chon" "${C_RESET}"
+  _wptt_exit_menu 1 "enter"
 fi
 
-if ! wptt_xac_nhan "Bạn có chắc chắn muốn XÓA $php_ver_hien_thi Extension này trên không?" \
-  "Extension bị gỡ bỏ : ${C_RED}$php_extension_chon${C_RESET}" \
+thong_bao_2=""
+case "$php_extension_chon" in
+  mysqlnd | mysqli | mysql | pdo | pdo_mysql)
+    thong_bao_2="CẢNH BÁO TỬ HUYỆT: Xóa '${php_extension_chon}' website sẽ SẬP DATABASE lập tức (Error Establishing)!"
+    ;;
+  json)
+    thong_bao_2="CẢNH BÁO CỐT LÕI: Thiếu 'json' sẽ làm hỏng Block Editor (Gutenberg) và WordPress REST API!"
+    ;;
+  curl)
+    thong_bao_2="NGUY HIỂM: Thiếu 'curl', web sẽ không thể update Plugin/Theme hay kết nối API Thanh toán!"
+    ;;
+  mbstring)
+    thong_bao_2="NGUY HIỂM: Thiếu 'mbstring' sẽ làm vỡ Font chữ (UTF-8) và gây lỗi trắng trang ở nhiều Theme!"
+    ;;
+  zip)
+    thong_bao_2="CẢNH BÁO: Thiếu 'zip' bạn sẽ KHÔNG THỂ cài đặt, upload hay update Theme/Plugin từ file .zip!"
+    ;;
+  xml | dom | simplexml)
+    thong_bao_2="CẢNH BÁO: Thiếu '${php_extension_chon}' sẽ làm hỏng Sitemap (SEO) và lỗi xử lý dữ liệu chuẩn XML!"
+    ;;
+  gd)
+    thong_bao_2="CẢNH BÁO: Thiếu '${php_extension_chon}', tính năng Upload, Cắt xén, Resize hình ảnh sẽ bị liệt hoàn toàn!"
+    ;;
+  opcache)
+    thong_bao_2="LƯU Ý HIỆU SUẤT: Xóa 'opcache' sẽ làm tốc độ website chậm đi cực kỳ nghiêm trọng!"
+    ;;
+  intl)
+    thong_bao_2="LƯU Ý: Xóa 'intl' sẽ gây lỗi cho các website Đa ngôn ngữ (WPML, Polylang) và dịch thuật!"
+    ;;
+  openssl)
+    thong_bao_2="CẢNH BÁO BẢO MẬT: Gỡ '${php_extension_chon}' sẽ làm đứt gãy các kết nối an toàn (HTTPS/API) ra bên ngoài!"
+    ;;
+  relay)
+    thong_bao_2="LƯU Ý CACHE: Gỡ 'relay' sẽ xóa 99-wptt-relay.ini; hãy tắt WP_REDIS_USE_RELAY trong wp-config.php để fallback về PhpRedis!"
+    ;;
+  igbinary | pecl-igbinary | msgpack | pecl-msgpack)
+    thong_bao_2="LƯU Ý CACHE: Xóa '${php_extension_chon}' có thể làm hỏng Object Cache (Relay, Redis, Memcached) đang dùng bộ tuần tự hóa này!"
+    ;;
+  memcached | pecl-memcached)
+    thong_bao_2="LƯU Ý CACHE: Xóa '${php_extension_chon}' có thể làm mất kết nối Object Cache Memcached!"
+    ;;
+  redis | pecl-redis)
+    thong_bao_2="LƯU Ý CACHE: Xóa '${php_extension_chon}' có thể làm mất kết nối Object Cache Redis!"
+    ;;
+  ioncube)
+    thong_bao_2="Lưu ý: Nếu source code còn dùng plugin bản quyền ionCube thì khi xóa sẽ gây lỗi!"
+    ;;
+  *)
+    thong_bao_2="Hãy chắc chắn là Source code không còn cần đến nó!"
+    ;;
+esac
+
+# Chặn xóa opcache vì làm hỏng OpenLiteSpeed ngay lập tức
+if [[ "$php_extension_chon" == "opcache" ]]; then
+  echoDo "Bạn không thể xóa opcache extension"
+  printf 'Nếu xóa máy chủ webserver LiteSpeed sẽ gặp sự cố ngay lập tức.\n'
+  printf 'Nếu bạn có nhu cầu tắt opcache để dev test hãy truy cập vào menu Quản Lý Cache => để tắt Opcache Cache PHP.\n'
+  _wptt_exit_menu 1 "enter"
+fi
+
+if ! wptt_xac_nhan "Bạn có chắc chắn muốn XÓA ${php_ver_hien_thi} Extension này không?" \
+  "Extension bị gỡ bỏ : ${C_RED}${php_extension_chon}${C_RESET}" \
   "$thong_bao_2" \
   "Đồng ý XÓA" "Hủy thao tác"; then
-  echo -e "${C_YELLOW}Đã hủy thao tác.${C_RESET}\n"
-  wptt_quay_ve_menu "${1:-}" 0
+  printf '%bĐã hủy thao tác.%b\n\n' "${C_YELLOW}" "${C_RESET}"
+  _wptt_exit_menu 0
 fi
 
 # ==============================================================================
 # BƯỚC 4: THỰC THI GỠ BỎ EXTENSION
 # ==============================================================================
-echo ""
-TASK_MSG="Gỡ bỏ Extension: $php_extension_chon"
+printf '\n'
+TASK_MSG="Gỡ bỏ Extension: ${LSPHP}-${php_extension_chon}"
 _runing "$TASK_MSG"
 
-phien_ban_php_co_cham=$(echo "$LSPHP" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g')
-
-# 1. Dọn dẹp tàn dư IONCUBE trong php.ini
-if [[ "$php_extension_chon" == 'ioncube' ]]; then
-  if [[ -f "/usr/local/lsws/$LSPHP/etc/php/$phien_ban_php_co_cham/litespeed/php.ini" ]]; then
-    duong_dan_php_ini_ioncube="/usr/local/lsws/$LSPHP/etc/php/$phien_ban_php_co_cham/litespeed/php.ini"
-  else
-    duong_dan_php_ini_ioncube="/usr/local/lsws/$LSPHP/etc/php.ini"
+# 1. Dọn dẹp cấu hình đặc thù (ionCube / CacheWerk Relay)
+if [[ "$php_extension_chon" == "ioncube" ]]; then
+  duong_dan_php_ini_ioncube="/usr/local/lsws/${LSPHP}/etc/php.ini"
+  if [[ -f "/usr/local/lsws/${LSPHP}/etc/php/${php_ver_dot}/litespeed/php.ini" ]]; then
+    duong_dan_php_ini_ioncube="/usr/local/lsws/${LSPHP}/etc/php/${php_ver_dot}/litespeed/php.ini"
   fi
-
-	[[ -f "${duong_dan_php_ini_ioncube:-}" ]] && grep -qF "ioncube_loader_lin" "$duong_dan_php_ini_ioncube" && sed -i '/ioncube_loader_lin/d' "$duong_dan_php_ini_ioncube"
+  if [[ -f "$duong_dan_php_ini_ioncube" ]] && grep -qF "ioncube_loader_lin" "$duong_dan_php_ini_ioncube"; then
+    sed -i '/ioncube_loader_lin/d' "$duong_dan_php_ini_ioncube"
+  fi
+elif [[ "$php_extension_chon" == "relay" ]]; then
+  _relay_cleanup_ini "$php_ver_num"
 fi
 
-# 2. Xóa gói qua Package Manager
+# 2. Gỡ gói qua Package Manager (có timeout và </dev/null chống treo)
 if command -v apt-get >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive apt-get remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1 || true
+  timeout 180 env DEBIAN_FRONTEND=noninteractive apt-get remove -y -qq "${LSPHP}-${php_extension_chon}" </dev/null >/dev/null 2>&1 || true
 elif command -v dnf >/dev/null 2>&1; then
-  dnf remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1 || true
+  timeout 180 dnf remove -y -q "${LSPHP}-${php_extension_chon}" </dev/null >/dev/null 2>&1 || true
 elif command -v yum >/dev/null 2>&1; then
-  yum remove -y "$LSPHP-$php_extension_chon" >/dev/null 2>&1 || true
+  timeout 180 yum remove -y -q "${LSPHP}-${php_extension_chon}" </dev/null >/dev/null 2>&1 || true
 fi
 
-check_lai=""
-if command -v dpkg-query >/dev/null 2>&1; then
-  check_lai=$(dpkg-query -W -f='${binary:Package}\n' "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
-elif command -v rpm >/dev/null 2>&1; then
-  check_lai=$(rpm -qa "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
-fi
-
-
-if [[ -z "$check_lai" ]]; then
-  wptt_smart_reload_lsws >/dev/null 2>&1 3>&- || true
+if ! _wptt_pkg_is_installed "${LSPHP}-${php_extension_chon}"; then
+  _wptt_reload_ols_lsphp || true
+  [[ "$php_extension_chon" == "relay" ]] && _relay_log_uninstall "Đã gỡ bỏ Relay và cấu hình 99-wptt-relay.ini cho ${LSPHP}"
   _rundone "$TASK_MSG"
 
-  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT XÓA EXTENSION${C_RESET}"
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Phiên bản PHP  : ${C_YELLOW}$php_ver_hien_thi ($LSPHP)${C_RESET}" 2
-  left_text "Extension xóa  : ${C_RED}$php_extension_chon${C_RESET}" 2
-  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Phiên bản PHP  : ${C_YELLOW}${php_ver_hien_thi} (${LSPHP})${C_RESET}" 2
+  left_text "Extension xóa  : ${C_RED}${php_extension_chon}${C_RESET}" 2
+  if [[ "$php_extension_chon" == "relay" ]]; then
+    left_text "Lưu ý WordPress: ${C_YELLOW}Tắt WP_REDIS_USE_RELAY trong wp-config.php để về PhpRedis${C_RESET}" 2
+  fi
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   wptt_status_ma_loi=0
 else
   _runloi "$TASK_MSG"
-  echo -e "${C_RED}Lỗi: Hệ thống vẫn còn phát hiện gói '$check_lai' đang tồn tại!${C_RESET}"
+  printf '%bLỗi: Hệ thống vẫn còn phát hiện gói %s-%s đang tồn tại!%b\n' "${C_RED}" "$LSPHP" "$php_extension_chon" "${C_RESET}"
   wptt_status_ma_loi=1
 fi
 
-wptt_quay_ve_menu "${1:-}" "${wptt_status_ma_loi:-0}" "enter"
+_wptt_exit_menu "${wptt_status_ma_loi:-0}" "enter"

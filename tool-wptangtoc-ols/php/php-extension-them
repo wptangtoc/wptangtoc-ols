@@ -5,15 +5,17 @@
 # @since: 2026
 
 set -uo pipefail
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export LANG="en_US.UTF-8"
+export LC_ALL="en_US.UTF-8"
+umask 022
 stty iutf8 2>/dev/null || true
 
 function huong_dan() {
   cat <<'EOF'
   Tính năng Cài đặt extension PHP là khả năng thêm các thư viện mở rộng [module hoặc plugin] vào môi trường PHP để bổ sung các chức năng cụ thể mà PHP cốt lõi không có sẵn.
 
-  Nói một cách đơn giản, PHP có một bộ chức năng cơ bản. Khi bạn cần PHP làm những việc chuyên biệt hơn như kết nối với một loại cơ sở dữ liệu đặc thù [ví dụ: mysqli, pgsql], xử lý hình ảnh [gd, imagick], làm việc với XML, mã hóa dữ liệu, hay tăng tốc thực thi mã [opcache], bạn cần cài đặt thêm các extension tương ứng.
+  Nói một cách đơn giản, PHP có một bộ chức năng cơ bản. Khi bạn cần PHP làm những việc chuyên biệt hơn như kết nối với một loại cơ sở dữ liệu đặc thù [ví dụ: mysqli, pgsql], xử lý hình ảnh [gd, imagick], làm việc với XML, mã hóa dữ liệu, tăng tốc thực thi mã [opcache] hay Object Cache hiệu năng cao [relay, redis], bạn cần cài đặt thêm các extension tương ứng.
 
   Mục đích chính:
   * Mở rộng khả năng của PHP: Giúp PHP thực hiện được nhiều tác vụ đa dạng hơn.
@@ -27,230 +29,779 @@ EOF
 wptt_load_main_conf 2>/dev/null || true
 [[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
 # shellcheck source=/dev/null
-. "/etc/wptt/lang/$ngon_ngu.sh" 2>/dev/null || true
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null || true
 # shellcheck source=/dev/null
 . /etc/wptt/echo-color 2>/dev/null || true
 
-# Bẫy dọn dẹp file tạm
+# ==============================================================================
+# CẤU HÌNH TOÀN CỤC & HÀM DỌN DẸP AN TOÀN
+# ==============================================================================
+readonly MENU_ARG="${1:-}"
+readonly WPTT_TMP_ROOT="/etc/wptt/tmp"
+readonly RELAY_LOG_DIR="/var/log/wptt"
+readonly RELAY_LOG_FILE="${RELAY_LOG_DIR}/relay-install.log"
+readonly RELAY_BACKUP_ROOT="/etc/wptt/backup/relay"
+readonly RELAY_GPG_URL="https://repos.r2.relay.so/key.gpg"
+readonly RELAY_RPM_REPO_URL="https://repos.r2.relay.so/rpm/el.repo"
+readonly RELAY_DEB_BASE_URL="https://repos.r2.relay.so/deb"
+readonly RELAY_MAX_MEMORY="64M"
+readonly RELAY_EVICTION_POLICY="lru"
+readonly RELAY_MIN_DISK_MB=150
+
+SESSION_ID=""
+printf -v SESSION_ID '%(%Y%m%d-%H%M%S)T-%d' -1 "$$"
+
+TMP_DIR=""
+OS_ID=""
+OS_VERSION_ID=""
+OS_CODENAME=""
+OS_FAMILY=""
+PKG_MGR=""
+ARCH=""
+
+_wptt_cleanup_tmp() {
+  if [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" ]]; then
+    case "$TMP_DIR" in
+      /etc/wptt/tmp/wptt-ext-them.*)
+        /bin/rm -rf -- "${TMP_DIR:?}" 2>/dev/null || true
+        ;;
+    esac
+    TMP_DIR=""
+  fi
+}
+
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM HUP
-  /bin/rm -f -- /etc/wptt/tmp/php_extension.txt 2>/dev/null || true
+  _wptt_cleanup_tmp
   exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-clear
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_YELLOW}QUẢN LÝ PHP ➜ Cài Đặt Thêm Extension (Thư viện Mở rộng)${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+_wptt_exit_menu() {
+  local code="${1:-0}"
+  local pause="${2:-}"
+  _wptt_cleanup_tmp
+  trap - EXIT INT TERM HUP
+  if declare -F wptt_quay_ve_menu >/dev/null 2>&1; then
+    if [[ -n "$pause" ]]; then
+      wptt_quay_ve_menu "$MENU_ARG" "$code" "$pause"
+    else
+      wptt_quay_ve_menu "$MENU_ARG" "$code"
+    fi
+  fi
+  exit "$code"
+}
+
+_wptt_pkg_is_installed() {
+  local pkg="$1"
+  if command -v dpkg-query >/dev/null 2>&1; then
+    dpkg-query -W -f='${Status}\n' "$pkg" 2>/dev/null | grep -qxF "install ok installed"
+  elif command -v rpm >/dev/null 2>&1; then
+    rpm -q "$pkg" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+_wptt_reload_ols_lsphp() {
+  if [[ -d /usr/local/lsws/admin/tmp ]]; then
+    /bin/touch -- /usr/local/lsws/admin/tmp/.lsphp_restart.txt 2>/dev/null || true
+  fi
+  if declare -F wptt_smart_reload_lsws >/dev/null 2>&1; then
+    wptt_smart_reload_lsws >/dev/null 2>&1
+  elif [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+    systemctl reload lsws >/dev/null 2>&1 || systemctl restart lsws >/dev/null 2>&1
+  elif [[ -x /usr/local/lsws/bin/lswsctrl ]]; then
+    /usr/local/lsws/bin/lswsctrl reload >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
 
 # ==============================================================================
-# BƯỚC 1: CHỌN PHIÊN BẢN PHP & KIỂM TRA MÔI TRƯỜNG
+# MODULE ENTERPRISE: CÀI ĐẶT CACHEWERK RELAY (REPO + GPG + INI + VALIDATE/ROLLBACK)
 # ==============================================================================
+_relay_init_log() {
+  /bin/mkdir -p -m 750 -- "$RELAY_LOG_DIR" 2>/dev/null || return 1
+  if [[ ! -f "$RELAY_LOG_FILE" ]]; then
+    (
+      umask 027
+      : > "$RELAY_LOG_FILE"
+    )
+  fi
+  /bin/chmod 640 -- "$RELAY_LOG_FILE" 2>/dev/null || true
+}
+
+_relay_log() {
+  local level="$1" msg="$2" ts=""
+  printf -v ts '%(%F %T)T' -1
+  [[ -w "$RELAY_LOG_FILE" ]] && printf '[%s] [%s] [%s] %s\n' "$ts" "$level" "$SESSION_ID" "$msg" >> "$RELAY_LOG_FILE"
+}
+
+_relay_detect_os() {
+  [[ -r /etc/os-release ]] || return 1
+  local key="" val="" id_like=""
+  while IFS='=' read -r key val; do
+    val="${val%\"}"
+    val="${val#\"}"
+    case "$key" in
+      ID) OS_ID="$val" ;;
+      VERSION_ID) OS_VERSION_ID="$val" ;;
+      VERSION_CODENAME) OS_CODENAME="$val" ;;
+      ID_LIKE) id_like="$val" ;;
+    esac
+  done < /etc/os-release
+
+  case "$OS_ID" in
+    ubuntu|debian)
+      OS_FAMILY="debian"
+      PKG_MGR="apt-get"
+      ;;
+    almalinux|rocky|rhel|ol|centos)
+      OS_FAMILY="rhel"
+      if command -v dnf >/dev/null 2>&1; then
+        PKG_MGR="dnf"
+      elif command -v yum >/dev/null 2>&1; then
+        PKG_MGR="yum"
+      else
+        return 1
+      fi
+      ;;
+    *)
+      if [[ "$id_like" == *debian* ]]; then
+        OS_FAMILY="debian"
+        PKG_MGR="apt-get"
+      elif [[ "$id_like" == *rhel* || "$id_like" == *fedora* ]]; then
+        OS_FAMILY="rhel"
+        PKG_MGR="dnf"
+      else
+        return 1
+      fi
+      ;;
+  esac
+
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    [[ -n "$OS_CODENAME" && "$OS_CODENAME" =~ ^[a-z0-9_-]+$ ]] || return 1
+  fi
+
+  ARCH="$(uname -m)"
+  [[ "$ARCH" == "x86_64" || "$ARCH" == "aarch64" ]] || return 1
+  return 0
+}
+
+_relay_apply_selinux() {
+  local target="$1" mode=""
+  if command -v restorecon >/dev/null 2>&1 && command -v getenforce >/dev/null 2>&1; then
+    mode="$(getenforce 2>/dev/null || true)"
+    if [[ "$mode" == "Enforcing" || "$mode" == "Permissive" ]]; then
+      restorecon -F -- "$target" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
+_relay_atomic_install() {
+  local src_tmp="$1" dest="$2" mode="$3"
+  local dest_dir="" staged=""
+  dest_dir="$(dirname -- "$dest")"
+  staged="$(mktemp -p "$dest_dir" ".wptt-stage.XXXXXX")" || return 1
+  /bin/cp -- "$src_tmp" "$staged" || { /bin/rm -f -- "$staged"; return 1; }
+  /bin/chown root:root -- "$staged" 2>/dev/null || true
+  /bin/chmod "$mode" -- "$staged" || { /bin/rm -f -- "$staged"; return 1; }
+  /bin/mv -T -- "$staged" "$dest" || { /bin/rm -f -- "$staged"; return 1; }
+  _relay_apply_selinux "$dest"
+  return 0
+}
+
+_relay_backup_file() {
+  local src="$1" tag="$2"
+  [[ -f "$src" ]] || return 0
+  /bin/mkdir -p -m 700 -- "$RELAY_BACKUP_ROOT" 2>/dev/null || return 1
+  local dst="${RELAY_BACKUP_ROOT}/${tag}.${SESSION_ID}.bak"
+  /bin/cp -a -- "$src" "$dst" || return 1
+  printf '%s\n' "$dst"
+}
+
+_relay_setup_logrotate() {
+  local lr_file="/etc/logrotate.d/wptt-relay"
+  [[ -f "$lr_file" ]] && return 0
+  local tmp_lr="${TMP_DIR}/wptt-relay.logrotate"
+  cat > "$tmp_lr" <<'EOF'
+/var/log/wptt/relay-install.log {
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}
+EOF
+  _relay_atomic_install "$tmp_lr" "$lr_file" 644 || true
+}
+
+_relay_check_pkg_unlocked() {
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    local lock_file=""
+    for lock_file in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock; do
+      if [[ -e "$lock_file" ]] && command -v fuser >/dev/null 2>&1 && fuser "$lock_file" >/dev/null 2>&1; then
+        printf '%bLỗi: Trình quản lý gói apt/dpkg đang bị khóa (%s). Vui lòng thử lại sau.%b\n' "${C_RED}" "$lock_file" "${C_RESET}"
+        return 1
+      fi
+    done
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x 'apt|apt-get|dpkg' >/dev/null 2>&1; then
+      printf '%bLỗi: Phát hiện tiến trình apt/dpkg đang chạy. Vui lòng đợi hoàn tất rồi thử lại.%b\n' "${C_RED}" "${C_RESET}"
+      return 1
+    fi
+  else
+    if command -v pgrep >/dev/null 2>&1 && pgrep -x 'dnf|yum|rpm' >/dev/null 2>&1; then
+      printf '%bLỗi: Phát hiện tiến trình dnf/yum/rpm đang chạy. Vui lòng đợi hoàn tất rồi thử lại.%b\n' "${C_RED}" "${C_RESET}"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+_relay_get_ini_dir() {
+  local php_bin="$1" line="" ini_dir=""
+  while IFS= read -r line; do
+    if [[ "$line" == "Scan for additional .ini files in:"* ]]; then
+      ini_dir="${line#Scan for additional .ini files in:}"
+      ini_dir="${ini_dir#"${ini_dir%%[![:space:]]*}"}"
+      ini_dir="${ini_dir%"${ini_dir##*[![:space:]]}"}"
+      break
+    fi
+  done < <("$php_bin" --ini 2>/dev/null)
+  [[ -n "$ini_dir" && -d "$ini_dir" && "$ini_dir" != "(none)" ]] || return 1
+  printf '%s\n' "$ini_dir"
+}
+
+_relay_extension_already_declared() {
+  local ini_dir="$1" skip_file="$2" f=""
+  shopt -s nullglob
+  for f in "${ini_dir}"/*.ini; do
+    [[ "$f" == "$skip_file" ]] && continue
+    if grep -Eq '^[[:space:]]*extension[[:space:]]*=[[:space:]]*"?relay(\.so)?"?' "$f"; then
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
+_relay_validate_lsphp() {
+  local php_bin="$1"
+  local ri_err="${TMP_DIR}/relay-ri-err.log"
+  : > "$ri_err"
+
+  if ! "$php_bin" --ri relay >/dev/null 2>"$ri_err"; then
+    _relay_log "ERROR" "Lệnh '${php_bin} --ri relay' thất bại: $(<"$ri_err")"
+    return 1
+  fi
+  if [[ -s "$ri_err" ]]; then
+    _relay_log "ERROR" "PHP xuất cảnh báo khi nạp Relay (${php_bin}): $(<"$ri_err")"
+    return 1
+  fi
+
+  local modules=""
+  modules="$("$php_bin" -m 2>/dev/null)" || return 1
+  grep -qxF -- "relay" <<< "$modules"
+}
+
+_wptt_install_relay_extension() {
+  local ver="$1"
+  local php_bin="/usr/local/lsws/lsphp${ver}/bin/php"
+  local task_msg="Cài đặt Extension CacheWerk Relay cho lsphp${ver}"
+  local avail_kb=0
+
+  _relay_init_log || true
+  _relay_setup_logrotate || true
+  _runing "$task_msg"
+
+  # 1. Preflight chuyên biệt cho Relay
+  if (( 10#$ver < 74 )); then
+    _runloi "$task_msg"
+    printf '%bLỗi: CacheWerk Relay chỉ hỗ trợ PHP >= 7.4 (bạn đã chọn lsphp%s).%b\n' "${C_RED}" "$ver" "${C_RESET}"
+    return 1
+  fi
+
+  if ! _relay_detect_os; then
+    _runloi "$task_msg"
+    printf '%bLỗi: Hệ điều hành hoặc kiến trúc CPU không hỗ trợ CacheWerk Relay.%b\n' "${C_RED}" "${C_RESET}"
+    return 1
+  fi
+
+  avail_kb="$(df -Pk -- /usr/local/lsws 2>/dev/null | awk 'NR==2 {print $4}')"
+  if [[ ! "$avail_kb" =~ ^[0-9]+$ ]] || (( avail_kb / 1024 < RELAY_MIN_DISK_MB )); then
+    _runloi "$task_msg"
+    printf '%bLỗi: Dung lượng đĩa trống trên /usr/local/lsws nhỏ hơn %dMB.%b\n' "${C_RED}" "$RELAY_MIN_DISK_MB" "${C_RESET}"
+    return 1
+  fi
+
+  if ! _relay_check_pkg_unlocked; then
+    _runloi "$task_msg"
+    return 1
+  fi
+
+  if [[ "$OS_FAMILY" == "debian" ]] && ! command -v gpg >/dev/null 2>&1; then
+    _runloi "$task_msg"
+    printf '%bLỗi: Thiếu lệnh gpg để xác thực chữ ký kho Relay. Hãy chạy: apt-get install -y gnupg%b\n' "${C_RED}" "${C_RESET}"
+    return 1
+  fi
+
+  if ! curl --fail --silent --show-error --location --head --max-time 15 --retry 2 --retry-delay 2 --output /dev/null "$RELAY_GPG_URL"; then
+    _runloi "$task_msg"
+    printf '%bLỗi: Không thể kết nối tới https://repos.r2.relay.so/.%b\n' "${C_RED}" "${C_RESET}"
+    return 1
+  fi
+
+  _relay_log "INFO" "Bắt đầu cài Relay cho lsphp${ver} | OS=${OS_ID} ${OS_VERSION_ID} (${OS_FAMILY}) | ARCH=${ARCH}"
+
+  # 2. Thiết lập kho gói chính thức CacheWerk Relay
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    local keyring="/usr/share/keyrings/cachewerk.gpg"
+    local repo_list="/etc/apt/sources.list.d/cachewerk.list"
+    local repo_line="deb [signed-by=${keyring}] ${RELAY_DEB_BASE_URL} ${OS_CODENAME} main"
+    local key_asc="${TMP_DIR}/cachewerk.gpg.asc"
+    local key_bin="${TMP_DIR}/cachewerk.gpg"
+
+    if ! curl --fail --silent --show-error --location --max-time 30 --retry 3 --retry-delay 2 --output "$key_asc" "$RELAY_GPG_URL"; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Không tải được khóa GPG Relay từ %s.%b\n' "${C_RED}" "$RELAY_GPG_URL" "${C_RESET}"
+      return 1
+    fi
+
+    if ! gpg --batch --show-keys "$key_asc" >/dev/null 2>&1 || ! gpg --batch --yes --dearmor --output "$key_bin" "$key_asc" >>"$RELAY_LOG_FILE" 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Khóa GPG CacheWerk Relay không hợp lệ.%b\n' "${C_RED}" "${C_RESET}"
+      return 1
+    fi
+
+    /bin/mkdir -p -m 755 -- /usr/share/keyrings
+    if ! _relay_atomic_install "$key_bin" "$keyring" 644; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Không thể ghi keyring %s.%b\n' "${C_RED}" "$keyring" "${C_RESET}"
+      return 1
+    fi
+
+    if [[ ! -f "$repo_list" ]] || ! grep -qxF -- "$repo_line" "$repo_list"; then
+      _relay_backup_file "$repo_list" "cachewerk.list" >/dev/null || true
+      local tmp_list="${TMP_DIR}/cachewerk.list"
+      printf '%s\n' "$repo_line" > "$tmp_list"
+      if ! _relay_atomic_install "$tmp_list" "$repo_list" 644; then
+        _runloi "$task_msg"
+        printf '%bLỗi: Không thể ghi tệp repo %s.%b\n' "${C_RED}" "$repo_list" "${C_RESET}"
+        return 1
+      fi
+    fi
+
+    if ! timeout 120 env DEBIAN_FRONTEND=noninteractive apt-get update -qq </dev/null >>"$RELAY_LOG_FILE" 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Lệnh apt-get update thất bại. Xem chi tiết tại %s.%b\n' "${C_RED}" "$RELAY_LOG_FILE" "${C_RESET}"
+      return 1
+    fi
+
+    if ! apt-cache show "lsphp${ver}-relay" >/dev/null 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Kho gói Relay chưa có bản lsphp%s-relay cho %s %s (%s).%b\n' "${C_RED}" "$ver" "$OS_ID" "$OS_CODENAME" "$ARCH" "${C_RESET}"
+      return 1
+    fi
+
+    if ! timeout 300 env DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold \
+      "lsphp${ver}-igbinary" "lsphp${ver}-msgpack" "lsphp${ver}-relay" </dev/null >>"$RELAY_LOG_FILE" 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Cài đặt gói lsphp%s-relay thất bại. Xem log tại %s.%b\n' "${C_RED}" "$ver" "$RELAY_LOG_FILE" "${C_RESET}"
+      return 1
+    fi
+  else
+    local repo_file="/etc/yum.repos.d/cachewerk.repo"
+    local tmp_repo="${TMP_DIR}/cachewerk.repo"
+
+    if ! curl --fail --silent --show-error --location --max-time 30 --retry 3 --retry-delay 2 --output "$tmp_repo" "$RELAY_RPM_REPO_URL"; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Không tải được tệp repo từ %s.%b\n' "${C_RED}" "$RELAY_RPM_REPO_URL" "${C_RESET}"
+      return 1
+    fi
+
+    if ! grep -qF -- "[cachewerk" "$tmp_repo" || ! grep -qF -- "gpgcheck=1" "$tmp_repo"; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Tệp cachewerk.repo không hợp lệ hoặc thiếu gpgcheck=1.%b\n' "${C_RED}" "${C_RESET}"
+      return 1
+    fi
+
+    _relay_backup_file "$repo_file" "cachewerk.repo" >/dev/null || true
+    if ! _relay_atomic_install "$tmp_repo" "$repo_file" 644; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Không thể ghi tệp repo %s.%b\n' "${C_RED}" "$repo_file" "${C_RESET}"
+      return 1
+    fi
+
+    if ! timeout 120 "$PKG_MGR" -y -q makecache --disablerepo='*' --enablerepo='cachewerk*' </dev/null >>"$RELAY_LOG_FILE" 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Lệnh %s makecache thất bại. Xem log tại %s.%b\n' "${C_RED}" "$PKG_MGR" "$RELAY_LOG_FILE" "${C_RESET}"
+      return 1
+    fi
+
+    if ! "$PKG_MGR" -y -q list available "lsphp${ver}-relay" </dev/null >/dev/null 2>&1 \
+      && ! "$PKG_MGR" -y -q list installed "lsphp${ver}-relay" </dev/null >/dev/null 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Kho gói Relay chưa có bản lsphp%s-relay cho %s %s (%s).%b\n' "${C_RED}" "$ver" "$OS_ID" "$OS_VERSION_ID" "$ARCH" "${C_RESET}"
+      return 1
+    fi
+
+    if ! timeout 300 "$PKG_MGR" install -y -q \
+      "lsphp${ver}-pecl-igbinary" "lsphp${ver}-pecl-msgpack" "lsphp${ver}-relay" </dev/null >>"$RELAY_LOG_FILE" 2>&1; then
+      _runloi "$task_msg"
+      printf '%bLỗi: Cài đặt gói lsphp%s-relay thất bại. Xem log tại %s.%b\n' "${C_RED}" "$ver" "$RELAY_LOG_FILE" "${C_RESET}"
+      return 1
+    fi
+  fi
+
+  # 3. Ghi cấu hình 99-wptt-relay.ini nguyên tử & xác thực (có Rollback tự động)
+  local ini_dir="" target_ini="" had_existing=0 backup_ini="" tmp_ini=""
+  ini_dir="$(_relay_get_ini_dir "$php_bin")" || {
+    _runloi "$task_msg"
+    printf '%bLỗi: Không xác định được thư mục scan .ini của lsphp%s.%b\n' "${C_RED}" "$ver" "${C_RESET}"
+    return 1
+  }
+
+  target_ini="${ini_dir}/99-wptt-relay.ini"
+  if [[ -f "$target_ini" ]]; then
+    had_existing=1
+    backup_ini="$(_relay_backup_file "$target_ini" "lsphp${ver}-99-wptt-relay.ini" || true)"
+  fi
+
+  tmp_ini="${TMP_DIR}/lsphp${ver}-relay.ini"
+  {
+    printf '; Managed by WPTangToc OLS (%s)\n' "$SESSION_ID"
+    if ! _relay_extension_already_declared "$ini_dir" "$target_ini"; then
+      printf 'extension = relay.so\n'
+    fi
+    printf 'relay.maxmemory = %s\n' "$RELAY_MAX_MEMORY"
+    printf 'relay.eviction_policy = %s\n' "$RELAY_EVICTION_POLICY"
+    printf 'relay.environment = production\n'
+  } > "$tmp_ini"
+
+  if ! _relay_atomic_install "$tmp_ini" "$target_ini" 644; then
+    _runloi "$task_msg"
+    printf '%bLỗi: Không thể ghi tệp cấu hình %s.%b\n' "${C_RED}" "$target_ini" "${C_RESET}"
+    return 1
+  fi
+
+  if ! _relay_validate_lsphp "$php_bin"; then
+    _relay_log "WARN" "Xác thực lsphp${ver} thất bại — tiến hành rollback ${target_ini}"
+    if (( had_existing == 1 )) && [[ -n "$backup_ini" && -f "$backup_ini" ]]; then
+      _relay_atomic_install "$backup_ini" "$target_ini" 644 || true
+    else
+      case "$target_ini" in
+        /usr/local/lsws/lsphp*/etc/*99-wptt-relay.ini)
+          /bin/rm -f -- "${target_ini:?}" 2>/dev/null || true
+          ;;
+      esac
+    fi
+    _runloi "$task_msg"
+    printf '%bLỗi: lsphp%s không nạp được Relay ổn định (đã khôi phục cấu hình cũ). Xem log tại %s.%b\n' "${C_RED}" "$ver" "$RELAY_LOG_FILE" "${C_RESET}"
+    return 1
+  fi
+
+  # 4. Graceful reload OpenLiteSpeed + detached LSPHP workers
+  _wptt_reload_ols_lsphp || true
+  _relay_log "INFO" "Hoàn tất cài đặt Relay cho lsphp${ver} (maxmemory=${RELAY_MAX_MEMORY}, policy=${RELAY_EVICTION_POLICY})"
+  _rundone "$task_msg"
+
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+  center_text "${C_BOLD_WHITE}HOÀN TẤT CÀI ĐẶT EXTENSION CACHEWERK RELAY${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Phiên bản PHP   : ${C_YELLOW}${php_ver_hien_thi} (${LSPHP})${C_RESET}" 2
+  left_text "Extension đã cài: ${C_BOLD_WHITE}relay${C_RESET} (kèm igbinary, msgpack)" 2
+  left_text "Cấu hình        : maxmemory=${RELAY_MAX_MEMORY} | policy=${RELAY_EVICTION_POLICY} | production" 2
+  left_text "Kiểm tra nhanh  : ${C_CYAN}${php_bin} --ri relay${C_RESET}" 2
+  left_text "WordPress Redis : ${C_YELLOW}define('WP_REDIS_USE_RELAY', true);${C_RESET}" 2
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+  return 0
+}
+
+# ==============================================================================
+# GIAO DIỆN CHÍNH & BƯỚC 1: CHỌN PHIÊN BẢN PHP
+# ==============================================================================
+clear
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_YELLOW}QUẢN LÝ PHP ➜ Cài Đặt Thêm Extension (Thư viện Mở rộng)${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
 /bin/bash /etc/wptt/php/wptt-php-version-domain
-echo -e "${C_YELLOW}Vui lòng chọn Phiên bản PHP bạn muốn cài thêm Extension:${C_RESET}"
+printf '%bVui lòng chọn Phiên bản PHP bạn muốn cài thêm Extension:%b\n' "${C_YELLOW}" "${C_RESET}"
 # shellcheck source=/dev/null
 . /etc/wptt/php/tenmien-php 2>/dev/null || true
 
 if [[ -z "${LSPHP:-}" || "$LSPHP" == "0" ]]; then
-  wptt_quay_ve_menu "${1:-}" 1
+  _wptt_exit_menu 1
 fi
 
-if [[ ! -d "/usr/local/lsws/$LSPHP" ]]; then
-  echo -e "\n${C_RED}❌ Lỗi: Phiên bản $LSPHP chưa được cài đặt trên máy chủ!${C_RESET}"
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
+if [[ ! "$LSPHP" =~ ^lsphp([0-9]{2,3})$ ]]; then
+  printf '\n%b❌ Lỗi: Tên phiên bản PHP không hợp lệ (%s)!%b\n' "${C_RED}" "$LSPHP" "${C_RESET}"
+  _wptt_exit_menu 1 "enter"
 fi
 
-if ! curl -sfI --connect-timeout 3 --max-time 5 https://1.1.1.1 >/dev/null 2>&1 && \
-   ! curl -sfI --connect-timeout 3 --max-time 5 https://8.8.8.8 >/dev/null 2>&1; then
+php_ver_num="${BASH_REMATCH[1]}"
+php_ver_dot="${php_ver_num:0:1}.${php_ver_num:1}"
+php_ver_hien_thi="PHP ${php_ver_dot}"
+
+if [[ ! -d "/usr/local/lsws/${LSPHP}" || ! -x "/usr/local/lsws/${LSPHP}/bin/php" ]]; then
+  printf '\n%b❌ Lỗi: Phiên bản %s chưa được cài đặt trên máy chủ!%b\n' "${C_RED}" "$LSPHP" "${C_RESET}"
+  _wptt_exit_menu 1 "enter"
+fi
+
+if ! curl -sfI --connect-timeout 3 --max-time 5 https://1.1.1.1 >/dev/null 2>&1 \
+  && ! curl -sfI --connect-timeout 3 --max-time 5 https://8.8.8.8 >/dev/null 2>&1; then
   _runloi "Kiểm tra Internet thất bại: Mất kết nối Internet!"
-  echo "Không thể kết nối Internet nên không thể cài đặt extension PHP."
-  wptt_quay_ve_menu "${1:-}" 1 "enter"
+  printf 'Không thể kết nối Internet nên không thể cài đặt extension PHP.\n'
+  _wptt_exit_menu 1 "enter"
 fi
-
-php_ver_hien_thi=$(echo "$LSPHP" | grep -Eo '[0-9]{1,2}' | head -1 | perl -pe 's/(\d{1})(?=(?:\d{1}){1,5}\b)/\1./g' | sed 's/^/PHP /g')
 
 # ==============================================================================
 # BƯỚC 2: QUÉT EXTENSION SIÊU TỐC (ZERO-WAIT TIME & C-BINARY SCAN)
 # ==============================================================================
-SCAN_MSG="Đang quét danh sách Extensions khả dụng cho $php_ver_hien_thi..."
+SCAN_MSG="Đang quét danh sách Extensions khả dụng cho ${php_ver_hien_thi}..."
 _runing "$SCAN_MSG"
 
-/bin/mkdir -p /etc/wptt/tmp
-chmod 700 /etc/wptt/tmp
-/bin/rm -f -- /etc/wptt/tmp/php_extension.txt
+/bin/mkdir -p -m 700 -- "$WPTT_TMP_ROOT"
+TMP_DIR="$(mktemp -d "${WPTT_TMP_ROOT}/wptt-ext-them.XXXXXX")"
+EXT_LIST_FILE="${TMP_DIR}/php_extension.txt"
+: > "$EXT_LIST_FILE"
 
 declare -a php_extension_da_cai_dat=()
 declare -a php_extension=()
 
-# TẦNG 1: LẤY DANH SÁCH GÓI ĐÃ CÀI ĐẶT (Dùng lệnh lõi siêu tốc - Mất 10ms)
+# TẦNG 1: Lấy danh sách gói ĐÃ CÀI ĐẶT thật sự (chặn gói residual-config trên Debian/Ubuntu)
 if command -v dpkg-query >/dev/null 2>&1; then
-  mapfile -t php_extension_da_cai_dat < <(dpkg-query -W -f='${binary:Package}\n' "${LSPHP}-*" 2>/dev/null | sed "s/^${LSPHP}-//" | sort -u)
+  mapfile -t php_extension_da_cai_dat < <(
+    dpkg-query -W -f='${Status}\t${binary:Package}\n' "${LSPHP}-*" 2>/dev/null \
+      | awk -F'\t' '$1 == "install ok installed" {print $2}' \
+      | sed "s/^${LSPHP}-//" | sort -u
+  )
 elif command -v rpm >/dev/null 2>&1; then
-  mapfile -t php_extension_da_cai_dat < <(rpm -qa --qf "%{NAME}\n" "${LSPHP}-*" 2>/dev/null | sed "s/^${LSPHP}-//" | sort -u)
+  mapfile -t php_extension_da_cai_dat < <(
+    rpm -qa --qf "%{NAME}\n" "${LSPHP}-*" 2>/dev/null \
+      | sed "s/^${LSPHP}-//" | sort -u
+  )
 fi
 
-# TẦNG 2: LẤY DANH SÁCH GÓI KHẢ DỤNG TỪ REPO (Trỏ đúng mục tiêu - Không tải rác)
+# TẦNG 2: Lấy danh sách gói khả dụng từ Repo chuẩn (chỉ nhận đúng gói bắt đầu bằng lsphpXX-)
 if command -v apt-cache >/dev/null 2>&1; then
-  mapfile -t php_extension < <(apt-cache search --names-only "^${LSPHP}-" 2>/dev/null | awk '{print $1}' | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
+  mapfile -t php_extension < <(
+    apt-cache search --names-only "^${LSPHP}-" 2>/dev/null \
+      | awk -v pfx="${LSPHP}-" 'index($1, pfx) == 1 {
+          pkg = substr($1, length(pfx) + 1)
+          if (pkg != "" && pkg !~ /(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$/) print pkg
+        }' | sort -u
+  )
 elif command -v dnf >/dev/null 2>&1; then
-  mapfile -t php_extension < <(dnf -q list available "${LSPHP}-*" 2>/dev/null | awk '{print $1}' | sed 's/\..*//' | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
+  mapfile -t php_extension < <(
+    dnf -q list available "${LSPHP}-*" 2>/dev/null \
+      | awk -v pfx="${LSPHP}-" 'index($1, pfx) == 1 {
+          pkg = $1
+          sub(/\..*/, "", pkg)
+          pkg = substr(pkg, length(pfx) + 1)
+          if (pkg != "" && pkg !~ /(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$/) print pkg
+        }' | sort -u
+  )
 elif command -v yum >/dev/null 2>&1; then
-  mapfile -t php_extension < <(yum -q list available "${LSPHP}-*" 2>/dev/null | awk '{print $1}' | sed 's/\..*//' | sed "s/^${LSPHP}-//" | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | sort -u)
+  mapfile -t php_extension < <(
+    yum -q list available "${LSPHP}-*" 2>/dev/null \
+      | awk -v pfx="${LSPHP}-" 'index($1, pfx) == 1 {
+          pkg = $1
+          sub(/\..*/, "", pkg)
+          pkg = substr(pkg, length(pfx) + 1)
+          if (pkg != "" && pkg !~ /(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$/) print pkg
+        }' | sort -u
+  )
 fi
 
-# TẦNG 3: XỬ LÝ KHI PHP HẾT HẠN (EOL)
+# TẦNG 3: Xử lý khi PHP hết hạn (EOL)
 repo_du_phong=0
-if [[ ${#php_extension[@]} -eq 0 ]]; then
+if (( ${#php_extension[@]} == 0 )); then
   (/bin/bash /etc/wptt/php/kho-luu-tru-litespeed >/dev/null 2>&1 || true)
   if [[ -f /etc/wptt/tmp/php_extension_call_eol ]]; then
-    mapfile -t php_extension < <(grep "$LSPHP" /etc/wptt/tmp/php_extension_call_eol | sed -E 's/.*('"$LSPHP"'(-[a-z-]+)*).*/\1/' | sed "s/^$LSPHP-//" | sed 's/-$//g' | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' | grep -v "^$" | grep -v "^${LSPHP}$" | sort -u)
+    mapfile -t php_extension < <(
+      grep "$LSPHP" /etc/wptt/tmp/php_extension_call_eol \
+        | sed -E "s/.*(${LSPHP}(-[a-z-]+)*).*/\1/" \
+        | sed "s/^${LSPHP}-//" | sed 's/-$//g' \
+        | grep -vE '(^|-)(dbg|dev|debuginfo|devel|debugsource|modules-source|common)$' \
+        | grep -v "^$" | grep -v "^${LSPHP}$" | sort -u
+    )
   fi
 
-  if [[ ${#php_extension[@]} -eq 0 ]]; then
+  if (( ${#php_extension[@]} == 0 )); then
     _runloi "$SCAN_MSG"
-    echo -e "${C_RED}Không thể kết nối đến Repo LiteSpeed để quét Extension!${C_RESET}"
-    wptt_quay_ve_menu "${1:-}" 1 "enter"
+    printf '%bKhông thể kết nối đến Repo LiteSpeed để quét Extension!%b\n' "${C_RED}" "${C_RESET}"
+    _wptt_exit_menu 1 "enter"
   fi
   repo_du_phong=1
 fi
 
-# TẦNG 4: TOÁN TỬ TRỪ TẬP HỢP (COMM -23) LỌC SIÊU TỐC
-if [[ ${#php_extension[@]} -gt 0 ]]; then
-  comm -23 <(printf "%s\n" "${php_extension[@]}" | sort) <(printf "%s\n" "${php_extension_da_cai_dat[@]}" | sort) > /etc/wptt/tmp/php_extension.txt
+# Bổ sung CacheWerk Relay vào danh sách khả dụng cho PHP >= 7.4 (x86_64/aarch64)
+cur_arch="$(uname -m)"
+if (( 10#$php_ver_num >= 74 )) && [[ "$cur_arch" == "x86_64" || "$cur_arch" == "aarch64" ]]; then
+  php_extension+=("relay")
+fi
+
+# TẦNG 4: Toán tử trừ tập hợp (comm -23) lọc ra các extension chưa cài
+if (( ${#php_extension[@]} > 0 )); then
+  if (( ${#php_extension_da_cai_dat[@]} > 0 )); then
+    comm -23 \
+      <(printf '%s\n' "${php_extension[@]}" | sort -u) \
+      <(printf '%s\n' "${php_extension_da_cai_dat[@]}" | sort -u) > "$EXT_LIST_FILE"
+  else
+    printf '%s\n' "${php_extension[@]}" | sort -u > "$EXT_LIST_FILE"
+  fi
 fi
 
 _rundone "$SCAN_MSG"
 
 # ==============================================================================
-# BƯỚC 3: GIAO DIỆN CHỌN EXTENSION (LAYOUT 2 CỘT TỐI ƯU UX)
+# BƯỚC 3: GIAO DIỆN CHỌN EXTENSION (LAYOUT 2 CỘT + FZF)
 # ==============================================================================
-mapfile -t selects < <(sort -u /etc/wptt/tmp/php_extension.txt | sed '/^$/d' || true)
+mapfile -t selects < <(sort -u "$EXT_LIST_FILE" | sed '/^$/d' || true)
 
-if [[ ${#selects[@]} -eq 0 ]]; then
-  echo -e "\n${C_GREEN}Phiên bản $php_ver_hien_thi của bạn đã được cài ĐẦY ĐỦ tất cả các Extensions!${C_RESET}"
-  wptt_quay_ve_menu "${1:-}" 0 "enter"
+if (( ${#selects[@]} == 0 )); then
+  printf '\n%bPhiên bản %s của bạn đã được cài ĐẦY ĐỦ tất cả các Extensions!%b\n' "${C_GREEN}" "$php_ver_hien_thi" "${C_RESET}"
+  _wptt_exit_menu 0 "enter"
 fi
 
-echo -e "\n${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}DANH SÁCH EXTENSIONS CHƯA CÀI CHO: ${C_YELLOW}$php_ver_hien_thi${C_RESET}"
-echo -e "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+printf '\n%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}DANH SÁCH EXTENSIONS CHƯA CÀI CHO: ${C_YELLOW}${php_ver_hien_thi}${C_RESET}"
+printf '%b\n' "${C_CYAN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
 
 total=${#selects[@]}
 for ((i = 0; i < total; i += 2)); do
   idx1=$((i + 1))
   val1="${selects[$i]}"
-  pad_val1=$(printf "%-28s" "$val1")
-  str_col1="  ${C_CYAN}$(printf "%2d" $idx1))${C_RESET} ${C_BOLD_WHITE}${pad_val1}${C_RESET}"
+  pad_val1="$(printf '%-28s' "$val1")"
+  str_col1="  ${C_CYAN}$(printf '%2d' "$idx1"))${C_RESET} ${C_BOLD_WHITE}${pad_val1}${C_RESET}"
 
   idx2=$((i + 2))
   if ((idx2 <= total)); then
     val2="${selects[$((i + 1))]}"
-    str_col2="${C_CYAN}$(printf "%2d" $idx2))${C_RESET} ${C_BOLD_WHITE}${val2}${C_RESET}"
+    str_col2="${C_CYAN}$(printf '%2d' "$idx2"))${C_RESET} ${C_BOLD_WHITE}${val2}${C_RESET}"
     left_text "${str_col1}${str_col2}" 0
   else
     left_text "${str_col1}" 0
   fi
 done
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+printf '%b\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
 
 php_extension_chon=""
 
 while true; do
-  if command -v fzf &>/dev/null; then
-    echo -en "${C_CYAN}Nhập số thứ tự (1-${#selects[@]}) hoặc gõ [00=Tìm nhanh, 0=Thoát]: ${C_RESET}"
+  if command -v fzf >/dev/null 2>&1; then
+    printf '%bNhập số thứ tự (1-%d) hoặc gõ [00=Tìm nhanh, 0=Thoát]: %b' "${C_CYAN}" "${#selects[@]}" "${C_RESET}"
   else
-    echo -en "${C_CYAN}Nhập số thứ tự (1-${#selects[@]}) [0=Thoát]: ${C_RESET}"
+    printf '%bNhập số thứ tự (1-%d) [0=Thoát]: %b' "${C_CYAN}" "${#selects[@]}" "${C_RESET}"
   fi
 
-
-	# ============================================================================
-  # XỬ LÝ TYPEAHEAD BUFFERING (CHỐNG TRÔI LỆNH)
-  # Quét sạch các phím người dùng lỡ bấm trong lúc chờ Bước 2 (Quét Repo)
-  # ============================================================================
-  if [[ -t 0 ]]; then stty -echo 2>/dev/null; fi
-  if declare -F wptt_flush_stdin >/dev/null; then
+  # Quét sạch typeahead buffer tránh trôi lệnh sau bước quét repo
+  if [[ -t 0 ]]; then stty -echo 2>/dev/null || true; fi
+  if declare -F wptt_flush_stdin >/dev/null 2>&1; then
     wptt_flush_stdin
   fi
-  if [[ -t 0 ]]; then stty echo 2>/dev/null; fi
-  # ============================================================================
+  if [[ -t 0 ]]; then stty echo 2>/dev/null || true; fi
 
-  read -r REPLY
+  IFS= read -r REPLY || _wptt_exit_menu 1
 
   if [[ "$REPLY" == "0" ]]; then
-    wptt_quay_ve_menu "${1:-}" 1
-  elif [[ "$REPLY" == "00" && -x $(command -v fzf) ]]; then
-    fzf_result=$(printf "%s\n" "${selects[@]}" | fzf \
+    _wptt_exit_menu 1
+  elif [[ "$REPLY" == "00" ]] && command -v fzf >/dev/null 2>&1; then
+    fzf_result="$(printf '%s\n' "${selects[@]}" | fzf \
       --prompt="Nhập extension cần tìm > " \
       --height='~60%' \
       --border=rounded \
       --color=border:green \
       --layout=reverse \
       --header="Tìm thấy ${#selects[@]} extension chưa cài. [↑/↓] Di chuyển, [ESC] Hủy, [Enter] Chọn." \
-      --preview='echo -e "Bạn đang chuẩn bị cài đặt: \033[1;32m{}\033[0m"')
+      --preview='echo -e "Bạn đang chuẩn bị cài đặt: \033[1;32m{}\033[0m"' || true)"
     if [[ -n "$fzf_result" ]]; then
       php_extension_chon="$fzf_result"
       break
     else
-      echo -e "${C_YELLOW}Đã hủy tìm kiếm FZF. Vui lòng chọn lại.${C_RESET}"
+      printf '%bĐã hủy tìm kiếm FZF. Vui lòng chọn lại.%b\n' "${C_YELLOW}" "${C_RESET}"
     fi
-  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && ((REPLY >= 1)) && ((REPLY <= ${#selects[@]})); then
-    php_extension_chon="${selects[$((REPLY - 1))]}"
+  elif [[ "$REPLY" =~ ^[0-9]+$ ]] && (( 10#$REPLY >= 1 && 10#$REPLY <= ${#selects[@]} )); then
+    php_extension_chon="${selects[$((10#$REPLY - 1))]}"
     break
   else
-    echo -e "${C_RED}Lựa chọn không hợp lệ!${C_RESET}"
+    printf '%bLựa chọn không hợp lệ!%b\n' "${C_RED}" "${C_RESET}"
   fi
 done
 
-# ==============================================================================
-# KIỂM TRA CẢNH BÁO TÀI NGUYÊN NẾU CÀI IMAGICK TRÊN VPS ÍT RAM (<= 1.8GB)
-# ==============================================================================
-if [[ "$php_extension_chon" == "imagick" || "$php_extension_chon" == 'pecl-imagick' ]]; then
-  TOTAL_RAM_MB=0
-  if [[ -r /proc/meminfo ]]; then
-    while IFS=': ' read -r key val _; do
-      if [[ "$key" == "MemTotal" && "${val:-}" =~ ^[0-9]+$ ]]; then
-        TOTAL_RAM_MB=$((val / 1024))
-        break
-      fi
-    done </proc/meminfo
-  fi
+# Validate tên extension trước khi truyền vào package manager
+if [[ ! "$php_extension_chon" =~ ^[a-zA-Z0-9._+-]+$ ]]; then
+  printf '%bLỗi: Tên extension không hợp lệ (%s)!%b\n' "${C_RED}" "$php_extension_chon" "${C_RESET}"
+  _wptt_exit_menu 1 "enter"
+fi
 
+# ==============================================================================
+# KIỂM TRA CẢNH BÁO TÀI NGUYÊN (IMAGICK / RELAY TRÊN VPS ÍT RAM)
+# ==============================================================================
+TOTAL_RAM_MB=0
+if [[ -r /proc/meminfo ]]; then
+  while IFS=': ' read -r key val _; do
+    if [[ "$key" == "MemTotal" && "${val:-}" =~ ^[0-9]+$ ]]; then
+      TOTAL_RAM_MB=$((val / 1024))
+      break
+    fi
+  done < /proc/meminfo
+fi
+
+if [[ "$php_extension_chon" == "imagick" || "$php_extension_chon" == "pecl-imagick" ]]; then
   if ((TOTAL_RAM_MB > 0 && TOTAL_RAM_MB <= 1800)); then
-    echo -e "\n${C_YELLOW}CẢNH BÁO TÀI NGUYÊN (VPS ÍT RAM ~ ${TOTAL_RAM_MB}MB):${C_RESET}"
-    echo -e "Hệ thống nhận thấy VPS của bạn chỉ có khoảng ${C_RED}${TOTAL_RAM_MB}MB RAM${C_RESET}."
-    echo -e "Extension ${C_YELLOW}imagick${C_RESET} xử lý ảnh qua tiến trình C độc lập (nằm ngoài giới hạn memory_limit của PHP),"
-    echo -e "rất dễ gây tràn RAM đột biến (OOM Killer) làm sập Database khi upload hoặc cắt ảnh cỡ lớn."
-    echo -e "Lưu ý: Mặc định WordPress đã có sẵn thư viện ${C_GREEN}GD${C_RESET} siêu nhẹ, tiết kiệm RAM và hoạt động rất ổn định.\n"
+    printf '\n%bCẢNH BÁO TÀI NGUYÊN (VPS ÍT RAM ~ %dMB):%b\n' "${C_YELLOW}" "$TOTAL_RAM_MB" "${C_RESET}"
+    printf 'Hệ thống nhận thấy VPS của bạn chỉ có khoảng %b%dMB RAM%b.\n' "${C_RED}" "$TOTAL_RAM_MB" "${C_RESET}"
+    printf 'Extension %bimagick%b xử lý ảnh qua tiến trình C độc lập (nằm ngoài giới hạn memory_limit của PHP),\n' "${C_YELLOW}" "${C_RESET}"
+    printf 'rất dễ gây tràn RAM đột biến (OOM Killer) làm sập Database khi upload hoặc cắt ảnh cỡ lớn.\n'
+    printf 'Lưu ý: Mặc định WordPress đã có sẵn thư viện %bGD%b siêu nhẹ, tiết kiệm RAM và hoạt động rất ổn định.\n\n' "${C_GREEN}" "${C_RESET}"
 
     if ! wptt_xac_nhan "Bạn có chắc chắn vẫn muốn cài đặt Imagick không?" "Gợi ý: Chọn [Không] và dùng GD mặc định." "" "Vẫn Cài Đặt" "Hủy Bỏ"; then
-      wptt_quay_ve_menu "${1:-}" 1 "enter"
+      _wptt_exit_menu 1 "enter"
     fi
+  fi
+elif [[ "$php_extension_chon" == "relay" ]]; then
+  if ((TOTAL_RAM_MB > 0 && TOTAL_RAM_MB < 1024)); then
+    printf '\n%bLƯU Ý TÀI NGUYÊN (VPS %dMB RAM):%b\n' "${C_YELLOW}" "$TOTAL_RAM_MB" "${C_RESET}"
+    printf 'CacheWerk Relay sẽ cấp phát bộ nhớ đệm Shared Memory mặc định %b%s%b (%s).\n\n' "${C_CYAN}" "$RELAY_MAX_MEMORY" "${C_RESET}" "$RELAY_EVICTION_POLICY"
   fi
 fi
 
 # ==============================================================================
 # BƯỚC 4: THỰC THI CÀI ĐẶT
 # ==============================================================================
-echo ""
-INSTALL_MSG="Cài đặt Extension: $LSPHP-$php_extension_chon"
+printf '\n'
+
+if [[ "$php_extension_chon" == "relay" ]]; then
+  if _wptt_install_relay_extension "$php_ver_num"; then
+    _wptt_exit_menu 0 "enter"
+  else
+    _wptt_exit_menu 1 "enter"
+  fi
+fi
+
+INSTALL_MSG="Cài đặt Extension: ${LSPHP}-${php_extension_chon}"
 _runing "$INSTALL_MSG"
 
 if ((repo_du_phong == 0)); then
   if command -v apt-get >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get install "$LSPHP-$php_extension_chon" -y >/dev/null 2>&1 || true
+    timeout 300 env DEBIAN_FRONTEND=noninteractive apt-get install -y "${LSPHP}-${php_extension_chon}" </dev/null >/dev/null 2>&1 || true
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install "$LSPHP-$php_extension_chon" -y >/dev/null 2>&1 || true
+    timeout 300 dnf install -y "${LSPHP}-${php_extension_chon}" </dev/null >/dev/null 2>&1 || true
   elif command -v yum >/dev/null 2>&1; then
-    yum install "$LSPHP-$php_extension_chon" -y >/dev/null 2>&1 || true
+    timeout 300 yum install -y "${LSPHP}-${php_extension_chon}" </dev/null >/dev/null 2>&1 || true
   fi
 else
-  # Cài qua EOL Repo
-  url_repo_litespeed=$(
-    awk -v pkg="$LSPHP-$php_extension_chon" 'BEGIN { FS = "/" } {
+  url_repo_litespeed="$(
+    awk -v pkg="${LSPHP}-${php_extension_chon}" 'BEGIN { FS = "/" } {
       filename = $NF; split(filename, parts, "-")
       pkg_name = ""; version = ""
       if (parts[2] == "pecl") { pkg_name = parts[1] "-" parts[2] "-" parts[3]; version = parts[4] }
@@ -258,41 +809,31 @@ else
       else { pkg_name = parts[1] "-" parts[2]; version = parts[3] }
       if (version > versions[pkg_name]) { versions[pkg_name] = version; latest_lines[pkg_name] = $0 }
     } END { PROCINFO["sorted_in"] = "@ind_str_asc"; for (p in latest_lines) if (p == pkg) print latest_lines[p] }' /etc/wptt/tmp/php_extension_call_eol | tail -n1
-  )
+  )"
   if [[ -n "$url_repo_litespeed" ]]; then
     if command -v dnf >/dev/null 2>&1; then
-      dnf install "https://rpms.litespeedtech.com${url_repo_litespeed}" -y >/dev/null 2>&1 || true
+      timeout 300 dnf install -y "https://rpms.litespeedtech.com${url_repo_litespeed}" </dev/null >/dev/null 2>&1 || true
     else
-      yum install "https://rpms.litespeedtech.com${url_repo_litespeed}" -y >/dev/null 2>&1 || true
+      timeout 300 yum install -y "https://rpms.litespeedtech.com${url_repo_litespeed}" </dev/null >/dev/null 2>&1 || true
     fi
   fi
 fi
 
-# ==============================================================================
-# KIỂM TRA LẠI & BÁO CÁO (SỬ DỤNG TRUY VẤN LÕI C-BINARY)
-# ==============================================================================
-check_lai=""
-if command -v dpkg-query >/dev/null 2>&1; then
-  check_lai=$(dpkg-query -W -f='${binary:Package}\n' "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
-elif command -v rpm >/dev/null 2>&1; then
-  check_lai=$(rpm -qa "*${LSPHP}*${php_extension_chon}*" 2>/dev/null | head -n 1 || true)
-fi
-
-if [[ -n "$check_lai" ]]; then
-  wptt_smart_reload_lsws >/dev/null 2>&1 || true
+if _wptt_pkg_is_installed "${LSPHP}-${php_extension_chon}"; then
+  _wptt_reload_ols_lsphp || true
   _rundone "$INSTALL_MSG"
-  
-  echo -e "\n${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+
+  printf '\n%b\n' "${C_GREEN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
   center_text "${C_BOLD_WHITE}HOÀN TẤT CÀI ĐẶT EXTENSION${C_RESET}"
-  echo -e "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
-  left_text "Phiên bản PHP   : ${C_YELLOW}$php_ver_hien_thi ($LSPHP)${C_RESET}" 2
-  left_text "Extension đã cài: ${C_BOLD_WHITE}$php_extension_chon${C_RESET}" 2
-  echo -e "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯\n${C_RESET}"
+  printf '%b\n' "${C_GREEN}├──────────────────────────────────────────────────────────────────────────────┤${C_RESET}"
+  left_text "Phiên bản PHP   : ${C_YELLOW}${php_ver_hien_thi} (${LSPHP})${C_RESET}" 2
+  left_text "Extension đã cài: ${C_BOLD_WHITE}${php_extension_chon}${C_RESET}" 2
+  printf '%b\n\n' "${C_GREEN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
   wptt_status_ma_loi=0
 else
   _runloi "$INSTALL_MSG"
-  echo -e "${C_RED}Cài đặt thất bại! Gói phần mềm không được cài đặt vào hệ thống.${C_RESET}"
+  printf '%bCài đặt thất bại! Gói phần mềm %s-%s không được cài đặt vào hệ thống.%b\n' "${C_RED}" "$LSPHP" "$php_extension_chon" "${C_RESET}"
   wptt_status_ma_loi=1
 fi
 
-wptt_quay_ve_menu "${1:-}" "${wptt_status_ma_loi:-0}" "enter"
+_wptt_exit_menu "${wptt_status_ma_loi:-0}" "enter"
