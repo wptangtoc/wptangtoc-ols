@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.1.9)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.2)
 
 - **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.1.9**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.2**.
 
 ---
 
@@ -3532,7 +3532,7 @@ Việc biết được phiên bản PHP của từng website giúp bạn quản 
 ```text
 Tính năng Cài đặt extension PHP là khả năng thêm các thư viện mở rộng [module hoặc plugin] vào môi trường PHP để bổ sung các chức năng cụ thể mà PHP cốt lõi không có sẵn.
 
-Nói một cách đơn giản, PHP có một bộ chức năng cơ bản. Khi bạn cần PHP làm những việc chuyên biệt hơn như kết nối với một loại cơ sở dữ liệu đặc thù [ví dụ: mysqli, pgsql], xử lý hình ảnh [gd, imagick], làm việc với XML, mã hóa dữ liệu, hay tăng tốc thực thi mã [opcache], bạn cần cài đặt thêm các extension tương ứng.
+Nói một cách đơn giản, PHP có một bộ chức năng cơ bản. Khi bạn cần PHP làm những việc chuyên biệt hơn như kết nối với một loại cơ sở dữ liệu đặc thù [ví dụ: mysqli, pgsql], xử lý hình ảnh [gd, imagick], làm việc với XML, mã hóa dữ liệu, tăng tốc thực thi mã [opcache] hay Object Cache hiệu năng cao [relay, redis], bạn cần cài đặt thêm các extension tương ứng.
 
 Mục đích chính:
 * Mở rộng khả năng của PHP: Giúp PHP thực hiện được nhiều tác vụ đa dạng hơn.
@@ -3556,7 +3556,7 @@ Mục đích chính của việc này:
 * Tăng cường bảo mật: Giảm thiểu bề mặt tấn công bằng cách gỡ bỏ những thành phần không cần thiết, vì mỗi extension đều có thể tiềm ẩn lỗ hổng.
 * Giải quyết xung đột: Gỡ bỏ extension có thể giúp khắc phục sự không tương thích giữa các extension với nhau hoặc với phiên bản PHP/ứng dụng.
 * Dọn dẹp môi trường: Giữ cho môi trường PHP gọn gàng, chỉ chứa những gì thực sự cần thiết.
-* Khi không còn nhu cầu: Nếu một ứng dụng web không còn cần đến một extension cụ thể nữa.
+* Hỗ trợ gỡ sạch CacheWerk Relay (sao lưu và xóa 99-wptt-relay.ini, gỡ gói lsphp-relay và tải lại êm ái worker LSPHP).
 
 Sau khi xóa hoặc vô hiệu hóa và khởi động lại web server, PHP sẽ không còn tải extension đó nữa, và mọi cố gắng gọi hàm từ extension đó sẽ gây ra lỗi.
 ```
