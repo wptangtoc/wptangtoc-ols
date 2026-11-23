@@ -1,62 +1,119 @@
 #!/bin/bash
-. /etc/wptt/core-functions 2>/dev/null
+# @author: Gia Tuấn
+# @website: https://wptangtoc.com
+# @description: Truy cập nhanh thư mục backup website (tách tiến trình con, không làm bẩn shell hiện tại)
 
-wptt_load_main_conf
-if [[ -z "$ngon_ngu" ]]; then
-  ngon_ngu='vi'
-fi
-. "/etc/wptt/lang/$ngon_ngu.sh"
-. /etc/wptt/echo-color
-tinh_nang_ten="truy cập nhanh thư mục backup website"
+set -uo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
 
-echo -e "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
-center_text "${C_BOLD_WHITE}$quan_ly_ma_nguon ➜ $tinh_nang_ten${C_RESET}"
-echo -e "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}\n"
+# shellcheck source=/dev/null
+. /etc/wptt/core-functions 2>/dev/null || true
 
-NAME=$1
-if [[ $NAME = '98' ]]; then
-  NAME=''
-fi
+wptt_load_main_conf 2>/dev/null || true
+[[ -z "${ngon_ngu:-}" ]] && ngon_ngu='vi'
+# shellcheck source=/dev/null
+. "/etc/wptt/lang/${ngon_ngu}.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+. /etc/wptt/echo-color 2>/dev/null || true
 
-if [[ -z "$NAME" ]];then
-	. /etc/wptt/tenmien
-	lua_chon_NAME "$tinh_nang_ten"
-fi
+readonly BACKUP_BASE_DIR="/usr/local/backup-website"
+readonly MENU_BACK_BIN="/etc/wptt/wptt-ma-nguon-main"
+rc_tmp=""
 
-. /etc/wptt/echo-color
-
-if [[ "$NAME" = "0" || -z "$NAME" ]]; then
-  exec /etc/wptt/wptt-ma-nguon-main 1
-fi
-
-pathcheck="/etc/wptt/vhost/.$NAME.conf"
-if [[ ! -f "$pathcheck" ]]; then
-  clear
-  echoDo "Tên miền không tồn tại trên hệ thống này"
-  sleep 3
-  exec /etc/wptt/wptt-ma-nguon-main 1
-  exit
-fi
-
-gowpt() {
-  local target_dir="/usr/local/backup-website/$1"
-  echo "==> Chuyển đến $target_dir"
-	if [[ ! -d "$target_dir" ]];then
-		echo "Lỗi: Không thể truy cập thư mục $target_dir" >&2
-		echo "Vì thư mục backup website không tồn tại"
-		return 1 # Trả về mã lỗi
-	fi
-
-  if cd "$target_dir"; then
-    # Chạy lệnh ls sau khi cd thành công (tùy chọn)
-    ls -al
-  else
-    echo "Lỗi: Không thể truy cập thư mục $target_dir" >&2
-    return 1 # Trả về mã lỗi
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if [[ -n "${rc_tmp:-}" && -f "$rc_tmp" ]]; then
+    case "$rc_tmp" in
+      /etc/wptt/tmp/wptt-rc.*) /bin/rm -f -- "${rc_tmp:?}" 2>/dev/null || true ;;
+    esac
   fi
+  exit "$rc"
 }
-gowpt "$NAME"
-unset pathcheck NAME
-unset -f gowpt
-exec bash --login #để reset câu lệnh tránh hiện tượng gõ: ip a nó lại ra wptt ip
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
+_exit_cancel() {
+  local code="${1:-1}"
+  if [[ -n "${WPTT_CD_FILE:-}" ]]; then
+    exit "$code"
+  fi
+  trap - EXIT INT TERM HUP
+  exec "$MENU_BACK_BIN" 1
+}
+
+tinh_nang_ten="Truy cập nhanh thư mục backup website"
+
+printf '%b\n' "${C_CYAN}╭──────────────────────────────────────────────────────────────────────────────╮${C_RESET}"
+center_text "${C_BOLD_WHITE}${quan_ly_ma_nguon:-Quản lý mã nguồn} ➜ ${tinh_nang_ten}${C_RESET}"
+printf '%b\n\n' "${C_CYAN}╰──────────────────────────────────────────────────────────────────────────────╯${C_RESET}"
+
+NAME="${1:-}"
+[[ "$NAME" == "98" ]] && NAME=""
+
+if [[ -z "$NAME" ]]; then
+  # shellcheck source=/dev/null
+  . /etc/wptt/tenmien
+  lua_chon_NAME "$tinh_nang_ten"
+fi
+
+if [[ "${NAME:-0}" == "0" || -z "${NAME:-}" ]]; then
+  _exit_cancel 1
+fi
+
+# Validate tên miền theo whitelist (chống path traversal & injection)
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$ || "$NAME" == *..* ]]; then
+  echoDo "Tên miền '${NAME}' không hợp lệ!"
+  [[ -z "${WPTT_CD_FILE:-}" ]] && sleep 2
+  _exit_cancel 1
+fi
+
+pathcheck="/etc/wptt/vhost/.${NAME}.conf"
+if [[ ! -f "$pathcheck" ]]; then
+  [[ -z "${WPTT_CD_FILE:-}" ]] && clear
+  echoDo "Tên miền '${NAME}' không tồn tại trên hệ thống này."
+  [[ -z "${WPTT_CD_FILE:-}" ]] && sleep 3
+  _exit_cancel 1
+fi
+
+target_dir="${BACKUP_BASE_DIR}/${NAME}"
+if [[ ! -d "$target_dir" || -L "$target_dir" ]]; then
+  printf 'Lỗi: Không thể truy cập thư mục %s\n' "$target_dir" >&2
+  printf 'Vì thư mục backup website không tồn tại.\n' >&2
+  [[ -z "${WPTT_CD_FILE:-}" ]] && sleep 3
+  _exit_cancel 1
+fi
+
+# Chống symlink trỏ ra ngoài /usr/local/backup-website
+real_base="$(readlink -f -- "$BACKUP_BASE_DIR" 2>/dev/null || printf '%s' "$BACKUP_BASE_DIR")"
+real_target="$(readlink -f -- "$target_dir" 2>/dev/null || true)"
+if [[ -z "$real_target" || "$real_target" != "${real_base}/${NAME}" ]]; then
+  printf 'Lỗi: Đường dẫn thư mục backup không hợp lệ (%s).\n' "$target_dir" >&2
+  [[ -z "${WPTT_CD_FILE:-}" ]] && sleep 3
+  _exit_cancel 1
+fi
+
+# Nhánh 1: Gọi từ CLI (wptt cdbk) -> ghi đường dẫn đích để shell cha tự cd
+if [[ -n "${WPTT_CD_FILE:-}" && -f "$WPTT_CD_FILE" && ! -L "$WPTT_CD_FILE" && -w "$WPTT_CD_FILE" ]]; then
+  printf '%s\n' "$real_target" > "$WPTT_CD_FILE"
+  exit 0
+fi
+
+# Nhánh 2: Gọi từ Menu WPTangToc OLS -> nạp .bashrc rồi tự cd đè lên dòng 'cd /wptangtoc-ols'
+/bin/mkdir -p -m 0700 -- /etc/wptt/tmp 2>/dev/null || true
+rc_tmp="$(
+  umask 077
+  mktemp -p /etc/wptt/tmp "wptt-rc.XXXXXX"
+)" || exit 1
+
+{
+  printf '/bin/rm -f -- %q 2>/dev/null || true\n' "$rc_tmp"
+  printf '[[ -r ~/.bashrc ]] && source ~/.bashrc\n'
+  printf 'printf "==> Chuyển đến %%s\\n" %q\n' "$real_target"
+  printf 'builtin cd -- %q && ls -al\n' "$real_target"
+} > "$rc_tmp"
+
+export WPTT_BYPASS=1
+exec bash --rcfile "$rc_tmp"
