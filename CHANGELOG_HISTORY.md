@@ -1,3 +1,18 @@
+## 🚀 Phiên bản 8.4.2.0
+
+## 🚀 Tính năng mới
+- **Tích hợp extension Relay**: Nâng cấp hiệu năng xử lý cache vượt trội cho Valkey, Redis và KeyDB, giúp tăng tốc độ truy vấn dữ liệu và giảm tải tài nguyên cho máy chủ.
+
+## 🐛 Sửa lỗi
+- **Khắc phục lỗi xung đột câu lệnh Terminal**: Sửa triệt để lỗi gõ các lệnh hệ thống thông thường (ví dụ: `ip a`) bị chuyển hướng nhầm thành lệnh quản trị WPTangToc, giúp quản trị viên thao tác dòng lệnh chính xác và không bị gián đoạn.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+
 ## 🚀 Tính năng mới
 - **Tích hợp extension Relay**: Nâng cấp hiệu năng xử lý cache vượt trội cho Valkey, Redis và KeyDB, giúp tăng tốc độ truy vấn dữ liệu và giảm tải tài nguyên cho máy chủ.
 
