@@ -972,143 +972,591 @@ function query-monitor() {
   _rundone "Kích hoạt query-monitor cho website $name_web"
 }
 
-function wp-redis() {
-  local target_domain=""
-  while [[ "$#" -gt 0 ]]; do
-    case $1 in
-    -d | --domain)
-      target_domain="$2"
-      shift
-      ;;
-    esac
-    shift
-  done
+# ==============================================================================
+# HELPER NỘI BỘ: CẬP NHẬT AN TOÀN CẤU HÌNH WP_REDIS_* TRONG wp-config.php
+# ==============================================================================
+# ==============================================================================
+# HELPERS NỘI BỘ: ESCAPE PHP, GHI NGUYÊN TỬ wp-config.php (GIỮ CHỦ SỞ HỮU) & XÓA OPCACHE
+# ==============================================================================
+_wptt_php_escape_sq() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\'/\\\'}"
+  printf '%s' "$s"
+}
 
-  get_web_context "$target_domain"
-  [[ -z "$name_web" ]] && {
-    echoDo "Không xác định được domain website"
+_wptt_clear_opcache_safe() {
+  local domain="$1"
+  [[ -n "$domain" ]] || return 0
+  if ! declare -F wptt_xoa_opcache >/dev/null 2>&1; then
+    if [[ -r /etc/wptt/cache/lib-opcache-clear ]]; then
+      # shellcheck source=/dev/null
+      . /etc/wptt/cache/lib-opcache-clear 2>/dev/null || true
+    fi
+  fi
+  if declare -F wptt_xoa_opcache >/dev/null 2>&1; then
+    wptt_xoa_opcache "$domain" >/dev/null 2>&1 || true
+  fi
+}
+
+_wptt_preserve_owner_and_mode() {
+  local ref_file="$1"
+  local target_file="$2"
+  local owner_u="${3:-}"
+  local owner_g="${4:-}"
+
+  local orig_uid="" resolved_g=""
+  orig_uid="$(stat -c '%u' -- "$ref_file" 2>/dev/null || printf '0')"
+
+  /bin/chmod --reference="$ref_file" -- "$target_file" 2>/dev/null \
+    || /bin/chmod 640 -- "$target_file" 2>/dev/null || true
+
+  # Ưu tiên giữ nguyên tuyệt đối uid:gid cũ của file gốc; nếu file gốc đang bị kẹt root (uid=0) thì tự phục hồi về user vhost
+  if [[ "$orig_uid" != "0" ]]; then
+    /bin/chown --reference="$ref_file" -- "$target_file" 2>/dev/null || true
+  elif [[ -n "$owner_u" ]]; then
+    resolved_g="$owner_g"
+    if [[ -z "$resolved_g" ]]; then
+      resolved_g="$(id -gn -- "$owner_u" 2>/dev/null || true)"
+    fi
+    if [[ -n "$resolved_g" ]]; then
+      /bin/chown "${owner_u}:${resolved_g}" -- "$target_file" 2>/dev/null || true
+    else
+      /bin/chown "$owner_u" -- "$target_file" 2>/dev/null || true
+    fi
+  fi
+
+  if command -v chcon >/dev/null 2>&1; then
+    chcon --reference="$ref_file" -- "$target_file" >/dev/null 2>&1 || true
+  fi
+}
+
+_wptt_wp_redis_rewrite_config() {
+  local engine="$1"    # "pantheon" | "redis-cache"
+  local mode="$2"      # "apply" | "remove"
+  local wp_cfg="$3"
+  local php_bin="$4"
+  local owner_u="$5"
+  local owner_g="$6"
+  local block_content="${7:-}"
+
+  local wp_dir="" tmp_cfg="" line="" in_block=0 inserted=0
+  local begin_marker="" end_marker=""
+  wp_dir="$(dirname -- "$wp_cfg")"
+
+  if [[ "$engine" == "pantheon" ]]; then
+    begin_marker="// BEGIN WPTangToc Pantheon WP Redis"
+    end_marker="// END WPTangToc Pantheon WP Redis"
+  else
+    begin_marker="// BEGIN WPTangToc Redis Object Cache"
+    end_marker="// END WPTangToc Redis Object Cache"
+  fi
+
+  local xtrace_was_on=0
+  [[ $- == *x* ]] && { xtrace_was_on=1; set +x; }
+
+  tmp_cfg="$(
+    umask 077
+    mktemp -p "$wp_dir" ".wp-config-wptt.XXXXXX"
+  )" || {
+    (( xtrace_was_on == 1 )) && set -x
     return 1
   }
 
-  # ... (Giữ nguyên phần logic bật redis cực đỉnh của sếp) ...
-  local ACTIVE_CACHE=""
+  # Loại bỏ block cũ và các dòng đơn lẻ tương ứng để đảm bảo idempotent 100%
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$begin_marker" ]]; then
+      in_block=1
+      continue
+    fi
+    if (( in_block == 1 )); then
+      [[ "$line" == "$end_marker" ]] && in_block=0
+      continue
+    fi
+
+    if [[ "$engine" == "pantheon" ]]; then
+      if [[ "$line" =~ ^[[:space:]]*\$redis_server[[:space:]]*=[[:space:]]*array ]] \
+        || [[ "$line" =~ ^[[:space:]]*define\([[:space:]]*[\'\"]WP_REDIS_USE_RELAY[\'\"] ]]; then
+        continue
+      fi
+    else
+				if [[ "$line" =~ ^[[:space:]]*define\([[:space:]]*[\'\"]WP_REDIS_(CLIENT|SCHEME|PATH|HOST|PORT|DATABASE|PASSWORD|IGBINARY|DISABLE_METRICS|DISABLE_BANNERS|DISABLE_ADMINBAR|GRACEFUL|USE_RELAY)[\'\"] ]]; then
+        continue
+      fi
+    fi
+
+    printf '%s\n' "$line" >> "$tmp_cfg"
+
+    if [[ "$mode" == "apply" ]] && (( inserted == 0 )) && [[ "$line" == "<?php"* ]]; then
+      printf '%s\n' "$block_content" >> "$tmp_cfg"
+      inserted=1
+    fi
+  done < "$wp_cfg"
+
+  if [[ "$mode" == "apply" ]] && (( inserted == 0 )); then
+    /bin/rm -f -- "${tmp_cfg:?}" 2>/dev/null || true
+    (( xtrace_was_on == 1 )) && set -x
+    return 1
+  fi
+
+  # Kiểm tra cú pháp PHP trước khi thay thế file thật (chống sập website)
+  if ! "$php_bin" -l "$tmp_cfg" >/dev/null 2>&1; then
+    /bin/rm -f -- "${tmp_cfg:?}" 2>/dev/null || true
+    (( xtrace_was_on == 1 )) && set -x
+    return 1
+  fi
+
+  _wptt_preserve_owner_and_mode "$wp_cfg" "$tmp_cfg" "$owner_u" "$owner_g"
+
+  if ! /bin/mv -T -- "$tmp_cfg" "$wp_cfg"; then
+    /bin/rm -f -- "${tmp_cfg:?}" 2>/dev/null || true
+    (( xtrace_was_on == 1 )) && set -x
+    return 1
+  fi
+
+  (( xtrace_was_on == 1 )) && set -x
+  return 0
+}
+
+_wptt_detect_active_cache() {
+  ACTIVE_CACHE=""
+  ACTIVE_CACHE_SOCK=""
   if systemctl is-enabled --quiet valkey 2>/dev/null || systemctl is-active --quiet valkey 2>/dev/null; then
     ACTIVE_CACHE="valkey"
   elif systemctl is-enabled --quiet keydb 2>/dev/null || systemctl is-active --quiet keydb 2>/dev/null; then
     ACTIVE_CACHE="keydb"
-  elif systemctl is-enabled --quiet redis 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null; then
+  elif systemctl is-enabled --quiet redis 2>/dev/null || systemctl is-active --quiet redis 2>/dev/null \
+    || systemctl is-active --quiet redis-server 2>/dev/null; then
     ACTIVE_CACHE="redis"
   fi
+  [[ -n "$ACTIVE_CACHE" ]] || return 1
 
-  if [[ -n "$ACTIVE_CACHE" ]]; then
-    local wp_cfg="/usr/local/lsws/$name_web/html/wp-config.php"
-    [[ ! -f "$wp_cfg" ]] && {
-      echo "Không xác định được đây là website WordPress"
-      return 1
-    }
-
-    _runing "Kích hoạt Pantheon wp-redis cho website $name_web"
-    wptt_load_vhost_conf "$name_web" 2>/dev/null
-    . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null
-    local run_wp=(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp --path="/usr/local/lsws/$name_web/html")
-
-    if "${run_wp[@]}" plugin list --fields=name --status=active 2>/dev/null | grep -q 'wp-redis'; then
-      echoDo "Website đã cài đặt wp redis trước đó rồi"
-      return 1
-    fi
-
-    sed -i '/$redis_server = array/d' "$wp_cfg"
-    local raw_redis_pass=""
-    [[ -n "$redis_acl_pass" ]] && raw_redis_pass=$(wptt_giai_ma "$redis_acl_pass")
-
-    if [[ -n "$redis_acl_user" && -n "$raw_redis_pass" && "$redis_db_id" ]]; then
-      sed -i "s|^<?php|<?php\n\$redis_server = array('host'=> '/var/run/${ACTIVE_CACHE}/${ACTIVE_CACHE}.sock','port'=>null,'database'=> ${redis_db_id}, 'auth' => array('$redis_acl_user', '$raw_redis_pass'));|" "$wp_cfg"
-    else
-      sed -i "s|^<?php|<?php\n\$redis_server = array('host'=> '/var/run/${ACTIVE_CACHE}/${ACTIVE_CACHE}.sock','port'=>null,'database'=> 0);|" "$wp_cfg"
-    fi
-
-    "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1
-    for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "$wp_cfg" | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" "$wp_cfg"; done
-
-    if ! grep -q "WP_CACHE_KEY_SALT" "$wp_cfg"; then
-      sed -i "/define( 'WP_CACHE_KEY_SALT'/d" "$wp_cfg"
-      sed -i "s|^define( 'NONCE_SALT'.*|&\ndefine( 'WP_CACHE_KEY_SALT', '$name_web' );|" "$wp_cfg"
-      "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1
-      for line_num in $(grep -n "define( 'WP_CACHE_KEY_SALT'" "$wp_cfg" | head -n -1 | cut -d: -f1 | tac); do sed -i "${line_num}d" "$wp_cfg"; done
-    fi
-
-    "${run_wp[@]}" plugin install wp-redis --activate >/dev/null 2>&1
-    "${run_wp[@]}" redis enable >/dev/null 2>&1
-    _rundone "Kích hoạt Pantheon wp-redis cho website $name_web"
-  else
-    echo "Chưa cài đặt redis trên hệ thống, vui lòng cài đặt redis"
+  ACTIVE_CACHE_SOCK="/var/run/${ACTIVE_CACHE}/${ACTIVE_CACHE}.sock"
+  if [[ ! -S "$ACTIVE_CACHE_SOCK" && "$ACTIVE_CACHE" == "redis" && -S /var/run/redis/redis-server.sock ]]; then
+    ACTIVE_CACHE_SOCK="/var/run/redis/redis-server.sock"
   fi
+  return 0
 }
 
-function rm-wp-redis() {
+# ==============================================================================
+# 1. KÍCH HOẠT REDIS OBJECT CACHE (redis-cache + Auto Relay/PhpRedis + OPcache)
+# ==============================================================================
+function wp-redis2() {
   local target_domain=""
   while [[ "$#" -gt 0 ]]; do
-    case $1 in
-    -d | --domain)
-      target_domain="$2"
-      shift
-      ;;
+    case "$1" in
+      -d | --domain)
+        target_domain="${2:-}"
+        shift
+        ;;
     esac
     shift
   done
 
   get_web_context "$target_domain"
-  [[ -z "$name_web" ]] && {
+  if [[ -z "${name_web:-}" ]]; then
     echoDo "Không xác định được domain website"
-    return 1
-  }
-
-  local wp_root="/usr/local/lsws/$name_web/html"
-  local wp_cfg="${wp_root}/wp-config.php"
-  local obj_cache="${wp_root}/wp-content/object-cache.php"
-
-  [[ ! -f "$wp_cfg" ]] && {
-    echoDo "Không xác định được đây là website WordPress"
-    return 1
-  }
-
-  wptt_load_vhost_conf "$name_web" 2>/dev/null
-  . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null
-  local run_wp=(/sbin/runuser -u "$User_name_vhost" -- /usr/local/lsws/lsphp"${phien_ban_php_domain_thuc_thi}"/bin/php /usr/local/bin/wp --path="$wp_root")
-
-  # Kiểm tra xem website có đang cài wp-redis hoặc tồn tại cấu hình/drop-in của wp-redis không
-  if ! "${run_wp[@]}" plugin is-installed wp-redis >/dev/null 2>&1 &&
-    ! grep -q '\$redis_server[[:space:]]*=' "$wp_cfg" 2>/dev/null &&
-    ! grep -q -i 'wp-redis' "$obj_cache" 2>/dev/null; then
-    echoDo "Website $name_web hiện không sử dụng Pantheon wp-redis"
     return 1
   fi
 
-  _runing "Gỡ bỏ Pantheon wp-redis cho website $name_web"
+  local ACTIVE_CACHE="" ACTIVE_CACHE_SOCK=""
+  if ! _wptt_detect_active_cache; then
+    echoDo "Chưa cài đặt Redis/Valkey/KeyDB trên hệ thống, vui lòng cài đặt trước."
+    return 1
+  fi
 
-  # 1. Xả sạch Object Cache của website trong RAM trước khi ngắt kết nối
+  local wp_root="/usr/local/lsws/${name_web}/html"
+  local wp_cfg="${wp_root}/wp-config.php"
+  if [[ ! -f "$wp_cfg" ]]; then
+    echoDo "Không xác định được đây là website WordPress (${wp_cfg} không tồn tại)."
+    return 1
+  fi
+
+  wptt_load_vhost_conf "$name_web" 2>/dev/null || true
+  # shellcheck source=/dev/null
+  . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null || true
+
+  local php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  if [[ ! -x "$php_bin" ]]; then
+    echoDo "Không tìm thấy binary PHP tại ${php_bin}."
+    return 1
+  fi
+
+  local run_wp=(
+    /sbin/runuser -u "$User_name_vhost" --
+    "$php_bin" /usr/local/bin/wp --path="$wp_root"
+  )
+
+  if "${run_wp[@]}" plugin is-active redis-cache >/dev/null 2>&1; then
+    echoDo "Website ${name_web} đã kích hoạt Redis Object Cache (redis-cache) trước đó rồi."
+    return 1
+  fi
+  if "${run_wp[@]}" plugin is-active wp-redis >/dev/null 2>&1; then
+    echoDo "Website ${name_web} đang dùng Pantheon wp-redis. Hãy chạy 'rm-wp-redis' trước khi chuyển sang wp-redis2."
+    return 1
+  fi
+
+  local php_mods="" redis_client="" use_igbinary=0
+  php_mods="$("$php_bin" -m 2>/dev/null || true)"
+
+  if grep -qxFi "relay" <<< "$php_mods"; then
+    redis_client="relay"
+  elif grep -qxFi "redis" <<< "$php_mods"; then
+    redis_client="phpredis"
+  else
+    echoDo "Phiên bản lsphp${phien_ban_php_domain_thuc_thi} chưa cài extension 'relay' hoặc 'redis' (PhpRedis). Vui lòng cài đặt trước."
+    return 1
+  fi
+
+  grep -qxFi "igbinary" <<< "$php_mods" && use_igbinary=1
+
+  local task_msg="Kích hoạt Redis Object Cache (${redis_client}) cho website ${name_web}"
+  _runing "$task_msg"
+
+  local xtrace_was_on=0
+  [[ $- == *x* ]] && { xtrace_was_on=1; set +x; }
+
+  local raw_redis_pass="" esc_user="" esc_pass="" db_id=0
+  if [[ -n "${redis_acl_pass:-}" ]]; then
+    raw_redis_pass="$(wptt_giai_ma "$redis_acl_pass" 2>/dev/null || true)"
+  fi
+  [[ "${redis_db_id:-}" =~ ^[0-9]+$ ]] && db_id="$redis_db_id"
+
+  local cfg_block=""
+  cfg_block+="// BEGIN WPTangToc Redis Object Cache"$'\n'
+  cfg_block+="define( 'WP_REDIS_CLIENT', '${redis_client}' );"$'\n'
+  cfg_block+="define( 'WP_REDIS_SCHEME', 'unix' );"$'\n'
+  cfg_block+="define( 'WP_REDIS_PATH', '${ACTIVE_CACHE_SOCK}' );"$'\n'
+  cfg_block+="define( 'WP_REDIS_DATABASE', ${db_id} );"$'\n'
+
+  if [[ -n "${redis_acl_user:-}" && -n "$raw_redis_pass" ]]; then
+    esc_user="$(_wptt_php_escape_sq "$redis_acl_user")"
+    esc_pass="$(_wptt_php_escape_sq "$raw_redis_pass")"
+    cfg_block+="define( 'WP_REDIS_PASSWORD', array( '${esc_user}', '${esc_pass}' ) );"$'\n'
+  fi
+
+  if (( use_igbinary == 1 )); then
+    cfg_block+="define( 'WP_REDIS_IGBINARY', true );"$'\n'
+  fi
+  cfg_block+="define( 'WP_REDIS_DISABLE_METRICS', true );"$'\n'
+  cfg_block+="define( 'WP_REDIS_DISABLE_BANNERS', true );"$'\n'
+	cfg_block+="define( 'WP_REDIS_DISABLE_ADMINBAR', true );"$'\n'
+  cfg_block+="define( 'WP_REDIS_GRACEFUL', true );"$'\n'
+  cfg_block+="// END WPTangToc Redis Object Cache"
+
+  unset raw_redis_pass esc_user esc_pass
+  (( xtrace_was_on == 1 )) && set -x
+
+  if ! _wptt_wp_redis_rewrite_config "redis-cache" "apply" "$wp_cfg" "$php_bin" "${User_name_vhost:-}" "${Group_name_vhost:-}" "$cfg_block"; then
+    unset cfg_block
+    _runloi "$task_msg"
+    echoDo "Không thể ghi cấu hình WP_REDIS_* hợp lệ vào ${wp_cfg}."
+    return 1
+  fi
+  unset cfg_block
+
+  "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1 || true
+  if ! grep -q "WP_CACHE_KEY_SALT" "$wp_cfg"; then
+    "${run_wp[@]}" config set WP_CACHE_KEY_SALT "${name_web}" --type=constant >/dev/null 2>&1 || true
+    "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1 || true
+  fi
+
+  if ! "${run_wp[@]}" plugin install redis-cache --activate >/dev/null 2>&1; then
+    _runloi "$task_msg"
+    echoDo "Cài đặt hoặc kích hoạt plugin redis-cache thất bại."
+    return 1
+  fi
+
+  if ! "${run_wp[@]}" redis enable >/dev/null 2>&1; then
+    _runloi "$task_msg"
+    echoDo "Lệnh 'wp redis enable' thất bại. Kiểm tra quyền ghi wp-content/object-cache.php và dịch vụ ${ACTIVE_CACHE}."
+    return 1
+  fi
+
+  _wptt_clear_opcache_safe "$name_web"
+  _rundone "$task_msg"
+  printf '  ➜ Client  : %s (lsphp%s)\n' "$redis_client" "$phien_ban_php_domain_thuc_thi"
+  printf '  ➜ Socket  : %s (DB: %d)\n' "$ACTIVE_CACHE_SOCK" "$db_id"
+  printf '  ➜ Igbinary: %s\n' "$( (( use_igbinary == 1 )) && printf 'Bật' || printf 'Tắt (chưa cài extension igbinary)' )"
+  return 0
+}
+
+# ==============================================================================
+# 2. GỠ BỎ REDIS OBJECT CACHE (redis-cache + OPcache)
+# ==============================================================================
+function rm-wp-redis2() {
+  local target_domain=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -d | --domain)
+        target_domain="${2:-}"
+        shift
+        ;;
+    esac
+    shift
+  done
+
+  get_web_context "$target_domain"
+  if [[ -z "${name_web:-}" ]]; then
+    echoDo "Không xác định được domain website"
+    return 1
+  fi
+
+  local wp_root="/usr/local/lsws/${name_web}/html"
+  local wp_cfg="${wp_root}/wp-config.php"
+  local obj_cache="${wp_root}/wp-content/object-cache.php"
+
+  if [[ ! -f "$wp_cfg" ]]; then
+    echoDo "Không xác định được đây là website WordPress"
+    return 1
+  fi
+
+  wptt_load_vhost_conf "$name_web" 2>/dev/null || true
+  # shellcheck source=/dev/null
+  . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null || true
+
+  local php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  local run_wp=(
+    /sbin/runuser -u "$User_name_vhost" --
+    "$php_bin" /usr/local/bin/wp --path="$wp_root"
+  )
+
+  if ! "${run_wp[@]}" plugin is-installed redis-cache >/dev/null 2>&1 \
+    && ! grep -qE "define\([[:space:]]*['\"]WP_REDIS_" "$wp_cfg" 2>/dev/null \
+    && ! grep -qiE 'Redis Object Cache|RhubarbGroup\\RedisCache' "$obj_cache" 2>/dev/null; then
+    echoDo "Website ${name_web} hiện không sử dụng Redis Object Cache (redis-cache)."
+    return 1
+  fi
+
+  local task_msg="Gỡ bỏ Redis Object Cache (redis-cache) cho website ${name_web}"
+  _runing "$task_msg"
+
+  "${run_wp[@]}" cache flush >/dev/null 2>&1 || true
+  "${run_wp[@]}" redis disable >/dev/null 2>&1 || true
+
+  if [[ -f "$obj_cache" || -L "$obj_cache" ]] && grep -qiE 'Redis Object Cache|RhubarbGroup\\RedisCache' "$obj_cache" 2>/dev/null; then
+    /bin/rm -f -- "$obj_cache" 2>/dev/null || true
+  fi
+
+  if "${run_wp[@]}" plugin is-installed redis-cache >/dev/null 2>&1; then
+    "${run_wp[@]}" plugin deactivate redis-cache --uninstall >/dev/null 2>&1 \
+      || "${run_wp[@]}" plugin delete redis-cache >/dev/null 2>&1 || true
+  fi
+
+  if ! _wptt_wp_redis_rewrite_config "redis-cache" "remove" "$wp_cfg" "$php_bin" "${User_name_vhost:-}" "${Group_name_vhost:-}"; then
+    _runloi "$task_msg"
+    echoDo "Đã gỡ plugin nhưng dọn cấu hình WP_REDIS_* trong ${wp_cfg} thất bại."
+    return 1
+  fi
+
+  _wptt_clear_opcache_safe "$name_web"
+  _rundone "$task_msg"
+  return 0
+}
+
+# ==============================================================================
+# 3. KÍCH HOẠT PANTHEON WP-REDIS (Auto Relay/PhpRedis + Giữ quyền + OPcache)
+# ==============================================================================
+function wp-redis() {
+  local target_domain=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -d | --domain)
+        target_domain="${2:-}"
+        shift
+        ;;
+    esac
+    shift
+  done
+
+  get_web_context "$target_domain"
+  if [[ -z "${name_web:-}" ]]; then
+    echoDo "Không xác định được domain website"
+    return 1
+  fi
+
+  local ACTIVE_CACHE="" ACTIVE_CACHE_SOCK=""
+  if ! _wptt_detect_active_cache; then
+    echoDo "Chưa cài đặt Redis/Valkey/KeyDB trên hệ thống, vui lòng cài đặt trước."
+    return 1
+  fi
+
+  local wp_root="/usr/local/lsws/${name_web}/html"
+  local wp_cfg="${wp_root}/wp-config.php"
+  if [[ ! -f "$wp_cfg" ]]; then
+    echoDo "Không xác định được đây là website WordPress (${wp_cfg} không tồn tại)."
+    return 1
+  fi
+
+  wptt_load_vhost_conf "$name_web" 2>/dev/null || true
+  # shellcheck source=/dev/null
+  . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null || true
+
+  local php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  if [[ ! -x "$php_bin" ]]; then
+    echoDo "Không tìm thấy binary PHP tại ${php_bin}."
+    return 1
+  fi
+
+  local run_wp=(
+    /sbin/runuser -u "$User_name_vhost" --
+    "$php_bin" /usr/local/bin/wp --path="$wp_root"
+  )
+
+  if "${run_wp[@]}" plugin is-active wp-redis >/dev/null 2>&1; then
+    echoDo "Website ${name_web} đã cài đặt Pantheon wp-redis trước đó rồi."
+    return 1
+  fi
+  if "${run_wp[@]}" plugin is-active redis-cache >/dev/null 2>&1; then
+    echoDo "Website ${name_web} đang dùng Redis Object Cache (redis-cache). Hãy chạy 'rm-wp-redis2' trước khi chuyển sang wp-redis."
+    return 1
+  fi
+
+  # Tự động nhận diện Relay hoặc PhpRedis trên đúng phiên bản PHP của website
+  local php_mods="" use_relay=0 client_label="phpredis"
+  php_mods="$("$php_bin" -m 2>/dev/null || true)"
+
+  if grep -qxFi "relay" <<< "$php_mods"; then
+    use_relay=1
+    client_label="relay"
+  elif ! grep -qxFi "redis" <<< "$php_mods"; then
+    echoDo "Phiên bản lsphp${phien_ban_php_domain_thuc_thi} chưa cài extension 'relay' hoặc 'redis' (PhpRedis). Vui lòng cài đặt trước."
+    return 1
+  fi
+
+  local task_msg="Kích hoạt Pantheon wp-redis (${client_label}) cho website ${name_web}"
+  _runing "$task_msg"
+
+  local xtrace_was_on=0
+  [[ $- == *x* ]] && { xtrace_was_on=1; set +x; }
+
+  local raw_redis_pass="" esc_user="" esc_pass="" db_id=0
+  if [[ -n "${redis_acl_pass:-}" ]]; then
+    raw_redis_pass="$(wptt_giai_ma "$redis_acl_pass" 2>/dev/null || true)"
+  fi
+  [[ "${redis_db_id:-}" =~ ^[0-9]+$ ]] && db_id="$redis_db_id"
+
+  local cfg_block=""
+  cfg_block+="// BEGIN WPTangToc Pantheon WP Redis"$'\n'
+  if (( use_relay == 1 )); then
+    cfg_block+="define( 'WP_REDIS_USE_RELAY', true );"$'\n'
+  fi
+  if [[ -n "${redis_acl_user:-}" && -n "$raw_redis_pass" ]]; then
+    esc_user="$(_wptt_php_escape_sq "$redis_acl_user")"
+    esc_pass="$(_wptt_php_escape_sq "$raw_redis_pass")"
+    cfg_block+="\$redis_server = array( 'host' => '${ACTIVE_CACHE_SOCK}', 'port' => null, 'database' => ${db_id}, 'auth' => array( '${esc_user}', '${esc_pass}' ) );"$'\n'
+  else
+    cfg_block+="\$redis_server = array( 'host' => '${ACTIVE_CACHE_SOCK}', 'port' => null, 'database' => ${db_id} );"$'\n'
+  fi
+  cfg_block+="// END WPTangToc Pantheon WP Redis"
+
+  unset raw_redis_pass esc_user esc_pass
+  (( xtrace_was_on == 1 )) && set -x
+
+  if ! _wptt_wp_redis_rewrite_config "pantheon" "apply" "$wp_cfg" "$php_bin" "${User_name_vhost:-}" "${Group_name_vhost:-}" "$cfg_block"; then
+    unset cfg_block
+    _runloi "$task_msg"
+    echoDo "Không thể ghi cấu hình Pantheon wp-redis hợp lệ vào ${wp_cfg}."
+    return 1
+  fi
+  unset cfg_block
+
+  "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1 || true
+  if ! grep -q "WP_CACHE_KEY_SALT" "$wp_cfg"; then
+    "${run_wp[@]}" config set WP_CACHE_KEY_SALT "${name_web}" --type=constant >/dev/null 2>&1 || true
+    "${run_wp[@]}" config shuffle-salts WP_CACHE_KEY_SALT --force >/dev/null 2>&1 || true
+  fi
+
+  if ! "${run_wp[@]}" plugin install wp-redis --activate >/dev/null 2>&1; then
+    _runloi "$task_msg"
+    echoDo "Cài đặt hoặc kích hoạt plugin wp-redis thất bại."
+    return 1
+  fi
+
+  if ! "${run_wp[@]}" redis enable >/dev/null 2>&1; then
+    _runloi "$task_msg"
+    echoDo "Lệnh 'wp redis enable' thất bại. Kiểm tra quyền ghi wp-content/object-cache.php và dịch vụ ${ACTIVE_CACHE}."
+    return 1
+  fi
+
+  _wptt_clear_opcache_safe "$name_web"
+  _rundone "$task_msg"
+  printf '  ➜ Client: %s (lsphp%s)\n' "$client_label" "$phien_ban_php_domain_thuc_thi"
+  printf '  ➜ Socket: %s (DB: %d)\n' "$ACTIVE_CACHE_SOCK" "$db_id"
+  return 0
+}
+
+# ==============================================================================
+# 4. GỠ BỎ PANTHEON WP-REDIS (Giữ quyền + Xóa WP_REDIS_USE_RELAY + OPcache)
+# ==============================================================================
+function rm-wp-redis() {
+  local target_domain=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      -d | --domain)
+        target_domain="${2:-}"
+        shift
+        ;;
+    esac
+    shift
+  done
+
+  get_web_context "$target_domain"
+  if [[ -z "${name_web:-}" ]]; then
+    echoDo "Không xác định được domain website"
+    return 1
+  fi
+
+  local wp_root="/usr/local/lsws/${name_web}/html"
+  local wp_cfg="${wp_root}/wp-config.php"
+  local obj_cache="${wp_root}/wp-content/object-cache.php"
+
+  if [[ ! -f "$wp_cfg" ]]; then
+    echoDo "Không xác định được đây là website WordPress"
+    return 1
+  fi
+
+  wptt_load_vhost_conf "$name_web" 2>/dev/null || true
+  # shellcheck source=/dev/null
+  . /etc/wptt/php/php-cli-domain-config "$name_web" 2>/dev/null || true
+
+  local php_bin="/usr/local/lsws/lsphp${phien_ban_php_domain_thuc_thi}/bin/php"
+  local run_wp=(
+    /sbin/runuser -u "$User_name_vhost" --
+    "$php_bin" /usr/local/bin/wp --path="$wp_root"
+  )
+
+  if ! "${run_wp[@]}" plugin is-installed wp-redis >/dev/null 2>&1 \
+    && ! grep -q '\$redis_server[[:space:]]*=' "$wp_cfg" 2>/dev/null \
+    && ! grep -q 'WP_REDIS_USE_RELAY' "$wp_cfg" 2>/dev/null \
+    && ! grep -qi 'wp-redis' "$obj_cache" 2>/dev/null; then
+    echoDo "Website ${name_web} hiện không sử dụng Pantheon wp-redis."
+    return 1
+  fi
+
+  local task_msg="Gỡ bỏ Pantheon wp-redis cho website ${name_web}"
+  _runing "$task_msg"
+
   "${run_wp[@]}" cache flush >/dev/null 2>&1 || true
 
-  # 2. Gỡ bỏ file drop-in wp-content/object-cache.php (do lệnh 'wp redis enable' tạo ra)
   if [[ -f "$obj_cache" || -L "$obj_cache" ]]; then
     /bin/rm -f -- "$obj_cache" 2>/dev/null || true
   fi
 
-  # 3. Hủy kích hoạt và xóa hoàn toàn plugin wp-redis
   if "${run_wp[@]}" plugin is-installed wp-redis >/dev/null 2>&1; then
-    "${run_wp[@]}" plugin deactivate wp-redis --uninstall >/dev/null 2>&1 ||
-      "${run_wp[@]}" plugin delete wp-redis >/dev/null 2>&1 || true
+    "${run_wp[@]}" plugin deactivate wp-redis --uninstall >/dev/null 2>&1 \
+      || "${run_wp[@]}" plugin delete wp-redis >/dev/null 2>&1 || true
   fi
 
-  # 4. Dọn dẹp cấu hình $redis_server và WP_CACHE_KEY_SALT trong wp-config.php
-  sed -i '/\$redis_server[[:space:]]*=[[:space:]]*array/d' "$wp_cfg"
-
-  # Đảm bảo quyền sở hữu file wp-config.php vẫn chuẩn theo user của vhost
-  if [[ -n "${User_name_vhost:-}" && -n "${Group_name_vhost:-}" ]]; then
-    chown "${User_name_vhost}:${Group_name_vhost}" "$wp_cfg" 2>/dev/null || true
+  if ! _wptt_wp_redis_rewrite_config "pantheon" "remove" "$wp_cfg" "$php_bin" "${User_name_vhost:-}" "${Group_name_vhost:-}"; then
+    _runloi "$task_msg"
+    echoDo "Đã gỡ plugin nhưng dọn cấu hình Pantheon wp-redis trong ${wp_cfg} thất bại."
+    return 1
   fi
 
-  _rundone "Gỡ bỏ Pantheon wp-redis cho website $name_web"
+  _wptt_clear_opcache_safe "$name_web"
+  _rundone "$task_msg"
+  return 0
 }
 
 function status() {
