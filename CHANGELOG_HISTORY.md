@@ -180,11 +180,3 @@
 
 ---
 *Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
-# WPTangToc OLS 8.4.0.5
-
-### 🛠️ Tối ưu hệ thống
-- **Tối ưu cơ chế quản lý bộ nhớ OOM Score:** Cải tiến tính năng cấu hình điểm số bảo vệ tiến trình (OOM Score) tương thích hoàn hảo với các môi trường ảo hóa một phần, giúp máy chủ vận hành ổn định và bảo vệ các dịch vụ cốt lõi trước nguy cơ bị hệ thống kết thúc tiến trình khi cạn kiệt tài nguyên RAM.
-
-
----
-*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
