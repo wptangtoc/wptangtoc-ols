@@ -16,7 +16,7 @@ function wptt_optimize_disk() {
 
   # Biến cờ (flag) để kiểm tra xem hệ thống đã được tối ưu chưa
   NEEDS_UPDATE=0
-  CURRENT_OPTIONS=$(awk '$2 == "/" {print $4}' /etc/fstab)
+  CURRENT_OPTIONS=$(awk '$1 !~ /^#/ && $2 == "/" {print $4}' /etc/fstab)
 
   # Kiểm tra thiếu noatime
   if [[ "$CURRENT_OPTIONS" != *"noatime"* ]]; then
@@ -34,27 +34,48 @@ function wptt_optimize_disk() {
     # Bước 2: Tạo bản sao lưu an toàn trước khi đụng vào fstab
     cp /etc/fstab /etc/fstab.wptt.bak
 
+    # Tạo file tạm an toàn trong /etc/wptt/tmp (chỉ root ghi được) tránh lỗi CWE-377 Symlink Attack trên /tmp
+    # Tự tạo thư mục vì installer có thể gọi script này trước khi tạo /etc/wptt/tmp
+    local tmp_fstab
+    if ! mkdir -p /etc/wptt/tmp 2>/dev/null || ! chmod 0700 /etc/wptt/tmp 2>/dev/null; then
+      echo "- LỖI NGHIÊM TRỌNG: Không thể tạo thư mục tạm /etc/wptt/tmp. Đang hủy bỏ thao tác!"
+      return 1
+    fi
+    tmp_fstab=$(mktemp -p /etc/wptt/tmp wptt_disk_optimize_XXXXXX.tmp) || {
+      echo "- LỖI NGHIÊM TRỌNG: Không thể tạo file tạm cho /etc/fstab. Đang hủy bỏ thao tác!"
+      return 1
+    }
+
     # Bước 3: Dùng awk thông minh truyền biến fstype vào để xử lý
     # (ĐÃ XÓA 'column -t' ĐỂ TRÁNH THẢM HỌA FILE RỖNG)
-    awk -v fstype="$ROOT_FSTYPE" '{ 
+    if ! awk -v fstype="$ROOT_FSTYPE" '{
       # Chỉ xử lý dòng không bị comment và mount point là /
-      if ($1 !~ /^#/ && $2 == "/") { 
-        if ($4 !~ /noatime/) { $4 = $4 ",noatime" } 
+      if ($1 !~ /^#/ && $2 == "/") {
+        if ($4 !~ /noatime/) { $4 = $4 ",noatime" }
         if (fstype == "xfs" && $4 !~ /logbsize=256k/) { $4 = $4 ",logbsize=256k" }
-      } 
+      }
       print $0
-    }' /etc/fstab >/tmp/fstab.new
+    }' /etc/fstab >"$tmp_fstab"; then
+      echo "- LỖI NGHIÊM TRỌNG: Lệnh awk xử lý /etc/fstab thất bại. Đang hủy bỏ thao tác!"
+      [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
+      return 1
+    fi
 
     # BƯỚC PHÒNG THỦ THÉP: Kiểm tra file mới có dung lượng > 0 byte không?
-    if [[ -s /tmp/fstab.new ]]; then
-      # File an toàn, tiến hành ghi đè
-      cat /tmp/fstab.new >/etc/fstab
-      rm -f /tmp/fstab.new
+    if [[ -s "$tmp_fstab" ]]; then
+      # File an toàn, ghi đè giữ nguyên SELinux context & quyền của /etc/fstab
+      if ! cat "$tmp_fstab" >/etc/fstab; then
+        echo "- LỖI NGHIÊM TRỌNG: Không thể ghi đè /etc/fstab (có thể đầy ổ cứng hoặc read-only). Đang khôi phục bản sao lưu!"
+        cat /etc/fstab.wptt.bak >/etc/fstab 2>/dev/null || true
+        [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
+        return 1
+      fi
+      [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
     else
-      # Cứu nạn khẩn cấp nếu lệnh awk bị lỗi
+      # Cứu nạn khẩn cấp nếu lệnh awk trả về file rỗng
       echo "- LỖI NGHIÊM TRỌNG: Quá trình tạo file fstab thất bại (file rỗng). Đang hủy bỏ thao tác!"
       cat /etc/fstab.wptt.bak >/etc/fstab
-      rm -f /tmp/fstab.new
+      [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
       return 1
     fi
 

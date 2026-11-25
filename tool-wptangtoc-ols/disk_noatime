@@ -6,19 +6,55 @@ function wptt_optimize_disk_noatime() {
 
   #WordPress, OpenLiteSpeed, MariaDB, PHP OPcache, JIT... KHÔNG MỘT AI quan tâm đến Access Time cả. Bọn chúng chỉ quan tâm đến Modify Time (mtime - thời gian sửa file)
   echo "Đang tối ưu hóa Ổ cứng: Giải phóng lệnh thừa bằng cờ 'noatime'..."
-  # Bước 1: Kiểm tra xem phân vùng gốc (/) đã có noatime chưa
-  if grep -E "^[^#].*[[:space:]]/[[:space:]].*noatime" /etc/fstab >/dev/null; then
+  # Bước 1: Kiểm tra xem phân vùng gốc (/) đã có noatime chưa (bỏ qua dòng comment kể cả thụt lề)
+  local current_options
+  current_options=$(awk '$1 !~ /^#/ && $2 == "/" {print $4}' /etc/fstab)
+  if [[ "$current_options" == *"noatime"* ]]; then
     echo "- Tính năng noatime đã được bật sẵn trên hệ thống. Bỏ qua!"
   else
     # Bước 2: Tạo bản sao lưu an toàn trước khi đụng vào fstab
     cp /etc/fstab /etc/fstab.wptt.bak
 
-    # Bước 3: Dùng awk tìm đúng dòng mount vào "/" và nhét ",noatime" vào cột options (cột thứ 4)
-    # Lệnh column -t giúp căn lề lại file fstab cho đẹp mắt sau khi chỉnh sửa
-    awk '{ if ($2 == "/" && $4 !~ /noatime/) { $4 = $4 ",noatime" }; print }' /etc/fstab | column -t >/tmp/fstab.new
-    # Ghi đè an toàn vào fstab gốc
-    cat /tmp/fstab.new >/etc/fstab
-    rm -f /tmp/fstab.new
+    # Tạo file tạm an toàn trong /etc/wptt/tmp (chỉ root ghi được) tránh lỗi CWE-377 Symlink Attack trên /tmp
+    # Tự tạo thư mục vì installer có thể gọi script này trước khi tạo /etc/wptt/tmp
+    local tmp_fstab
+    if ! mkdir -p /etc/wptt/tmp 2>/dev/null || ! chmod 0700 /etc/wptt/tmp 2>/dev/null; then
+      echo "- LỖI NGHIÊM TRỌNG: Không thể tạo thư mục tạm /etc/wptt/tmp. Đang hủy bỏ thao tác!"
+      return 1
+    fi
+    tmp_fstab=$(mktemp -p /etc/wptt/tmp wptt_disk_noatime_XXXXXX.tmp) || {
+      echo "- LỖI NGHIÊM TRỌNG: Không thể tạo file tạm cho /etc/fstab. Đang hủy bỏ thao tác!"
+      return 1
+    }
+
+    # Bước 3: Dùng awk tìm đúng dòng mount vào "/" (bỏ qua comment) và thêm ",noatime" vào cột options (cột 4)
+    # Không dùng pipe 'column -t' để tránh ghi rỗng /etc/fstab nếu hệ thống minimal chưa cài column
+    if ! awk '{
+      if ($1 !~ /^#/ && $2 == "/" && $4 !~ /noatime/) {
+        $4 = $4 ",noatime"
+      }
+      print $0
+    }' /etc/fstab >"$tmp_fstab"; then
+      echo "- LỖI NGHIÊM TRỌNG: Lệnh awk xử lý /etc/fstab thất bại. Đang hủy bỏ thao tác!"
+      [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
+      return 1
+    fi
+
+    # Chốt chặn an toàn: chỉ ghi đè khi file tạm có dữ liệu (> 0 byte)
+    if [[ -s "$tmp_fstab" ]]; then
+      if ! cat "$tmp_fstab" >/etc/fstab; then
+        echo "- LỖI NGHIÊM TRỌNG: Không thể ghi đè /etc/fstab (có thể đầy ổ cứng hoặc read-only). Đang khôi phục bản sao lưu!"
+        cat /etc/fstab.wptt.bak >/etc/fstab 2>/dev/null || true
+        [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
+        return 1
+      fi
+      [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
+    else
+      echo "- LỖI NGHIÊM TRỌNG: Quá trình tạo file fstab thất bại (file rỗng). Đang hủy bỏ thao tác!"
+      cat /etc/fstab.wptt.bak >/etc/fstab
+      [[ -f "$tmp_fstab" ]] && rm -f -- "${tmp_fstab:?}"
+      return 1
+    fi
 
     # Bước 4: Áp dụng cấu hình ngay lập tức mà KHÔNG CẦN khởi động lại máy chủ
     mount -o remount /
