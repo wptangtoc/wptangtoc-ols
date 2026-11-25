@@ -1,3 +1,20 @@
+## 🚀 Phiên bản 8.4.2.1
+
+### 🛠️ Tối ưu hệ thống
+- Nâng cấp và cải tiến cơ chế kết nối Redis Cache, giúp tăng tốc độ phản hồi và duy trì sự ổn định tối đa cho hệ thống dưới tải cao.
+- Bổ sung hệ thống cảnh báo thông minh khi VPS vận hành trên 10 website có sử dụng chế độ relay, giúp quản trị viên chủ động điều chỉnh cấu hình để đạt hiệu năng tốt nhất.
+
+### 🐛 Sửa lỗi
+- Vá lỗ hổng bảo mật liên quan đến việc xử lý tệp tạm của `/etc/fstab` (CWE-377).
+- Khắc phục sự cố tiềm ẩn gây trống tệp `fstab` khi kích hoạt tính năng `disk_noatime`.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+
 ## 🚀 Phiên bản 8.4.2.0
 
 ## 🚀 Tính năng mới
