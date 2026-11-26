@@ -499,7 +499,14 @@ timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set DB_HOST 'localhost' --t
 timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set DB_NAME "$database" --type=constant --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" >/dev/null 2>&1
 timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set DB_USER "$username" --type=constant --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" >/dev/null 2>&1
 timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set DB_PASSWORD --prompt --type=constant --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" <<<"$password" >/dev/null 2>&1
-timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set WP_CACHE_KEY_SALT "${NAME2}_$(openssl rand -hex 4)" --type=constant --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" >/dev/null 2>&1
+
+clone_cache_salt="${NAME2}_$(openssl rand -hex 4)"
+timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set WP_CACHE_KEY_SALT "$clone_cache_salt" --type=constant --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" >/dev/null 2>&1
+# Nếu web nguồn có khai báo WP_REDIS_PREFIX (được redis-cache ưu tiên cao hơn WP_CACHE_KEY_SALT) -> đổi riêng cho web đích để chống đụng key cache
+if [[ -f "$duong_dan_nguon_moi/wp-config.php" ]] && grep -Eq "^[[:space:]]*define\([[:space:]]*['\"]WP_REDIS_PREFIX['\"]" "$duong_dan_nguon_moi/wp-config.php"; then
+  timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config set WP_REDIS_PREFIX "$clone_cache_salt" --type=constant --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" >/dev/null 2>&1
+fi
+
 timeout 30 "${PHP_EXEC[@]}" /usr/local/bin/wp config shuffle-salts --force --path="$duong_dan_nguon_moi" "${WP_CLI_FLAGS[@]}" >/dev/null 2>&1
 
 cd "$duong_dan_nguon_moi" || exit 1
@@ -714,6 +721,30 @@ if [[ -n "${REDIS_MASTER_PASS:-}" ]]; then
           "${WP_EXEC_CACHE[@]}" litespeed-option set object-db_id "$redis_db_id" --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
           "${WP_EXEC_CACHE[@]}" litespeed-purge all --path="$duong_dan_nguon_moi" --quiet >/dev/null 2>&1 || true
         fi
+
+##### tương thích plugin redis-cache của Till Krüss và wp redis
+# Đồng bộ DB ID & ACL mới vào wp-config.php nếu web nguồn dùng redis-cache và wp redis
+wp_cfg_clone="$duong_dan_nguon_moi/wp-config.php"
+if [[ -f "$wp_cfg_clone" ]]; then
+  WP_EXEC_CFG=(timeout 15 /sbin/runuser -u "$USER" -- "${PHP_EXEC[@]}" /usr/local/bin/wp)
+
+  # 1. Nếu web nguồn dùng redis-cache (bản Free)
+  if grep -Eq "^[[:space:]]*define\([[:space:]]*['\"]WP_REDIS_(DATABASE|PASSWORD|CLIENT|PATH)['\"]" "$wp_cfg_clone" \
+    && ! grep -Eq "^[[:space:]]*define\([[:space:]]*['\"]WP_REDIS_CONFIG['\"]" "$wp_cfg_clone"; then
+    "${WP_EXEC_CFG[@]}" config set WP_REDIS_DATABASE "$redis_db_id" --raw --type=constant --path="$duong_dan_nguon_moi" --quiet --skip-plugins --skip-themes >/dev/null 2>&1 || true
+    "${WP_EXEC_CFG[@]}" config set WP_REDIS_PASSWORD --prompt --raw --type=constant --path="$duong_dan_nguon_moi" --quiet --skip-plugins --skip-themes <<<"array( '${redis_acl_user}', '${raw_redis_pass}' )" >/dev/null 2>&1 || true
+  fi
+
+	# 2. Nếu web nguồn dùng Pantheon wp-redis (xử lý gọn cả $redis_server 1 dòng lẫn nhiều dòng)
+  if grep -Eq '^[[:space:]]*[$]redis_server[[:space:]]*=' "$wp_cfg_clone"; then
+    "${WP_EXEC_CFG[@]}" config set redis_server --prompt --raw --type=variable --path="$duong_dan_nguon_moi" --quiet --skip-plugins --skip-themes <<<"array( 'host' => '${socket_path}', 'port' => null, 'database' => ${redis_db_id}, 'auth' => array( '${redis_acl_user}', '${raw_redis_pass}' ) )" >/dev/null 2>&1 || true
+  fi
+
+fi
+
+##### tương thích plugin wp redis
+
+
       fi
     fi
   fi

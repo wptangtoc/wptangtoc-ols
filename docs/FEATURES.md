@@ -1,6 +1,6 @@
 # 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.2.1)
 
-- **Tác giả:** Gia Tuấn ([@wptangtoc](https://wptangtoc.com))
+- **Tác giả:** Hoàng Gia Tuấn ([@wptangtoc](https://wptangtoc.com/gia-tuan/))
 - **Trang chủ:** https://wptangtoc.com
 
 ## 🚀 Cài Đặt Nhanh WPTangToc OLS
