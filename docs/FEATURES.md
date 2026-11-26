@@ -1,4 +1,4 @@
-# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.2.1)
+# 📚 Tài Liệu Tính Năng Chính Thức WPTangToc OLS (v8.4.2.2)
 
 - **Tác giả:** Hoàng Gia Tuấn ([@wptangtoc](https://wptangtoc.com/gia-tuan/))
 - **Trang chủ:** https://wptangtoc.com
@@ -9,7 +9,7 @@
 curl -sO [https://wptangtoc.com/share/wptangtoc-ols](https://wptangtoc.com/share/wptangtoc-ols) && bash wptangtoc-ols
 ```
 
-> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.2.1**.
+> Tài liệu này được biên dịch tự động 100% từ các tính năng chính thức trong Menu của **WPTangToc OLS v8.4.2.2**.
 
 ---
 

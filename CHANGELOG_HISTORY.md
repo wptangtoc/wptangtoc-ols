@@ -1,3 +1,18 @@
+## 🚀 Phiên bản 8.4.2.2
+
+## WPTangToc OLS v8.4.2.2
+
+🛠️ Tối ưu hệ thống
+- Tự động cập nhật tiền tố `WP_redis_prefix` khi sao chép website sử dụng Redis Cache, ngăn ngừa triệt để tình trạng trùng lặp key và tối ưu hiệu suất Object Cache giữa các trang web.
+- Nâng cấp cơ chế cấu hình quyền ACL cho các hệ thống ValKey, Redis và KeyDB đối với cả hai plugin WP Redis và Redis Cache, giúp kết nối luôn chính xác và ổn định.
+
+
+---
+*Bản phát hành bao gồm toàn bộ chữ ký xác thực GPG, SHA256SUMS và Full Source Code.*
+
+
+---
+
 ## 🚀 Phiên bản 8.4.2.1
 
 ### 🛠️ Tối ưu hệ thống
