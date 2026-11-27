@@ -36,7 +36,7 @@
     <li><b>Rocky Linux:</b> 8, 9, 10</li>
     <li><b>Red Hat Enterprise Linux (RHEL):</b> 8, 9, 10</li>
     <li><b>Oracle Linux Server:</b> 8, 9, 10</li>
-    <li><b>Ubuntu:</b> 22.04, 24.04 <i>(Thử nghiệm)</i></li>
+    <li><b>Ubuntu:</b> 22.04, 24.04 <i>(Nhánh thử nghiệm - Không khuyến nghị cho Production)</i></li>
 </ul>
 
 <h3>⚙️ Cấu hình yêu cầu</h3>
